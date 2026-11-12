@@ -107,6 +107,14 @@ name = "knotes-core"
 version = "0.1.0"
 
 [[package]]
+name = "knotes-gen"
+version = "0.1.0"
+dependencies = [
+ "knotes-synth",
+ "tempfile",
+]
+
+[[package]]
 name = "knotes-md"
 version = "0.1.0"
 dependencies = [

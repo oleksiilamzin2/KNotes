@@ -1,0 +1,13 @@
+[package]
+name = "knotes-gen"
+description = "Writes a synthetic Obsidian vault for Knotes tests and benchmarks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-synth.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
