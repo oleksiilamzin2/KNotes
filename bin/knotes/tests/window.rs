@@ -161,3 +161,14 @@ fn choosing_a_sort_order_reorders_and_saves_only_that_field() {
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json, serde_json::json!({"list": {"sort": "title"}}));
 }
+
+#[test]
+fn clicking_notes_opens_them_and_back_returns() {
+    let vault = tempfile::tempdir().unwrap();
+    write_aged(&vault.path().join("a.md"), "# A\n\nbody a", Duration::from_secs(10));
+    write_aged(&vault.path().join("b.md"), "body b", Duration::from_secs(20));
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_ACTION", "back")]);
+    assert!(out.contains("note: a.md | # A⏎⏎body a"), "{out}");
+    assert!(out.contains("nav: back=off forward=on"), "{out}");
+    assert!(out.contains("selected-row: a"), "{out}");
+}

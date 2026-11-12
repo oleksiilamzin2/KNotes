@@ -13,7 +13,12 @@ use crate::vault_window::split_controller;
 const INITIAL_WIDTHS: [f64; 3] = [260.0, 340.0, 320.0];
 const SPLIT_AUTOSAVE: &str = "KnotesMainSplit";
 
-pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController, list: &NSViewController) -> (Retained<NSWindow>, Retained<NSSplitViewController>) {
+pub fn build(
+    mtm: MainThreadMarker,
+    sidebar: &NSViewController,
+    list: &NSViewController,
+    note: &NSViewController,
+) -> (Retained<NSWindow>, Retained<NSSplitViewController>) {
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -27,7 +32,7 @@ pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController, list: &NSViewCon
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(ns_string!("Knotes"));
 
-    let split = split_controller(sidebar, list, mtm);
+    let split = split_controller(sidebar, list, note, mtm);
     window.setContentViewController(Some(&split));
     // Setting the controller sizes the window to its (still empty) views; restore the size.
     window.setContentSize(frame.size);

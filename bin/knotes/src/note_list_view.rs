@@ -15,7 +15,7 @@ use objc2_app_kit::{
     NSTextField, NSUserInterfaceItemIdentification, NSView,
 };
 use objc2_core_foundation::CGFloat;
-use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle, NSInteger, NSObject, NSObjectProtocol, NSString, ns_string};
+use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
 
 use crate::strings;
 
@@ -53,7 +53,11 @@ impl Formatters {
     }
 }
 
+type OnSelect = Box<dyn Fn(String)>;
+
 pub struct Ivars {
+    /// Called with the path of a note the user selected.
+    on_select: RefCell<Option<OnSelect>>,
     rows: RefCell<Arc<Vec<NoteRow>>>,
     items: RefCell<Vec<ListItem>>,
     clock: Cell<Clock>,
@@ -94,6 +98,15 @@ define_class!(
             if self.is_header(row) { HEADER_ROW_HEIGHT } else { NOTE_ROW_HEIGHT }
         }
 
+        #[unsafe(method(tableViewSelectionDidChange:))]
+        fn selection_did_change(&self, notification: &NSNotification) {
+            let Some(table) = notification.object().and_then(|o| o.downcast::<NSTableView>().ok()) else { return };
+            let path = (table.selectedRow() >= 0).then(|| self.path_at(table.selectedRow() as usize)).flatten();
+            if let (Some(path), Some(callback)) = (path, self.ivars().on_select.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
         #[unsafe(method(tableView:shouldSelectRow:))]
         fn should_select_row(&self, _table: &NSTableView, row: NSInteger) -> bool {
             !self.is_header(row)
@@ -104,6 +117,7 @@ define_class!(
 impl NoteListSource {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let ivars = Ivars {
+            on_select: RefCell::new(None),
             rows: RefCell::new(Arc::new(Vec::new())),
             items: RefCell::new(Vec::new()),
             clock: Cell::new(now()),
@@ -117,6 +131,24 @@ impl NoteListSource {
         *self.ivars().rows.borrow_mut() = rows;
         *self.ivars().items.borrow_mut() = items;
         self.ivars().clock.set(now());
+    }
+
+    pub fn on_select(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_select.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Path of the note shown in `row`; `None` for headers.
+    pub fn path_at(&self, row: usize) -> Option<String> {
+        match self.ivars().items.borrow().get(row)? {
+            ListItem::Note(i) => self.ivars().rows.borrow().get(*i as usize).map(|r| r.path.clone()),
+            ListItem::Header(_) => None,
+        }
+    }
+
+    /// Row showing the note at `path`, if it is in the list.
+    pub fn row_of(&self, path: &str) -> Option<usize> {
+        let rows = self.ivars().rows.borrow();
+        self.ivars().items.borrow().iter().position(|item| matches!(item, ListItem::Note(i) if rows[*i as usize].path == path))
     }
 
     fn is_header(&self, row: NSInteger) -> bool {

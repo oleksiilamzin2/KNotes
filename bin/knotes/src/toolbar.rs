@@ -2,6 +2,8 @@
 //! new note and back/forward over the note, chat toggle over the inspector. Separators track
 //! the split view columns, so each group sits above its column; macOS draws the glass.
 
+use std::cell::{Cell, RefCell};
+
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -20,9 +22,16 @@ pub const NEW_NOTE: &str = "knotes.new-note";
 pub const HISTORY: &str = "knotes.history";
 pub const CHAT: &str = "knotes.chat";
 
+type OnNavigate = Box<dyn Fn(bool)>;
+
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
     list_menu: Retained<NSMenu>,
+    /// Called with `true` for forward, `false` for back.
+    on_navigate: RefCell<Option<OnNavigate>>,
+    history: RefCell<Option<Retained<NSToolbarItemGroup>>>,
+    /// Back/forward availability, applied when the group item is created later.
+    history_state: Cell<(bool, bool)>,
 }
 
 define_class!(
@@ -56,16 +65,38 @@ define_class!(
         #[unsafe(method(newNote:))]
         fn new_note(&self, _sender: Option<&AnyObject>) {}
 
-        /// Note history comes with note selection.
         #[unsafe(method(navigate:))]
-        fn navigate(&self, _sender: Option<&AnyObject>) {}
+        fn navigate(&self, sender: &NSToolbarItemGroup) {
+            let forward = sender.selectedIndex() == 1;
+            if let Some(callback) = self.ivars().on_navigate.borrow().as_ref() {
+                callback(forward);
+            }
+        }
     }
 );
 
 impl ToolbarDelegate {
     pub fn new(mtm: MainThreadMarker, split_view: Retained<NSSplitView>, list_menu: Retained<NSMenu>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { split_view, list_menu });
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            split_view,
+            list_menu,
+            on_navigate: RefCell::new(None),
+            history: RefCell::new(None),
+            history_state: Cell::new((false, false)),
+        });
         unsafe { msg_send![super(this), init] }
+    }
+
+    pub fn on_navigate(&self, callback: impl Fn(bool) + 'static) {
+        *self.ivars().on_navigate.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Enables the back and forward segments.
+    pub fn set_history(&self, can_back: bool, can_forward: bool) {
+        self.ivars().history_state.set((can_back, can_forward));
+        if let Some(group) = self.ivars().history.borrow().as_ref() {
+            apply_history(group, can_back, can_forward);
+        }
     }
 
     fn make_item(&self, id: &NSString) -> Option<Retained<NSToolbarItem>> {
@@ -108,6 +139,9 @@ impl ToolbarDelegate {
                         mtm,
                     )
                 };
+                let (can_back, can_forward) = self.ivars().history_state.get();
+                apply_history(&group, can_back, can_forward);
+                *self.ivars().history.borrow_mut() = Some(group.clone());
                 Some(Retained::into_super(group))
             }
             CHAT => {
@@ -164,4 +198,12 @@ fn button(mtm: MainThreadMarker, id: &NSString, symbol_name: &str, label: &str) 
     item.setLabel(&NSString::from_str(label));
     item.setToolTip(Some(&NSString::from_str(label)));
     item
+}
+
+fn apply_history(group: &NSToolbarItemGroup, can_back: bool, can_forward: bool) {
+    group.setAutovalidates(false);
+    for (item, on) in group.subitems().iter().zip([can_back, can_forward]) {
+        item.setAutovalidates(false);
+        item.setEnabled(on);
+    }
 }

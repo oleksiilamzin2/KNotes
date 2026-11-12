@@ -6,18 +6,19 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use knotes_app::{FolderNode, FolderRules, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, resolve_list_settings};
-use knotes_core::{FolderRulesStore, NoteRow, TagIndex};
+use knotes_app::{FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, resolve_list_settings};
+use knotes_core::{FolderRulesStore, NoteRow, NoteText, TagIndex};
 use knotes_index::SqliteIndex;
 use knotes_session::{Event, Snapshot};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSView, NSViewController, NSWindow};
+use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextView, NSView, NSViewController, NSWindow};
 use objc2_foundation::{NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString};
 
 use crate::list_menu::ListMenu;
 use crate::note_list_view::{self, NoteListSource};
+use crate::note_view;
 use crate::sidebar_view::{self, SidebarSource};
 use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
@@ -33,6 +34,7 @@ struct State {
     vault: Option<PathBuf>,
     /// List settings of tag views: tags have no folder and no `.knotes`; kept for the session.
     tag_settings: HashMap<String, ListSettings>,
+    history: History,
     /// Read-only index connection, opened on first need (the index exists after the first snapshot).
     reader: Option<SqliteIndex>,
 }
@@ -43,9 +45,10 @@ pub struct VaultWindow {
     pub outline: Retained<NSOutlineView>,
     pub list: Retained<NoteListSource>,
     pub table: Retained<NSTableView>,
-    /// Kept alive here: the toolbar holds its delegate weakly.
-    _toolbar: Retained<ToolbarDelegate>,
     pub list_menu: ListMenu,
+    pub note_text: Retained<NSTextView>,
+    /// Kept alive here: the toolbar holds its delegate weakly.
+    toolbar_delegate: Retained<ToolbarDelegate>,
     state: RefCell<State>,
     /// Set while the window selects a sidebar row itself, so the selection callback ignores it.
     highlighting: Cell<bool>,
@@ -62,7 +65,10 @@ impl VaultWindow {
         let (list_scroll, table) = note_list_view::table(mtm, &list);
         let list_vc = NSViewController::new(mtm);
         list_vc.setView(&list_scroll);
-        let (window, split) = window::build(mtm, &sidebar_vc, &list_vc);
+        let (note_scroll, note_text) = note_view::note_view(mtm);
+        let note_vc = NSViewController::new(mtm);
+        note_vc.setView(&note_scroll);
+        let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc);
         let list_menu = ListMenu::new(mtm);
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
         toolbar::install(&window, &toolbar);
@@ -75,6 +81,7 @@ impl VaultWindow {
             index_dir: None,
             vault: None,
             tag_settings: HashMap::new(),
+            history: History::default(),
             reader: None,
         };
         let this = Rc::new(Self {
@@ -83,8 +90,9 @@ impl VaultWindow {
             outline,
             list,
             table,
-            _toolbar: toolbar,
             list_menu,
+            note_text,
+            toolbar_delegate: toolbar,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
         });
@@ -92,6 +100,18 @@ impl VaultWindow {
         this.sidebar.on_select(move |item| {
             if let Some(window) = weak.upgrade() {
                 window.select(item);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_select(move |path| {
+            if let Some(window) = weak.upgrade() {
+                window.open_note(&path, true);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_navigate(move |forward| {
+            if let Some(window) = weak.upgrade() {
+                window.navigate(forward);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -145,6 +165,13 @@ impl VaultWindow {
     }
 
     fn show(&self, snapshot: &Snapshot) {
+        let reopen = {
+            let mut state = self.state.borrow_mut();
+            let paths: HashSet<&str> = snapshot.rows.iter().map(|r| r.path.as_str()).collect();
+            state.history.retain(|p| paths.contains(p));
+            let current = state.history.current().map(str::to_owned);
+            current.filter(|c| snapshot.changed.iter().any(|p| p == c))
+        };
         {
             let mut state = self.state.borrow_mut();
             state.rows = Arc::clone(&snapshot.rows);
@@ -165,6 +192,10 @@ impl VaultWindow {
         }
         self.highlight(&selection);
         self.refresh_list();
+        if let Some(path) = reopen {
+            self.open_note(&path, false);
+        }
+        self.update_navigation();
         if probe::enabled() && !snapshot.rows.is_empty() {
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
@@ -173,7 +204,64 @@ impl VaultWindow {
             if let Some(option) = probe::requested_option() {
                 self.choose(option);
             }
+            for path in probe::requested_notes() {
+                if let Some(row) = self.list.row_of(&path) {
+                    // Selecting the row goes through the same delegate path as a click.
+                    self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
+                }
+            }
+            if let Some(forward) = probe::requested_navigation() {
+                self.navigate(forward);
+            }
             probe::schedule(true);
+        }
+    }
+
+    /// Shows a note in the note column; `record` adds it to the back/forward history.
+    pub fn open_note(&self, path: &str, record: bool) {
+        let text = {
+            let mut state = self.state.borrow_mut();
+            if record {
+                state.history.visit(path);
+            }
+            self.ensure_reader(&mut state);
+            state.reader.as_ref().and_then(|r| r.note_text(path).ok().flatten()).unwrap_or_default()
+        };
+        self.note_text.setString(&NSString::from_str(&text));
+        self.update_navigation();
+    }
+
+    /// Back (`false`) or forward (`true`) in the note history; the list selection follows.
+    pub fn navigate(&self, forward: bool) {
+        let target = {
+            let mut state = self.state.borrow_mut();
+            let next = if forward { state.history.forward() } else { state.history.back() };
+            next.map(str::to_owned)
+        };
+        if let Some(path) = target {
+            self.open_note(&path, false);
+            if let Some(row) = self.list.row_of(&path) {
+                self.highlighting.set(true);
+                self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
+                self.highlighting.set(false);
+            }
+        }
+    }
+
+    fn update_navigation(&self) {
+        let state = self.state.borrow();
+        self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
+    }
+
+    /// The open note and history availability, for probe mode.
+    pub fn describe_note(&self) -> (Option<String>, bool, bool) {
+        let state = self.state.borrow();
+        (state.history.current().map(str::to_owned), state.history.can_back(), state.history.can_forward())
+    }
+
+    fn ensure_reader(&self, state: &mut State) {
+        if state.reader.is_none() {
+            state.reader = state.index_dir.as_deref().and_then(|dir| SqliteIndex::open_reader(dir).ok());
         }
     }
 
@@ -222,9 +310,7 @@ impl VaultWindow {
     }
 
     fn notes_with_tag(&self, state: &mut State, tag: &str) -> HashSet<String> {
-        if state.reader.is_none() {
-            state.reader = state.index_dir.as_deref().and_then(|dir| SqliteIndex::open_reader(dir).ok());
-        }
+        self.ensure_reader(state);
         state.reader.as_ref().and_then(|r| r.notes_with_tag(tag).ok()).unwrap_or_default().into_iter().collect()
     }
 
@@ -264,11 +350,16 @@ pub fn placeholder(mtm: MainThreadMarker) -> Retained<NSViewController> {
     controller
 }
 
-pub fn split_items(sidebar: &NSViewController, list: &NSViewController, mtm: MainThreadMarker) -> [Retained<NSSplitViewItem>; 4] {
+pub fn split_items(
+    sidebar: &NSViewController,
+    list: &NSViewController,
+    note: &NSViewController,
+    mtm: MainThreadMarker,
+) -> [Retained<NSSplitViewItem>; 4] {
     [
         NSSplitViewItem::sidebarWithViewController(sidebar),
         NSSplitViewItem::contentListWithViewController(list),
-        NSSplitViewItem::splitViewItemWithViewController(&placeholder(mtm)),
+        NSSplitViewItem::splitViewItemWithViewController(note),
         NSSplitViewItem::inspectorWithViewController(&placeholder(mtm)),
     ]
 }
@@ -278,9 +369,14 @@ pub fn split_items(sidebar: &NSViewController, list: &NSViewController, mtm: Mai
 /// role caps itself at 270 points otherwise.
 const COLUMNS: [(f64, f64, f32); 4] = [(200.0, 480.0, 260.0), (260.0, 640.0, 255.0), (360.0, f64::MAX, 250.0), (260.0, 640.0, 255.0)];
 
-pub fn split_controller(sidebar: &NSViewController, list: &NSViewController, mtm: MainThreadMarker) -> Retained<NSSplitViewController> {
+pub fn split_controller(
+    sidebar: &NSViewController,
+    list: &NSViewController,
+    note: &NSViewController,
+    mtm: MainThreadMarker,
+) -> Retained<NSSplitViewController> {
     let split = NSSplitViewController::new(mtm);
-    for (item, (min, max, holding)) in split_items(sidebar, list, mtm).iter().zip(COLUMNS) {
+    for (item, (min, max, holding)) in split_items(sidebar, list, note, mtm).iter().zip(COLUMNS) {
         item.setMinimumThickness(min);
         if max < f64::MAX {
             item.setMaximumThickness(max);

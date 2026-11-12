@@ -42,6 +42,20 @@ pub fn requested_option() -> Option<knotes_app::ListOption> {
     }
 }
 
+/// Notes to open one after another, as clicks in the list (`KNOTES_PROBE_OPEN=a.md,b.md`).
+pub fn requested_notes() -> Vec<String> {
+    std::env::var("KNOTES_PROBE_OPEN").map(|v| v.split(',').map(str::to_owned).collect()).unwrap_or_default()
+}
+
+/// `KNOTES_PROBE_ACTION=back` or `forward`: the toolbar's history buttons.
+pub fn requested_navigation() -> Option<bool> {
+    match std::env::var("KNOTES_PROBE_ACTION").ok()?.as_str() {
+        "back" => Some(false),
+        "forward" => Some(true),
+        _ => None,
+    }
+}
+
 pub fn watch(window: &Rc<VaultWindow>) {
     WINDOW.with(|w| *w.borrow_mut() = Some(Rc::clone(window)));
 }
@@ -62,6 +76,7 @@ pub fn schedule(with_sidebar: bool) {
                     report_sidebar(&window.outline);
                     report_list(&window.table);
                     println!("list-menu: {}", window.list_menu.describe());
+                    report_note(window);
                 }
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PNG") {
                     render_png(&window.window, &path.to_string_lossy());
@@ -164,4 +179,26 @@ fn report_list(table: &NSTableView) {
         })
         .collect();
     println!("list: {}", rows.join(" | "));
+}
+
+/// Open note (from the text view itself), history buttons (from the toolbar) and list selection.
+fn report_note(window: &VaultWindow) {
+    let (path, _, _) = window.describe_note();
+    if let Some(path) = path {
+        let text: String = window.note_text.string().to_string().replace('\n', "⏎").chars().take(60).collect();
+        println!("note: {path} | {text}");
+    }
+    if let Some(group) = window.window.toolbar().and_then(|t| {
+        t.items().iter().find_map(|i| i.downcast::<NSToolbarItemGroup>().ok())
+    }) {
+        let state: Vec<&str> = group.subitems().iter().map(|i| if i.isEnabled() { "on" } else { "off" }).collect();
+        println!("nav: back={} forward={}", state.first().unwrap_or(&"?"), state.get(1).unwrap_or(&"?"));
+    }
+    let row = window.table.selectedRow();
+    if row >= 0
+        && let Some(cell) = window.table.viewAtColumn_row_makeIfNecessary(0, row, true).and_then(|v| v.downcast::<NSTableCellView>().ok())
+        && let Some(title) = field(&cell, TITLE_ID)
+    {
+        println!("selected-row: {}", title.stringValue());
+    }
 }
