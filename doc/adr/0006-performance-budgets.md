@@ -45,4 +45,4 @@ hold on an M5 Pro with at least 2x margin, including list scrolling (0.23 ms p95
 idle CPU (~0 %, ~2 wakeups per second) and memory (245 MB at 50k notes).
 
 Memory after a cold index (first open of a vault) was over budget (432–476 MB) and is fixed
-by ADR 0014: 158 MB after a cold index, 142 MB on a warm start.
+by ADR 0014: 153–158 MB after a cold index, 135 MB on a warm start.

@@ -31,8 +31,8 @@ Profiling (vmmap, a headless index run with a counting allocator) found:
 
 ## Consequences
 
-- 50k notes, release, M5 Pro: footprint after a cold index 158 MB (was 432–476 MB; warm
-  start 142 MB). Cold index 6.70 s (6.59 s with the 64 MB cache), every other ADR 0006
+- 50k notes, release, M5 Pro: footprint after a cold index 153–158 MB (was 432–476 MB);
+  warm start 135 MB (142 MB before). Cold index 6.70 s (6.59 s with the 64 MB cache), every other ADR 0006
   budget unchanged.
 - Each large block costs a system call and fresh zero pages; no slowdown was measurable.
 - A window test compares the footprint after a cold and a warm open of an 8k-note vault
