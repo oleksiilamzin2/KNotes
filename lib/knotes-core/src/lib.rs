@@ -9,6 +9,7 @@ mod note_outline;
 mod note_parser;
 mod note_text;
 mod tag_index;
+mod title_search;
 mod vault_file;
 mod vault_scanner;
 
@@ -21,6 +22,7 @@ pub use note_outline::NoteOutline;
 pub use note_parser::NoteParser;
 pub use note_text::NoteText;
 pub use tag_index::TagIndex;
+pub use title_search::{TitleHit, TitleSearch};
 pub use vault_file::{FileKind, VaultFile};
 pub use vault_scanner::VaultScanner;
 
