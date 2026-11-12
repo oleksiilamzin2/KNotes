@@ -13,6 +13,7 @@ knotes-index.workspace = true
 knotes-indexer.workspace = true
 knotes-md.workspace = true
 knotes-vault.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -290,6 +290,7 @@ dependencies = [
  "knotes-indexer",
  "knotes-md",
  "knotes-vault",
+ "serde_json",
  "tempfile",
 ]
 
