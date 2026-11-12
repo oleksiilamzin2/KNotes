@@ -237,3 +237,25 @@ fn live_preview_hides_markup_outside_the_cursor_line() {
         "[hidden]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
     );
 }
+
+fn text_layout(out: &str) -> (f64, f64, f64) {
+    let line = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).unwrap_or_else(|| panic!("{out}"));
+    let v: Vec<f64> = line.split(' ').map(|kv| kv.split('=').nth(1).unwrap().parse().unwrap()).collect();
+    (v[0], v[1], v[2])
+}
+
+#[test]
+fn note_text_is_at_most_700_points_wide_and_centered() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "text").unwrap();
+    // Default window: the note column is narrower than 700 + margins.
+    let (column, width, left) = text_layout(&probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md")]));
+    assert!(column < 764.0, "column {column}");
+    assert!((width - (column - 64.0)).abs() < 0.2 && left == 32.0, "{column} {width} {left}");
+    // Wide window: exactly 700 points, centered.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_WIDTH", "2400")]);
+    let (column, width, left) = text_layout(&out);
+    assert!(column > 900.0, "column {column}");
+    assert!((width - 700.0).abs() < 0.2, "width {width}");
+    assert!((left - (column - 700.0) / 2.0).abs() < 0.2, "left {left} of column {column}");
+}

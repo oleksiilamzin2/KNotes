@@ -3,7 +3,6 @@
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSFont, NSScrollView, NSTextView};
-use objc2_foundation::NSSize;
 
 pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTextView>) {
     let scroll = NSTextView::scrollableTextView(mtm);
@@ -12,6 +11,5 @@ pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NST
     text.setSelectable(true);
     text.setRichText(false);
     text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
-    text.setTextContainerInset(NSSize::new(32.0, 24.0));
     (scroll, text)
 }

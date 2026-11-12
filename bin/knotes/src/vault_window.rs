@@ -74,6 +74,7 @@ impl VaultWindow {
         let (note_scroll, note_text) = note_view::note_view(mtm);
         let live_preview = LivePreview::new(mtm);
         note_text.setDelegate(Some(ProtocolObject::from_ref(&*live_preview)));
+        live_preview.attach(&note_text);
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
         let chat = chat_view::chat_view(mtm);
@@ -225,6 +226,11 @@ impl VaultWindow {
             }
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
+            }
+            if let Some(width) = std::env::var("KNOTES_PROBE_WIDTH").ok().and_then(|w| w.parse::<f64>().ok()) {
+                let height = self.window.frame().size.height;
+                self.window.setContentSize(objc2_foundation::NSSize::new(width, height));
+                self.window.layoutIfNeeded();
             }
             if std::env::var("KNOTES_PROBE_CURSOR").as_deref() == Ok("end") {
                 let end = self.note_text.string().length();

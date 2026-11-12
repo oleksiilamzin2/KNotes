@@ -8,14 +8,19 @@ use std::ops::Range;
 use knotes_editor::{Highlight, Style, highlight};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSTextDelegate, NSTextStorage,
-    NSTextView, NSTextViewDelegate,
+    NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
-use objc2_foundation::{NSDictionary, NSNotification, NSObject, NSObjectProtocol, NSRange, NSString};
+use objc2_foundation::{NSDictionary, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSRange, NSSize, NSString};
 
 pub const STYLE_KEY: &str = "knotes.style";
+/// Longest line of note text, as Obsidian's "readable line length" (700 CSS px = 700 pt).
+pub const READABLE_WIDTH: f64 = 700.0;
+/// Side margin when the column is narrower than the readable width.
+const MIN_MARGIN: f64 = 32.0;
+const TOP_MARGIN: f64 = 24.0;
 const BODY_SIZE: f64 = 15.0;
 const HEADING_SIZES: [f64; 6] = [26.0, 22.0, 19.0, 17.0, 15.0, 15.0];
 
@@ -55,6 +60,16 @@ define_class!(
 
     unsafe impl NSTextDelegate for LivePreview {}
 
+    impl LivePreview {
+        /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
+        #[unsafe(method(frameDidChange:))]
+        fn frame_did_change(&self, notification: &NSNotification) {
+            if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
+                fit_readable_width(&view);
+            }
+        }
+    }
+
     unsafe impl NSTextViewDelegate for LivePreview {
         #[unsafe(method(textViewDidChangeSelection:))]
         fn selection_did_change(&self, notification: &NSNotification) {
@@ -90,6 +105,23 @@ impl LivePreview {
         };
         let this = Self::alloc(mtm).set_ivars(ivars);
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// Makes `view` keep its text at the readable width as it resizes.
+    pub fn attach(&self, view: &NSTextView) {
+        view.setPostsFrameChangedNotifications(true);
+        let observer: &AnyObject = self.as_ref();
+        // SAFETY: the observer outlives the view (both live as long as the window), and the
+        // selector takes one notification argument.
+        unsafe {
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                observer,
+                sel!(frameDidChange:),
+                Some(NSViewFrameDidChangeNotification),
+                Some(view.as_ref()),
+            );
+        }
+        fit_readable_width(view);
     }
 
     /// Shows `source` in `view` with live preview styles.
@@ -182,6 +214,15 @@ impl LivePreview {
             at = end;
         }
         parts.join("|")
+    }
+}
+
+/// Side insets that center a text column of at most `READABLE_WIDTH` in the view.
+pub fn fit_readable_width(view: &NSTextView) {
+    let width = view.frame().size.width;
+    let side = ((width - READABLE_WIDTH) / 2.0).max(MIN_MARGIN);
+    if view.textContainerInset().width != side {
+        view.setTextContainerInset(NSSize::new(side, TOP_MARGIN));
     }
 }
 
