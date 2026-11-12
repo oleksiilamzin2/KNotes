@@ -2,6 +2,7 @@
 
 mod codec;
 mod content_pack;
+mod corpus;
 mod fts_query;
 mod light_stemmer;
 mod read;
@@ -11,4 +12,5 @@ mod sqlite_index;
 mod stemmer;
 mod write;
 
+pub use corpus::TextSnapshot;
 pub use sqlite_index::SqliteIndex;

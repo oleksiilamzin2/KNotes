@@ -39,16 +39,20 @@ impl ContentPack {
             return Ok(String::new());
         }
         let end = offset + len;
-        let map = self.mapped_to(end)?;
+        let map = self.map_covering(end)?.ok_or_else(|| io::Error::other("empty content pack"))?;
         String::from_utf8(map[offset as usize..end as usize].to_vec())
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    /// A mapping that covers `end`, remapped when the pack has grown since the last map.
-    fn mapped_to(&self, end: u64) -> io::Result<Arc<Mmap>> {
+    /// A mapping that covers `end` (`None` for `end == 0`), remapped when the pack has grown
+    /// since the last map. Older mappings handed out stay valid.
+    pub fn map_covering(&self, end: u64) -> io::Result<Option<Arc<Mmap>>> {
+        if end == 0 {
+            return Ok(None);
+        }
         let mut slot = self.map.borrow_mut();
         if let Some(map) = slot.as_ref().filter(|m| m.len() as u64 >= end) {
-            return Ok(Arc::clone(map));
+            return Ok(Some(Arc::clone(map)));
         }
         // SAFETY: the pack is append-only and never truncated while open (see type docs),
         // so the mapped bytes cannot change or disappear under the mapping.
@@ -57,6 +61,6 @@ impl ContentPack {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "content pack is shorter than the index says"));
         }
         *slot = Some(Arc::clone(&map));
-        Ok(map)
+        Ok(Some(map))
     }
 }

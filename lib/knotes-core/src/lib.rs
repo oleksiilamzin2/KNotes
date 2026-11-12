@@ -2,6 +2,7 @@
 
 mod content_scan;
 mod content_search;
+mod corpus_source;
 mod file_states;
 mod index_writer;
 mod link_graph;
@@ -16,6 +17,7 @@ mod vault_scanner;
 
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};
 pub use content_search::{BlockHit, ContentSearch};
+pub use corpus_source::CorpusSource;
 pub use file_states::{FileState, FileStates};
 pub use index_writer::{IndexChange, IndexWriter};
 pub use link_graph::LinkGraph;

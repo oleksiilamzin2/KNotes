@@ -1,10 +1,12 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use knotes_core::BoxError;
 use rusqlite::Connection;
 
+use crate::TextSnapshot;
 use crate::content_pack::{ContentPack, PACK_FILE};
 use crate::schema;
 
@@ -16,6 +18,8 @@ pub struct SqliteIndex {
     pub(crate) pack: ContentPack,
     /// Cached number of search blocks; reset by every write.
     pub(crate) block_count: Cell<Option<i64>>,
+    /// Cached text snapshot; reset by every write.
+    pub(crate) corpus: RefCell<Option<Arc<TextSnapshot>>>,
 }
 
 impl SqliteIndex {
@@ -36,6 +40,12 @@ impl SqliteIndex {
         Self::open_consistent(dir)?.ok_or_else(|| "a fresh index is inconsistent".into())
     }
 
+    /// Drops everything cached from the database; called after every write.
+    pub(crate) fn invalidate_caches(&self) {
+        self.block_count.set(None);
+        self.corpus.borrow_mut().take();
+    }
+
     fn open_consistent(dir: &Path) -> Result<Option<Self>, BoxError> {
         let conn = Connection::open(dir.join(DB_FILE))?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -51,6 +61,6 @@ impl SqliteIndex {
         if needed as u64 > pack.len()? {
             return Ok(None);
         }
-        Ok(Some(Self { conn, pack, block_count: Cell::new(None) }))
+        Ok(Some(Self { conn, pack, block_count: Cell::new(None), corpus: RefCell::new(None) }))
     }
 }
