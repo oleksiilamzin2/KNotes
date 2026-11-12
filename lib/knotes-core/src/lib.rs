@@ -3,5 +3,5 @@
 mod note;
 mod note_parser;
 
-pub use note::{Heading, ParsedNote, Span};
+pub use note::{Heading, Link, LinkKind, ParsedNote, Span};
 pub use note_parser::NoteParser;

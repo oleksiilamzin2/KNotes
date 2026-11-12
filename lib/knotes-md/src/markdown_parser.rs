@@ -1,5 +1,7 @@
-use knotes_core::{Heading, NoteParser, ParsedNote, Span};
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use knotes_core::{Heading, Link, LinkKind, NoteParser, ParsedNote, Span};
+use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
+
+use crate::link_target::{has_scheme, percent_decode, split_subpath};
 
 /// Obsidian-flavoured Markdown: wikilinks, math, YAML frontmatter, GFM tables, alerts.
 const OPTIONS: Options = Options::ENABLE_WIKILINKS
@@ -22,38 +24,83 @@ impl MarkdownParser {
 
 impl NoteParser for MarkdownParser {
     fn parse(&self, source: &str) -> ParsedNote {
-        let mut note = ParsedNote::default();
-        let mut heading: Option<Heading> = None;
-
+        let mut c = Collector::default();
         for (event, range) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
+            let span = Span::new(range.start, range.end);
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
-                    heading = Some(Heading {
-                        level: level as u8,
-                        text: String::new(),
-                        span: Span::new(range.start, range.end),
-                    });
+                    c.heading = Some(Heading { level: level as u8, text: String::new(), span });
                 }
-                Event::End(TagEnd::Heading(_)) => {
-                    if let Some(mut h) = heading.take() {
-                        let trimmed = h.text.trim_end().len();
-                        h.text.truncate(trimmed);
-                        note.headings.push(h);
-                    }
-                }
-                Event::Text(t) | Event::Code(t) | Event::InlineMath(t) => {
-                    if let Some(h) = heading.as_mut() {
-                        h.text.push_str(&t);
-                    }
-                }
-                Event::SoftBreak | Event::HardBreak => {
-                    if let Some(h) = heading.as_mut() {
-                        h.text.push(' ');
-                    }
-                }
+                Event::End(TagEnd::Heading(_)) => c.end_heading(),
+                Event::Start(Tag::Link { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, false, span),
+                Event::Start(Tag::Image { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, true, span),
+                Event::End(TagEnd::Link | TagEnd::Image) => c.end_link(),
+                Event::Text(t) | Event::Code(t) | Event::InlineMath(t) => c.text(&t),
+                Event::SoftBreak | Event::HardBreak => c.text(" "),
                 _ => {}
             }
         }
-        note
+        c.note
+    }
+}
+
+/// Single-pass state over the pulldown-cmark event stream.
+#[derive(Default)]
+struct Collector {
+    note: ParsedNote,
+    heading: Option<Heading>,
+    /// Open links: index into `note.links` and whether their text is the display text.
+    open_links: Vec<(usize, bool)>,
+}
+
+impl Collector {
+    fn text(&mut self, t: &str) {
+        if let Some(h) = self.heading.as_mut() {
+            h.text.push_str(t);
+        }
+        if let Some(&(i, true)) = self.open_links.last() {
+            self.note.links[i].display.get_or_insert_with(String::new).push_str(t);
+        }
+    }
+
+    fn end_heading(&mut self) {
+        if let Some(mut h) = self.heading.take() {
+            let trimmed = h.text.trim_end().len();
+            h.text.truncate(trimmed);
+            self.note.headings.push(h);
+        }
+    }
+
+    fn start_link(&mut self, link_type: LinkType, dest: CowStr, embed: bool, span: Span) {
+        let (kind, collect_display) = match link_type {
+            LinkType::WikiLink { has_pothole } => (LinkKind::Wiki, has_pothole),
+            LinkType::Autolink | LinkType::Email => (LinkKind::External, false),
+            _ if has_scheme(&dest) => (LinkKind::External, true),
+            _ => (LinkKind::Markdown, true),
+        };
+        let (target, subpath) = match kind {
+            LinkKind::External => (dest.into_string(), None),
+            LinkKind::Wiki => {
+                // `[[Note\|alias]]` inside a table leaves `\` at the end; Obsidian forbids `\` in names.
+                let dest = dest.strip_suffix('\\').unwrap_or(&dest);
+                let (path, sub) = split_subpath(dest);
+                (path.to_owned(), sub.map(str::to_owned))
+            }
+            LinkKind::Markdown => {
+                let (path, sub) = split_subpath(&dest);
+                (percent_decode(path).into_owned(), sub.map(|s| percent_decode(s).into_owned()))
+            }
+        };
+        self.open_links.push((self.note.links.len(), collect_display));
+        self.note.links.push(Link { kind, embed, target, subpath, display: None, span });
+    }
+
+    fn end_link(&mut self) {
+        if let Some((i, _)) = self.open_links.pop() {
+            let link = &mut self.note.links[i];
+            if link.display.as_deref().is_some_and(str::is_empty) {
+                link.display = None;
+            }
+        }
     }
 }
