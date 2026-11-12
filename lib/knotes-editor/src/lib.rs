@@ -2,8 +2,10 @@
 
 mod document;
 mod highlight;
+mod restyle;
 mod utf16;
 
 pub use document::{DiskChange, Document, conflict_path};
 pub use highlight::{Highlight, Run, Style, highlight};
-pub use utf16::utf16_offsets;
+pub use restyle::{Edit, changed_region};
+pub use utf16::{byte_offset, utf16_offsets};

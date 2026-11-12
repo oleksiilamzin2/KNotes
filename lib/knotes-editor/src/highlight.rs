@@ -6,7 +6,7 @@ use knotes_core::NoteParser;
 use knotes_md::{MarkdownParser, OPTIONS};
 use pulldown_cmark::{Event, LinkType, Parser, Tag};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Style {
     Heading(u8),
     Strong,
@@ -36,6 +36,25 @@ pub struct Highlight {
 }
 
 impl Highlight {
+    /// Style of the innermost run around each markup range (the last one in `runs` order that
+    /// contains it), in one pass: a stack of runs open at the current position.
+    pub fn markup_owners(&self) -> Vec<Option<Style>> {
+        let mut open: Vec<&Run> = Vec::new();
+        let mut next = 0;
+        self.markup
+            .iter()
+            .map(|m| {
+                while let Some(run) = self.runs.get(next).filter(|r| r.range.start <= m.start) {
+                    open.push(run);
+                    next += 1;
+                }
+                // Runs ending before this markup cannot hold any later one either.
+                open.retain(|r| r.range.end >= m.start);
+                open.iter().rev().find(|r| r.range.start <= m.start && m.end <= r.range.end).map(|r| r.style)
+            })
+            .collect()
+    }
+
     /// The same highlight with UTF-16 ranges (what `NSString` counts), converted in one pass.
     pub fn to_utf16(&self, source: &str) -> Highlight {
         let mut bounds: Vec<usize> =

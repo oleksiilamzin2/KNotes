@@ -73,3 +73,26 @@ fn whole_highlight_converts_to_utf16_ranges() {
     assert_eq!(h.runs.iter().map(|r| (r.style, text(r.range.clone()))).collect::<Vec<_>>(), [(Style::Strong, "**б**".to_owned()), (Style::WikiLink, "[[N|a]]".to_owned())]);
     assert_eq!(h.markup.iter().map(|r| text(r.clone())).collect::<Vec<_>>(), ["**", "**", "[[N|", "]]"]);
 }
+
+#[test]
+fn markup_takes_the_style_of_the_innermost_run_around_it() {
+    let src = "# Title **b**\n\nplain _i_ [[Note|alias]]";
+    let h = highlight(src);
+    let owners: Vec<(&str, Option<Style>)> = h.markup.iter().zip(h.markup_owners()).map(|(m, o)| (&src[m.clone()], o)).collect();
+    assert_eq!(owners[0], ("# ", Some(Style::Heading(1))));
+    assert_eq!(owners[1], ("**", Some(Style::Strong)));
+    assert_eq!(owners[2], ("**", Some(Style::Strong)));
+    assert!(owners[3..].iter().all(|(_, o)| matches!(o, Some(Style::Emphasis | Style::WikiLink))), "{owners:?}");
+}
+
+#[test]
+fn markup_owners_match_a_plain_search_on_a_large_note() {
+    let src: String = (0..2000).map(|i| format!("## H{i} *x*\n\na **b _c_** [[N{i}|n]] `k` ~~s~~ [l](u) #t{i}\n\n")).collect();
+    let h = highlight(&src);
+    let plain: Vec<Option<Style>> = h
+        .markup
+        .iter()
+        .map(|m| h.runs.iter().rev().find(|r| r.range.start <= m.start && m.end <= r.range.end).map(|r| r.style))
+        .collect();
+    assert_eq!(h.markup_owners(), plain);
+}
