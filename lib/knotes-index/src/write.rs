@@ -8,11 +8,20 @@ use crate::codec::{file_kind_code, link_kind_code};
 
 impl IndexWriter for SqliteIndex {
     fn apply(&mut self, changes: &[IndexChange<'_>]) -> Result<(), BoxError> {
+        // Texts of the batch go to the pack in one write before the commit; offsets start at
+        // the length on disk, so an aborted batch leaves only dead bytes.
+        let base = self.pack.len()?;
+        let mut texts = Vec::new();
         let tx = self.conn.transaction()?;
         for change in changes {
             match change {
                 IndexChange::Upsert { file, note } => {
-                    let id = upsert_file(&tx, file)?;
+                    let range = note.map(|(source, _)| {
+                        let off = base + texts.len() as u64;
+                        texts.extend_from_slice(source.as_bytes());
+                        (off, source.len() as u64)
+                    });
+                    let id = upsert_file(&tx, file, range)?;
                     delete_note_rows(&tx, id)?;
                     if let Some((_source, parsed)) = note {
                         insert_note_rows(&tx, id, parsed)?;
@@ -28,19 +37,28 @@ impl IndexWriter for SqliteIndex {
                 }
             }
         }
+        self.pack.append(&texts)?;
         tx.commit()?;
         Ok(())
     }
 }
 
-fn upsert_file(tx: &Transaction, file: &VaultFile) -> Result<i64, BoxError> {
+/// `pack` is the `(offset, length)` of the note text in the content pack.
+fn upsert_file(tx: &Transaction, file: &VaultFile, pack: Option<(u64, u64)>) -> Result<i64, BoxError> {
+    let (off, len) = match pack {
+        Some((off, len)) => (Some(i64::try_from(off)?), Some(i64::try_from(len)?)),
+        None => (None, None),
+    };
     let id = tx
         .prepare_cached(
-            "INSERT INTO files(path, kind, size, mtime_ns) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, size = excluded.size, mtime_ns = excluded.mtime_ns
+            "INSERT INTO files(path, kind, size, mtime_ns, pack_off, pack_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, size = excluded.size, mtime_ns = excluded.mtime_ns,
+                 pack_off = excluded.pack_off, pack_len = excluded.pack_len
              RETURNING id",
         )?
-        .query_row(params![file.path, file_kind_code(file.kind), i64::try_from(file.size)?, file.mtime_ns], |r| r.get(0))?;
+        .query_row(params![file.path, file_kind_code(file.kind), i64::try_from(file.size)?, file.mtime_ns, off, len], |r| {
+            r.get(0)
+        })?;
     Ok(id)
 }
 

@@ -1,4 +1,5 @@
-use knotes_core::{BoxError, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, Span, TagIndex};
+use knotes_core::{BoxError, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, NoteText, Span, TagIndex};
+use rusqlite::OptionalExtension;
 
 use crate::SqliteIndex;
 use crate::codec::link_kind_from;
@@ -60,5 +61,19 @@ impl TagIndex for SqliteIndex {
         )?;
         let rows = st.query_map([tag.to_lowercase()], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
+
+impl NoteText for SqliteIndex {
+    fn note_text(&self, path: &str) -> Result<Option<String>, BoxError> {
+        let range: Option<(Option<i64>, Option<i64>)> = self
+            .conn
+            .prepare_cached("SELECT pack_off, pack_len FROM files WHERE path = ?1")?
+            .query_row([path], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        match range {
+            Some((Some(off), Some(len))) => Ok(Some(self.pack.read_string(off as u64, len as u64)?)),
+            _ => Ok(None),
+        }
     }
 }

@@ -17,6 +17,7 @@ knotes-synth = { path = "lib/knotes-synth" }
 knotes-vault = { path = "lib/knotes-vault" }
 knotes-index = { path = "lib/knotes-index" }
 rusqlite = { version = "0.42.0", features = ["bundled"] }
+memmap2 = "0.9.12"
 rand = { version = "0.10.3", default-features = false }
 rand_chacha = { version = "0.10.0", default-features = false }
 rayon = "1.12.0"
