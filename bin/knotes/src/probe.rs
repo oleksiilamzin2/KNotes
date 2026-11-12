@@ -74,6 +74,9 @@ pub fn schedule(with_sidebar: bool) {
                 report(&window.window);
                 let placeholder = window.chat.question.placeholderString().map(|p| p.to_string()).unwrap_or_default();
                 println!("chat: {} | {placeholder}", window.chat.title.stringValue());
+                if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("scroll-bench") {
+                    scroll_bench(&window.table);
+                }
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_list(&window.table);
@@ -216,4 +219,30 @@ fn report_note(window: &VaultWindow) {
     {
         println!("selected-row: {}", title.stringValue());
     }
+}
+
+/// Scrolls the note list in 40-point steps (a fast flick at 120 Hz) and times the main-thread
+/// work of each step: scrolling, laying out and filling newly visible rows, drawing.
+fn scroll_bench(table: &NSTableView) {
+    let Some(scroll) = table.enclosingScrollView() else { return };
+    let clip = scroll.contentView();
+    let height = table.frame().size.height - clip.bounds().size.height;
+    let steps = ((height / 40.0) as usize).clamp(1, 3000);
+    let mut times = Vec::with_capacity(steps);
+    for i in 0..steps {
+        let start = std::time::Instant::now();
+        clip.scrollToPoint(objc2_foundation::NSPoint::new(0.0, (i as f64 * 40.0).min(height)));
+        scroll.reflectScrolledClipView(&clip);
+        table.layoutSubtreeIfNeeded();
+        scroll.displayIfNeeded();
+        times.push(start.elapsed());
+    }
+    times.sort_unstable();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    println!(
+        "scroll-bench: steps={steps} p50={:.2}ms p95={:.2}ms max={:.2}ms (120 Hz frame: 8.33 ms)",
+        ms(times[steps / 2]),
+        ms(times[steps * 95 / 100]),
+        ms(times[steps - 1])
+    );
 }

@@ -64,3 +64,15 @@ fn snapshots_carry_folder_rules_and_follow_their_changes() {
     fs::write(vault.path().join("Projects/.knotes"), r#"{"list": {"sort": "modified"}}"#).unwrap();
     wait_for(&events, |s| resolve_list_settings("Projects", &s.rules).sort == SortOrder::Modified);
 }
+
+#[test]
+fn closing_a_session_is_immediate() {
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::write(vault.path().join("a.md"), "a").unwrap();
+    let (session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    wait_for(&events, |s| s.rows.len() == 1);
+    std::thread::sleep(Duration::from_millis(50));
+    let start = Instant::now();
+    drop(session);
+    assert!(start.elapsed() < Duration::from_millis(100), "{:?}", start.elapsed());
+}

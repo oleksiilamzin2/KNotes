@@ -204,3 +204,15 @@ fn closing_the_last_window_quits_the_app() {
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "close")]);
     assert!(out.contains("closing window"), "{out}");
 }
+
+#[test]
+fn scrolling_the_note_list_fits_a_120_hz_frame() {
+    let vault = tempfile::tempdir().unwrap();
+    for i in 0..400 {
+        std::fs::write(vault.path().join(format!("note {i}.md")), format!("line of note {i} with some words\n")).unwrap();
+    }
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "scroll-bench")]);
+    let line = out.lines().find(|l| l.starts_with("scroll-bench:")).unwrap_or_else(|| panic!("{out}"));
+    let p95: f64 = line.split("p95=").nth(1).unwrap().split("ms").next().unwrap().parse().unwrap();
+    assert!(p95 < 8.33, "{line}");
+}

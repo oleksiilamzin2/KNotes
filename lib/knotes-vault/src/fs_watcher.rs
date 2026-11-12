@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,11 +14,21 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 /// Dropping the watcher stops the background thread.
 pub struct FsWatcher {
     _watcher: RecommendedWatcher,
-    batches: Receiver<Vec<String>>,
+    batches: Option<Receiver<Vec<String>>>,
 }
 
 impl FsWatcher {
     pub fn new(root: &Path, debounce: Duration) -> io::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = Self::with_callback(root, debounce, move |batch| tx.send(batch).is_ok())?;
+        watcher.batches = Some(rx);
+        Ok(watcher)
+    }
+
+    /// Calls `on_batch` from the watcher thread for each debounced batch, so a consumer can
+    /// block on its own channel together with other messages. `on_batch` returns `false` to
+    /// stop watching. `next_change` then never reports anything.
+    pub fn with_callback(root: &Path, debounce: Duration, on_batch: impl Fn(Vec<String>) -> bool + Send + 'static) -> io::Result<Self> {
         // FSEvents reports real paths (/private/var/...), so compare against the canonical root.
         let root = root.canonicalize()?;
         let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
@@ -31,19 +41,24 @@ impl FsWatcher {
         })
         .map_err(io::Error::other)?;
         watcher.watch(&root, RecursiveMode::Recursive).map_err(io::Error::other)?;
-        let (tx, rx) = mpsc::channel();
-        thread::Builder::new().name("knotes-watch".into()).spawn(move || debounce_loop(&root, &raw_rx, &tx, debounce))?;
-        Ok(Self { _watcher: watcher, batches: rx })
+        thread::Builder::new().name("knotes-watch".into()).spawn(move || debounce_loop(&root, &raw_rx, &on_batch, debounce))?;
+        Ok(Self { _watcher: watcher, batches: None })
     }
 }
 
 impl ChangeFeed for FsWatcher {
     fn next_change(&self, timeout: Duration) -> Option<Vec<String>> {
-        self.batches.recv_timeout(timeout).ok()
+        match &self.batches {
+            Some(rx) => rx.recv_timeout(timeout).ok(),
+            None => {
+                thread::sleep(timeout);
+                None
+            }
+        }
     }
 }
 
-fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, out: &Sender<Vec<String>>, debounce: Duration) {
+fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, on_batch: &impl Fn(Vec<String>) -> bool, debounce: Duration) {
     // `recv` fails once the watcher (and its callback holding the sender) is dropped.
     while let Ok(first) = raw.recv() {
         let mut paths = BTreeSet::new();
@@ -56,7 +71,7 @@ fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, out: &Sender<Vec<String>>
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
-        if !paths.is_empty() && out.send(paths.into_iter().collect()).is_err() {
+        if !paths.is_empty() && !on_batch(paths.into_iter().collect()) {
             return;
         }
     }
