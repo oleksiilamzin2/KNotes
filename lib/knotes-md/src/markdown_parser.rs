@@ -11,7 +11,7 @@ use crate::snippet::snippet;
 use crate::tag_scan::scan_tags;
 
 /// Obsidian-flavoured Markdown: wikilinks, math, YAML frontmatter, GFM tables, alerts.
-pub(crate) const OPTIONS: Options = Options::ENABLE_WIKILINKS
+pub const OPTIONS: Options = Options::ENABLE_WIKILINKS
     .union(Options::ENABLE_MATH)
     .union(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS)
     .union(Options::ENABLE_TABLES)

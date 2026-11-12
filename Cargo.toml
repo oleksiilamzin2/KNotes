@@ -27,6 +27,7 @@ knotes-search = { path = "lib/knotes-search" }
 knotes-indexer = { path = "lib/knotes-indexer" }
 knotes-app = { path = "lib/knotes-app" }
 knotes-session = { path = "lib/knotes-session" }
+knotes-editor = { path = "lib/knotes-editor" }
 rand = { version = "0.10.3", default-features = false }
 rand_chacha = { version = "0.10.0", default-features = false }
 rayon = "1.12.0"

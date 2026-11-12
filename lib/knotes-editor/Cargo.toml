@@ -1,0 +1,12 @@
+[package]
+name = "knotes-editor"
+description = "Editor model of Knotes: live preview highlighting, plain Rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+knotes-md.workspace = true
+pulldown-cmark.workspace = true

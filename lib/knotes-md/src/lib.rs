@@ -8,5 +8,5 @@ mod markdown_parser;
 mod snippet;
 mod tag_scan;
 
-pub use markdown_parser::MarkdownParser;
+pub use markdown_parser::{MarkdownParser, OPTIONS};
 pub use snippet::snippet;

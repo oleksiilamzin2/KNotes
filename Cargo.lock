@@ -230,6 +230,15 @@ name = "knotes-core"
 version = "0.1.0"
 
 [[package]]
+name = "knotes-editor"
+version = "0.1.0"
+dependencies = [
+ "knotes-core",
+ "knotes-md",
+ "pulldown-cmark",
+]
+
+[[package]]
 name = "knotes-gen"
 version = "0.1.0"
 dependencies = [
