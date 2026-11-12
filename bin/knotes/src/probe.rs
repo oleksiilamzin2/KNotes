@@ -42,6 +42,30 @@ pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&text), not_found) };
 }
 
+/// `KNOTES_PROBE_CLICK=index` or `index:cmd`: a mouse click on that character, delivered to
+/// the text view as AppKit would (a mouse-up is queued for its tracking loop).
+pub fn click_requested(view: &crate::note_view::NoteTextView) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
+    let Ok(spec) = std::env::var("KNOTES_PROBE_CLICK") else { return };
+    let (index, cmd) = spec.split_once(':').map_or((spec.as_str(), false), |(i, m)| (i, m == "cmd"));
+    let (Ok(index), Some(window)) = (index.parse::<usize>(), view.window()) else { return };
+    // SAFETY: the range lies inside the text; a null actual range is allowed.
+    let rect = unsafe {
+        objc2_app_kit::NSTextInputClient::firstRectForCharacterRange_actualRange(&**view, objc2_foundation::NSRange::new(index, 1), std::ptr::null_mut())
+    };
+    let center = objc2_foundation::NSPoint::new(rect.origin.x + rect.size.width / 2.0, rect.origin.y + rect.size.height / 2.0);
+    let at = window.convertPointFromScreen(center);
+    let flags = if cmd { NSEventModifierFlags::Command } else { NSEventModifierFlags::empty() };
+    let event = |kind| {
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            kind, at, flags, 0.0, window.windowNumber(), None, 0, 1, 1.0,
+        )
+    };
+    let (Some(down), Some(up)) = (event(NSEventType::LeftMouseDown), event(NSEventType::LeftMouseUp)) else { return };
+    NSApplication::sharedApplication(view.mtm()).postEvent_atStart(&up, false);
+    NSResponder::mouseDown(view, &down);
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
@@ -309,7 +333,7 @@ fn quantiles(mut times: Vec<std::time::Duration>) -> String {
 /// Editor costs on the open note: open+style, cursor moves, scrolling, full restyle.
 fn editor_bench(window: &VaultWindow) {
     use objc2_foundation::{NSPoint, NSRange};
-    let view = &window.note_text;
+    let view: &objc2_app_kit::NSTextView = &window.note_text;
     let source = view.string().to_string();
     let t = std::time::Instant::now();
     window.reopen_current();
@@ -363,7 +387,7 @@ fn editor_bench(window: &VaultWindow) {
     for c in "typing **bold** and `code` in the middle ".chars().cycle().take(200) {
         let t = std::time::Instant::now();
         // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
-        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(&c.to_string()), not_found) };
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&c.to_string()), not_found) };
         view.layoutSubtreeIfNeeded();
         if let Some(scroll) = view.enclosingScrollView() {
             scroll.displayIfNeeded();
@@ -372,7 +396,7 @@ fn editor_bench(window: &VaultWindow) {
     }
     view.setSelectedRange(NSRange::new(start, 200));
     // SAFETY: as above.
-    unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(""), not_found) };
+    unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(""), not_found) };
     println!("editor-bench: {} bytes; open+style {:.2}ms", source.len(), open.as_secs_f64() * 1e3);
     println!("editor-bench: keystroke {}", quantiles(keys));
     println!("editor-bench: cursor move {}", quantiles(moves));

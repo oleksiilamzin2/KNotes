@@ -398,3 +398,86 @@ fn an_outside_change_to_an_edited_note_keeps_both_versions() {
     assert_eq!(read(vault.path(), &copies[0]), "changed outside");
     assert!(out.contains("document: clean"), "{out}");
 }
+
+/// A vault with the given notes, probed with `env`.
+fn probe_notes(notes: &[(&str, &str)], env: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+    let vault = tempfile::tempdir().unwrap();
+    for (path, text) in notes {
+        let file = vault.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let out = probe_env(&[vault.path()], None, env);
+    (vault, out)
+}
+
+#[test]
+fn clicking_a_link_outside_the_cursor_line_opens_its_note() {
+    let (_vault, out) = probe_notes(
+        &[("a.md", "[[b]]\n\nsecond line"), ("b.md", "# B\n\ntarget")],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "2")],
+    );
+    assert!(out.contains("note: b.md | # B⏎⏎target"), "{out}");
+    assert!(out.contains("nav: back=on"), "{out}");
+}
+
+#[test]
+fn a_plain_click_in_the_cursor_line_places_the_cursor_and_cmd_click_opens() {
+    let notes = [("a.md", "see [[b]] here"), ("b.md", "target")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "6")]);
+    assert!(out.contains("note: a.md"), "{out}");
+    assert!(out.contains("cursor: 6") || out.contains("cursor: 7"), "{out}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "6:cmd")]);
+    assert!(out.contains("note: b.md | target"), "{out}");
+}
+
+#[test]
+fn clicking_a_heading_link_moves_the_cursor_to_the_heading() {
+    let b = format!("# B\n\n{}## Second\n\ntext", "line\n\n".repeat(80));
+    let (_vault, out) = probe_notes(
+        &[("a.md", "[[b#second]]\n\nx"), ("b.md", &b)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "3")],
+    );
+    assert!(out.contains("note: b.md"), "{out}");
+    assert!(out.contains(&format!("cursor: {}", b.find("## Second").unwrap())), "{out}");
+}
+
+#[test]
+fn clicking_a_link_to_a_missing_note_creates_it_in_the_new_notes_folder() {
+    let (vault, out) = probe_notes(
+        &[("a.md", "[[Нова ідея]]\n\nx")],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "3")],
+    );
+    assert!(vault.path().join("Вхідні/Нова ідея.md").is_file(), "{out}");
+    assert!(out.contains("note: Вхідні/Нова ідея.md"), "{out}");
+    let (vault, _) = probe_notes(
+        &[("a.md", "[[Ідея]]\n\nx"), (".knotes", r#"{"newNotes": {"folder": "Inbox"}}"#)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "3")],
+    );
+    assert!(vault.path().join("Inbox/Ідея.md").is_file());
+}
+
+#[test]
+fn links_to_missing_notes_are_dimmed() {
+    let (_vault, out) = probe_notes(&[("a.md", "[[b]] [[zzz]]\n\nx"), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[wikilink]b|") && runs.contains("[missing]zzz|"), "{runs}");
+}
+
+#[test]
+fn clicking_an_external_link_opens_it_outside() {
+    let (_vault, out) = probe_notes(
+        &[("a.md", "[site](https://example.com)\n\nx")],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "2")],
+    );
+    assert!(out.contains("open-url: https://example.com"), "{out}");
+}
+
+#[test]
+fn opening_a_shorter_note_after_a_longer_one_with_markup_works() {
+    let (_vault, out) = probe_notes(
+        &[("a.md", "see **bold** and [[b]] here, a longer note"), ("b.md", "short")],
+        &[("KNOTES_PROBE_OPEN", "a.md,b.md")],
+    );
+    assert!(out.contains("note: b.md | short"), "{out}");
+}

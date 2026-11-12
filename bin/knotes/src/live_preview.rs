@@ -4,8 +4,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
+use std::sync::Arc;
 
-use knotes_editor::{Edit, Highlight, Style, changed_region, highlight};
+use knotes_core::{Link, LinkKind, LinkResolver};
+use knotes_editor::{Edit, Highlight, LinkRun, Run, Style, changed_region, highlight};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
@@ -35,15 +37,24 @@ struct Look {
     text: Retained<NSColor>,
     muted: Retained<NSColor>,
     accent: Retained<NSColor>,
+    /// Links to missing notes (ADR 0013).
+    missing: Retained<NSColor>,
     clear: Retained<NSColor>,
     style_key: Retained<NSString>,
 }
 
 type OnChange = Box<dyn Fn()>;
+type OnLink = Box<dyn Fn(&Link)>;
 
 pub struct Ivars {
     /// Called after every user edit.
     on_change: RefCell<Option<OnChange>>,
+    /// Called to follow a clicked link.
+    on_link: RefCell<Option<OnLink>>,
+    /// Resolves the note's links, to dim those to missing notes.
+    links: RefCell<Option<Arc<dyn LinkResolver>>>,
+    /// Vault path of the shown note: relative links start from its folder.
+    path: RefCell<String>,
     /// The edit being made and its inserted text, between `shouldChangeText` and
     /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
     pending: Cell<Option<Edit>>,
@@ -131,12 +142,16 @@ impl LivePreview {
             text: NSColor::labelColor(),
             muted: NSColor::tertiaryLabelColor(),
             accent: NSColor::linkColor(),
+            missing: NSColor::linkColor().colorWithAlphaComponent(0.45),
             clear: NSColor::clearColor(),
             style_key: NSString::from_str(STYLE_KEY),
             body,
         };
         let ivars = Ivars {
             on_change: RefCell::new(None),
+            on_link: RefCell::new(None),
+            links: RefCell::new(None),
+            path: RefCell::new(String::new()),
             pending: Cell::new(None),
             inserted: RefCell::new(String::new()),
             source: RefCell::new(String::new()),
@@ -205,7 +220,7 @@ impl LivePreview {
         storage.beginEditing();
         set(storage, NSRange::new(region.0, region.1 - region.0), &look.body, &look.text, "plain", look);
         for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
-            let (font, color, name) = run_look(run.style, look);
+            let (font, color, name) = self.run_look(run, &styled);
             set(storage, ns(&clip(&run.range)), font, color, &name, look);
         }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| m.start < region.1 && m.end > region.0) {
@@ -232,7 +247,12 @@ impl LivePreview {
     }
 
     /// Shows `source` in `view` with live preview styles.
-    pub fn show(&self, view: &NSTextView, source: &str) {
+    pub fn show(&self, view: &NSTextView, path: &str, source: &str) {
+        *self.ivars().path.borrow_mut() = path.to_owned();
+        // setString moves the selection, which reveals markup: the old note's ranges must not
+        // be applied to the new text.
+        *self.ivars().styled.borrow_mut() = Highlight::default();
+        self.ivars().markup_fonts.borrow_mut().clear();
         view.setString(&NSString::from_str(source));
         *self.ivars().source.borrow_mut() = source.to_owned();
         self.ivars().source_units.set(view.string().length());
@@ -260,7 +280,7 @@ impl LivePreview {
         let full = NSRange::new(0, storage.length());
         set(storage, full, &look.body, &look.text, "plain", look);
         for run in &styled.runs {
-            let (font, color, name) = run_look(run.style, look);
+            let (font, color, name) = self.run_look(run, &styled);
             set(storage, ns(&run.range), font, color, &name, look);
         }
         let fonts = self.ivars().markup_fonts.borrow();
@@ -304,6 +324,50 @@ impl LivePreview {
     }
 
     /// Restyles everything from `source` (the edit path's worst case), for the editor bench.
+    pub fn on_link(&self, callback: impl Fn(&Link) + 'static) {
+        *self.ivars().on_link.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// New link resolution (files came or went): restyle the note's links.
+    pub fn set_links(&self, view: &NSTextView, links: Arc<dyn LinkResolver>) {
+        *self.ivars().links.borrow_mut() = Some(links);
+        if let Some(storage) = unsafe { view.textStorage() } {
+            self.apply_all(&storage, self.ivars().revealed.get());
+        }
+    }
+
+    /// A click on character `index`: follows a link where its markup is hidden, or anywhere
+    /// with Cmd; elsewhere the click is the text view's (ADR 0013).
+    pub fn click(&self, index: usize, cmd: bool) -> bool {
+        let link = {
+            let styled = self.ivars().styled.borrow();
+            let revealed = self.ivars().revealed.get();
+            let in_cursor_line = index >= revealed.0 && index < revealed.1;
+            match link_at(&styled, index) {
+                Some(link) if cmd || !in_cursor_line => link.link.clone(),
+                _ => return false,
+            }
+        };
+        if let Some(callback) = self.ivars().on_link.borrow().as_ref() {
+            callback(&link);
+        }
+        true
+    }
+
+    /// Font, colour and test name of a run; links to missing notes are dimmed.
+    fn run_look<'a>(&'a self, run: &Run, styled: &Highlight) -> (&'a NSFont, &'a NSColor, String) {
+        let look = &self.ivars().look;
+        if matches!(run.style, Style::Link | Style::WikiLink)
+            && let Some(links) = self.ivars().links.borrow().as_ref()
+            && let Some(link) = link_at(styled, run.range.start)
+            && link.link.kind != LinkKind::External
+            && links.resolve(link.link.kind, &link.link.target, &self.ivars().path.borrow()).is_none()
+        {
+            return (&look.body, &look.missing, "missing".into());
+        }
+        run_look(run.style, look)
+    }
+
     pub fn restyle_all(&self, view: &NSTextView, source: &str) {
         let styled = highlight(source).to_utf16(source);
         *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&styled, &self.ivars().look);
@@ -355,6 +419,12 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, String) {
         Style::WikiLink => (&look.body, &look.accent, "wikilink".into()),
         Style::Tag => (&look.body, &look.accent, "tag".into()),
     }
+}
+
+/// The link whose source range holds `index`.
+fn link_at(styled: &Highlight, index: usize) -> Option<&LinkRun> {
+    let after = styled.links.partition_point(|l| l.range.start <= index);
+    styled.links[..after].last().filter(|l| index < l.range.end)
 }
 
 /// The font each markup range takes when shown: that of the innermost run containing it.

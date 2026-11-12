@@ -64,3 +64,13 @@ fn options_change_settings() {
     let s = ListSettings::default().with(ListOption::SortBy(SortOrder::Title)).with(ListOption::GroupByDate(false));
     assert_eq!(s, ListSettings { sort: SortOrder::Title, group_by_date: false, include_subfolders: true });
 }
+
+#[test]
+fn new_notes_go_to_the_root_rules_folder_or_the_default() {
+    use knotes_app::new_notes_folder;
+    assert_eq!(new_notes_folder(&rules(&[]), "Вхідні"), "Вхідні");
+    assert_eq!(new_notes_folder(&rules(&[("", r#"{"newNotes": {"folder": "Inbox/New"}}"#)]), "Вхідні"), "Inbox/New");
+    assert_eq!(new_notes_folder(&rules(&[("", r#"{"newNotes": {"folder": "/Inbox/"}}"#)]), "Вхідні"), "Inbox", "slashes trimmed");
+    assert_eq!(new_notes_folder(&rules(&[("", r#"{"newNotes": {"folder": ""}}"#)]), "Вхідні"), "", "empty means the vault root");
+    assert_eq!(new_notes_folder(&rules(&[("A", r#"{"newNotes": {"folder": "X"}}"#)]), "Вхідні"), "Вхідні", "only the root decides");
+}

@@ -9,7 +9,7 @@ mod note_list;
 mod sidebar;
 mod tag_tree;
 
-pub use folder_rules::{FolderRules, RULES_FILE, resolve_list_settings};
+pub use folder_rules::{FolderRules, RULES_FILE, new_notes_folder, resolve_list_settings};
 pub use folder_tree::{FolderNode, folder_tree};
 pub use history::{HISTORY_DEPTH, History};
 pub use labels::{TimeStyle, plural_uk, time_style};

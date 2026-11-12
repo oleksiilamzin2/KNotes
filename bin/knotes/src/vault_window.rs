@@ -9,23 +9,26 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, resolve_list_settings};
-use knotes_core::{FolderRulesStore, NoteRow, NoteWriter, TagIndex, VaultReader};
-use knotes_editor::{DiskChange, Document, conflict_path};
-use knotes_index::SqliteIndex;
+use knotes_app::{
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, new_notes_folder,
+    resolve_list_settings,
+};
+use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_editor::{DiskChange, Document, conflict_path, subpath_offset, utf16_offsets};
+use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_session::{Event, Snapshot};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextView, NSViewController, NSWindow};
-use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString};
+use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSViewController, NSWindow, NSWorkspace};
+use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
 use crate::note_list_view::{self, NoteListSource};
-use crate::note_view;
+use crate::note_view::{self, NoteTextView};
 use crate::sidebar_view::{self, SidebarSource};
 use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
@@ -44,6 +47,8 @@ struct State {
     history: History,
     /// Read-only index connection, opened on first need (the index exists after the first snapshot).
     reader: Option<SqliteIndex>,
+    /// Link resolution of the last snapshot (ADR 0013); `None` until the first one.
+    links: Option<Arc<LinkTargets>>,
 }
 
 /// Autosave runs after this long without edits (ADR 0011).
@@ -62,7 +67,7 @@ pub struct VaultWindow {
     pub list: Retained<NoteListSource>,
     pub table: Retained<NSTableView>,
     pub list_menu: ListMenu,
-    pub note_text: Retained<NSTextView>,
+    pub note_text: Retained<NoteTextView>,
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
     pub chat: ChatView,
@@ -92,6 +97,8 @@ impl VaultWindow {
         let live_preview = LivePreview::new(mtm);
         note_text.setDelegate(Some(ProtocolObject::from_ref(&*live_preview)));
         live_preview.attach(&note_text);
+        let clicks = live_preview.clone();
+        note_text.on_click(move |index, cmd| clicks.click(index, cmd));
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
         let chat = chat_view::chat_view(mtm);
@@ -112,6 +119,7 @@ impl VaultWindow {
             tag_settings: HashMap::new(),
             history: History::default(),
             reader: None,
+            links: None,
         };
         let this = Rc::new(Self {
             window,
@@ -131,6 +139,12 @@ impl VaultWindow {
             this: RefCell::new(Weak::new()),
         });
         *this.this.borrow_mut() = Rc::downgrade(&this);
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.live_preview.on_link(move |link| {
+            if let Some(window) = weak.upgrade() {
+                window.follow_link(link);
+            }
+        });
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.live_preview.on_change(move || {
             if let Some(window) = weak.upgrade() {
@@ -222,6 +236,17 @@ impl VaultWindow {
             state.folders = Arc::clone(&snapshot.folders);
             state.tags = Arc::clone(&snapshot.tags);
         }
+        let new_links = {
+            let mut state = self.state.borrow_mut();
+            let fresh = !state.links.as_ref().is_some_and(|l| Arc::ptr_eq(l, &snapshot.links));
+            fresh.then(|| {
+                state.links = Some(Arc::clone(&snapshot.links));
+                Arc::clone(&snapshot.links)
+            })
+        };
+        if let Some(links) = new_links {
+            self.live_preview.set_links(&self.note_text, links);
+        }
         self.sidebar.set_model(Sidebar::new(&snapshot.folders, &snapshot.tags));
         self.outline.reloadData();
         for section in [SidebarItem::FoldersSection, SidebarItem::TagsSection] {
@@ -271,6 +296,7 @@ impl VaultWindow {
                 let at = if cursor == "end" { end } else { cursor.parse().unwrap_or(0).min(end) };
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
+            probe::click_requested(&self.note_text);
             probe::schedule(true);
         }
     }
@@ -287,8 +313,66 @@ impl VaultWindow {
             state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(path).ok()).unwrap_or_default()
         };
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
-        self.live_preview.show(&self.note_text, &text);
+        self.live_preview.show(&self.note_text, path, &text);
         self.update_navigation();
+    }
+
+    /// Follows a clicked link: opens the note it resolves to (creating a missing one), then
+    /// moves to its `#heading` or `^block`; external links open in their app (ADR 0013).
+    fn follow_link(&self, link: &Link) {
+        if link.kind == LinkKind::External {
+            open_url(&link.target);
+            return;
+        }
+        let Some(source) = self.open_path() else { return };
+        let Some(links) = self.state.borrow().links.clone() else { return };
+        let path = match links.resolve(link.kind, &link.target, &source) {
+            Some(path) => path,
+            None => match self.create_linked_note(link, &source) {
+                Some(path) => path,
+                None => return,
+            },
+        };
+        if path != source {
+            self.open_note(&path, true);
+            self.highlight_open_note();
+        }
+        if let Some(subpath) = &link.subpath {
+            let text = self.note_text.string().to_string();
+            if let Some(at) = subpath_offset(&text, subpath) {
+                self.note_text.move_to_top(utf16_offsets(&text, &[at])[0]);
+            }
+        }
+    }
+
+    /// Creates the empty note a link to a missing note names: at the written path for links
+    /// with a folder (Markdown links: from the linking note's folder), else in the new notes
+    /// folder. An existing file (not indexed yet) is opened as it is.
+    fn create_linked_note(&self, link: &Link, source: &str) -> Option<String> {
+        let target = link.target.trim().trim_start_matches('/');
+        if target.is_empty() {
+            return None;
+        }
+        let state = self.state.borrow();
+        let vault = state.vault.clone()?;
+        let folder = match link.kind {
+            LinkKind::Markdown => source.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_owned()),
+            _ if target.contains('/') => String::new(),
+            _ => new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER),
+        };
+        drop(state);
+        let mut path = normalize(&if folder.is_empty() { target.to_owned() } else { format!("{folder}/{target}") })?;
+        if !path.to_lowercase().ends_with(".md") {
+            path.push_str(".md");
+        }
+        let fs = FsVault::new(&vault);
+        if !vault.join(&path).exists()
+            && let Err(e) = fs.write_note(&path, "")
+        {
+            eprintln!("knotes: cannot create {path}: {e}");
+            return None;
+        }
+        Some(path)
     }
 
     /// Path of the note in the editor.
@@ -365,7 +449,7 @@ impl VaultWindow {
             DiskChange::Ignore => {}
             DiskChange::Reload => {
                 let cursor = self.note_text.selectedRange();
-                self.live_preview.show(&self.note_text, &disk);
+                self.live_preview.show(&self.note_text, path, &disk);
                 let end = self.note_text.string().length();
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
             }
@@ -501,6 +585,32 @@ impl VaultWindow {
             self.outline.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
             self.highlighting.set(false);
         }
+    }
+}
+
+/// `path` with `.` and `..` segments applied; `None` if it leaves the vault.
+fn normalize(path: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Opens an external link in its app; probe mode only reports it.
+fn open_url(url: &str) {
+    if probe::enabled() {
+        println!("open-url: {url}");
+        return;
+    }
+    if let Some(url) = NSURL::URLWithString(&NSString::from_str(url)) {
+        NSWorkspace::sharedWorkspace().openURL(&url);
     }
 }
 

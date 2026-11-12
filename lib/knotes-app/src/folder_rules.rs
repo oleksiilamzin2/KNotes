@@ -84,6 +84,13 @@ impl FolderRules {
     }
 }
 
+/// Folder for notes created from links (and by Cmd+N without a selected folder): the root
+/// `.knotes` field `newNotes.folder`, else `default` (ADR 0013). `""` is the vault root.
+pub fn new_notes_folder(rules: &HashMap<String, FolderRules>, default: &str) -> String {
+    let set = rules.get("").and_then(|r| r.root.get("newNotes")).and_then(|n| n.get("folder")).and_then(Value::as_str);
+    set.unwrap_or(default).trim_matches('/').to_owned()
+}
+
 /// List settings of `folder` (`""` is the vault root), given the rules of the folders that
 /// have a `.knotes` file.
 pub fn resolve_list_settings(folder: &str, rules: &HashMap<String, FolderRules>) -> ListSettings {

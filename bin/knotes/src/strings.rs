@@ -48,3 +48,5 @@ pub const MINIMIZE: &str = "Згорнути";
 pub const ZOOM: &str = "Масштабувати";
 pub const OPEN: &str = "Відкрити";
 pub const SAVE: &str = "Зберегти";
+/// Folder for notes created from links when the root `.knotes` names none (ADR 0013).
+pub const NEW_NOTES_FOLDER: &str = "Вхідні";
