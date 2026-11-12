@@ -41,6 +41,9 @@ fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(
 #[test]
 fn window_has_four_columns_with_native_roles() {
     let out = probe();
+    // A transparent titlebar drops the line the scroll pockets draw under the toolbar
+    // (checked on a screen capture; offscreen rendering does not show it).
+    assert!(out.contains("titlebar: transparent"), "{out}");
     assert!(out.contains("columns: sidebar, content-list, content, inspector"), "{out}");
     assert!(out.contains("title: Knotes"), "{out}");
 }
@@ -64,7 +67,7 @@ fn sidebar_shows_all_notes_folders_and_tags_of_the_vault() {
     std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
     let out = probe_with(&[vault.path()], None);
     let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(sidebar, "Усі нотатки (3) | Теки | Inbox (1) | Projects (2)", "folders unless switched");
+    assert_eq!(sidebar, "Усі нотатки (3) | Inbox (1) | Projects (2)", "folders unless switched, no heading");
     let size = out.lines().find_map(|l| l.strip_prefix("size: ")).expect("size line");
     let width: f64 = size.split_once('x').unwrap().0.parse().unwrap();
     assert!(width >= 1000.0, "window shrank after data arrived: {size}");
@@ -590,12 +593,12 @@ fn the_sidebar_switch_shows_tags_instead_of_folders_and_is_remembered() {
     std::fs::write(vault.path().join("a.md"), "#radar one").unwrap();
     let home = tempfile::tempdir().unwrap();
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=tags")]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | Теги | radar (1) | todo (1)"), "{out}");
+    assert!(out.contains("sidebar: Усі нотатки (2) | radar (1) | todo (1)"), "{out}");
     assert!(out.contains("sidebar-mode: tags"), "{out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | Теги | radar (1) | todo (1)"), "remembered: {out}");
+    assert!(out.contains("sidebar: Усі нотатки (2) | radar (1) | todo (1)"), "remembered: {out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=folders")]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | Теки | Inbox (1)"), "{out}");
+    assert!(out.contains("sidebar: Усі нотатки (2) | Inbox (1)"), "{out}");
 }
 
 #[test]

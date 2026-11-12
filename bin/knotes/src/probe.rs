@@ -305,6 +305,7 @@ fn report(window: &NSWindow) {
     println!("subtitle: {}", window.subtitle());
     let frame = window.frame();
     println!("size: {:.0}x{:.0}", frame.size.width, frame.size.height);
+    println!("titlebar: {}", if window.titlebarAppearsTransparent() { "transparent" } else { "opaque" });
     if let Some(split) = window.contentViewController().and_then(|c| c.downcast::<NSSplitViewController>().ok()) {
         let roles: Vec<&str> = split
             .splitViewItems()
