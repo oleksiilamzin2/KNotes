@@ -67,7 +67,7 @@ fn sidebar_shows_all_notes_folders_and_tags_of_the_vault() {
     std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
     let out = probe_with(&[vault.path()], None);
     let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(sidebar, "Усі нотатки (3) | Inbox (1) | Projects (2)", "folders unless switched, no heading");
+    assert_eq!(sidebar, "Усі нотатки (3) | Вхідні (0) | Без тегів (1) | · | Inbox (1) | Projects (2)", "folders unless switched, no heading");
     let size = out.lines().find_map(|l| l.strip_prefix("size: ")).expect("size line");
     let width: f64 = size.split_once('x').unwrap().0.parse().unwrap();
     assert!(width >= 1000.0, "window shrank after data arrived: {size}");
@@ -593,12 +593,12 @@ fn the_sidebar_switch_shows_tags_instead_of_folders_and_is_remembered() {
     std::fs::write(vault.path().join("a.md"), "#radar one").unwrap();
     let home = tempfile::tempdir().unwrap();
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=tags")]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | radar (1) | todo (1)"), "{out}");
+    assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | radar (1) | todo (1)"), "{out}");
     assert!(out.contains("sidebar-mode: tags"), "{out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | radar (1) | todo (1)"), "remembered: {out}");
+    assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | radar (1) | todo (1)"), "remembered: {out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=folders")]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | Inbox (1)"), "{out}");
+    assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | Inbox (1)"), "{out}");
 }
 
 #[test]
@@ -627,4 +627,23 @@ fn the_toolbar_separator_stays_on_the_column_boundary_when_the_sidebar_collapses
         let (sep, boundary) = separator_and_boundary(&out);
         assert!((sep - boundary).abs() <= 1.5, "{action}: separator at {sep}, boundary at {boundary}");
     }
+}
+
+#[test]
+fn untagged_lists_the_notes_without_tags() {
+    let (_vault, out) = probe_notes(&[("a.md", "#todo a"), ("b.md", "plain b"), ("Вхідні/c.md", "plain c")], &[("KNOTES_PROBE_SELECT", "untagged")]);
+    assert!(out.contains("title: Без тегів"), "{out}");
+    let mut titles = list_titles(&out);
+    titles.sort();
+    assert_eq!(titles, ["b", "c"], "{out}");
+    assert!(out.contains("sidebar: Усі нотатки (3) | Вхідні (1) | Без тегів (2) | ·"), "{out}");
+}
+
+#[test]
+fn the_inbox_is_listed_once_and_selectable_before_it_exists() {
+    let (_vault, out) = probe_notes(&[("Вхідні/c.md", "c"), ("Projects/p.md", "p")], &[]);
+    assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (1) | Без тегів (2) | · | Projects (1)"), "not twice: {out}");
+    let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_SELECT", "f:Вхідні")]);
+    assert!(out.contains("title: Вхідні"), "{out}");
+    assert!(out.contains("subtitle: 0 нотаток"), "{out}");
 }

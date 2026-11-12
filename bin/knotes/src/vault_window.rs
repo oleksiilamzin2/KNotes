@@ -45,6 +45,8 @@ struct State {
     rules: Arc<HashMap<String, FolderRules>>,
     folders: Arc<FolderNode>,
     tags: Arc<Vec<TagNode>>,
+    /// Notes without any tag (the "Untagged" row).
+    untagged: usize,
     index_dir: Option<PathBuf>,
     vault: Option<PathBuf>,
     /// List settings of tag views: tags have no folder and no `.knotes`; kept for the session.
@@ -111,7 +113,7 @@ impl Drop for VaultWindow {
 
 impl VaultWindow {
     pub fn new(mtm: MainThreadMarker) -> Rc<Self> {
-        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders);
+        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0);
         let sidebar = SidebarSource::new(mtm, empty);
         let (scroll, outline) = sidebar_view::outline(mtm, &sidebar);
         let sidebar_vc = NSViewController::new(mtm);
@@ -141,6 +143,7 @@ impl VaultWindow {
             rules: Arc::new(HashMap::new()),
             folders: Arc::new(FolderNode::default()),
             tags: Arc::new(Vec::new()),
+            untagged: 0,
             index_dir: None,
             vault: None,
             tag_settings: HashMap::new(),
@@ -264,7 +267,8 @@ impl VaultWindow {
     fn rebuild_sidebar(&self) {
         let model = {
             let state = self.state.borrow();
-            Sidebar::new(&state.folders, &state.tags, state.sidebar_mode)
+            let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
+            Sidebar::new(&state.folders, &state.tags, state.sidebar_mode, Some(&inbox), state.untagged)
         };
         self.sidebar.set_model(model);
         self.outline.reloadData();
@@ -280,12 +284,13 @@ impl VaultWindow {
     /// kept for the session for tag views.
     pub fn choose(&self, option: ListOption) {
         let mut state = self.state.borrow_mut();
-        match state.selection.clone() {
-            SidebarItem::Tag(tag) => {
-                let current = state.tag_settings.get(&tag).copied().unwrap_or_else(|| resolve_list_settings("", &state.rules));
-                state.tag_settings.insert(tag, current.with(option));
+        let selection = state.selection.clone();
+        match session_settings_key(&selection) {
+            Some(key) => {
+                let current = state.tag_settings.get(&key).copied().unwrap_or_else(|| resolve_list_settings("", &state.rules));
+                state.tag_settings.insert(key, current.with(option));
             }
-            selection => {
+            None => {
                 let folder = match &selection {
                     SidebarItem::Folder(path) => path.clone(),
                     _ => String::new(),
@@ -327,6 +332,7 @@ impl VaultWindow {
             state.rules = Arc::clone(&snapshot.rules);
             state.folders = Arc::clone(&snapshot.folders);
             state.tags = Arc::clone(&snapshot.tags);
+            state.untagged = snapshot.untagged;
         }
         let new_links = {
             let mut state = self.state.borrow_mut();
@@ -810,25 +816,27 @@ impl VaultWindow {
     fn refresh_list(&self) {
         let mut state = self.state.borrow_mut();
         let selection = state.selection.clone();
-        let (title, tagged) = match &selection {
+        let (title, listed) = match &selection {
             SidebarItem::Folder(path) => (path.rsplit('/').next().unwrap_or(path).to_owned(), None),
             SidebarItem::Tag(tag) => (format!("#{tag}"), Some(self.notes_with_tag(&mut state, tag))),
+            SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some(self.untagged_notes(&mut state))),
             _ => (strings::ALL_NOTES.to_owned(), None),
         };
-        let filter = match (&selection, &tagged) {
+        let filter = match (&selection, &listed) {
             (SidebarItem::Folder(path), _) => ListFilter::Folder(path),
-            (SidebarItem::Tag(_), Some(paths)) => ListFilter::Paths(paths),
+            (_, Some(paths)) => ListFilter::Paths(paths),
             _ => ListFilter::All,
         };
         let folder = match &selection {
             SidebarItem::Folder(path) => path.as_str(),
             _ => "",
         };
-        let settings = match &selection {
-            SidebarItem::Tag(tag) => state.tag_settings.get(tag).copied().unwrap_or_else(|| resolve_list_settings("", &state.rules)),
-            _ => resolve_list_settings(folder, &state.rules),
+        let session_key = session_settings_key(&selection);
+        let settings = match &session_key {
+            Some(key) => state.tag_settings.get(key).copied().unwrap_or_else(|| resolve_list_settings("", &state.rules)),
+            None => resolve_list_settings(folder, &state.rules),
         };
-        self.list_menu.update(&settings, !matches!(selection, SidebarItem::Tag(_)));
+        self.list_menu.update(&settings, session_key.is_none());
         let items = build_note_list(&state.rows, &filter, &settings, &note_list_view::now());
         self.list.set_items(Arc::clone(&state.rows), items);
         drop(state);
@@ -854,6 +862,11 @@ impl VaultWindow {
         self.highlighting.set(false);
     }
 
+    fn untagged_notes(&self, state: &mut State) -> HashSet<String> {
+        self.ensure_reader(state);
+        state.reader.as_ref().and_then(|r| r.untagged_notes().ok()).unwrap_or_default().into_iter().collect()
+    }
+
     fn notes_with_tag(&self, state: &mut State, tag: &str) -> HashSet<String> {
         self.ensure_reader(state);
         state.reader.as_ref().and_then(|r| r.notes_with_tag(tag).ok()).unwrap_or_default().into_iter().collect()
@@ -862,7 +875,8 @@ impl VaultWindow {
     fn exists(&self, item: &SidebarItem) -> bool {
         let state = self.state.borrow();
         match item {
-            SidebarItem::Folder(path) => folder_exists(&state.folders, path),
+            // The inbox row shows before its folder exists.
+            SidebarItem::Folder(path) => folder_exists(&state.folders, path) || *path == new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER),
             SidebarItem::Tag(tag) => tag_exists(&state.tags, tag),
             _ => true,
         }
@@ -943,6 +957,11 @@ fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) {
     if let Err(e) = vault.write_note(&copy, disk) {
         eprintln!("knotes: cannot keep conflict copy {copy}: {e}");
     }
+}
+
+/// Tags and "Untagged" have no folder and no `.knotes`: their list options last the session.
+fn session_settings_key(item: &SidebarItem) -> Option<String> {
+    matches!(item, SidebarItem::Tag(_) | SidebarItem::Untagged).then(|| item.key())
 }
 
 fn folder_exists(node: &FolderNode, path: &str) -> bool {

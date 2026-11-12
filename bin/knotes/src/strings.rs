@@ -52,3 +52,5 @@ pub const SAVE: &str = "Зберегти";
 pub const NEW_NOTES_FOLDER: &str = "Вхідні";
 /// File name of a new note until its first line names it (ADR 0011).
 pub const UNTITLED: &str = "Без назви";
+/// Sidebar row of notes without any tag.
+pub const UNTAGGED: &str = "Без тегів";

@@ -7,6 +7,10 @@ use crate::{FolderNode, TagNode};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SidebarItem {
     AllNotes,
+    /// Notes without any tag.
+    Untagged,
+    /// Empty space between the fixed rows and the tree.
+    Gap,
     Folder(String),
     Tag(String),
 }
@@ -17,6 +21,8 @@ impl SidebarItem {
     pub fn key(&self) -> String {
         match self {
             Self::AllNotes => "all".into(),
+            Self::Untagged => "untagged".into(),
+            Self::Gap => "gap".into(),
             Self::Folder(path) => format!("f:{path}"),
             Self::Tag(tag) => format!("t:{tag}"),
         }
@@ -25,6 +31,8 @@ impl SidebarItem {
     pub fn from_key(key: &str) -> Option<Self> {
         match key {
             "all" => Some(Self::AllNotes),
+            "untagged" => Some(Self::Untagged),
+            "gap" => Some(Self::Gap),
             _ => match key.split_once(':')? {
                 ("f", path) => Some(Self::Folder(path.into())),
                 ("t", tag) => Some(Self::Tag(tag.into())),
@@ -65,23 +73,50 @@ struct Entry {
     children: Vec<SidebarItem>,
 }
 
-/// Sidebar contents for one snapshot: "All notes", then the folder tree or the tag tree, with
-/// no heading (the toolbar switch says which).
+/// Sidebar contents for one snapshot: "All notes", the inbox (the new notes folder, pinned in
+/// both modes), "Untagged", a gap, then the folder tree or the tag tree, with no heading (the
+/// toolbar switch says which).
 pub struct Sidebar {
     top: Vec<SidebarItem>,
     entries: HashMap<SidebarItem, Entry>,
+    inbox: Option<SidebarItem>,
 }
 
 impl Sidebar {
-    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode) -> Self {
+    /// `inbox`: path of the new notes folder (`None` or `""`: no inbox row); it shows even
+    /// before the folder exists, and the folder tree leaves it out. `untagged`: notes without
+    /// any tag.
+    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode, inbox: Option<&str>, untagged: usize) -> Self {
         let mut entries = HashMap::new();
-        entries.insert(SidebarItem::AllNotes, Entry { name: String::new(), count: Some(folders.notes), children: Vec::new() });
+        let fixed = |count| Entry { name: String::new(), count, children: Vec::new() };
+        entries.insert(SidebarItem::AllNotes, fixed(Some(folders.notes)));
+        entries.insert(SidebarItem::Untagged, fixed(Some(untagged)));
+        entries.insert(SidebarItem::Gap, fixed(None));
+        let inbox = inbox.filter(|p| !p.is_empty());
         let mut top = vec![SidebarItem::AllNotes];
+        let inbox_item = inbox.map(|path| {
+            let node = find_folder(folders, path);
+            let children = node.map(|n| n.children.iter().map(|c| add_folder(c, &mut entries, path)).collect()).unwrap_or_default();
+            let name = node.map_or_else(|| path.rsplit('/').next().unwrap_or(path).to_owned(), |n| n.name.clone());
+            let item = SidebarItem::Folder(path.to_owned());
+            entries.insert(item.clone(), Entry { name, count: Some(node.map_or(0, |n| n.notes)), children });
+            item
+        });
+        top.extend(inbox_item.clone());
+        top.extend([SidebarItem::Untagged, SidebarItem::Gap]);
+        let skip = inbox.unwrap_or("");
         match mode {
-            SidebarMode::Folders => top.extend(folders.children.iter().map(|f| add_folder(f, &mut entries))),
+            SidebarMode::Folders => {
+                top.extend(folders.children.iter().filter(|f| f.path != skip).map(|f| add_folder(f, &mut entries, skip)));
+            }
             SidebarMode::Tags => top.extend(tags.iter().map(|t| add_tag(t, &mut entries))),
         }
-        Self { top, entries }
+        Self { top, entries, inbox: inbox_item }
+    }
+
+    /// The pinned inbox row, if the vault has a new notes folder.
+    pub fn inbox(&self) -> Option<&SidebarItem> {
+        self.inbox.as_ref()
     }
 
     /// Children of `item`, or the top-level rows for `None`.
@@ -117,8 +152,16 @@ impl Sidebar {
     }
 }
 
-fn add_folder(node: &FolderNode, entries: &mut HashMap<SidebarItem, Entry>) -> SidebarItem {
-    let children = node.children.iter().map(|c| add_folder(c, entries)).collect();
+fn find_folder<'a>(node: &'a FolderNode, path: &str) -> Option<&'a FolderNode> {
+    if node.path == path {
+        return Some(node);
+    }
+    node.children.iter().find(|c| path == c.path || path.starts_with(&format!("{}/", c.path))).and_then(|c| find_folder(c, path))
+}
+
+/// Adds `node` and its subfolders, leaving out the folder at `skip` (the pinned inbox).
+fn add_folder(node: &FolderNode, entries: &mut HashMap<SidebarItem, Entry>, skip: &str) -> SidebarItem {
+    let children = node.children.iter().filter(|c| c.path != skip).map(|c| add_folder(c, entries, skip)).collect();
     let item = SidebarItem::Folder(node.path.clone());
     entries.insert(item.clone(), Entry { name: node.name.clone(), count: Some(node.notes), children });
     item

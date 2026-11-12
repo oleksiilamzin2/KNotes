@@ -63,6 +63,16 @@ define_class!(
             self.cell_for(outline, item)
         }
 
+        #[unsafe(method(outlineView:heightOfRowByItem:))]
+        fn row_height(&self, outline: &NSOutlineView, item: &AnyObject) -> f64 {
+            if item_of(item) == Some(SidebarItem::Gap) { GAP_HEIGHT } else { outline.rowHeight() }
+        }
+
+        #[unsafe(method(outlineView:shouldSelectItem:))]
+        fn should_select(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
+            item_of(item) != Some(SidebarItem::Gap)
+        }
+
         #[unsafe(method(outlineViewSelectionDidChange:))]
         fn selection_did_change(&self, notification: &NSNotification) {
             let Some(outline) = notification.object().and_then(|o| o.downcast::<NSOutlineView>().ok()) else { return };
@@ -89,7 +99,11 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let item = item_of(item)?;
         let model = self.ivars().model.borrow();
         let (label, icon) = match &item {
+            // Empty space between the fixed rows and the tree.
+            SidebarItem::Gap => return Some(NSView::new(self.mtm())),
             SidebarItem::AllNotes => (strings::ALL_NOTES.to_owned(), Some("tray.full")),
+            SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some("tag.slash")),
+            SidebarItem::Folder(_) if model.inbox() == Some(&item) => (model.name(&item).to_owned(), Some("tray.and.arrow.down")),
             SidebarItem::Folder(_) => (model.name(&item).to_owned(), Some("folder")),
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
         };
@@ -151,6 +165,8 @@ pub fn outline(mtm: MainThreadMarker, source: &SidebarSource) -> (Retained<NSScr
 }
 
 const CELL_ID: &str = "SidebarCell";
+/// Height of the empty row between the fixed rows and the tree.
+const GAP_HEIGHT: f64 = 10.0;
 const COUNT_ID: &str = "count";
 
 /// A reused cell (icon, name, count on the right), laid out with constraints.

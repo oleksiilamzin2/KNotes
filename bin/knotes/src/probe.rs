@@ -367,7 +367,9 @@ fn report_sidebar_mode(window: &NSWindow) {
 fn report_sidebar(outline: &NSOutlineView) {
     let rows: Vec<String> = (0..outline.numberOfRows())
         .filter_map(|row| {
-            let cell = outline.viewAtColumn_row_makeIfNecessary(0, row, true)?.downcast::<NSTableCellView>().ok()?;
+            let view = outline.viewAtColumn_row_makeIfNecessary(0, row, true)?;
+            // The gap row is a plain view.
+            let Ok(cell) = view.downcast::<NSTableCellView>() else { return Some("·".to_owned()) };
             let name = unsafe { cell.textField() }?.stringValue().to_string();
             let count = count_field(&cell).map(|c| c.stringValue().to_string()).unwrap_or_default();
             Some(if count.is_empty() { name } else { format!("{name} ({count})") })
