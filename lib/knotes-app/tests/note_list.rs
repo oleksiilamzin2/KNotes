@@ -63,7 +63,7 @@ fn date_groups_like_apple_notes() {
         .iter()
         .map(|i| match i {
             ListItem::Header(g) => format!("{g:?}"),
-            ListItem::Note(n) => rows[*n as usize].path.clone(),
+            ListItem::Note(n) | ListItem::Found(n, _) => rows[*n as usize].path.clone(),
         })
         .collect();
     assert_eq!(

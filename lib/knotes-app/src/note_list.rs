@@ -74,10 +74,23 @@ impl Default for ListSettings {
 }
 
 /// A row of the note list: a date header or an index into the rows given to `build_note_list`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListItem {
     Header(DateGroup),
     Note(u32),
+    /// A search result: the note row and the text around the match, shown instead of the
+    /// note's usual snippet.
+    Found(u32, String),
+}
+
+impl ListItem {
+    /// Index of the note row, for every item but headers.
+    pub fn row(&self) -> Option<u32> {
+        match self {
+            Self::Header(_) => None,
+            Self::Note(i) | Self::Found(i, _) => Some(*i),
+        }
+    }
 }
 
 /// Title shown for a note: its file name without `.md`.
@@ -86,8 +99,9 @@ pub fn title_of(path: &str) -> &str {
     name.strip_suffix(".md").unwrap_or(name)
 }
 
-pub fn build_note_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, clock: &Clock) -> Vec<ListItem> {
-    let keep = |row: &NoteRow| match filter {
+/// Whether the list of `filter` shows the note `row`.
+pub(crate) fn keeps(filter: &ListFilter, settings: &ListSettings, row: &NoteRow) -> bool {
+    match filter {
         ListFilter::All => true,
         ListFilter::Paths(paths) => paths.contains(&row.path),
         ListFilter::Folder(folder) => {
@@ -96,7 +110,11 @@ pub fn build_note_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSet
                 || (settings.include_subfolders
                     && (folder.is_empty() || parent.strip_prefix(*folder).is_some_and(|rest| rest.starts_with('/'))))
         }
-    };
+    }
+}
+
+pub fn build_note_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, clock: &Clock) -> Vec<ListItem> {
+    let keep = |row: &NoteRow| keeps(filter, settings, row);
     let mut picked: Vec<u32> = (0..rows.len() as u32).filter(|&i| keep(&rows[i as usize])).collect();
     let title = |i: u32| title_of(&rows[i as usize].path);
     match settings.sort {
