@@ -145,3 +145,52 @@ fn repeated_scope_sees_notes_changed_in_between() {
     found.sort();
     assert_eq!(found, ["a.md", "b.md"]);
 }
+
+mod note_level {
+    use super::*;
+    use knotes_core::{ContentQuery, Within};
+
+    fn notes() -> Vec<(&'static str, String)> {
+        let filler = "слово ".repeat(500);
+        vec![
+            ("razom.md", "Сьогодні Люцифер і Баптист прийшли разом.".to_owned()),
+            ("okremo.md", format!("Люцифер тут.\n\n{filler}\n\n# Інший розділ\n\nБаптист там.")),
+            ("odyn.md", "Лише Люцифер, без другого.".to_owned()),
+        ]
+    }
+
+    fn found(index: &SqliteIndex, text: &str, within: Within, prefixes: bool, scope: Option<&[String]>) -> Vec<String> {
+        let query = ContentQuery { text, within, prefixes, scope, limit: 50 };
+        let mut paths: Vec<String> = index.search(&query).unwrap().into_iter().map(|h| h.path).collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn every_word_anywhere_in_the_note_once_per_note() {
+        let notes = notes();
+        let refs: Vec<(&str, &str)> = notes.iter().map(|(p, s)| (*p, s.as_str())).collect();
+        let (_d, index) = index_with(&refs);
+        assert_eq!(found(&index, "люцифер баптист", Within::Note, false, None), ["okremo.md", "razom.md"]);
+        assert_eq!(found(&index, "люцифер баптист", Within::Block, false, None), ["razom.md"], "block: both in one block");
+        assert_eq!(found(&index, "люцифер", Within::Note, false, None), ["odyn.md", "okremo.md", "razom.md"]);
+    }
+
+    #[test]
+    fn halves_of_words_match_while_typing() {
+        let notes = notes();
+        let refs: Vec<(&str, &str)> = notes.iter().map(|(p, s)| (*p, s.as_str())).collect();
+        let (_d, index) = index_with(&refs);
+        assert_eq!(found(&index, "люц ба", Within::Note, true, None), ["okremo.md", "razom.md"]);
+        assert!(found(&index, "люцифер ба", Within::Note, false, None).is_empty(), "short words are exact otherwise");
+    }
+
+    #[test]
+    fn the_scope_limits_note_level_results() {
+        let notes = notes();
+        let refs: Vec<(&str, &str)> = notes.iter().map(|(p, s)| (*p, s.as_str())).collect();
+        let (_d, index) = index_with(&refs);
+        let scope = vec!["okremo.md".to_owned(), "odyn.md".to_owned()];
+        assert_eq!(found(&index, "люцифер баптист", Within::Note, false, Some(&scope)), ["okremo.md"]);
+    }
+}

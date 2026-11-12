@@ -16,23 +16,27 @@ const EXACT_MAX_CHARS: usize = 3;
 /// Words are quoted FTS5 phrases, so user input is never FTS syntax; FTS5 tokenizes inside the
 /// quotes with the table tokenizer (`пам'ять` becomes `пам ять`). Punctuation around a word is
 /// dropped, and so are words without letters or digits.
-pub(crate) fn query_groups(query: &str, stemmer: &impl Stemmer) -> Vec<QueryGroup> {
+///
+/// With `prefixes` (search as you type) short words are prefixes too: `"ба"*`.
+pub(crate) fn query_groups(query: &str, stemmer: &impl Stemmer, prefixes: bool) -> Vec<QueryGroup> {
+    let words: Vec<String> =
+        query.split_whitespace().map(|raw| raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).filter(|w| !w.is_empty()).collect();
     let mut groups = Vec::new();
-    for raw in query.split_whitespace() {
-        let word = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
-        if word.is_empty() {
-            continue;
-        }
+    for word in words {
         let stem = stemmer.stem(&word);
         let mut expr = String::new();
-        if word.chars().count() <= EXACT_MAX_CHARS {
+        let short = word.chars().count() <= EXACT_MAX_CHARS;
+        let typed = short && prefixes;
+        if typed {
+            let _ = write!(expr, "{}*", quoted(&word));
+        } else if short {
             let _ = write!(expr, "{}", quoted(&word));
         } else if stem == word {
             let _ = write!(expr, "{}*", quoted(&word));
         } else {
             let _ = write!(expr, "({} OR {}*)", quoted(&word), quoted(stem));
         }
-        groups.push(QueryGroup { word, expr });
+        groups.push(QueryGroup { word, expr, typed });
     }
     groups
 }
@@ -42,6 +46,8 @@ pub(crate) struct QueryGroup {
     /// Lowercased word as typed, used to look up how frequent it is.
     pub word: String,
     pub expr: String,
+    /// A short word turned into a prefix while typing: its exact frequency says nothing.
+    pub typed: bool,
 }
 
 /// Explicit AND: FTS5 has no implicit AND between parenthesized groups.
@@ -59,7 +65,7 @@ mod tests {
     use crate::light_stemmer::LightStemmer;
 
     fn expr(q: &str) -> Option<String> {
-        let groups = query_groups(q, &LightStemmer);
+        let groups = query_groups(q, &LightStemmer, false);
         (!groups.is_empty()).then(|| join(&groups))
     }
 

@@ -81,7 +81,7 @@ impl SqliteIndex {
         if needed as u64 > pack.len()? {
             return Ok(None);
         }
-        conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY)")?;
+        conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY); CREATE TEMP TABLE note_blocks(id INTEGER PRIMARY KEY)")?;
         Ok(Some(Self { dir: dir.to_path_buf(), conn, pack: RefCell::new(pack), read_only: false, data_version: Cell::new(-1), block_count: Cell::new(None), corpus: RefCell::new(None), scope: RefCell::new(None) }))
     }
 }
@@ -212,7 +212,7 @@ impl SqliteIndex {
             return Err(format!("index schema {version}, expected {}", schema::VERSION).into());
         }
         rusqlite::vtab::array::load_module(&conn)?;
-        conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY)")?;
+        conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY); CREATE TEMP TABLE note_blocks(id INTEGER PRIMARY KEY)")?;
         let pack = ContentPack::open_read_only(&dir.join(PACK_FILE))?;
         Ok(Self {
             dir: dir.to_path_buf(),

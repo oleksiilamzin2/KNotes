@@ -13,9 +13,36 @@ pub struct BlockHit {
     pub score: f64,
 }
 
-/// Ranked full-text search over note blocks. The query is plain user text, never syntax:
-/// every word must occur in the block.
+/// How near each other the words of a content query must be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Within {
+    /// Anywhere in the note (Obsidian's `content:`); one hit per note, its best block.
+    Note,
+    /// In one block (Obsidian's `block:`).
+    Block,
+}
+
+/// A content query. The text is plain user text, never syntax: every word must occur.
+#[derive(Debug, Clone, Copy)]
+pub struct ContentQuery<'a> {
+    pub text: &'a str,
+    pub within: Within,
+    /// Search as you type: every word also matches as the start of a word, however short
+    /// (`люц ба` finds "Люцифер" and "Баптист"); otherwise words of up to three letters match
+    /// whole words only.
+    pub prefixes: bool,
+    /// Only these note paths (unknown paths are ignored); `None`: all notes.
+    pub scope: Option<&'a [String]>,
+    pub limit: usize,
+}
+
+/// Ranked full-text search over note blocks.
 pub trait ContentSearch {
-    /// `scope`: only blocks of these note paths (unknown paths are ignored); `None`: all notes.
-    fn search_blocks(&self, query: &str, scope: Option<&[String]>, limit: usize) -> Result<Vec<BlockHit>, BoxError>;
+    /// Best first.
+    fn search(&self, query: &ContentQuery) -> Result<Vec<BlockHit>, BoxError>;
+
+    /// Blocks holding every word, best first.
+    fn search_blocks(&self, query: &str, scope: Option<&[String]>, limit: usize) -> Result<Vec<BlockHit>, BoxError> {
+        self.search(&ContentQuery { text: query, within: Within::Block, prefixes: false, scope, limit })
+    }
 }

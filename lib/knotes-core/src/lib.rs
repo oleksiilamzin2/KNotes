@@ -25,7 +25,7 @@ mod vault_scanner;
 
 pub use change_feed::ChangeFeed;
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};
-pub use content_search::{BlockHit, ContentSearch};
+pub use content_search::{BlockHit, ContentQuery, ContentSearch, Within};
 pub use corpus_source::CorpusSource;
 pub use file_states::{FileState, FileStates};
 pub use folder_rules_store::FolderRulesStore;

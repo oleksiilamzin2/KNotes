@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use knotes_core::{
-    CaseMode, ContentScan, ContentSearch, CorpusSource, FileKind, IndexChange, IndexWriter, LinkGraph, NoteCatalog,
+    CaseMode, ContentQuery, ContentScan, ContentSearch, CorpusSource, Within, FileKind, IndexChange, IndexWriter, LinkGraph, NoteCatalog,
     NoteParser, NoteText, ScanQuery, TextCorpus, TitleSearch, VaultFile, VaultScanner,
 };
 use knotes_index::SqliteIndex;
@@ -94,6 +94,19 @@ fn run(vault: PathBuf, factor: f64) -> Result<String, Box<dyn std::error::Error 
     rows.push(measure("Content search (FTS), 1 word", MS(30), &words, |q| index.search_blocks(q, None, 50).map_or(0, |h| h.len())));
     let pairs: Vec<String> = words.chunks(2).filter(|c| c.len() == 2).map(|c| c.join(" ")).collect();
     rows.push(measure("Content search (FTS), 2 words", MS(30), &pairs, |q| index.search_blocks(q, None, 50).map_or(0, |h| h.len())));
+
+    // Search as you type in the list (`content:`): every word anywhere in a note, halves too.
+    fn note_query(q: &str) -> ContentQuery<'_> {
+        ContentQuery { text: q, within: Within::Note, prefixes: true, scope: None, limit: 500 }
+    }
+    rows.push(measure("Content search, note level, 2 words", MS(30), &pairs, |q| index.search(&note_query(q)).map_or(0, |h| h.len())));
+    let halves: Vec<String> = pairs
+        .iter()
+        .map(|p| p.split(' ').map(|w| w.chars().take(3).collect::<String>()).collect::<Vec<_>>().join(" "))
+        .collect();
+    rows.push(measure("Content search, note level, 2 word starts (3 letters)", MS(30), &halves, |q| {
+        index.search(&note_query(q)).map_or(0, |h| h.len())
+    }));
 
     let scope: Vec<String> = corpus_paths(&*corpus).into_iter().step_by(5).collect();
     rows.push(measure("Scoped content search (20% of notes)", MS(30), &words, |q| {
