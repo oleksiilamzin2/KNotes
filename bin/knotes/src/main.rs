@@ -10,6 +10,8 @@ mod main_menu;
 mod note_list_view;
 mod note_view;
 mod probe;
+mod search_bar;
+mod search_worker;
 mod sidebar_view;
 mod strings;
 mod toolbar;

@@ -139,16 +139,20 @@ impl NoteListSource {
 
     /// Path of the note shown in `row`; `None` for headers.
     pub fn path_at(&self, row: usize) -> Option<String> {
-        match self.ivars().items.borrow().get(row)? {
-            ListItem::Note(i) => self.ivars().rows.borrow().get(*i as usize).map(|r| r.path.clone()),
-            ListItem::Header(_) => None,
-        }
+        let i = self.ivars().items.borrow().get(row)?.row()?;
+        self.ivars().rows.borrow().get(i as usize).map(|r| r.path.clone())
+    }
+
+    /// Paths of the notes in the list, in list order.
+    pub fn paths(&self) -> Vec<String> {
+        let rows = self.ivars().rows.borrow();
+        self.ivars().items.borrow().iter().filter_map(|i| i.row()).map(|i| rows[i as usize].path.clone()).collect()
     }
 
     /// Row showing the note at `path`, if it is in the list.
     pub fn row_of(&self, path: &str) -> Option<usize> {
         let rows = self.ivars().rows.borrow();
-        self.ivars().items.borrow().iter().position(|item| matches!(item, ListItem::Note(i) if rows[*i as usize].path == path))
+        self.ivars().items.borrow().iter().position(|item| item.row().is_some_and(|i| rows[i as usize].path == path))
     }
 
     fn is_header(&self, row: NSInteger) -> bool {
@@ -157,11 +161,11 @@ impl NoteListSource {
 
     /// Notes (not headers) in the list.
     pub fn note_count(&self) -> usize {
-        self.ivars().items.borrow().iter().filter(|i| matches!(i, ListItem::Note(_))).count()
+        self.ivars().items.borrow().iter().filter(|i| i.row().is_some()).count()
     }
 
     fn cell_for(&self, table: &NSTableView, index: usize) -> Option<Retained<NSView>> {
-        let item = *self.ivars().items.borrow().get(index)?;
+        let item = self.ivars().items.borrow().get(index)?.clone();
         let mtm = self.mtm();
         match item {
             ListItem::Header(group) => {
@@ -171,13 +175,18 @@ impl NoteListSource {
                 }
                 Some(Retained::into_super(cell))
             }
-            ListItem::Note(i) => {
+            ListItem::Note(i) | ListItem::Found(i, _) => {
                 let rows = self.ivars().rows.borrow();
                 let row = rows.get(i as usize)?;
                 let cell = note_cell(table, mtm);
                 set_field(&cell, TITLE_ID, title_of(&row.path));
                 set_field(&cell, TIME_ID, &self.time_label(row.mtime_ns));
-                set_field(&cell, SNIPPET_ID, &row.snippet);
+                // A search result shows the text around the match instead of the note's start.
+                let snippet = match &item {
+                    ListItem::Found(_, found) => found.as_str(),
+                    _ => row.snippet.as_str(),
+                };
+                set_field(&cell, SNIPPET_ID, snippet);
                 Some(Retained::into_super(cell))
             }
         }

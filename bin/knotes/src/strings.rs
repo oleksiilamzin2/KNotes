@@ -54,3 +54,5 @@ pub const NEW_NOTES_FOLDER: &str = "Вхідні";
 pub const UNTITLED: &str = "Без назви";
 /// Sidebar row of notes without any tag.
 pub const UNTAGGED: &str = "Без тегів";
+/// Placeholder of the search field over the note list.
+pub const SEARCH: &str = "Пошук";

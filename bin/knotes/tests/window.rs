@@ -108,7 +108,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(2), sidebar-separator, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
+        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -646,4 +646,33 @@ fn the_inbox_is_listed_once_and_selectable_before_it_exists() {
     let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_SELECT", "f:Вхідні")]);
     assert!(out.contains("title: Вхідні"), "{out}");
     assert!(out.contains("subtitle: 0 нотаток"), "{out}");
+}
+
+#[test]
+fn searching_lists_title_matches_then_text_matches_in_the_selected_folder() {
+    let (_vault, out) = probe_notes(
+        &[
+            ("Projects/Radar.md", "about sensors"),
+            ("Projects/notes.md", "# Notes\n\nToday we discuss radar modes and filters."),
+            ("Projects/other.md", "nothing here"),
+            ("outside.md", "radar outside the folder"),
+        ],
+        &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_SEARCH", "radar")],
+    );
+    assert_eq!(list_titles(&out), ["Radar", "notes"], "{out}");
+    let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap();
+    assert!(list.contains("notes ~") && list.contains("radar modes"), "the row shows the found text: {list}");
+    assert!(out.contains("search: radar"), "{out}");
+    assert!(out.contains("subtitle: 2 нотатки"), "{out}");
+}
+
+#[test]
+fn word_forms_are_found_and_an_empty_search_restores_the_list() {
+    let (_vault, out) = probe_notes(
+        &[("a.md", "Пишемо українською мовою"), ("b.md", "інше")],
+        &[("KNOTES_PROBE_SEARCH", "мова")],
+    );
+    assert_eq!(list_titles(&out), ["a"], "{out}");
+    let (_vault, out) = probe_notes(&[("a.md", "a"), ("b.md", "b")], &[("KNOTES_PROBE_SEARCH", "")]);
+    assert_eq!(list_titles(&out).len(), 2, "{out}");
 }

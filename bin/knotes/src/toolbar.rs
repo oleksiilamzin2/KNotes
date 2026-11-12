@@ -8,7 +8,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSImage, NSMenu, NSMenuToolbarItem, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
+    NSImage, NSMenu, NSMenuToolbarItem, NSSearchField, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
     NSToolbarItem, NSToolbarItemGroup, NSToolbarItemGroupSelectionMode, NSToolbarSidebarTrackingSeparatorItemIdentifier,
     NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
@@ -20,6 +20,7 @@ use crate::strings;
 
 pub const SIDEBAR_MODE: &str = "knotes.sidebar-mode";
 pub const LIST_SEPARATOR: &str = "knotes.list-separator";
+pub const SEARCH: &str = "knotes.search";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
 pub const NEW_NOTE: &str = "knotes.new-note";
 pub const HISTORY: &str = "knotes.history";
@@ -28,6 +29,8 @@ pub const CHAT: &str = "knotes.chat";
 type OnNavigate = Box<dyn Fn(bool)>;
 type OnNewNote = Box<dyn Fn()>;
 type OnSidebarMode = Box<dyn Fn(SidebarMode)>;
+type OnSearch = Box<dyn Fn(String)>;
+type OnToggleSearch = Box<dyn Fn()>;
 
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
@@ -36,6 +39,8 @@ pub struct Ivars {
     on_navigate: RefCell<Option<OnNavigate>>,
     on_new_note: RefCell<Option<OnNewNote>>,
     on_sidebar_mode: RefCell<Option<OnSidebarMode>>,
+    on_search: RefCell<Option<OnSearch>>,
+    on_toggle_search: RefCell<Option<OnToggleSearch>>,
     /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
     sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     sidebar_mode_state: Cell<SidebarMode>,
@@ -89,6 +94,24 @@ define_class!(
             }
         }
 
+        /// The magnifying glass: shows or hides the search row over the list.
+        #[unsafe(method(toggleSearch:))]
+        fn toggle_search(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_toggle_search.borrow().as_ref() {
+                callback();
+            }
+        }
+
+        /// The search field's text changed (it sends after a short pause, and at once on
+        /// Return or the clear button).
+        #[unsafe(method(searchChanged:))]
+        fn search_changed(&self, sender: &NSSearchField) {
+            let query = sender.stringValue().to_string();
+            if let Some(callback) = self.ivars().on_search.borrow().as_ref() {
+                callback(query);
+            }
+        }
+
         #[unsafe(method(navigate:))]
         fn navigate(&self, sender: &NSToolbarItemGroup) {
             let forward = sender.selectedIndex() == 1;
@@ -107,6 +130,8 @@ impl ToolbarDelegate {
             on_navigate: RefCell::new(None),
             on_new_note: RefCell::new(None),
             on_sidebar_mode: RefCell::new(None),
+            on_search: RefCell::new(None),
+            on_toggle_search: RefCell::new(None),
             sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
             sidebar_shown: Cell::new(true),
@@ -118,6 +143,14 @@ impl ToolbarDelegate {
 
     pub fn on_new_note(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_new_note.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_toggle_search(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_toggle_search.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_search(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_search.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_sidebar_mode(&self, callback: impl Fn(SidebarMode) + 'static) {
@@ -183,6 +216,14 @@ impl ToolbarDelegate {
                 &self.ivars().split_view,
                 1,
             ))),
+            SEARCH => {
+                let item = button(mtm, id, "magnifyingglass", strings::SEARCH);
+                unsafe {
+                    item.setTarget(Some(target));
+                    item.setAction(Some(sel!(toggleSearch:)));
+                }
+                Some(item)
+            }
             LIST_OPTIONS => {
                 let item = NSMenuToolbarItem::initWithItemIdentifier(NSMenuToolbarItem::alloc(mtm), id);
                 item.setImage(symbol("ellipsis", strings::LIST_OPTIONS).as_deref());
@@ -248,6 +289,7 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         // No flexible space before the list options: the title already takes the free width,
         // and with the sidebar collapsed every point is needed for the separator to stay on
         // the list/note boundary.
+        custom(SEARCH),
         custom(LIST_OPTIONS),
         custom(LIST_SEPARATOR),
         custom(NEW_NOTE),

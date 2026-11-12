@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, SidebarMode, TagNode, build_note_list, new_notes_folder,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, SidebarMode, TagNode, search_list, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -34,6 +34,8 @@ use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view::{self, NoteTextView};
+use crate::search_bar::SearchBar;
+use crate::search_worker::{SearchRequest, SearchResponse, SearchWorker};
 use crate::sidebar_view::{self, SidebarSource};
 use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
@@ -60,6 +62,8 @@ struct State {
     titles: Option<Arc<TitleIndex>>,
     /// Folders or tags under "All notes".
     sidebar_mode: SidebarMode,
+    /// Text in the search field over the list; the list shows its results when not empty.
+    search: String,
 }
 
 /// Autosave runs after this long without edits (ADR 0011).
@@ -79,6 +83,8 @@ pub struct VaultWindow {
     pub table: Retained<NSTableView>,
     pub list_menu: ListMenu,
     pub note_text: Retained<NoteTextView>,
+    /// The search row over the note list.
+    pub search_bar: SearchBar,
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
     pub chat: ChatView,
@@ -98,6 +104,10 @@ pub struct VaultWindow {
     completion_dismissed: Cell<Option<usize>>,
     /// Set while a completion is inserted, so the edit does not reopen the list.
     accepting: Cell<bool>,
+    /// List search: the background thread, the latest request and the results shown.
+    search_worker: RefCell<Option<SearchWorker>>,
+    search_generation: Cell<u64>,
+    search_results: RefCell<Option<SearchResponse>>,
     /// The sidebar's split view item, watched to hide the folders/tags switch with it.
     sidebar_item: Retained<NSSplitViewItem>,
     collapse_observer: RefCell<Option<Retained<CollapseObserver>>>,
@@ -121,7 +131,8 @@ impl VaultWindow {
         let list = NoteListSource::new(mtm);
         let (list_scroll, table) = note_list_view::table(mtm, &list);
         let list_vc = NSViewController::new(mtm);
-        list_vc.setView(&list_scroll);
+        let search_bar = SearchBar::new(mtm, list_scroll);
+        list_vc.setView(&search_bar.column);
         let (note_scroll, note_text) = note_view::note_view(mtm);
         let live_preview = LivePreview::new(mtm);
         note_text.setDelegate(Some(ProtocolObject::from_ref(&*live_preview)));
@@ -136,6 +147,7 @@ impl VaultWindow {
         let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc, &chat_vc);
         let list_menu = ListMenu::new(mtm);
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
+        search_bar.set_target(toolbar.as_ref());
         toolbar::install(&window, &toolbar);
         let state = State {
             selection: SidebarItem::AllNotes,
@@ -152,6 +164,7 @@ impl VaultWindow {
             links: None,
             titles: None,
             sidebar_mode: SidebarMode::Folders,
+            search: String::new(),
         };
         let this = Rc::new(Self {
             window,
@@ -161,6 +174,7 @@ impl VaultWindow {
             table,
             list_menu,
             note_text,
+            search_bar,
             live_preview,
             chat,
             toolbar_delegate: toolbar,
@@ -173,6 +187,9 @@ impl VaultWindow {
             completion_from: Cell::new(0),
             completion_dismissed: Cell::new(None),
             accepting: Cell::new(false),
+            search_worker: RefCell::new(None),
+            search_generation: Cell::new(0),
+            search_results: RefCell::new(None),
             sidebar_item: split.splitViewItems().objectAtIndex(0),
             collapse_observer: RefCell::new(None),
         });
@@ -227,6 +244,18 @@ impl VaultWindow {
         this.toolbar_delegate.on_new_note(move || {
             if let Some(window) = weak.upgrade() {
                 window.new_note();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_toggle_search(move || {
+            if let Some(window) = weak.upgrade() {
+                window.toggle_search();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_search(move |query| {
+            if let Some(window) = weak.upgrade() {
+                window.search(&query);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -360,6 +389,7 @@ impl VaultWindow {
         self.update_navigation();
         if probe::enabled() && !snapshot.rows.is_empty() && probe::act_once() {
             probe::sidebar_mode_requested(&self.window);
+            probe::search_requested(&self.window);
             probe::toggle_sidebar_requested(&self.window);
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
@@ -810,7 +840,11 @@ impl VaultWindow {
             return;
         }
         self.state.borrow_mut().selection = item;
+        *self.search_results.borrow_mut() = None;
         self.refresh_list();
+        if !self.state.borrow().search.trim().is_empty() {
+            self.request_search();
+        }
     }
 
     fn refresh_list(&self) {
@@ -837,7 +871,13 @@ impl VaultWindow {
             None => resolve_list_settings(folder, &state.rules),
         };
         self.list_menu.update(&settings, session_key.is_none());
-        let items = build_note_list(&state.rows, &filter, &settings, &note_list_view::now());
+        // Search results replace the list; it is built only without them (50k notes: ~2 ms).
+        let results = self.search_results.borrow();
+        let items = match results.as_ref().filter(|_| !state.search.trim().is_empty()) {
+            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content),
+            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now()),
+        };
+        drop(results);
         self.list.set_items(Arc::clone(&state.rows), items);
         drop(state);
         self.table.reloadData();
@@ -860,6 +900,67 @@ impl VaultWindow {
             None => unsafe { self.table.deselectAll(None) },
         }
         self.highlighting.set(false);
+    }
+
+    /// The magnifying glass: shows the search row, or hides it and drops the search.
+    pub fn toggle_search(&self) {
+        let shown = !self.search_bar.is_shown();
+        self.search_bar.show(shown);
+        if !shown {
+            self.search("");
+        }
+    }
+
+    /// The search field changed: the list shows the results within the selected list.
+    pub fn search(&self, query: &str) {
+        self.state.borrow_mut().search = query.to_owned();
+        if query.trim().is_empty() {
+            *self.search_results.borrow_mut() = None;
+            self.refresh_list();
+        } else {
+            *self.search_results.borrow_mut() = None;
+            self.refresh_list();
+            self.request_search();
+        }
+    }
+
+    /// Asks the search thread for the results of the current query within the selected list;
+    /// they replace the list when they arrive (`apply_search`).
+    fn request_search(&self) {
+        let generation = self.search_generation.get() + 1;
+        self.search_generation.set(generation);
+        let (query, scope, titles, index_dir) = {
+            let state = self.state.borrow();
+            let filter_all = matches!(state.selection, SidebarItem::AllNotes);
+            let scope = (!filter_all).then(|| self.list.paths());
+            (state.search.clone(), scope, state.titles.clone(), state.index_dir.clone())
+        };
+        if self.search_worker.borrow().is_none() {
+            let Some(index_dir) = index_dir else { return };
+            let Some(mtm) = MainThreadMarker::new() else { return };
+            let target = Arc::new(MainThreadBound::new(self.this.borrow().clone(), mtm));
+            let worker = SearchWorker::start(index_dir, move |response| {
+                let target = Arc::clone(&target);
+                DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(window) = target.get(mtm).upgrade() {
+                        window.apply_search(response);
+                    }
+                });
+            });
+            *self.search_worker.borrow_mut() = Some(worker);
+        }
+        if let Some(worker) = self.search_worker.borrow().as_ref() {
+            worker.request(SearchRequest { generation, query, scope, titles });
+        }
+    }
+
+    /// Results from the search thread: shown unless a newer query is on its way.
+    fn apply_search(&self, response: SearchResponse) {
+        if response.generation == self.search_generation.get() && !self.state.borrow().search.trim().is_empty() {
+            *self.search_results.borrow_mut() = Some(response);
+            self.refresh_list();
+        }
     }
 
     fn untagged_notes(&self, state: &mut State) -> HashSet<String> {
@@ -990,7 +1091,7 @@ pub fn split_items(
 /// note column stretches and the others keep their width. Explicit maximums: the inspector
 /// role caps itself at 270 points otherwise.
 /// Narrowest list column while the sidebar is collapsed (see `VaultWindow::new`).
-const COLLAPSED_LIST_MIN: f64 = 360.0;
+const COLLAPSED_LIST_MIN: f64 = 400.0;
 
 const COLUMNS: [(f64, f64, f32); 4] = [(200.0, 480.0, 260.0), (260.0, 640.0, 255.0), (360.0, f64::MAX, 250.0), (260.0, 640.0, 255.0)];
 

@@ -125,6 +125,40 @@ pub fn toggle_sidebar_requested(window: &NSWindow) {
     unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(objc2::sel!(toggleSidebar:), Some(&controller), None) };
 }
 
+/// `KNOTES_PROBE_SEARCH=text`: typed into the search field over the list, then sent as the
+/// field sends it.
+pub fn search_requested(window: &NSWindow) {
+    let Ok(query) = std::env::var("KNOTES_PROBE_SEARCH") else { return };
+    let id = NSString::from_str(crate::toolbar::SEARCH);
+    let Some(item) = window.toolbar().and_then(|t| t.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))) else { return };
+    // A click on the magnifying glass, then typing into the field it shows.
+    if let Some(action) = item.action() {
+        let target = item.target();
+        // SAFETY: the item's own action and target.
+        unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&item)) };
+    }
+    let Some(field) = search_field(window) else { return };
+    field.setStringValue(&NSString::from_str(&query));
+    if let Some(action) = field.action() {
+        let target = field.target();
+        // SAFETY: the field's own action and target, with the field as sender.
+        unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&field)) };
+    }
+    println!("search: {query}");
+}
+
+/// The search field of the list column, if the window has one.
+fn search_field(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit::NSSearchField>> {
+    fn find(view: &objc2_app_kit::NSView) -> Option<objc2::rc::Retained<objc2_app_kit::NSSearchField>> {
+        if let Some(field) = view.downcast_ref::<objc2_app_kit::NSSearchField>() {
+            return Some(objc2::Message::retain(field));
+        }
+        view.subviews().iter().find_map(|sub| find(&sub))
+    }
+    let content = window.contentView()?;
+    find(&content)
+}
+
 /// `KNOTES_PROBE_ACTION=new`: File → New Note through the responder chain, like the menu.
 /// True when it was requested.
 pub fn new_note_requested() -> bool {
