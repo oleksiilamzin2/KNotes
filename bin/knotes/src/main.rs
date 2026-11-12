@@ -2,6 +2,7 @@
 
 mod app_delegate;
 mod chat_view;
+mod collapse_observer;
 mod completion_panel;
 mod list_menu;
 mod live_preview;

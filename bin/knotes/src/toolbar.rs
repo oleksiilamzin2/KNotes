@@ -39,6 +39,8 @@ pub struct Ivars {
     /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
     sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     sidebar_mode_state: Cell<SidebarMode>,
+    /// The switch shows only while the sidebar does.
+    sidebar_shown: Cell<bool>,
     history: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     /// Back/forward availability, applied when the group item is created later.
     history_state: Cell<(bool, bool)>,
@@ -107,6 +109,7 @@ impl ToolbarDelegate {
             on_sidebar_mode: RefCell::new(None),
             sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
+            sidebar_shown: Cell::new(true),
             history: RefCell::new(None),
             history_state: Cell::new((false, false)),
         });
@@ -126,6 +129,14 @@ impl ToolbarDelegate {
         self.ivars().sidebar_mode_state.set(mode);
         if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
             group.setSelectedIndex(mode_index(mode));
+        }
+    }
+
+    /// Hides the folders/tags switch while the sidebar is collapsed.
+    pub fn set_sidebar_shown(&self, shown: bool) {
+        self.ivars().sidebar_shown.set(shown);
+        if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
+            group.setHidden(!shown);
         }
     }
 
@@ -163,6 +174,7 @@ impl ToolbarDelegate {
                     item.setToolTip(Some(&NSString::from_str(tip)));
                 }
                 group.setSelectedIndex(mode_index(self.ivars().sidebar_mode_state.get()));
+                group.setHidden(!self.ivars().sidebar_shown.get());
                 *self.ivars().sidebar_mode.borrow_mut() = Some(group.clone());
                 Some(Retained::into_super(group))
             }

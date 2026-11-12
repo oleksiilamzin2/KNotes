@@ -597,3 +597,13 @@ fn the_sidebar_switch_shows_tags_instead_of_folders_and_is_remembered() {
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=folders")]);
     assert!(out.contains("sidebar: Усі нотатки (2) | Теки | Inbox (1)"), "{out}");
 }
+
+#[test]
+fn the_sidebar_switch_hides_with_the_sidebar() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let out = probe_env(&[vault.path()], None, &[]);
+    assert!(out.contains("sidebar-mode: folders"), "{out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "toggle-sidebar")]);
+    assert!(out.contains("sidebar-mode: hidden"), "{out}");
+}

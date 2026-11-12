@@ -28,6 +28,7 @@ use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTab
 use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
+use crate::collapse_observer::CollapseObserver;
 use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
@@ -95,6 +96,17 @@ pub struct VaultWindow {
     completion_dismissed: Cell<Option<usize>>,
     /// Set while a completion is inserted, so the edit does not reopen the list.
     accepting: Cell<bool>,
+    /// The sidebar's split view item, watched to hide the folders/tags switch with it.
+    sidebar_item: Retained<NSSplitViewItem>,
+    collapse_observer: RefCell<Option<Retained<CollapseObserver>>>,
+}
+
+impl Drop for VaultWindow {
+    fn drop(&mut self) {
+        if let Some(observer) = self.collapse_observer.take() {
+            observer.stop(&self.sidebar_item);
+        }
+    }
 }
 
 impl VaultWindow {
@@ -158,7 +170,12 @@ impl VaultWindow {
             completion_from: Cell::new(0),
             completion_dismissed: Cell::new(None),
             accepting: Cell::new(false),
+            sidebar_item: split.splitViewItems().objectAtIndex(0),
+            collapse_observer: RefCell::new(None),
         });
+        let toolbar = this.toolbar_delegate.clone();
+        let observer = CollapseObserver::watch(mtm, &this.sidebar_item, move |collapsed| toolbar.set_sidebar_shown(!collapsed));
+        *this.collapse_observer.borrow_mut() = Some(observer);
         *this.this.borrow_mut() = Rc::downgrade(&this);
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.live_preview.on_link(move |link| {
@@ -334,6 +351,7 @@ impl VaultWindow {
         self.update_navigation();
         if probe::enabled() && !snapshot.rows.is_empty() && probe::act_once() {
             probe::sidebar_mode_requested(&self.window);
+            probe::toggle_sidebar_requested(&self.window);
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
                 self.select(item);

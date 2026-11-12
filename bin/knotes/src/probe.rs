@@ -113,6 +113,18 @@ fn sidebar_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItem
     window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?.downcast::<NSToolbarItemGroup>().ok()
 }
 
+/// `KNOTES_PROBE_ACTION=toggle-sidebar`: the toolbar's sidebar button action, sent to the
+/// split view controller (in probe mode the window is not key, so the responder chain would
+/// not reach it).
+pub fn toggle_sidebar_requested(window: &NSWindow) {
+    if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("toggle-sidebar") {
+        return;
+    }
+    let Some(controller) = window.contentViewController() else { return };
+    // SAFETY: NSSplitViewController implements toggleSidebar:.
+    unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(objc2::sel!(toggleSidebar:), Some(&controller), None) };
+}
+
 /// `KNOTES_PROBE_ACTION=new`: File → New Note through the responder chain, like the menu.
 /// True when it was requested.
 pub fn new_note_requested() -> bool {
@@ -312,12 +324,18 @@ fn report(window: &NSWindow) {
 
 /// Visible sidebar rows as `name (count)`, read back from the outline view's cells.
 fn report_sidebar_mode(window: &NSWindow) {
-    let mode = match sidebar_switch(window).map(|g| g.selectedIndex()) {
-        Some(0) => "folders",
-        Some(1) => "tags",
+    let mode = match sidebar_switch(window).map(|g| (g.isHidden(), g.selectedIndex())) {
+        Some((true, _)) => "hidden",
+        Some((false, 0)) => "folders",
+        Some((false, 1)) => "tags",
         _ => "none",
     };
-    println!("sidebar-mode: {mode}");
+    let collapsed = window
+        .contentViewController()
+        .and_then(|c| c.downcast::<NSSplitViewController>().ok())
+        .and_then(|split| split.splitViewItems().firstObject())
+        .is_some_and(|item| item.isCollapsed());
+    println!("sidebar-mode: {mode}{}", if collapsed { " (sidebar collapsed)" } else { "" });
 }
 
 fn report_sidebar(outline: &NSOutlineView) {
