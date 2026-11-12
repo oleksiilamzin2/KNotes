@@ -77,6 +77,9 @@ pub fn schedule(with_sidebar: bool) {
                 if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("scroll-bench") {
                     scroll_bench(&window.table);
                 }
+                if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("editor-bench") {
+                    editor_bench(window);
+                }
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_list(&window.table);
@@ -247,4 +250,63 @@ fn scroll_bench(table: &NSTableView) {
         ms(times[steps * 95 / 100]),
         ms(times[steps - 1])
     );
+}
+
+fn quantiles(mut times: Vec<std::time::Duration>) -> String {
+    times.sort_unstable();
+    let n = times.len().max(1);
+    let ms = |d: Option<&std::time::Duration>| d.map_or(0.0, |d| d.as_secs_f64() * 1e3);
+    format!("p50={:.2}ms p95={:.2}ms max={:.2}ms n={}", ms(times.get(n / 2)), ms(times.get(n * 95 / 100)), ms(times.last()), times.len())
+}
+
+/// Editor costs on the open note: open+style, cursor moves, scrolling, full restyle.
+fn editor_bench(window: &VaultWindow) {
+    use objc2_foundation::{NSPoint, NSRange};
+    let view = &window.note_text;
+    let source = view.string().to_string();
+    let t = std::time::Instant::now();
+    window.reopen_current();
+    let open = t.elapsed();
+    let ns = view.string();
+    // Cursor moves: one paragraph down at a time, scrolling to keep it visible.
+    let (mut at, mut moves) = (0usize, Vec::new());
+    while at < ns.length() && moves.len() < 400 {
+        let next = ns.paragraphRangeForRange(NSRange::new(at, 0));
+        at = next.location + next.length;
+        let t = std::time::Instant::now();
+        view.setSelectedRange(NSRange::new(at.min(ns.length()), 0));
+        view.scrollRangeToVisible(NSRange::new(at.min(ns.length()), 0));
+        view.layoutSubtreeIfNeeded();
+        if let Some(scroll) = view.enclosingScrollView() {
+            scroll.displayIfNeeded();
+        }
+        moves.push(t.elapsed());
+    }
+    // Scrolling the whole note in 40-point steps.
+    let mut scrolls = Vec::new();
+    if let Some(scroll) = view.enclosingScrollView() {
+        let clip = scroll.contentView();
+        let height = view.frame().size.height - clip.bounds().size.height;
+        let mut y = 0.0;
+        while y < height && scrolls.len() < 3000 {
+            let t = std::time::Instant::now();
+            clip.scrollToPoint(NSPoint::new(0.0, y));
+            scroll.reflectScrolledClipView(&clip);
+            view.layoutSubtreeIfNeeded();
+            scroll.displayIfNeeded();
+            scrolls.push(t.elapsed());
+            y += 40.0;
+        }
+    }
+    // Worst case of an edit: highlight and restyle the whole note.
+    let mut restyles = Vec::new();
+    for _ in 0..10 {
+        let t = std::time::Instant::now();
+        window.live_preview_restyle(&source);
+        restyles.push(t.elapsed());
+    }
+    println!("editor-bench: {} bytes; open+style {:.2}ms", source.len(), open.as_secs_f64() * 1e3);
+    println!("editor-bench: cursor move {}", quantiles(moves));
+    println!("editor-bench: scroll {}", quantiles(scrolls));
+    println!("editor-bench: full restyle {}", quantiles(restyles));
 }

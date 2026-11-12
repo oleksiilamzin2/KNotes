@@ -154,6 +154,16 @@ impl LivePreview {
         }
     }
 
+    /// Restyles everything from `source` (the edit path's worst case), for the editor bench.
+    pub fn restyle_all(&self, view: &NSTextView, source: &str) {
+        let styled = highlight(source).to_utf16(source);
+        *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&styled, &self.ivars().look);
+        *self.ivars().styled.borrow_mut() = styled;
+        if let Some(storage) = unsafe { view.textStorage() } {
+            self.apply_all(&storage, self.ivars().revealed.get());
+        }
+    }
+
     /// `[style]text|[style]text…` of the text view's storage, for probe mode.
     pub fn describe(view: &NSTextView) -> String {
         let Some(storage) = (unsafe { view.textStorage() }) else { return String::new() };

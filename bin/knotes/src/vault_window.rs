@@ -248,6 +248,18 @@ impl VaultWindow {
         self.update_navigation();
     }
 
+    /// Opens the current note again (editor bench).
+    pub fn reopen_current(&self) {
+        let current = self.state.borrow().history.current().map(str::to_owned);
+        if let Some(path) = current {
+            self.open_note(&path, false);
+        }
+    }
+
+    pub fn live_preview_restyle(&self, source: &str) {
+        self.live_preview.restyle_all(&self.note_text, source);
+    }
+
     /// Back (`false`) or forward (`true`) in the note history; the list selection follows.
     pub fn navigate(&self, forward: bool) {
         let target = {
