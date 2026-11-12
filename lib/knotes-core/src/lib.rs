@@ -1,5 +1,6 @@
 //! Domain model and traits (ports) of Knotes. No I/O lives here.
 
+mod change_feed;
 mod content_scan;
 mod content_search;
 mod corpus_source;
@@ -17,6 +18,7 @@ mod vault_file;
 mod vault_reader;
 mod vault_scanner;
 
+pub use change_feed::ChangeFeed;
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};
 pub use content_search::{BlockHit, ContentSearch};
 pub use corpus_source::CorpusSource;

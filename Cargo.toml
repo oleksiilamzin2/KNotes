@@ -21,6 +21,7 @@ memmap2 = "0.9.12"
 nucleo-matcher = "0.3.1"
 regex = "1.13.1"
 unicode-normalization = "0.1.26"
+notify = "8.2.2"
 knotes-search = { path = "lib/knotes-search" }
 knotes-indexer = { path = "lib/knotes-indexer" }
 rand = { version = "0.10.3", default-features = false }
