@@ -42,3 +42,16 @@ fn depth_is_bounded() {
     }
     assert_eq!(steps, knotes_app::HISTORY_DEPTH);
 }
+
+#[test]
+fn a_renamed_note_keeps_its_place_in_the_history() {
+    let mut h = History::default();
+    for p in ["a.md", "old.md", "b.md"] {
+        h.visit(p);
+    }
+    h.back();
+    h.rename("old.md", "New.md");
+    assert_eq!(h.current(), Some("New.md"));
+    assert_eq!(h.forward(), Some("b.md"));
+    assert_eq!(h.back(), Some("New.md"));
+}

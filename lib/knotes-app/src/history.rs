@@ -54,6 +54,15 @@ impl History {
         !self.forward.is_empty()
     }
 
+    /// A note was renamed or moved: every step on it follows.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        for step in self.back.iter_mut().chain(self.current.iter_mut()).chain(self.forward.iter_mut()) {
+            if step == from {
+                *step = to.to_owned();
+            }
+        }
+    }
+
     /// Drops notes that no longer exist; neighbours that became equal merge into one step.
     pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
         if self.current.as_deref().is_some_and(|c| !keep(c)) {
