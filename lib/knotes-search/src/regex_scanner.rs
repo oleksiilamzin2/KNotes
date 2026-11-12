@@ -5,6 +5,9 @@ use regex::bytes::{Regex, RegexBuilder};
 /// `line_text` keeps at most this many bytes on each side of the match: notes written as one
 /// long paragraph line would otherwise copy the whole paragraph into every hit.
 const CONTEXT_BYTES: usize = 160;
+/// Notes in the first parallel batch; later batches double up to `MAX_BATCH`.
+const FIRST_BATCH: usize = 256;
+const MAX_BATCH: usize = 8192;
 
 /// Parallel regex scan over raw note bytes (`regex::bytes`: no UTF-8 validation per scan;
 /// literal patterns use the crate's SIMD prefilters).
@@ -22,9 +25,25 @@ impl ContentScan for RegexScanner {
             CaseMode::Insensitive => true,
         };
         let re = RegexBuilder::new(&source).case_insensitive(insensitive).build()?;
-        // Each note is capped at `limit` hits; collecting keeps corpus order.
-        let per_note: Vec<Vec<ScanHit>> = (0..corpus.len()).into_par_iter().map(|i| scan_note(&re, corpus, i, limit)).collect();
-        Ok(per_note.into_iter().flatten().take(limit).collect())
+        // Batches in corpus order, each scanned in parallel; stop once `limit` hits are in.
+        // Growing batches: a frequent pattern stops after the first small batch (`і` at 50k
+        // notes: 286 ms when scanning everything), a rare one pays few synchronisation points.
+        let mut hits = Vec::new();
+        let (mut start, mut batch) = (0, FIRST_BATCH);
+        while start < corpus.len() {
+            let end = (start + batch).min(corpus.len());
+            let remaining = limit - hits.len();
+            let per_note: Vec<Vec<ScanHit>> = (start..end).into_par_iter().map(|i| scan_note(&re, corpus, i, remaining)).collect();
+            for hit in per_note.into_iter().flatten() {
+                hits.push(hit);
+                if hits.len() == limit {
+                    return Ok(hits);
+                }
+            }
+            start = end;
+            batch = (batch * 2).min(MAX_BATCH);
+        }
+        Ok(hits)
     }
 }
 
