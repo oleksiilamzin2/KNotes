@@ -133,3 +133,15 @@ fn scope_limits_results_to_given_notes() {
     assert_eq!(found, ["b.md", "c.md"]);
     assert!(index.search_blocks("radar", Some(&[]), 10).unwrap().is_empty());
 }
+
+#[test]
+fn repeated_scope_sees_notes_changed_in_between() {
+    let (_d, mut index) = index_with(&[("a.md", "radar\n"), ("b.md", "other\n")]);
+    let scope = vec!["a.md".to_owned(), "b.md".to_owned()];
+    assert_eq!(index.search_blocks("radar", Some(&scope), 10).unwrap().len(), 1);
+    upsert(&mut index, "b.md", "now radar too\n");
+    upsert(&mut index, "a.md", "radar again\n");
+    let mut found: Vec<String> = index.search_blocks("radar", Some(&scope), 10).unwrap().into_iter().map(|h| h.path).collect();
+    found.sort();
+    assert_eq!(found, ["a.md", "b.md"]);
+}

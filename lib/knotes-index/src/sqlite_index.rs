@@ -21,6 +21,8 @@ pub struct SqliteIndex {
     pub(crate) block_count: Cell<Option<i64>>,
     /// Cached text snapshot; reset by every write.
     pub(crate) corpus: RefCell<Option<Arc<TextSnapshot>>>,
+    /// Paths whose blocks are in `temp.scope_blocks`; reset by every write.
+    pub(crate) scope: RefCell<Option<Vec<String>>>,
 }
 
 impl SqliteIndex {
@@ -45,6 +47,7 @@ impl SqliteIndex {
     pub(crate) fn invalidate_caches(&self) {
         self.block_count.set(None);
         self.corpus.borrow_mut().take();
+        self.scope.borrow_mut().take();
     }
 
     fn open_consistent(dir: &Path) -> Result<Option<Self>, BoxError> {
@@ -64,7 +67,8 @@ impl SqliteIndex {
         if needed as u64 > pack.len()? {
             return Ok(None);
         }
-        Ok(Some(Self { conn, pack, block_count: Cell::new(None), corpus: RefCell::new(None) }))
+        conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY)")?;
+        Ok(Some(Self { conn, pack, block_count: Cell::new(None), corpus: RefCell::new(None), scope: RefCell::new(None) }))
     }
 }
 

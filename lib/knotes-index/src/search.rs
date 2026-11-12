@@ -21,7 +21,7 @@ fn sql(ranked: bool, scoped: bool) -> String {
     let scope = if scoped {
         // Unary `+`: without it SQLite hands `rowid IN (...)` to FTS5 as an index constraint and
         // FTS5 re-runs the whole MATCH once per scoped rowid (8 s for a 10k-note scope).
-        "AND +rowid IN (SELECT b.id FROM files f JOIN blocks b ON b.file_id = f.id WHERE f.path IN rarray(?3))"
+        "AND +rowid IN (SELECT id FROM temp.scope_blocks)"
     } else {
         ""
     };
@@ -58,15 +58,12 @@ impl ContentSearch for SqliteIndex {
         }
         let ranked = !rare.is_empty();
         let expr = if ranked { join(rare) } else { join(&groups) };
+        if let Some(paths) = scope {
+            self.load_scope(paths)?;
+        }
         let mut st = self.conn.prepare_cached(&sql(ranked, scope.is_some()))?;
-        let rows = match scope {
-            Some(paths) => {
-                let paths: Rc<Vec<Value>> = Rc::new(paths.iter().map(|p| Value::Text(p.clone())).collect());
-                st.query_map(params![expr, limit as i64, paths], block_hit)?.collect::<Result<_, _>>()
-            }
-            None => st.query_map(params![expr, limit as i64], block_hit)?.collect::<Result<_, _>>(),
-        };
-        Ok(rows?)
+        let rows = st.query_map(params![expr, limit as i64], block_hit)?.collect::<Result<_, _>>()?;
+        Ok(rows)
     }
 }
 
@@ -81,6 +78,23 @@ fn block_hit(r: &rusqlite::Row) -> rusqlite::Result<BlockHit> {
 }
 
 impl SqliteIndex {
+    /// Fills `temp.scope_blocks` with the blocks of `paths`, unless it already holds this scope:
+    /// while a user types content queries the scope stays the same (10k-note scope: ~10 ms).
+    fn load_scope(&self, paths: &[String]) -> Result<(), BoxError> {
+        if self.scope.borrow().as_deref() == Some(paths) {
+            return Ok(());
+        }
+        let values: Rc<Vec<Value>> = Rc::new(paths.iter().map(|p| Value::Text(p.clone())).collect());
+        self.conn.execute("DELETE FROM temp.scope_blocks", [])?;
+        self.conn.execute(
+            "INSERT INTO temp.scope_blocks(id)
+             SELECT b.id FROM files f JOIN blocks b ON b.file_id = f.id WHERE f.path IN rarray(?1)",
+            [values],
+        )?;
+        *self.scope.borrow_mut() = Some(paths.to_vec());
+        Ok(())
+    }
+
     fn blocks(&self) -> Result<i64, BoxError> {
         if let Some(n) = self.block_count.get() {
             return Ok(n);
