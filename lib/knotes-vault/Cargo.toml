@@ -1,0 +1,14 @@
+[package]
+name = "knotes-vault"
+description = "File system access to a Knotes vault: scanning and reading"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
