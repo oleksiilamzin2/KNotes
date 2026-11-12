@@ -138,6 +138,19 @@ pub fn search_requested(window: &NSWindow) {
         unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&item)) };
     }
     let Some(field) = search_field(window) else { return };
+    if std::env::var_os("KNOTES_PROBE_SEARCH_TYPE").is_some() {
+        // Typed key by key into the field editor, as the keyboard does.
+        window.makeFirstResponder(Some(&field));
+        if let Some(editor) = field.currentEditor().and_then(|e| e.downcast::<objc2_app_kit::NSTextView>().ok()) {
+            for c in query.chars() {
+                let not_found = objc2_foundation::NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+                // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+                unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&*editor, &NSString::from_str(&c.to_string()), not_found) };
+            }
+        }
+        println!("search: {query}");
+        return;
+    }
     field.setStringValue(&NSString::from_str(&query));
     // KNOTES_PROBE_SEARCH_MODE=content: then a click on that segment of the switch.
     let switch_to = std::env::var("KNOTES_PROBE_SEARCH_MODE").ok();
@@ -171,11 +184,21 @@ fn search_switch(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit:
     find(&content)
 }
 
-/// Mode shown by the search switch and the text in the search field.
+/// Mode shown by the search switch, the text in the search field, and whether the end of the
+/// text (where typing goes on) is inside the field's visible text area.
 fn report_search(window: &NSWindow) {
     if let (Some(switch), Some(field)) = (search_switch(window), search_field(window)) {
         println!("search-mode: {}", if switch.selectedSegment() == 1 { "content" } else { "files" });
         println!("search-field: {}", field.stringValue());
+        // The field editor sits in a clip view as wide as the field's text area; the end of the
+        // text is in view when the clip shows the editor's right edge.
+        if let Some(editor) = field.currentEditor().and_then(|e| e.downcast::<objc2_app_kit::NSTextView>().ok())
+            && let Some(clip) = unsafe { editor.superview() }
+        {
+            let (shown, frame) = (clip.bounds(), editor.frame());
+            let end_visible = shown.origin.x + shown.size.width >= frame.origin.x + frame.size.width - 2.0;
+            println!("search-caret-visible: {end_visible}");
+        }
     }
 }
 

@@ -37,6 +37,12 @@ impl SearchBar {
         column.addSubview(&bar);
         let field = NSSearchField::new(mtm);
         field.setPlaceholderString(Some(&NSString::from_str(strings::SEARCH)));
+        // A field made in code does not scroll: typing past its width would hide the cursor.
+        if let Some(cell) = field.cell() {
+            cell.setScrollable(true);
+            cell.setWraps(false);
+            cell.setUsesSingleLineMode(true);
+        }
         field.setTranslatesAutoresizingMaskIntoConstraints(false);
         bar.addSubview(&field);
         let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::SEARCH_FILES), NSString::from_str(strings::SEARCH_CONTENT)]);

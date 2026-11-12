@@ -694,3 +694,11 @@ fn word_forms_are_found_and_an_empty_search_restores_the_list() {
     let (_vault, out) = probe_notes(&[("a.md", "a"), ("b.md", "b")], &[("KNOTES_PROBE_SEARCH", "")]);
     assert_eq!(list_titles(&out).len(), 2, "{out}");
 }
+
+#[test]
+fn the_search_field_scrolls_to_show_what_is_typed() {
+    let long = "content: Люцифер Баптист і ще дуже довгий запит, що не влазить у поле пошуку";
+    let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_SEARCH", long), ("KNOTES_PROBE_SEARCH_TYPE", "1")]);
+    assert!(out.contains(&format!("search-field: {long}")), "{out}");
+    assert!(out.contains("search-caret-visible: true"), "the end of the text must stay in view: {out}");
+}
