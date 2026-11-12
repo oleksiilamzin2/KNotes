@@ -51,6 +51,15 @@ pub struct Tag {
     pub span: Span,
 }
 
+/// Unit of full-text search and of reading by the chat agent: a heading section,
+/// or a piece of one when the section is too long. Text is `source[span]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Block {
+    pub span: Span,
+    /// Index into `ParsedNote::headings` of the section this block belongs to.
+    pub heading: Option<u32>,
+}
+
 /// Obsidian block identifier `^name` at the end of a line; target of `[[note#^name]]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockAnchor {
@@ -79,4 +88,6 @@ pub struct ParsedNote {
     /// Inline tags only; frontmatter tags live in `frontmatter.tags`.
     pub tags: Vec<Tag>,
     pub anchors: Vec<BlockAnchor>,
+    /// In source order; frontmatter is excluded.
+    pub blocks: Vec<Block>,
 }

@@ -4,6 +4,7 @@ use knotes_core::{Heading, Link, LinkKind, NoteParser, ParsedNote, Span};
 use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::anchor_scan::scan_anchors;
+use crate::chunking::{TopBlock, chunk};
 use crate::frontmatter::parse_frontmatter;
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
 use crate::tag_scan::scan_tags;
@@ -18,12 +19,27 @@ const OPTIONS: Options = Options::ENABLE_WIKILINKS
     .union(Options::ENABLE_FOOTNOTES)
     .union(Options::ENABLE_GFM);
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MarkdownParser;
+/// Default block size: a few hundred tokens of Ukrainian or English text.
+pub const DEFAULT_MAX_BLOCK_BYTES: usize = 2048;
+
+#[derive(Debug, Clone, Copy)]
+pub struct MarkdownParser {
+    max_block_bytes: usize,
+}
+
+impl Default for MarkdownParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl MarkdownParser {
     pub fn new() -> Self {
-        Self
+        Self::with_max_block_bytes(DEFAULT_MAX_BLOCK_BYTES)
+    }
+
+    pub fn with_max_block_bytes(max_block_bytes: usize) -> Self {
+        Self { max_block_bytes: max_block_bytes.max(1) }
     }
 }
 
@@ -34,6 +50,7 @@ impl NoteParser for MarkdownParser {
             if !matches!(event, Event::Text(_)) {
                 c.flush_run();
             }
+            c.track_top_block(&event, &range);
             let span = Span::new(range.start, range.end);
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
@@ -63,6 +80,7 @@ impl NoteParser for MarkdownParser {
             }
         }
         c.flush_run();
+        chunk(source, &c.top, self.max_block_bytes, &mut c.note.blocks);
         c.note
     }
 }
@@ -81,9 +99,30 @@ struct Collector<'s> {
     run: Option<Range<usize>>,
     /// Frontmatter being read: block span and YAML text.
     yaml: Option<(Span, String)>,
+    /// Nesting depth of Start/End events; 0 means between top-level blocks.
+    depth: u32,
+    /// Top-level blocks (frontmatter excluded), input for chunking.
+    top: Vec<TopBlock>,
 }
 
 impl Collector<'_> {
+    fn track_top_block(&mut self, event: &Event, range: &Range<usize>) {
+        match event {
+            Event::Start(_) => self.depth += 1,
+            Event::End(end) => {
+                self.depth -= 1;
+                if self.depth == 0 && !matches!(end, TagEnd::MetadataBlock(_)) {
+                    // The heading is pushed right after this call, so its index is the current length.
+                    let heading = matches!(end, TagEnd::Heading(_)).then_some(self.note.headings.len() as u32);
+                    self.top.push(TopBlock { range: range.clone(), heading });
+                }
+            }
+            // Leaf blocks such as a thematic break.
+            _ if self.depth == 0 => self.top.push(TopBlock { range: range.clone(), heading: None }),
+            _ => {}
+        }
+    }
+
     fn end_frontmatter(&mut self) {
         self.in_verbatim = false;
         if let Some((span, yaml)) = self.yaml.take() {
