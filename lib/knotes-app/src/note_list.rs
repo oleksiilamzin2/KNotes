@@ -103,9 +103,13 @@ pub fn build_note_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSet
     items
 }
 
+/// Days since 1970-01-01 in local time.
+pub(crate) fn local_day(ns: i64, clock: &Clock) -> i64 {
+    (ns.div_euclid(1_000_000_000) + i64::from(clock.utc_offset_s)).div_euclid(86_400)
+}
+
 fn date_group(mtime_ns: i64, clock: &Clock) -> DateGroup {
-    let local_day = |ns: i64| (ns.div_euclid(1_000_000_000) + i64::from(clock.utc_offset_s)).div_euclid(86_400);
-    let (today, day) = (local_day(clock.now_ns), local_day(mtime_ns));
+    let (today, day) = (local_day(clock.now_ns, clock), local_day(mtime_ns, clock));
     match today - day {
         i64::MIN..=0 => DateGroup::Today,
         1 => DateGroup::Yesterday,
