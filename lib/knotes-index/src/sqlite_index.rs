@@ -128,6 +128,26 @@ impl SqliteIndex {
     }
 }
 
+impl SqliteIndex {
+    /// Frees the clean pages of the writer's page cache. A large write (a cold build) fills
+    /// the 64 MB cache, which SQLite otherwise keeps for the life of the connection.
+    pub fn release_memory(&self) {
+        if let Err(e) = self.conn.release_memory() {
+            eprintln!("knotes: sqlite release_memory: {e}");
+        }
+    }
+
+    /// Bytes held by the writer's page cache.
+    pub fn cache_used(&self) -> usize {
+        let (mut current, mut high) = (0, 0);
+        // SAFETY: a valid connection handle and out-pointers; reading a status counter.
+        unsafe {
+            rusqlite::ffi::sqlite3_db_status(self.conn.handle(), rusqlite::ffi::SQLITE_DBSTATUS_CACHE_USED, &mut current, &mut high, 0);
+        }
+        current.max(0) as usize
+    }
+}
+
 /// Maintenance compacts the pack when at least this many bytes are dead and dead bytes
 /// outnumber live ones.
 const COMPACT_MIN_DEAD: u64 = 16 << 20;

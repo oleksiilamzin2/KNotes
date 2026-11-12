@@ -9,6 +9,7 @@ use knotes_indexer::Indexer;
 use knotes_md::MarkdownParser;
 use knotes_vault::{FsVault, FsWatcher};
 
+use crate::memory::{self, LARGE_SYNC};
 use crate::{Snapshot, VaultLock, index_dir};
 
 /// Changes within this window are synced together.
@@ -85,7 +86,11 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
     let _watcher = FsWatcher::with_callback(vault, DEBOUNCE, move |batch| changes.send(Control::Changed(batch)).is_ok())?;
     let indexer = Indexer::new(FsVault::new(vault), MarkdownParser::new());
     let first = indexer.sync(&mut index)?;
-    if first.added + first.modified + first.removed > 0 && !send(&index, Vec::new())? {
+    let touched = first.added + first.modified + first.removed;
+    if touched >= LARGE_SYNC {
+        memory::give_back(&index);
+    }
+    if touched > 0 && !send(&index, Vec::new())? {
         return Ok(());
     }
     let mut maintenance_due = true;
@@ -101,14 +106,24 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
         };
         match message {
             Some(Control::Changed(changed)) => {
-                indexer.sync(&mut index)?;
+                let report = indexer.sync(&mut index)?;
+                if report.added + report.modified + report.removed >= LARGE_SYNC {
+                    memory::give_back(&index);
+                }
                 if !send(&index, changed)? {
                     return Ok(());
                 }
                 maintenance_due = true;
             }
             Some(Control::Stop) => return Ok(()),
-            None => maintenance_due = index.maintenance()?.merge_steps > 0,
+            None => {
+                let merged = index.maintenance()?.merge_steps;
+                maintenance_due = merged > 0;
+                if merged == 0 {
+                    // Merging is done (or was not needed): whatever it allocated is free now.
+                    memory::give_back(&index);
+                }
+            }
         }
     }
 }

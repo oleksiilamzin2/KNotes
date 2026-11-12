@@ -2,6 +2,7 @@
 
 mod app_settings;
 mod lock;
+mod memory;
 mod paths;
 mod session;
 mod snapshot;
