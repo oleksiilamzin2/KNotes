@@ -2,6 +2,9 @@
 
 mod app_delegate;
 mod probe;
+mod sidebar_view;
+mod strings;
+mod vault_window;
 mod window;
 
 use objc2::MainThreadMarker;

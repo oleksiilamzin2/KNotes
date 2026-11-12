@@ -3,12 +3,12 @@
 
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{
-    NSBackingStoreType, NSSplitViewController, NSSplitViewItem, NSView, NSViewController, NSWindow, NSWindowStyleMask,
-};
+use objc2_app_kit::{NSBackingStoreType, NSViewController, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
 
-pub fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
+use crate::vault_window::split_controller;
+
+pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController) -> Retained<NSWindow> {
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -22,25 +22,10 @@ pub fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(ns_string!("Knotes"));
 
-    let split = NSSplitViewController::new(mtm);
-    let items = [
-        NSSplitViewItem::sidebarWithViewController(&placeholder(mtm)),
-        NSSplitViewItem::contentListWithViewController(&placeholder(mtm)),
-        NSSplitViewItem::splitViewItemWithViewController(&placeholder(mtm)),
-        NSSplitViewItem::inspectorWithViewController(&placeholder(mtm)),
-    ];
-    for item in &items {
-        split.addSplitViewItem(item);
-    }
+    let split = split_controller(sidebar, mtm);
     window.setContentViewController(Some(&split));
     // Setting the controller sizes the window to its (still empty) views; restore the size.
     window.setContentSize(frame.size);
     window.center();
     window
-}
-
-fn placeholder(mtm: MainThreadMarker) -> Retained<NSViewController> {
-    let controller = NSViewController::new(mtm);
-    controller.setView(&NSView::new(mtm));
-    controller
 }

@@ -80,6 +80,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags",
+ "block2",
+ "libc",
  "objc2",
 ]
 
@@ -188,9 +190,14 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 name = "knotes"
 version = "0.1.0"
 dependencies = [
+ "dispatch2",
+ "knotes-app",
+ "knotes-core",
+ "knotes-session",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "tempfile",
 ]
 
 [[package]]
