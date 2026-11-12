@@ -1,6 +1,6 @@
 //! Where a link's `#Heading` or `#^block` points inside a note (ADR 0013).
 
-use knotes_core::NoteParser;
+use knotes_core::{Heading, NoteParser};
 use knotes_md::MarkdownParser;
 
 /// Byte offset of the heading named `subpath` (case-insensitive), or of the start of the line
@@ -17,4 +17,9 @@ pub fn subpath_offset(source: &str, subpath: &str) -> Option<usize> {
             note.headings.iter().find(|h| h.text.trim().to_lowercase() == wanted).map(|h| h.span.start as usize)
         }
     }
+}
+
+/// Headings of a note, in source order (for `[[note#` completion).
+pub fn note_headings(source: &str) -> Vec<Heading> {
+    MarkdownParser::new().parse(source).headings
 }

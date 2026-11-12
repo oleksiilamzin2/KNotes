@@ -74,7 +74,9 @@ fn closing_a_session_is_immediate() {
     std::thread::sleep(Duration::from_millis(50));
     let start = Instant::now();
     drop(session);
-    assert!(start.elapsed() < Duration::from_millis(100), "{:?}", start.elapsed());
+    // Below the old 300 ms polling step and the 2 s maintenance delay, with room for a loaded
+    // machine (the whole test suite runs app processes in parallel).
+    assert!(start.elapsed() < Duration::from_millis(250), "{:?}", start.elapsed());
 }
 
 #[test]

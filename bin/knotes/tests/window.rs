@@ -481,3 +481,49 @@ fn opening_a_shorter_note_after_a_longer_one_with_markup_works() {
     );
     assert!(out.contains("note: b.md | short"), "{out}");
 }
+
+fn completion(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("completion: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn typing_an_open_wikilink_lists_matching_notes_with_their_folders() {
+    let (_vault, out) = probe_notes(
+        &[("Projects/Radar.md", "r"), ("Radio.md", "r"), ("a.md", "x")],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", " [[Rad")],
+    );
+    let list = completion(&out);
+    assert!(list.contains("Radar — Projects") && list.contains("Radio"), "{list}");
+    assert!(list.starts_with('▸'), "the first row is chosen: {list}");
+}
+
+#[test]
+fn return_inserts_the_chosen_note_as_the_shortest_link_and_closes_it() {
+    let notes = [("Note.md", "n"), ("A/Note.md", "n"), ("a.md", "")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[Note"), ("KNOTES_PROBE_KEYS", "return")]);
+    assert!(out.contains("note: a.md | [[Note]]"), "{out}");
+    assert!(out.contains("cursor: 8"), "{out}");
+    assert_eq!(completion(&out), "none");
+    let (_vault, out) =
+        probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[Note"), ("KNOTES_PROBE_KEYS", "down,return")]);
+    assert!(out.contains("note: a.md | [[A/Note]]"), "the bare name would open Note.md: {out}");
+}
+
+#[test]
+fn after_a_hash_the_list_offers_the_target_headings() {
+    let (_vault, out) = probe_notes(
+        &[("b.md", "# B\n\n## Second part\n\n## Other"), ("a.md", "")],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[b#sec"), ("KNOTES_PROBE_KEYS", "tab")],
+    );
+    assert!(out.contains("note: a.md | [[b#Second part]]"), "{out}");
+}
+
+#[test]
+fn escape_closes_the_list_and_leaves_the_text() {
+    let (_vault, out) = probe_notes(
+        &[("Note.md", "n"), ("a.md", "")],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[No"), ("KNOTES_PROBE_KEYS", "escape")],
+    );
+    assert_eq!(completion(&out), "none");
+    assert!(out.contains("note: a.md | [[No"), "{out}");
+}

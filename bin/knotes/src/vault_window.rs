@@ -14,17 +14,21 @@ use knotes_app::{
     resolve_list_settings,
 };
 use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteRow, NoteWriter, TagIndex, VaultReader};
-use knotes_editor::{DiskChange, Document, conflict_path, subpath_offset, utf16_offsets};
+use knotes_core::TitleSearch;
+use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
+use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
-use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSViewController, NSWindow, NSWorkspace};
-use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString, NSURL};
+use objc2::runtime::{ProtocolObject, Sel};
+use objc2::sel;
+use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
+use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
+use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
 use crate::note_list_view::{self, NoteListSource};
@@ -49,6 +53,8 @@ struct State {
     reader: Option<SqliteIndex>,
     /// Link resolution of the last snapshot (ADR 0013); `None` until the first one.
     links: Option<Arc<LinkTargets>>,
+    /// Title search of the last snapshot, for link completion.
+    titles: Option<Arc<TitleIndex>>,
 }
 
 /// Autosave runs after this long without edits (ADR 0011).
@@ -80,6 +86,13 @@ pub struct VaultWindow {
     /// Bumped on every edit: a scheduled autosave runs only if no edit came after it.
     edits: Cell<u64>,
     this: RefCell<Weak<Self>>,
+    completion: CompletionPanel,
+    /// UTF-16 start of the text an accepted completion replaces.
+    completion_from: Cell<usize>,
+    /// The `[[` (UTF-16 location) whose list Esc closed: it stays closed while typing on.
+    completion_dismissed: Cell<Option<usize>>,
+    /// Set while a completion is inserted, so the edit does not reopen the list.
+    accepting: Cell<bool>,
 }
 
 impl VaultWindow {
@@ -120,6 +133,7 @@ impl VaultWindow {
             history: History::default(),
             reader: None,
             links: None,
+            titles: None,
         };
         let this = Rc::new(Self {
             window,
@@ -137,6 +151,10 @@ impl VaultWindow {
             editing: RefCell::new(None),
             edits: Cell::new(0),
             this: RefCell::new(Weak::new()),
+            completion: CompletionPanel::new(mtm),
+            completion_from: Cell::new(0),
+            completion_dismissed: Cell::new(None),
+            accepting: Cell::new(false),
         });
         *this.this.borrow_mut() = Rc::downgrade(&this);
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -149,8 +167,17 @@ impl VaultWindow {
         this.live_preview.on_change(move || {
             if let Some(window) = weak.upgrade() {
                 window.edited();
+                window.update_completion();
             }
         });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.live_preview.on_cursor(move || {
+            if let Some(window) = weak.upgrade() {
+                window.update_completion();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.live_preview.on_command(move |command| weak.upgrade().is_some_and(|window| window.completion_command(command)));
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.sidebar.on_select(move |item| {
             if let Some(window) = weak.upgrade() {
@@ -239,6 +266,7 @@ impl VaultWindow {
         let new_links = {
             let mut state = self.state.borrow_mut();
             let fresh = !state.links.as_ref().is_some_and(|l| Arc::ptr_eq(l, &snapshot.links));
+            state.titles = Some(Arc::clone(&snapshot.titles));
             fresh.then(|| {
                 state.links = Some(Arc::clone(&snapshot.links));
                 Arc::clone(&snapshot.links)
@@ -279,6 +307,7 @@ impl VaultWindow {
                 }
                 if i == 0 {
                     probe::type_requested(&self.note_text);
+                    probe::keys_requested(&self.note_text);
                 }
             }
             probe::save_requested();
@@ -304,6 +333,7 @@ impl VaultWindow {
     /// Shows a note in the note column; `record` adds it to the back/forward history.
     pub fn open_note(&self, path: &str, record: bool) {
         self.save();
+        self.completion.hide();
         let text = {
             let mut state = self.state.borrow_mut();
             if record {
@@ -373,6 +403,140 @@ impl VaultWindow {
             return None;
         }
         Some(path)
+    }
+
+    /// Shows, updates or hides the link completion list for the text before the cursor.
+    fn update_completion(&self) {
+        if self.accepting.get() {
+            return;
+        }
+        let view = &self.note_text;
+        let selection = view.selectedRange();
+        let ns = view.string();
+        let context = (selection.length == 0)
+            .then(|| {
+                let line = ns.paragraphRangeForRange(NSRange::new(selection.location, 0));
+                let before = ns.substringWithRange(NSRange::new(line.location, selection.location - line.location)).to_string();
+                link_completion(&before).map(|c| (line.location, before, c))
+            })
+            .flatten();
+        let Some((line, before, completion)) = context else {
+            self.completion.hide();
+            self.completion_dismissed.set(None);
+            return;
+        };
+        let units = |bytes: usize| line + before[..bytes].encode_utf16().count();
+        let open = units(before.rfind("[[").unwrap_or(0));
+        if self.completion_dismissed.get() == Some(open) {
+            return;
+        }
+        let from = match &completion {
+            LinkCompletion::Title { from, .. } | LinkCompletion::Heading { from, .. } => units(*from),
+        };
+        let items = self.completion_items(&completion);
+        if items.is_empty() {
+            self.completion.hide();
+            return;
+        }
+        self.completion_from.set(from);
+        // SAFETY: the range lies inside the text; a null actual range is allowed.
+        let cursor = unsafe { view.firstRectForCharacterRange_actualRange(NSRange::new(selection.location, 0), std::ptr::null_mut()) };
+        self.completion.show(&self.window, cursor, items);
+    }
+
+    fn completion_items(&self, completion: &LinkCompletion) -> Vec<CompletionItem> {
+        let state = self.state.borrow();
+        let (Some(links), Some(titles), Some(source)) = (state.links.as_ref(), state.titles.as_ref(), self.open_path()) else {
+            return Vec::new();
+        };
+        match completion {
+            LinkCompletion::Title { query, .. } => {
+                let paths: Vec<(String, Option<String>)> = if query.is_empty() {
+                    recent_notes(&state.rows, MAX_ROWS).into_iter().map(|p| (p, None)).collect()
+                } else {
+                    titles.search_titles(query, MAX_ROWS).into_iter().map(|h| (h.path, h.alias)).collect()
+                };
+                paths
+                    .into_iter()
+                    .map(|(path, alias)| {
+                        let (folder, name) = path.rsplit_once('/').unwrap_or(("", &path));
+                        let name = name.strip_suffix(".md").unwrap_or(name);
+                        let link = links.link_text(&path, &source);
+                        CompletionItem {
+                            title: alias.clone().unwrap_or_else(|| name.to_owned()),
+                            detail: folder.to_owned(),
+                            insert: alias.map_or_else(|| link.clone(), |a| format!("{link}|{a}")),
+                        }
+                    })
+                    .collect()
+            }
+            LinkCompletion::Heading { target, query, .. } => {
+                let Some(path) = links.resolve(LinkKind::Wiki, target, &source) else { return Vec::new() };
+                let text = if path == source {
+                    self.note_text.string().to_string()
+                } else {
+                    state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(&path).ok()).unwrap_or_default()
+                };
+                let query = query.to_lowercase();
+                note_headings(&text)
+                    .into_iter()
+                    .filter(|h| h.text.to_lowercase().contains(&query))
+                    .take(MAX_ROWS)
+                    .map(|h| CompletionItem { insert: h.text.clone(), title: h.text, detail: format!("H{}", h.level) })
+                    .collect()
+            }
+        }
+    }
+
+    /// Keys while the list is open: Up/Down choose, Return/Tab insert, Esc closes.
+    fn completion_command(&self, command: Sel) -> bool {
+        if !self.completion.is_visible() {
+            return false;
+        }
+        if command == sel!(moveDown:) {
+            self.completion.move_selection(1);
+        } else if command == sel!(moveUp:) {
+            self.completion.move_selection(-1);
+        } else if command == sel!(insertNewline:) || command == sel!(insertTab:) {
+            self.accept_completion();
+        } else if command == sel!(cancelOperation:) {
+            self.completion.hide();
+            let view = &self.note_text;
+            let ns = view.string();
+            let cursor = view.selectedRange().location;
+            let line = ns.paragraphRangeForRange(NSRange::new(cursor, 0));
+            let before = ns.substringWithRange(NSRange::new(line.location, cursor - line.location)).to_string();
+            let open = before.rfind("[[").map(|b| line.location + before[..b].encode_utf16().count());
+            self.completion_dismissed.set(open);
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Replaces the typed part with the chosen link (or heading), closing it with `]]` unless
+    /// the brackets already follow, and puts the cursor after them.
+    fn accept_completion(&self) {
+        let Some(item) = self.completion.chosen() else { return };
+        self.completion.hide();
+        let view = &self.note_text;
+        let cursor = view.selectedRange().location;
+        let from = self.completion_from.get().min(cursor);
+        let ns = view.string();
+        let closed = cursor + 2 <= ns.length() && ns.substringWithRange(NSRange::new(cursor, 2)).to_string() == "]]";
+        let text = if closed { item.insert } else { format!("{}]]", item.insert) };
+        self.accepting.set(true);
+        view.setSelectedRange(NSRange::new(from, cursor - from));
+        let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { NSTextInputClient::insertText_replacementRange(&***view, &NSString::from_str(&text), not_found) };
+        let after = from + text.encode_utf16().count() + if closed { 2 } else { 0 };
+        view.setSelectedRange(NSRange::new(after, 0));
+        self.accepting.set(false);
+    }
+
+    pub fn describe_completion(&self) -> String {
+        self.completion.describe()
     }
 
     /// Path of the note in the editor.
@@ -586,6 +750,19 @@ impl VaultWindow {
             self.highlighting.set(false);
         }
     }
+}
+
+/// Paths of the `n` most recently modified notes, newest first.
+fn recent_notes(rows: &[NoteRow], n: usize) -> Vec<String> {
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    let n = n.min(order.len());
+    if n == 0 {
+        return Vec::new();
+    }
+    order.select_nth_unstable_by_key(n - 1, |&i| std::cmp::Reverse(rows[i].mtime_ns));
+    order.truncate(n);
+    order.sort_by_key(|&i| std::cmp::Reverse(rows[i].mtime_ns));
+    order.into_iter().map(|i| rows[i].path.clone()).collect()
 }
 
 /// `path` with `.` and `..` segments applied; `None` if it leaves the vault.

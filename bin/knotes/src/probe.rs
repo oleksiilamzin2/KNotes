@@ -42,6 +42,25 @@ pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&text), not_found) };
 }
 
+/// `KNOTES_PROBE_KEYS=down,return,…`: key commands as the keyboard sends them to the text
+/// view (`doCommandBySelector:`, which asks the delegate first).
+pub fn keys_requested(view: &objc2_app_kit::NSTextView) {
+    use objc2::sel;
+    let Ok(keys) = std::env::var("KNOTES_PROBE_KEYS") else { return };
+    for key in keys.split(',') {
+        let command = match key {
+            "down" => sel!(moveDown:),
+            "up" => sel!(moveUp:),
+            "return" => sel!(insertNewline:),
+            "tab" => sel!(insertTab:),
+            "escape" => sel!(cancelOperation:),
+            other => panic!("unknown probe key {other}"),
+        };
+        // SAFETY: a key-binding selector the text view implements.
+        unsafe { objc2_app_kit::NSStandardKeyBindingResponding::doCommandBySelector(view, command) };
+    }
+}
+
 /// `KNOTES_PROBE_CLICK=index` or `index:cmd`: a mouse click on that character, delivered to
 /// the text view as AppKit would (a mouse-up is queued for its tracking loop).
 pub fn click_requested(view: &crate::note_view::NoteTextView) {
@@ -151,6 +170,11 @@ pub fn schedule(with_sidebar: bool) {
                 }
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PNG") {
                     render_png(&window.window, &path.to_string_lossy());
+                }
+                if let Some(path) = std::env::var_os("KNOTES_PROBE_PANEL_PNG")
+                    && let Some(panel) = window.window.childWindows().and_then(|c| c.firstObject())
+                {
+                    render_png(&panel, &path.to_string_lossy());
                 }
             }
         });
@@ -278,6 +302,7 @@ fn report_note(window: &VaultWindow) {
         println!("note: {path} | {text}");
     }
     println!("document: {}", if window.is_dirty() { "dirty" } else { "clean" });
+    println!("completion: {}", window.describe_completion());
     println!("cursor: {}", window.note_text.selectedRange().location);
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");

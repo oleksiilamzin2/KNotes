@@ -9,7 +9,7 @@ use std::sync::Arc;
 use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{Edit, Highlight, LinkRun, Run, Style, changed_region, highlight};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSTextDelegate, NSTextStorage,
@@ -45,12 +45,17 @@ struct Look {
 
 type OnChange = Box<dyn Fn()>;
 type OnLink = Box<dyn Fn(&Link)>;
+type OnCommand = Box<dyn Fn(Sel) -> bool>;
 
 pub struct Ivars {
     /// Called after every user edit.
     on_change: RefCell<Option<OnChange>>,
     /// Called to follow a clicked link.
     on_link: RefCell<Option<OnLink>>,
+    /// Called after the cursor moved.
+    on_cursor: RefCell<Option<OnChange>>,
+    /// Offered key commands (`moveDown:`, `insertNewline:`…) first; true when it took one.
+    on_command: RefCell<Option<OnCommand>>,
     /// Resolves the note's links, to dim those to missing notes.
     links: RefCell<Option<Arc<dyn LinkResolver>>>,
     /// Vault path of the shown note: relative links start from its folder.
@@ -125,6 +130,14 @@ define_class!(
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
                 self.reveal_cursor_paragraph(&view);
             }
+            if let Some(callback) = self.ivars().on_cursor.borrow().as_ref() {
+                callback();
+            }
+        }
+
+        #[unsafe(method(textView:doCommandBySelector:))]
+        fn do_command(&self, _view: &NSTextView, command: Sel) -> bool {
+            self.ivars().on_command.borrow().as_ref().is_some_and(|callback| callback(command))
         }
     }
 );
@@ -150,6 +163,8 @@ impl LivePreview {
         let ivars = Ivars {
             on_change: RefCell::new(None),
             on_link: RefCell::new(None),
+            on_cursor: RefCell::new(None),
+            on_command: RefCell::new(None),
             links: RefCell::new(None),
             path: RefCell::new(String::new()),
             pending: Cell::new(None),
@@ -324,6 +339,14 @@ impl LivePreview {
     }
 
     /// Restyles everything from `source` (the edit path's worst case), for the editor bench.
+    pub fn on_cursor(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_cursor.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_command(&self, callback: impl Fn(Sel) -> bool + 'static) {
+        *self.ivars().on_command.borrow_mut() = Some(Box::new(callback));
+    }
+
     pub fn on_link(&self, callback: impl Fn(&Link) + 'static) {
         *self.ivars().on_link.borrow_mut() = Some(Box::new(callback));
     }
