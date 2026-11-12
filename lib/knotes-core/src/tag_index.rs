@@ -9,4 +9,6 @@ pub trait TagIndex {
     /// Every tag and every parent of a nested tag, with the number of distinct notes that
     /// have it or a tag below it; sorted by tag.
     fn tag_counts(&self) -> Result<Vec<(String, usize)>, BoxError>;
+    /// Paths of notes without any tag, sorted.
+    fn untagged_notes(&self) -> Result<Vec<String>, BoxError>;
 }

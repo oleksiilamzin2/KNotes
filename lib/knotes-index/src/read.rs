@@ -92,6 +92,15 @@ impl TagIndex for SqliteIndex {
         }
         Ok(notes.into_iter().map(|(tag, files)| (tag, files.len())).collect())
     }
+
+    fn untagged_notes(&self) -> Result<Vec<String>, BoxError> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT path FROM files f WHERE kind = {} AND NOT EXISTS (SELECT 1 FROM tags t WHERE t.file_id = f.id) ORDER BY path",
+            file_kind_code(FileKind::Markdown)
+        ))?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
 }
 
 impl NoteText for SqliteIndex {

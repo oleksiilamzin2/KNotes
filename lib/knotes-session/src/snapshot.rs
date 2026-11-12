@@ -13,6 +13,8 @@ pub struct Snapshot {
     pub catalog: Arc<Vec<CatalogEntry>>,
     pub folders: Arc<FolderNode>,
     pub tags: Arc<Vec<TagNode>>,
+    /// Notes without any tag.
+    pub untagged: usize,
     /// `.knotes` rules by folder (`""` is the vault root); unreadable files are skipped.
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// Link resolution for the editor (ADR 0013).
@@ -43,6 +45,7 @@ impl Snapshot {
         };
         let folders = folder_tree(catalog.iter().map(|e| e.path.as_str()));
         let tags = tag_tree(&index.tag_counts()?);
+        let untagged = index.untagged_notes()?.len();
         let mut paths = Vec::new();
         collect_paths(&folders, &mut paths);
         let rules = rules_store
@@ -63,6 +66,7 @@ impl Snapshot {
             titles,
             folders: Arc::new(folders),
             tags: Arc::new(tags),
+            untagged,
             rules: Arc::new(rules),
             changed,
         })
