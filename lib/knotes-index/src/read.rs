@@ -1,4 +1,4 @@
-use knotes_core::{BackLink, BoxError, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, NoteText, OutLink, Span, TagIndex};
+use knotes_core::{BackLink, BoxError, CatalogEntry, FileState, FileStates, Heading, Link, LinkGraph, NoteCatalog, NoteOutline, NoteText, OutLink, Span, TagIndex};
 use rusqlite::OptionalExtension;
 
 use crate::SqliteIndex;
@@ -89,5 +89,24 @@ impl NoteText for SqliteIndex {
             Some((Some(off), Some(len))) => Ok(Some(self.pack.read_string(off as u64, len as u64)?)),
             _ => Ok(None),
         }
+    }
+}
+
+impl NoteCatalog for SqliteIndex {
+    fn catalog(&self) -> Result<Vec<CatalogEntry>, BoxError> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT f.path, a.alias FROM files f LEFT JOIN aliases a ON a.file_id = f.id ORDER BY f.path, a.ord",
+        )?;
+        let mut entries: Vec<CatalogEntry> = Vec::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))? {
+            let (path, alias) = row?;
+            if entries.last().is_none_or(|e| e.path != path) {
+                entries.push(CatalogEntry { path, aliases: Vec::new() });
+            }
+            if let (Some(alias), Some(entry)) = (alias, entries.last_mut()) {
+                entry.aliases.push(alias);
+            }
+        }
+        Ok(entries)
     }
 }

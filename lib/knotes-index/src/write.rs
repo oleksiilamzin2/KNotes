@@ -159,7 +159,7 @@ fn delete_note_rows(tx: &Transaction, id: i64, fts: &mut FtsWork) -> Result<(), 
     for rowid in st.query_map([id], |r| r.get(0))? {
         fts.deletes.push(rowid?);
     }
-    for table in ["blocks", "headings", "links", "tags"] {
+    for table in ["blocks", "headings", "links", "tags", "aliases"] {
         tx.prepare_cached(&format!("DELETE FROM {table} WHERE file_id = ?1"))?.execute([id])?;
     }
     Ok(())
@@ -189,6 +189,11 @@ fn insert_note_rows<'a>(
     let mut st = tx.prepare_cached("INSERT INTO tags(file_id, tag) VALUES (?1, ?2)")?;
     for tag in &tags {
         st.execute(params![id, tag])?;
+    }
+
+    let mut st = tx.prepare_cached("INSERT INTO aliases(file_id, ord, alias) VALUES (?1, ?2, ?3)")?;
+    for (ord, alias) in note.frontmatter.iter().flat_map(|f| f.aliases.iter()).enumerate() {
+        st.execute(params![id, ord as i64, alias])?;
     }
     Ok(())
 }

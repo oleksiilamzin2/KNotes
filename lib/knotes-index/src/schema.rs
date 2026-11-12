@@ -1,6 +1,6 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 5;
+pub(crate) const VERSION: i64 = 6;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE files(
@@ -49,6 +49,12 @@ CREATE TABLE tags(
     PRIMARY KEY(file_id, tag)
 ) WITHOUT ROWID;
 CREATE INDEX tags_by_tag ON tags(tag, file_id);
+CREATE TABLE aliases(
+    file_id INTEGER NOT NULL,
+    ord INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY(file_id, ord)
+) WITHOUT ROWID;
 -- Search blocks; `id` is the rowid of the block in blocks_fts.
 CREATE TABLE blocks(
     id INTEGER PRIMARY KEY,
