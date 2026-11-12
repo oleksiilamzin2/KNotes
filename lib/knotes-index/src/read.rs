@@ -96,13 +96,18 @@ impl TagIndex for SqliteIndex {
 
 impl NoteText for SqliteIndex {
     fn note_text(&self, path: &str) -> Result<Option<String>, BoxError> {
-        let range: Option<(Option<i64>, Option<i64>)> = self
+        let range: Option<(Option<i64>, Option<i64>, i64)> = self
             .conn
-            .prepare_cached("SELECT pack_off, pack_len FROM files WHERE path = ?1")?
-            .query_row([path], |r| Ok((r.get(0)?, r.get(1)?)))
+            .prepare_cached(
+                "SELECT pack_off, pack_len, (SELECT value FROM meta WHERE key = 'pack_generation') FROM files WHERE path = ?1",
+            )?
+            .query_row([path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
         match range {
-            Some((Some(off), Some(len))) => Ok(Some(self.pack.read_string(off as u64, len as u64)?)),
+            Some((Some(off), Some(len), generation)) => {
+                self.ensure_pack_generation(generation)?;
+                Ok(Some(self.pack.borrow().read_string(off as u64, len as u64)?))
+            }
             _ => Ok(None),
         }
     }

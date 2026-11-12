@@ -30,7 +30,7 @@ impl IndexWriter for SqliteIndex {
     fn apply(&mut self, changes: &[IndexChange<'_>]) -> Result<(), BoxError> {
         // Texts of the batch go to the pack in one write before the commit; offsets start at
         // the length on disk, so an aborted batch leaves only dead bytes.
-        let base = self.pack.len()?;
+        let base = self.pack.borrow().len()?;
         let mut texts = Vec::new();
         let mut fts = FtsWork::default();
         // Names of files that came or went (their links re-resolve) and notes with new links.
@@ -95,7 +95,7 @@ impl IndexWriter for SqliteIndex {
                 st.execute(params![rowid, text])?;
             }
         }
-        self.pack.append(&texts)?;
+        self.pack.borrow().append(&texts)?;
         tx.commit()?;
         self.invalidate_caches();
         Ok(())

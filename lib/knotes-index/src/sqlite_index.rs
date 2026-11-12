@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use knotes_core::BoxError;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::TextSnapshot;
 use crate::content_pack::{ContentPack, HEADER_LEN, PACK_FILE};
@@ -17,7 +17,12 @@ pub(crate) const DB_FILE: &str = "index.sqlite";
 pub struct SqliteIndex {
     dir: PathBuf,
     pub(crate) conn: Connection,
-    pub(crate) pack: ContentPack,
+    /// In a cell: a reader reopens it when the writer compacts the pack.
+    pub(crate) pack: RefCell<ContentPack>,
+    /// Opened with `open_reader`: read-only, follows another connection's writes.
+    read_only: bool,
+    /// Last seen `PRAGMA data_version`; it changes when another connection commits.
+    data_version: Cell<i64>,
     /// Cached number of search blocks; reset by every write.
     pub(crate) block_count: Cell<Option<i64>>,
     /// Cached text snapshot; reset by every write.
@@ -77,7 +82,7 @@ impl SqliteIndex {
             return Ok(None);
         }
         conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY)")?;
-        Ok(Some(Self { dir: dir.to_path_buf(), conn, pack, block_count: Cell::new(None), corpus: RefCell::new(None), scope: RefCell::new(None) }))
+        Ok(Some(Self { dir: dir.to_path_buf(), conn, pack: RefCell::new(pack), read_only: false, data_version: Cell::new(-1), block_count: Cell::new(None), corpus: RefCell::new(None), scope: RefCell::new(None) }))
     }
 }
 
@@ -113,7 +118,7 @@ impl SqliteIndex {
             report.merge_steps += 1;
         }
         let dead = self.dead_pack_bytes()?;
-        if dead >= COMPACT_MIN_DEAD && dead > self.pack.len()? - dead {
+        if dead >= COMPACT_MIN_DEAD && dead > self.pack.borrow().len()? - dead {
             report.compacted = self.compact_pack()?;
         }
         let (log, done): (i64, i64) = self.conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |r| Ok((r.get(1)?, r.get(2)?)))?;
@@ -139,13 +144,13 @@ impl SqliteIndex {
             .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)))?
             .collect::<Result<_, _>>()?;
         let live: u64 = rows.iter().map(|r| r.2).sum();
-        if self.pack.len()? == HEADER_LEN + live {
+        if self.pack.borrow().len()? == HEADER_LEN + live {
             return Ok(false);
         }
-        let generation = self.pack.generation() + 1;
+        let generation = self.pack.borrow().generation() + 1;
         let (path, tmp) = (self.dir.join(PACK_FILE), self.dir.join(format!("{PACK_FILE}.new")));
         let ranges: Vec<(u64, u64)> = rows.iter().map(|r| (r.1, r.2)).collect();
-        let offsets = self.pack.write_compacted(&tmp, generation, &ranges)?;
+        let offsets = self.pack.borrow().write_compacted(&tmp, generation, &ranges)?;
         let tx = self.conn.transaction()?;
         {
             let mut st = tx.prepare_cached("UPDATE files SET pack_off = ?2 WHERE id = ?1")?;
@@ -159,7 +164,7 @@ impl SqliteIndex {
             return Err(e.into());
         }
         tx.commit()?;
-        self.pack = ContentPack::open(&path)?;
+        *self.pack.borrow_mut() = ContentPack::open(&path)?;
         self.invalidate_caches();
         Ok(true)
     }
@@ -167,6 +172,61 @@ impl SqliteIndex {
     /// Dead bytes in the pack.
     fn dead_pack_bytes(&self) -> Result<u64, BoxError> {
         let live: i64 = self.conn.query_row("SELECT COALESCE(SUM(pack_len), 0) FROM files", [], |r| r.get(0))?;
-        Ok(self.pack.len()?.saturating_sub(HEADER_LEN + live as u64))
+        Ok(self.pack.borrow().len()?.saturating_sub(HEADER_LEN + live as u64))
+    }
+}
+
+impl SqliteIndex {
+    /// Opens an existing index read-only, next to a writer in another connection or process
+    /// (WAL allows both). Never creates, migrates or deletes anything: an index of another
+    /// schema version is an error.
+    pub fn open_reader(dir: &Path) -> Result<Self, BoxError> {
+        let path = dir.join(DB_FILE);
+        if !path.exists() {
+            return Err(format!("no index in {}", dir.display()).into());
+        }
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        conn.execute_batch("PRAGMA busy_timeout = 5000; PRAGMA mmap_size = 268435456; PRAGMA cache_size = -16384;")?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version != schema::VERSION {
+            return Err(format!("index schema {version}, expected {}", schema::VERSION).into());
+        }
+        rusqlite::vtab::array::load_module(&conn)?;
+        conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY)")?;
+        let pack = ContentPack::open_read_only(&dir.join(PACK_FILE))?;
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            conn,
+            pack: RefCell::new(pack),
+            read_only: true,
+            data_version: Cell::new(-1),
+            block_count: Cell::new(None),
+            corpus: RefCell::new(None),
+            scope: RefCell::new(None),
+        })
+    }
+
+    /// For readers: drops caches when another connection has committed since the last call.
+    pub(crate) fn follow_writer(&self) -> Result<(), BoxError> {
+        if !self.read_only {
+            return Ok(());
+        }
+        let version: i64 = self.conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
+        if version != self.data_version.replace(version) {
+            self.invalidate_caches();
+        }
+        Ok(())
+    }
+
+    /// Makes sure the pack matches `generation` (read in the same query as the offsets that
+    /// will be used); a reader reopens it after the writer compacted.
+    pub(crate) fn ensure_pack_generation(&self, generation: i64) -> Result<(), BoxError> {
+        if generation as u64 != self.pack.borrow().generation() {
+            *self.pack.borrow_mut() = ContentPack::open_read_only(&self.dir.join(PACK_FILE))?;
+            if generation as u64 != self.pack.borrow().generation() {
+                return Err("content pack changed while reading; retry".into());
+            }
+        }
+        Ok(())
     }
 }

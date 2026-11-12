@@ -28,6 +28,7 @@ impl CorpusSource for SqliteIndex {
 
     /// Cached until the next write.
     fn corpus(&self) -> Result<Arc<TextSnapshot>, BoxError> {
+        self.follow_writer()?;
         if let Some(c) = self.corpus.borrow().as_ref() {
             return Ok(Arc::clone(c));
         }
@@ -37,8 +38,10 @@ impl CorpusSource for SqliteIndex {
         let notes: Vec<(String, usize, usize)> =
             st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize, r.get::<_, i64>(2)? as usize)))?
                 .collect::<Result<_, _>>()?;
+        let generation: i64 = self.conn.query_row("SELECT value FROM meta WHERE key = 'pack_generation'", [], |r| r.get(0))?;
+        self.ensure_pack_generation(generation)?;
         let end = notes.iter().map(|n| n.2).max().unwrap_or(0);
-        let map = self.pack.map_covering(end as u64)?;
+        let map = self.pack.borrow().map_covering(end as u64)?;
         let snapshot = Arc::new(TextSnapshot { map, notes });
         *self.corpus.borrow_mut() = Some(Arc::clone(&snapshot));
         Ok(snapshot)

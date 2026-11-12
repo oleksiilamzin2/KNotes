@@ -41,6 +41,7 @@ fn sql(ranked: bool, scoped: bool) -> String {
 
 impl ContentSearch for SqliteIndex {
     fn search_blocks(&self, query: &str, scope: Option<&[String]>, limit: usize) -> Result<Vec<BlockHit>, BoxError> {
+        self.follow_writer()?;
         let groups = query_groups(query, &LightStemmer);
         if groups.is_empty() {
             return Ok(Vec::new());

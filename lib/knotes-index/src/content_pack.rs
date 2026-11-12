@@ -32,6 +32,15 @@ impl ContentPack {
         if file.metadata()?.len() == 0 {
             (&file).write_all(&header(0))?;
         }
+        Self::from_file(file)
+    }
+
+    /// For readers in other connections or processes: never creates or writes the file.
+    pub fn open_read_only(path: &Path) -> io::Result<Self> {
+        Self::from_file(File::open(path)?)
+    }
+
+    fn from_file(file: File) -> io::Result<Self> {
         let mut head = [0u8; HEADER_LEN as usize];
         // Positional read: in append mode the cursor sits at the end after writing the header.
         file.read_exact_at(&mut head, 0).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "content pack has no header"))?;
