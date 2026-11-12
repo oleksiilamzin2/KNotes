@@ -1,6 +1,6 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 6;
+pub(crate) const VERSION: i64 = 7;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE files(
@@ -73,6 +73,9 @@ CREATE VIRTUAL TABLE blocks_fts USING fts5(
 -- Pending-terms buffer before FTS5 writes a segment (default 1 MB): fewer segments and merges
 -- during bulk indexing. Measured on 50k notes: FTS build 6.6 s -> 4.1 s with a larger buffer.
 INSERT INTO blocks_fts(blocks_fts, rank) VALUES ('hashsize', 67108864);
+-- No merging inside writes: automerge made 1 in 10 single-note updates take 10-60 ms.
+-- Segments are merged by SqliteIndex::maintenance in idle time (crisismerge still bounds them).
+INSERT INTO blocks_fts(blocks_fts, rank) VALUES ('automerge', 0);
 -- Number of blocks per term, to recognise words found almost everywhere.
 CREATE VIRTUAL TABLE blocks_vocab USING fts5vocab(blocks_fts, 'row');
 ";
@@ -85,4 +88,6 @@ PRAGMA temp_store = MEMORY;
 PRAGMA busy_timeout = 5000;
 PRAGMA mmap_size = 268435456;
 PRAGMA cache_size = -65536;
+-- Checkpoints run in maintenance; the automatic one (16384 pages, 64 MB) is only a safety net.
+PRAGMA wal_autocheckpoint = 16384;
 ";

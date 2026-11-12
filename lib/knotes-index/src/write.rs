@@ -99,6 +99,10 @@ impl IndexWriter for SqliteIndex {
         self.invalidate_caches();
         Ok(())
     }
+
+    fn maintain(&mut self) -> Result<(), BoxError> {
+        self.maintenance().map(|_| ())
+    }
 }
 
 /// `pack` is the `(offset, length)` of the note text in the content pack.

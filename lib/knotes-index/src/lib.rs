@@ -15,4 +15,4 @@ mod stemmer;
 mod write;
 
 pub use corpus::TextSnapshot;
-pub use sqlite_index::SqliteIndex;
+pub use sqlite_index::{MaintenanceReport, SqliteIndex};

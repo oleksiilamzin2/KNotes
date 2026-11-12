@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use knotes_core::BoxError;
 use rusqlite::Connection;
@@ -64,5 +65,41 @@ impl SqliteIndex {
             return Ok(None);
         }
         Ok(Some(Self { conn, pack, block_count: Cell::new(None), corpus: RefCell::new(None) }))
+    }
+}
+
+/// What one `SqliteIndex::maintenance` run did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MaintenanceReport {
+    /// FTS5 merge commands that did work.
+    pub merge_steps: u32,
+    /// WAL frames not yet copied into the database after the checkpoint (busy readers).
+    pub wal_frames_left: i64,
+}
+
+/// Longest a single maintenance run keeps the writer busy.
+const MAINTENANCE_BUDGET: Duration = Duration::from_millis(200);
+/// Leaf pages merged per FTS5 `merge` command.
+const MERGE_PAGES: i64 = 500;
+
+impl SqliteIndex {
+    /// Merges FTS5 segments until there is no work left or the time budget is spent, then
+    /// checkpoints the WAL. Call repeatedly in idle time; each call is short.
+    pub fn maintenance(&mut self) -> Result<MaintenanceReport, BoxError> {
+        let mut report = MaintenanceReport::default();
+        let start = Instant::now();
+        while start.elapsed() < MAINTENANCE_BUDGET {
+            let before = self.conn.total_changes();
+            self.conn.execute("INSERT INTO blocks_fts(blocks_fts, rank) VALUES ('merge', ?1)", [MERGE_PAGES])?;
+            // FTS5: fewer than two changes means the merge found nothing to do.
+            if self.conn.total_changes() - before < 2 {
+                break;
+            }
+            report.merge_steps += 1;
+        }
+        let (log, done): (i64, i64) = self.conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |r| Ok((r.get(1)?, r.get(2)?)))?;
+        report.wal_frames_left = (log - done).max(0);
+        self.invalidate_caches();
+        Ok(report)
     }
 }

@@ -10,4 +10,10 @@ pub enum IndexChange<'a> {
 /// Applies a batch of changes atomically (one transaction per call).
 pub trait IndexWriter {
     fn apply(&mut self, changes: &[IndexChange<'_>]) -> Result<(), BoxError>;
+
+    /// Deferred housekeeping (merging index segments, checkpoints), for idle time: keeping it
+    /// out of `apply` keeps a single-note update fast. Safe to call at any time.
+    fn maintain(&mut self) -> Result<(), BoxError> {
+        Ok(())
+    }
 }
