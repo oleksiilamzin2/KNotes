@@ -17,5 +17,5 @@ pub use labels::{TimeStyle, plural_uk, time_style};
 pub use natural_order::{natural_cmp, natural_key};
 pub use new_note::{note_file_stem, unique_note_path};
 pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListOption, ListSettings, SortOrder, build_note_list, days_from_civil, title_of};
-pub use sidebar::{Sidebar, SidebarItem};
+pub use sidebar::{Sidebar, SidebarItem, SidebarMode};
 pub use tag_tree::{TagNode, tag_tree};

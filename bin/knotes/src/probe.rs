@@ -91,6 +91,28 @@ pub fn write_requested(window: &VaultWindow) {
     std::fs::write(vault.join(path), text).expect("outside write");
 }
 
+/// `KNOTES_PROBE_ACTION=sidebar=tags` or `sidebar=folders`: a click on that segment of the
+/// toolbar switch, sent to its target as AppKit does.
+pub fn sidebar_mode_requested(window: &NSWindow) {
+    let index = match std::env::var("KNOTES_PROBE_ACTION").as_deref() {
+        Ok("sidebar=folders") => 0,
+        Ok("sidebar=tags") => 1,
+        _ => return,
+    };
+    let Some(group) = sidebar_switch(window) else { return };
+    group.setSelectedIndex(index);
+    if let Some(action) = group.action() {
+        let target = group.target();
+        // SAFETY: the group's own action and target, with the group as sender.
+        unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&group)) };
+    }
+}
+
+fn sidebar_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItemGroup>> {
+    let id = NSString::from_str(crate::toolbar::SIDEBAR_MODE);
+    window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?.downcast::<NSToolbarItemGroup>().ok()
+}
+
 /// `KNOTES_PROBE_ACTION=new`: File → New Note through the responder chain, like the menu.
 /// True when it was requested.
 pub fn new_note_requested() -> bool {
@@ -176,6 +198,7 @@ pub fn schedule(with_sidebar: bool) {
                 }
                 if with_sidebar {
                     report_sidebar(&window.outline);
+                    report_sidebar_mode(&window.window);
                     report_list(&window.table);
                     println!("list-menu: {}", window.list_menu.describe());
                     report_note(window);
@@ -288,6 +311,15 @@ fn report(window: &NSWindow) {
 }
 
 /// Visible sidebar rows as `name (count)`, read back from the outline view's cells.
+fn report_sidebar_mode(window: &NSWindow) {
+    let mode = match sidebar_switch(window).map(|g| g.selectedIndex()) {
+        Some(0) => "folders",
+        Some(1) => "tags",
+        _ => "none",
+    };
+    println!("sidebar-mode: {mode}");
+}
+
 fn report_sidebar(outline: &NSOutlineView) {
     let rows: Vec<String> = (0..outline.numberOfRows())
         .filter_map(|row| {
@@ -348,8 +380,9 @@ fn report_note(window: &VaultWindow) {
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");
     }
+    let history = NSString::from_str(crate::toolbar::HISTORY);
     if let Some(group) = window.window.toolbar().and_then(|t| {
-        t.items().iter().find_map(|i| i.downcast::<NSToolbarItemGroup>().ok())
+        t.items().iter().find(|i| i.itemIdentifier().isEqualToString(&history)).and_then(|i| i.downcast::<NSToolbarItemGroup>().ok())
     }) {
         let state: Vec<&str> = group.subitems().iter().map(|i| if i.isEnabled() { "on" } else { "off" }).collect();
         println!("nav: back={} forward={}", state.first().unwrap_or(&"?"), state.get(1).unwrap_or(&"?"));

@@ -1,15 +1,20 @@
-use knotes_app::{Sidebar, SidebarItem, folder_tree, tag_tree};
+use knotes_app::{Sidebar, SidebarItem, SidebarMode, folder_tree, tag_tree};
 
 fn sidebar() -> Sidebar {
+    sidebar_in(SidebarMode::Folders)
+}
+
+fn sidebar_in(mode: SidebarMode) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md"]);
     let tags = tag_tree(&[("project".to_owned(), 2), ("project/radar".to_owned(), 1), ("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags)
+    Sidebar::new(&folders, &tags, mode)
 }
 
 #[test]
-fn top_level_is_all_notes_then_folders_and_tags_sections() {
+fn top_level_is_all_notes_then_the_folders_or_the_tags_section() {
     let s = sidebar();
-    assert_eq!(s.children(None), [SidebarItem::AllNotes, SidebarItem::FoldersSection, SidebarItem::TagsSection]);
+    assert_eq!(s.children(None), [SidebarItem::AllNotes, SidebarItem::FoldersSection]);
+    assert_eq!(sidebar_in(SidebarMode::Tags).children(None), [SidebarItem::AllNotes, SidebarItem::TagsSection]);
     assert_eq!(s.count(&SidebarItem::AllNotes), Some(4));
     assert_eq!(s.count(&SidebarItem::FoldersSection), None);
 }

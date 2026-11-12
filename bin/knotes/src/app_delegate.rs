@@ -184,8 +184,17 @@ impl AppDelegate {
         if probe::enabled() {
             probe::watch(&window);
         }
+        let mut settings = AppSettings::load(&app_data());
+        window.set_sidebar_mode(settings.sidebar_mode);
+        window.on_sidebar_mode(|mode| {
+            let mut settings = AppSettings::load(&app_data());
+            settings.sidebar_mode = mode;
+            if let Err(e) = settings.save(&app_data()) {
+                eprintln!("knotes: cannot save settings: {e}");
+            }
+        });
         forward(events, &window, mtm);
-        let settings = AppSettings { last_vault: Some(path.clone()) };
+        settings.last_vault = Some(path.clone());
         if let Err(e) = settings.save(&app_data()) {
             eprintln!("knotes: cannot save settings: {e}");
         }

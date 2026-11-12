@@ -64,7 +64,7 @@ fn sidebar_shows_all_notes_folders_and_tags_of_the_vault() {
     std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
     let out = probe_with(&[vault.path()], None);
     let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(sidebar, "Усі нотатки (3) | Теки | Inbox (1) | Projects (2) | Теги | radar (1) | todo (1)");
+    assert_eq!(sidebar, "Усі нотатки (3) | Теки | Inbox (1) | Projects (2)", "folders unless switched");
     let size = out.lines().find_map(|l| l.strip_prefix("size: ")).expect("size line");
     let width: f64 = size.split_once('x').unwrap().0.parse().unwrap();
     assert!(width >= 1000.0, "window shrank after data arrived: {size}");
@@ -105,7 +105,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-separator, flexible-space, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
+        "toggle-sidebar, sidebar-mode(2), sidebar-separator, flexible-space, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -580,4 +580,20 @@ fn an_unfinished_first_line_names_the_note_when_leaving_it() {
     assert!(out.contains("note: Вхідні/Без назви.md"), "not named mid-line: {out}");
     assert_eq!(read(vault.path(), "Вхідні/Ідея.md"), "Ідея", "quitting leaves the note");
     assert!(!vault.path().join("Вхідні/Без назви.md").exists());
+}
+
+#[test]
+fn the_sidebar_switch_shows_tags_instead_of_folders_and_is_remembered() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault.path().join("Inbox")).unwrap();
+    std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
+    std::fs::write(vault.path().join("a.md"), "#radar one").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=tags")]);
+    assert!(out.contains("sidebar: Усі нотатки (2) | Теги | radar (1) | todo (1)"), "{out}");
+    assert!(out.contains("sidebar-mode: tags"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[]);
+    assert!(out.contains("sidebar: Усі нотатки (2) | Теги | radar (1) | todo (1)"), "remembered: {out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=folders")]);
+    assert!(out.contains("sidebar: Усі нотатки (2) | Теки | Inbox (1)"), "{out}");
 }

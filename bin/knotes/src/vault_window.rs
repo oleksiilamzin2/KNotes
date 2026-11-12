@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, new_notes_folder,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, SidebarMode, TagNode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -55,6 +55,8 @@ struct State {
     links: Option<Arc<LinkTargets>>,
     /// Title search of the last snapshot, for link completion.
     titles: Option<Arc<TitleIndex>>,
+    /// Folders or tags under "All notes".
+    sidebar_mode: SidebarMode,
 }
 
 /// Autosave runs after this long without edits (ADR 0011).
@@ -97,7 +99,7 @@ pub struct VaultWindow {
 
 impl VaultWindow {
     pub fn new(mtm: MainThreadMarker) -> Rc<Self> {
-        let empty = Sidebar::new(&Default::default(), &[]);
+        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders);
         let sidebar = SidebarSource::new(mtm, empty);
         let (scroll, outline) = sidebar_view::outline(mtm, &sidebar);
         let sidebar_vc = NSViewController::new(mtm);
@@ -134,6 +136,7 @@ impl VaultWindow {
             reader: None,
             links: None,
             titles: None,
+            sidebar_mode: SidebarMode::Folders,
         };
         let this = Rc::new(Self {
             window,
@@ -214,6 +217,39 @@ impl VaultWindow {
         this
     }
 
+    /// Folders or tags under "All notes" (the toolbar switch); the list keeps what it shows.
+    pub fn set_sidebar_mode(&self, mode: SidebarMode) {
+        self.state.borrow_mut().sidebar_mode = mode;
+        self.toolbar_delegate.set_sidebar_mode(mode);
+        self.rebuild_sidebar();
+        let selection = self.state.borrow().selection.clone();
+        self.highlight(&selection);
+    }
+
+    /// Called when the user flips the folders/tags switch (the app saves the choice).
+    pub fn on_sidebar_mode(&self, callback: impl Fn(SidebarMode) + 'static) {
+        let weak = self.this.borrow().clone();
+        self.toolbar_delegate.on_sidebar_mode(move |mode| {
+            if let Some(window) = weak.upgrade() {
+                window.set_sidebar_mode(mode);
+            }
+            callback(mode);
+        });
+    }
+
+    fn rebuild_sidebar(&self) {
+        let model = {
+            let state = self.state.borrow();
+            Sidebar::new(&state.folders, &state.tags, state.sidebar_mode)
+        };
+        self.sidebar.set_model(model);
+        self.outline.reloadData();
+        for section in [SidebarItem::FoldersSection, SidebarItem::TagsSection] {
+            // SAFETY: section objects come from the data source of this outline view.
+            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&section))) };
+        }
+    }
+
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
         let mut state = self.state.borrow_mut();
         state.vault = Some(vault);
@@ -284,12 +320,7 @@ impl VaultWindow {
         if let Some(links) = new_links {
             self.live_preview.set_links(&self.note_text, links);
         }
-        self.sidebar.set_model(Sidebar::new(&snapshot.folders, &snapshot.tags));
-        self.outline.reloadData();
-        for section in [SidebarItem::FoldersSection, SidebarItem::TagsSection] {
-            // SAFETY: section objects come from the data source of this outline view.
-            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&section))) };
-        }
+        self.rebuild_sidebar();
         let mut selection = self.state.borrow().selection.clone();
         if !self.exists(&selection) {
             selection = SidebarItem::AllNotes;
@@ -302,6 +333,7 @@ impl VaultWindow {
         }
         self.update_navigation();
         if probe::enabled() && !snapshot.rows.is_empty() && probe::act_once() {
+            probe::sidebar_mode_requested(&self.window);
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
                 self.select(item);
@@ -819,11 +851,15 @@ impl VaultWindow {
     fn highlight(&self, item: &SidebarItem) {
         // SAFETY: the item object comes from this outline view's data source.
         let row = unsafe { self.outline.rowForItem(Some(&self.sidebar.object_for(item))) };
+        self.highlighting.set(true);
         if row >= 0 {
-            self.highlighting.set(true);
             self.outline.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
-            self.highlighting.set(false);
+        } else {
+            // Not shown in this sidebar mode: no other row may look selected.
+            // SAFETY: a nil sender is allowed.
+            unsafe { self.outline.deselectAll(None) };
         }
+        self.highlighting.set(false);
     }
 }
 

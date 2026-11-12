@@ -1,4 +1,4 @@
-//! Window toolbar as in Knotes v1: sidebar toggle, list title (window title and subtitle),
+//! Window toolbar as in Knotes v1: sidebar toggle and the folders/tags switch, list title (window title and subtitle),
 //! new note and back/forward over the note, chat toggle over the inspector. Separators track
 //! the split view columns, so each group sits above its column; macOS draws the glass.
 
@@ -14,8 +14,11 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
 
+use knotes_app::SidebarMode;
+
 use crate::strings;
 
+pub const SIDEBAR_MODE: &str = "knotes.sidebar-mode";
 pub const LIST_SEPARATOR: &str = "knotes.list-separator";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
 pub const NEW_NOTE: &str = "knotes.new-note";
@@ -24,6 +27,7 @@ pub const CHAT: &str = "knotes.chat";
 
 type OnNavigate = Box<dyn Fn(bool)>;
 type OnNewNote = Box<dyn Fn()>;
+type OnSidebarMode = Box<dyn Fn(SidebarMode)>;
 
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
@@ -31,6 +35,10 @@ pub struct Ivars {
     /// Called with `true` for forward, `false` for back.
     on_navigate: RefCell<Option<OnNavigate>>,
     on_new_note: RefCell<Option<OnNewNote>>,
+    on_sidebar_mode: RefCell<Option<OnSidebarMode>>,
+    /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
+    sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
+    sidebar_mode_state: Cell<SidebarMode>,
     history: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     /// Back/forward availability, applied when the group item is created later.
     history_state: Cell<(bool, bool)>,
@@ -70,6 +78,15 @@ define_class!(
             }
         }
 
+        #[unsafe(method(sidebarMode:))]
+        fn sidebar_mode_chosen(&self, sender: &NSToolbarItemGroup) {
+            let mode = if sender.selectedIndex() == 1 { SidebarMode::Tags } else { SidebarMode::Folders };
+            self.ivars().sidebar_mode_state.set(mode);
+            if let Some(callback) = self.ivars().on_sidebar_mode.borrow().as_ref() {
+                callback(mode);
+            }
+        }
+
         #[unsafe(method(navigate:))]
         fn navigate(&self, sender: &NSToolbarItemGroup) {
             let forward = sender.selectedIndex() == 1;
@@ -87,6 +104,9 @@ impl ToolbarDelegate {
             list_menu,
             on_navigate: RefCell::new(None),
             on_new_note: RefCell::new(None),
+            on_sidebar_mode: RefCell::new(None),
+            sidebar_mode: RefCell::new(None),
+            sidebar_mode_state: Cell::new(SidebarMode::Folders),
             history: RefCell::new(None),
             history_state: Cell::new((false, false)),
         });
@@ -95,6 +115,18 @@ impl ToolbarDelegate {
 
     pub fn on_new_note(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_new_note.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_sidebar_mode(&self, callback: impl Fn(SidebarMode) + 'static) {
+        *self.ivars().on_sidebar_mode.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Shows `mode` in the folders/tags switch (without calling back).
+    pub fn set_sidebar_mode(&self, mode: SidebarMode) {
+        self.ivars().sidebar_mode_state.set(mode);
+        if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
+            group.setSelectedIndex(mode_index(mode));
+        }
     }
 
     pub fn on_navigate(&self, callback: impl Fn(bool) + 'static) {
@@ -113,6 +145,27 @@ impl ToolbarDelegate {
         let mtm = self.mtm();
         let target: &AnyObject = self.as_ref();
         match id.to_string().as_str() {
+            SIDEBAR_MODE => {
+                let images = NSArray::from_retained_slice(&[symbol("folder", strings::FOLDERS)?, symbol("tag", strings::TAGS)?]);
+                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::FOLDERS), NSString::from_str(strings::TAGS)]);
+                let group = unsafe {
+                    NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
+                        id,
+                        &images,
+                        NSToolbarItemGroupSelectionMode::SelectOne,
+                        Some(&labels),
+                        Some(target),
+                        Some(sel!(sidebarMode:)),
+                        mtm,
+                    )
+                };
+                for (item, tip) in group.subitems().iter().zip([strings::FOLDERS, strings::TAGS]) {
+                    item.setToolTip(Some(&NSString::from_str(tip)));
+                }
+                group.setSelectedIndex(mode_index(self.ivars().sidebar_mode_state.get()));
+                *self.ivars().sidebar_mode.borrow_mut() = Some(group.clone());
+                Some(Retained::into_super(group))
+            }
             LIST_SEPARATOR => Some(Retained::into_super(NSTrackingSeparatorToolbarItem::trackingSeparatorToolbarItemWithIdentifier_splitView_dividerIndex(
                 id,
                 &self.ivars().split_view,
@@ -178,6 +231,7 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
     let custom = |s: &str| NSString::from_str(s);
     NSArray::from_retained_slice(&[
         system[0].copy(),
+        custom(SIDEBAR_MODE),
         system[1].copy(),
         system[2].copy(),
         custom(LIST_OPTIONS),
@@ -208,6 +262,13 @@ fn button(mtm: MainThreadMarker, id: &NSString, symbol_name: &str, label: &str) 
     item.setLabel(&NSString::from_str(label));
     item.setToolTip(Some(&NSString::from_str(label)));
     item
+}
+
+fn mode_index(mode: SidebarMode) -> isize {
+    match mode {
+        SidebarMode::Folders => 0,
+        SidebarMode::Tags => 1,
+    }
 }
 
 fn apply_history(group: &NSToolbarItemGroup, can_back: bool, can_forward: bool) {

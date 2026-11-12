@@ -40,27 +40,56 @@ impl SidebarItem {
     }
 }
 
+/// What the sidebar lists under "All notes": the folder tree or the tag tree.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarMode {
+    #[default]
+    Folders,
+    Tags,
+}
+
+impl SidebarMode {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Folders => "folders",
+            Self::Tags => "tags",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "folders" => Some(Self::Folders),
+            "tags" => Some(Self::Tags),
+            _ => None,
+        }
+    }
+}
+
 struct Entry {
     name: String,
     count: Option<usize>,
     children: Vec<SidebarItem>,
 }
 
-/// Sidebar contents for one snapshot: "All notes", the folder tree and the tag tree.
+/// Sidebar contents for one snapshot: "All notes", then the folder tree or the tag tree.
 pub struct Sidebar {
     top: Vec<SidebarItem>,
     entries: HashMap<SidebarItem, Entry>,
 }
 
 impl Sidebar {
-    pub fn new(folders: &FolderNode, tags: &[TagNode]) -> Self {
+    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode) -> Self {
         let mut entries = HashMap::new();
         entries.insert(SidebarItem::AllNotes, Entry { name: String::new(), count: Some(folders.notes), children: Vec::new() });
         let folder_items = folders.children.iter().map(|f| add_folder(f, &mut entries)).collect();
         entries.insert(SidebarItem::FoldersSection, Entry { name: String::new(), count: None, children: folder_items });
         let tag_items = tags.iter().map(|t| add_tag(t, &mut entries)).collect();
         entries.insert(SidebarItem::TagsSection, Entry { name: String::new(), count: None, children: tag_items });
-        Self { top: vec![SidebarItem::AllNotes, SidebarItem::FoldersSection, SidebarItem::TagsSection], entries }
+        let section = match mode {
+            SidebarMode::Folders => SidebarItem::FoldersSection,
+            SidebarMode::Tags => SidebarItem::TagsSection,
+        };
+        Self { top: vec![SidebarItem::AllNotes, section], entries }
     }
 
     /// Children of `item`, or the top-level rows for `None`.
