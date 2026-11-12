@@ -22,3 +22,4 @@ pub const SORT_MODIFIED: &str = "Датою зміни";
 pub const SORT_TITLE: &str = "Назвою";
 pub const GROUP_BY_DATE: &str = "Групувати за датою";
 pub const INCLUDE_SUBFOLDERS: &str = "Нотатки з підтек";
+pub const ASK_NOTES: &str = "Запитайте свої нотатки…";

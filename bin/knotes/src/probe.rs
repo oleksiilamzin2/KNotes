@@ -72,6 +72,8 @@ pub fn schedule(with_sidebar: bool) {
         WINDOW.with(|w| {
             if let Some(window) = w.borrow().as_ref() {
                 report(&window.window);
+                let placeholder = window.chat.question.placeholderString().map(|p| p.to_string()).unwrap_or_default();
+                println!("chat: {} | {placeholder}", window.chat.title.stringValue());
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_list(&window.table);

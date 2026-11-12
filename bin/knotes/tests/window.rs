@@ -172,3 +172,9 @@ fn clicking_notes_opens_them_and_back_returns() {
     assert!(out.contains("nav: back=off forward=on"), "{out}");
     assert!(out.contains("selected-row: a"), "{out}");
 }
+
+#[test]
+fn chat_column_has_title_and_question_field() {
+    let out = probe();
+    assert!(out.contains("chat: Чат | Запитайте свої нотатки…"), "{out}");
+}

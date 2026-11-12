@@ -13,9 +13,10 @@ use knotes_session::{Event, Snapshot};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextView, NSView, NSViewController, NSWindow};
+use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextView, NSViewController, NSWindow};
 use objc2_foundation::{NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString};
 
+use crate::chat_view::{self, ChatView};
 use crate::list_menu::ListMenu;
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view;
@@ -47,6 +48,7 @@ pub struct VaultWindow {
     pub table: Retained<NSTableView>,
     pub list_menu: ListMenu,
     pub note_text: Retained<NSTextView>,
+    pub chat: ChatView,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
     state: RefCell<State>,
@@ -68,7 +70,10 @@ impl VaultWindow {
         let (note_scroll, note_text) = note_view::note_view(mtm);
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
-        let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc);
+        let chat = chat_view::chat_view(mtm);
+        let chat_vc = NSViewController::new(mtm);
+        chat_vc.setView(&chat.view);
+        let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc, &chat_vc);
         let list_menu = ListMenu::new(mtm);
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
         toolbar::install(&window, &toolbar);
@@ -92,6 +97,7 @@ impl VaultWindow {
             table,
             list_menu,
             note_text,
+            chat,
             toolbar_delegate: toolbar,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
@@ -343,24 +349,17 @@ fn tag_exists(nodes: &[TagNode], tag: &str) -> bool {
     nodes.iter().any(|n| n.tag == tag || tag_exists(&n.children, tag))
 }
 
-/// Unused split view items get an empty controller until their stage.
-pub fn placeholder(mtm: MainThreadMarker) -> Retained<NSViewController> {
-    let controller = NSViewController::new(mtm);
-    controller.setView(&NSView::new(mtm));
-    controller
-}
-
 pub fn split_items(
     sidebar: &NSViewController,
     list: &NSViewController,
     note: &NSViewController,
-    mtm: MainThreadMarker,
+    chat: &NSViewController,
 ) -> [Retained<NSSplitViewItem>; 4] {
     [
         NSSplitViewItem::sidebarWithViewController(sidebar),
         NSSplitViewItem::contentListWithViewController(list),
         NSSplitViewItem::splitViewItemWithViewController(note),
-        NSSplitViewItem::inspectorWithViewController(&placeholder(mtm)),
+        NSSplitViewItem::inspectorWithViewController(chat),
     ]
 }
 
@@ -373,10 +372,11 @@ pub fn split_controller(
     sidebar: &NSViewController,
     list: &NSViewController,
     note: &NSViewController,
+    chat: &NSViewController,
     mtm: MainThreadMarker,
 ) -> Retained<NSSplitViewController> {
     let split = NSSplitViewController::new(mtm);
-    for (item, (min, max, holding)) in split_items(sidebar, list, note, mtm).iter().zip(COLUMNS) {
+    for (item, (min, max, holding)) in split_items(sidebar, list, note, chat).iter().zip(COLUMNS) {
         item.setMinimumThickness(min);
         if max < f64::MAX {
             item.setMaximumThickness(max);

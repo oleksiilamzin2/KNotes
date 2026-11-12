@@ -18,6 +18,7 @@ pub fn build(
     sidebar: &NSViewController,
     list: &NSViewController,
     note: &NSViewController,
+    chat: &NSViewController,
 ) -> (Retained<NSWindow>, Retained<NSSplitViewController>) {
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
@@ -32,7 +33,7 @@ pub fn build(
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(ns_string!("Knotes"));
 
-    let split = split_controller(sidebar, list, note, mtm);
+    let split = split_controller(sidebar, list, note, chat, mtm);
     window.setContentViewController(Some(&split));
     // Setting the controller sizes the window to its (still empty) views; restore the size.
     window.setContentSize(frame.size);
