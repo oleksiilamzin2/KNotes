@@ -1,0 +1,11 @@
+[package]
+name = "knotes-md"
+description = "Obsidian-flavoured Markdown parser for the Knotes indexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+pulldown-cmark.workspace = true

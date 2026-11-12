@@ -1,0 +1,9 @@
+[package]
+name = "knotes-core"
+description = "Domain model and traits of Knotes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
