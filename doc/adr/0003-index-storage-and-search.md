@@ -47,8 +47,8 @@ with a single-writer lock. It stays an option if FTS5 misses the budgets in ADR 
 ## Consequences
 
 - One small embedded engine covers metadata, links and ranked search.
-- Block-level FTS means 1–2 million FTS rows at 50k notes; index size is measured in
-  the benchmarks.
+- Block-level FTS gives about 200k rows at 50k notes (measured on the synthetic vault
+  with 2 KB blocks: 196k blocks, 361k links); index size is measured in the benchmarks.
 - Language-aware matching (Ukrainian and English word forms) is not solved by the
   default `unicode61` tokenizer; it gets its own decision when search quality is
   measured.
