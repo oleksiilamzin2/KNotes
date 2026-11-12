@@ -7,8 +7,6 @@ use crate::{FolderNode, TagNode};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SidebarItem {
     AllNotes,
-    FoldersSection,
-    TagsSection,
     Folder(String),
     Tag(String),
 }
@@ -19,8 +17,6 @@ impl SidebarItem {
     pub fn key(&self) -> String {
         match self {
             Self::AllNotes => "all".into(),
-            Self::FoldersSection => "folders".into(),
-            Self::TagsSection => "tags".into(),
             Self::Folder(path) => format!("f:{path}"),
             Self::Tag(tag) => format!("t:{tag}"),
         }
@@ -29,8 +25,6 @@ impl SidebarItem {
     pub fn from_key(key: &str) -> Option<Self> {
         match key {
             "all" => Some(Self::AllNotes),
-            "folders" => Some(Self::FoldersSection),
-            "tags" => Some(Self::TagsSection),
             _ => match key.split_once(':')? {
                 ("f", path) => Some(Self::Folder(path.into())),
                 ("t", tag) => Some(Self::Tag(tag.into())),
@@ -71,7 +65,8 @@ struct Entry {
     children: Vec<SidebarItem>,
 }
 
-/// Sidebar contents for one snapshot: "All notes", then the folder tree or the tag tree.
+/// Sidebar contents for one snapshot: "All notes", then the folder tree or the tag tree, with
+/// no heading (the toolbar switch says which).
 pub struct Sidebar {
     top: Vec<SidebarItem>,
     entries: HashMap<SidebarItem, Entry>,
@@ -81,15 +76,12 @@ impl Sidebar {
     pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode) -> Self {
         let mut entries = HashMap::new();
         entries.insert(SidebarItem::AllNotes, Entry { name: String::new(), count: Some(folders.notes), children: Vec::new() });
-        let folder_items = folders.children.iter().map(|f| add_folder(f, &mut entries)).collect();
-        entries.insert(SidebarItem::FoldersSection, Entry { name: String::new(), count: None, children: folder_items });
-        let tag_items = tags.iter().map(|t| add_tag(t, &mut entries)).collect();
-        entries.insert(SidebarItem::TagsSection, Entry { name: String::new(), count: None, children: tag_items });
-        let section = match mode {
-            SidebarMode::Folders => SidebarItem::FoldersSection,
-            SidebarMode::Tags => SidebarItem::TagsSection,
-        };
-        Self { top: vec![SidebarItem::AllNotes, section], entries }
+        let mut top = vec![SidebarItem::AllNotes];
+        match mode {
+            SidebarMode::Folders => top.extend(folders.children.iter().map(|f| add_folder(f, &mut entries))),
+            SidebarMode::Tags => top.extend(tags.iter().map(|t| add_tag(t, &mut entries))),
+        }
+        Self { top, entries }
     }
 
     /// Children of `item`, or the top-level rows for `None`.

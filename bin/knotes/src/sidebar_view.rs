@@ -63,11 +63,6 @@ define_class!(
             self.cell_for(outline, item)
         }
 
-        #[unsafe(method(outlineView:isGroupItem:))]
-        fn is_group(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
-            matches!(item_of(item), Some(SidebarItem::FoldersSection | SidebarItem::TagsSection))
-        }
-
         #[unsafe(method(outlineViewSelectionDidChange:))]
         fn selection_did_change(&self, notification: &NSNotification) {
             let Some(outline) = notification.object().and_then(|o| o.downcast::<NSOutlineView>().ok()) else { return };
@@ -76,11 +71,6 @@ define_class!(
             if let (Some(item), Some(callback)) = (item, self.ivars().on_select.borrow().as_ref()) {
                 callback(item);
             }
-        }
-
-        #[unsafe(method(outlineView:shouldSelectItem:))]
-        fn should_select(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
-            !matches!(item_of(item), Some(SidebarItem::FoldersSection | SidebarItem::TagsSection))
         }
     }
 );
@@ -100,8 +90,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let model = self.ivars().model.borrow();
         let (label, icon) = match &item {
             SidebarItem::AllNotes => (strings::ALL_NOTES.to_owned(), Some("tray.full")),
-            SidebarItem::FoldersSection => (strings::FOLDERS.to_owned(), None),
-            SidebarItem::TagsSection => (strings::TAGS.to_owned(), None),
             SidebarItem::Folder(_) => (model.name(&item).to_owned(), Some("folder")),
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
         };

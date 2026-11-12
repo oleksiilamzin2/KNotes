@@ -268,10 +268,6 @@ impl VaultWindow {
         };
         self.sidebar.set_model(model);
         self.outline.reloadData();
-        for section in [SidebarItem::FoldersSection, SidebarItem::TagsSection] {
-            // SAFETY: section objects come from the data source of this outline view.
-            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&section))) };
-        }
     }
 
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
