@@ -76,3 +76,27 @@ fn closing_a_session_is_immediate() {
     drop(session);
     assert!(start.elapsed() < Duration::from_millis(100), "{:?}", start.elapsed());
 }
+
+#[test]
+fn snapshots_resolve_links_and_search_titles_and_reuse_them_while_files_stay() {
+    use knotes_core::{LinkKind, LinkResolver, TitleSearch};
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::create_dir(vault.path().join("Projects")).unwrap();
+    fs::write(vault.path().join("Projects/Radar.md"), "a").unwrap();
+    fs::write(vault.path().join("b.md"), "b").unwrap();
+    let (session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| s.rows.len() == 2);
+    assert_eq!(first.links.resolve(LinkKind::Wiki, "radar", "b.md").as_deref(), Some("Projects/Radar.md"));
+    assert_eq!(first.titles.search_titles("rad", 5)[0].path, "Projects/Radar.md");
+
+    fs::write(vault.path().join("b.md"), "edited").unwrap();
+    let edited = wait_for(&events, |s| s.changed.iter().any(|p| p == "b.md"));
+    assert!(std::sync::Arc::ptr_eq(&first.links, &edited.links), "same files: no rebuild");
+    assert!(std::sync::Arc::ptr_eq(&first.titles, &edited.titles));
+
+    fs::write(vault.path().join("New.md"), "c").unwrap();
+    let added = wait_for(&events, |s| s.rows.len() == 3);
+    assert_eq!(added.links.resolve(LinkKind::Wiki, "new", "b.md").as_deref(), Some("New.md"));
+    assert_eq!(added.titles.search_titles("new", 5)[0].path, "New.md");
+    drop(session);
+}

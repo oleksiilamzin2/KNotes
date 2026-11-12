@@ -74,8 +74,11 @@ impl Drop for VaultSession {
 fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, control: &Receiver<Control>) -> Result<(), BoxError> {
     let mut index = SqliteIndex::open(dir)?;
     let files = FsVault::new(vault);
+    let last: std::cell::RefCell<Option<Snapshot>> = std::cell::RefCell::new(None);
     let send = |index: &SqliteIndex, changed: Vec<String>| -> Result<bool, BoxError> {
-        Ok(tx.send(Event::Snapshot(Snapshot::read(index, &files, changed)?)).is_ok())
+        let snapshot = Snapshot::read(index, &files, changed, last.borrow().as_ref())?;
+        *last.borrow_mut() = Some(snapshot.clone());
+        Ok(tx.send(Event::Snapshot(snapshot)).is_ok())
     };
     send(&index, Vec::new())?;
     // Watch before syncing, so changes made during the sync are picked up afterwards.
