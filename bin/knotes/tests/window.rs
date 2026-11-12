@@ -726,10 +726,10 @@ fn content_finds_halves_of_words_anywhere_in_a_note_and_block_in_one_block() {
 
 const FORMULA_NOTE: &str = "Energy $E=mc^2$ here\n\n$$\n\\frac{a+b}{\\sqrt{x^2+y^2}}\n$$\n\nlast line";
 
-/// `formula-layer: x y w h kind` lines of the probe.
-fn formula_layers(out: &str) -> Vec<(f64, f64, f64, f64, String)> {
+/// `formula-image: x y w h kind` lines of the probe (formulas drawn in view).
+fn formula_images(out: &str) -> Vec<(f64, f64, f64, f64, String)> {
     out.lines()
-        .filter_map(|l| l.strip_prefix("formula-layer: "))
+        .filter_map(|l| l.strip_prefix("formula-image: "))
         .map(|l| {
             let p: Vec<&str> = l.split(' ').collect();
             (p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap(), p[4].to_owned())
@@ -743,7 +743,7 @@ fn formulas_show_typeset_outside_the_cursor_with_their_source_hidden() {
     let runs = editor_runs(&out);
     assert!(runs.contains("[formula]$E=mc^2$|"), "{runs}");
     assert!(runs.contains("[formula]$$⏎\\frac{a+b}{\\sqrt{x^2+y^2}}⏎$$|"), "{runs}");
-    let layers = formula_layers(&out);
+    let layers = formula_images(&out);
     assert_eq!(layers.len(), 2, "{out}");
     let layout = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).unwrap();
     let column: f64 = layout.split(' ').find_map(|p| p.strip_prefix("column=")).unwrap().parse().unwrap();
@@ -760,7 +760,7 @@ fn the_cursor_in_a_display_formula_shows_its_source_and_a_preview_below() {
     let (_vault, out) = probe_notes(&[("f.md", FORMULA_NOTE)], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", &inside)]);
     let runs = editor_runs(&out);
     assert!(runs.contains("[math]$$⏎\\frac"), "the source shows: {runs}");
-    let layers = formula_layers(&out);
+    let layers = formula_images(&out);
     assert!(layers.iter().any(|l| l.4 == "preview"), "{layers:?}");
     assert!(layers.iter().any(|l| l.4 == "typeset"), "the inline one stays typeset: {layers:?}");
 }
@@ -769,7 +769,7 @@ fn the_cursor_in_a_display_formula_shows_its_source_and_a_preview_below() {
 fn invalid_latex_shows_its_source_as_an_error() {
     let (_vault, out) = probe_notes(&[("f.md", "bad $\\nosuchcommand x$ here\n\nend")], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert!(editor_runs(&out).contains("[math-error]$\\nosuchcommand x$"), "{out}");
-    assert!(formula_layers(&out).is_empty(), "{out}");
+    assert!(formula_images(&out).is_empty(), "{out}");
 }
 
 #[test]
@@ -781,7 +781,7 @@ fn formulas_that_scroll_into_view_get_their_images() {
         let mut p = visible.split(' ').map(|v| v.parse::<f64>().unwrap());
         (p.next().unwrap(), p.next().unwrap())
     };
-    let layers = formula_layers(&out);
+    let layers = formula_images(&out);
     assert!(top > 1000.0, "scrolled down: {visible}");
     assert!(!layers.is_empty() && layers.len() < 100, "only the formulas in view: {}", layers.len());
     assert!(layers.iter().all(|l| l.1 > top - 400.0 && l.1 < bottom + 400.0), "{visible}: {layers:?}");
@@ -794,7 +794,7 @@ fn a_wide_inline_formula_at_a_line_end_moves_down_whole_instead_of_overflowing()
     let layout = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).unwrap();
     let field = |name: &str| -> f64 { layout.split(' ').find_map(|p| p.strip_prefix(name)).unwrap().parse().unwrap() };
     let right = field("left=") + field("width=");
-    let layers = formula_layers(&out);
+    let layers = formula_images(&out);
     assert_eq!(layers.len(), 3, "{out}");
     assert!(layers.iter().all(|l| l.0 + l.2 <= right + 1.0), "inside the text column (right edge {right}): {layers:?}");
 }

@@ -533,8 +533,8 @@ fn report_list(table: &NSTableView) {
 fn report_note(window: &VaultWindow) {
     println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
-    for layer in window.describe_formulas() {
-        println!("formula-layer: {layer}");
+    for image in window.describe_formulas() {
+        println!("formula-image: {image}");
     }
     if let Some(scroll) = window.note_text.enclosingScrollView() {
         let shown = scroll.contentView().bounds();

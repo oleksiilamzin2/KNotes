@@ -4,7 +4,7 @@ mod app_delegate;
 mod chat_view;
 mod collapse_observer;
 mod completion_panel;
-mod formula_layers;
+mod formula_fragment;
 mod list_menu;
 mod live_preview;
 mod main_menu;

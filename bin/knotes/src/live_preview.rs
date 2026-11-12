@@ -6,19 +6,18 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::sync::Arc;
 
-use dispatch2::{DispatchQueue, MainThreadBound};
-
 use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, Run, Style, changed_region, highlight};
 
-use crate::formula_layers::{Anchor, FormulaLayers, PREVIEW_GAP, Placement, viewport};
+use crate::formula_fragment::{Anchor, FormulaFragment, Mark, PREVIEW_GAP};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSKernAttributeName,
-    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextDelegate, NSTextStorage, NSTextView, NSTextViewDelegate,
-    NSViewBoundsDidChangeNotification, NSViewFrameDidChangeNotification,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextContentStorage, NSTextDelegate, NSTextElement,
+    NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
+    NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
@@ -70,13 +69,10 @@ pub struct Ivars {
     links: RefCell<Option<Arc<dyn LinkResolver>>>,
     /// Vault path of the shown note: relative links start from its folder.
     path: RefCell<String>,
-    /// Typeset formulas, by source, and the layers that show them (ADR 0017).
+    /// Typeset formulas, by source (ADR 0017); layout fragments draw them.
     formula_cache: RefCell<FormulaCache>,
-    formula_layers: FormulaLayers,
     /// Light or dark: formulas are typeset in the text colour.
     dark: Cell<bool>,
-    /// A formula placement is scheduled.
-    placing: Cell<bool>,
     /// The edit being made and its inserted text, between `shouldChangeText` and
     /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
     pending: Cell<Option<Edit>>,
@@ -118,26 +114,31 @@ define_class!(
 
     impl LivePreview {
         /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
-        /// The note scrolled: formulas that came into view need their layers.
-        #[unsafe(method(boundsDidChange:))]
-        fn bounds_did_change(&self, notification: &NSNotification) {
-            let view = notification
-                .object()
-                .and_then(|o| o.downcast::<objc2_app_kit::NSClipView>().ok())
-                .and_then(|clip| clip.documentView())
-                .and_then(|v| v.downcast::<NSTextView>().ok());
-            if let Some(view) = view
-                && !self.ivars().styled.borrow().formulas.is_empty()
-            {
-                self.schedule_formulas(&view);
-            }
-        }
-
         #[unsafe(method(frameDidChange:))]
         fn frame_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
                 fit_readable_width(&view);
-                self.schedule_formulas(&view);
+            }
+        }
+    }
+
+    unsafe impl NSTextLayoutManagerDelegate for LivePreview {
+        /// A paragraph holding typeset formulas gets a fragment that draws them. TextKit asks
+        /// again whenever a paragraph's attributes change, and every change of what a formula
+        /// shows restyles it.
+        #[unsafe(method_id(textLayoutManager:textLayoutFragmentForLocation:inTextElement:))]
+        fn fragment_for(
+            &self,
+            layout: &NSTextLayoutManager,
+            _location: &ProtocolObject<dyn NSTextLocation>,
+            element: &NSTextElement,
+        ) -> Retained<NSTextLayoutFragment> {
+            let range = element.elementRange();
+            let marks = self.formula_marks(layout, range.as_deref());
+            if marks.is_empty() {
+                NSTextLayoutFragment::initWithTextElement_range(NSTextLayoutFragment::alloc(), element, range.as_deref())
+            } else {
+                Retained::into_super(FormulaFragment::new(element, range.as_deref(), marks))
             }
         }
     }
@@ -211,9 +212,7 @@ impl LivePreview {
             links: RefCell::new(None),
             path: RefCell::new(String::new()),
             formula_cache: RefCell::new(FormulaCache::default()),
-            formula_layers: FormulaLayers::default(),
             dark: Cell::new(false),
-            placing: Cell::new(false),
             pending: Cell::new(None),
             inserted: RefCell::new(String::new()),
             source: RefCell::new(String::new()),
@@ -267,7 +266,6 @@ impl LivePreview {
             // An edit not announced through shouldChangeText: restyle everything.
             None => self.apply_all(&storage, revealed),
         }
-        self.schedule_formulas(view);
     }
 
     fn resync(&self, storage: &NSTextStorage) {
@@ -298,7 +296,7 @@ impl LivePreview {
         storage.endEditing();
     }
 
-    /// Makes `view` keep its text at the readable width as it resizes.
+    /// Makes `view` keep its text at the readable width as it resizes, and draw formulas.
     pub fn attach(&self, view: &NSTextView) {
         view.setPostsFrameChangedNotifications(true);
         let observer: &AnyObject = self.as_ref();
@@ -313,19 +311,9 @@ impl LivePreview {
             );
         }
         fit_readable_width(view);
-        // Scrolling brings other formulas into view.
-        if let Some(scroll) = view.enclosingScrollView() {
-            let clip = scroll.contentView();
-            clip.setPostsBoundsChangedNotifications(true);
-            // SAFETY: as above.
-            unsafe {
-                NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
-                    observer,
-                    sel!(boundsDidChange:),
-                    Some(NSViewBoundsDidChangeNotification),
-                    Some(clip.as_ref()),
-                );
-            }
+        // Paragraphs with typeset formulas draw them (the layout manager keeps a weak reference).
+        if let Some(layout) = view.textLayoutManager() {
+            layout.setDelegate(Some(ProtocolObject::from_ref(self)));
         }
     }
 
@@ -355,7 +343,6 @@ impl LivePreview {
         self.ivars().revealed.set(para);
         self.ivars().dark.set(is_dark(view));
         self.apply_all(&storage, para);
-        self.schedule_formulas(view);
     }
 
     fn apply_all(&self, storage: &NSTextStorage, revealed: (usize, usize)) {
@@ -412,9 +399,6 @@ impl LivePreview {
             self.fit_formula_lines_in(&storage, (old.0.min(new.0), old.1.max(new.1)), new);
         }
         storage.endEditing();
-        if touched {
-            self.schedule_formulas(view);
-        }
     }
 
     /// Text colour for typeset formulas, and the typeset image of `f` (cached).
@@ -528,51 +512,41 @@ impl LivePreview {
         }
     }
 
-    /// Places the formula layers on the next turn of the run loop, once AppKit has taken in
-    /// the restyle (placing at once read frames of paragraphs not laid out again yet);
-    /// requests in between make one placement.
-    fn schedule_formulas(&self, view: &NSTextView) {
-        if self.ivars().placing.replace(true) {
-            return;
-        }
-        let Some(mtm) = MainThreadMarker::new() else { return };
-        let target = MainThreadBound::new((self.retain(), view.retain()), mtm);
-        DispatchQueue::main().exec_async(move || {
-            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
-            let (preview, view) = target.get(mtm);
-            preview.ivars().placing.set(false);
-            preview.place_formulas(view);
-        });
-    }
-
-    /// Puts each typeset formula's image (or a display formula's preview) at its place.
-    fn place_formulas(&self, view: &NSTextView) {
-        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+    /// What the paragraph at `range` draws: each typeset formula starting in it (inline, or a
+    /// display formula on its own line), and the preview of a display formula with the cursor
+    /// in it below its last paragraph.
+    fn formula_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
         let styled = self.ivars().styled.borrow();
+        let (Some(range), false) = (range, styled.formulas.is_empty()) else { return Vec::new() };
+        let Some(content) = layout.textContentManager() else { return Vec::new() };
+        let storage = content.downcast_ref::<NSTextContentStorage>().and_then(|c| c.textStorage());
+        let Some(storage) = storage else { return Vec::new() };
+        let start = content.documentRange().location();
+        let from = content.offsetFromLocation_toLocation(&start, &range.location()).max(0) as usize;
+        let to = content.offsetFromLocation_toLocation(&start, &range.endLocation()).max(0) as usize;
         let revealed = self.ivars().revealed.get();
-        // Only formulas TextKit laid out for the visible part: placing the others would lay out
-        // the whole note (~0.5 s for 1000 formulas in 300 KB); scrolling places them later.
-        let Some((from, to)) = viewport(view) else { return };
-        let mut placements = Vec::new();
-        for f in styled.formulas.iter().filter(|f| f.range.end >= from && f.range.start <= to) {
-            let Ok(image) = self.formula_image(f) else { continue };
+        let first = styled.formulas.partition_point(|f| f.range.end <= from);
+        let mut marks = Vec::new();
+        for f in styled.formulas[first..].iter().take_while(|f| f.range.start < to) {
             let block = f.display && is_block(&storage, f);
-            let anchor = match (overlaps(&f.range, revealed), block) {
-                (false, true) => Anchor::Line,
-                (false, false) => Anchor::Inline,
-                (true, true) => Anchor::Below,
+            let (anchor, at) = match (overlaps(&f.range, revealed), block) {
+                (false, true) => (Anchor::Line, f.range.start),
+                (false, false) => (Anchor::Inline, f.range.start),
+                (true, true) => (Anchor::Below, f.range.end.saturating_sub(1)),
                 (true, false) => continue,
             };
-            let index = if anchor == Anchor::Below { f.range.end.saturating_sub(1) } else { f.range.start };
-            placements.push(Placement { image, index, anchor });
+            if !(from..to).contains(&at) {
+                continue;
+            }
+            let Ok(image) = self.formula_image(f) else { continue };
+            marks.push(Mark { offset: at - from, image, anchor });
         }
-        drop(styled);
-        self.ivars().formula_layers.place(view, &placements);
+        marks
     }
 
-    /// `x y w h kind` of each formula layer, for probe mode.
-    pub fn describe_formulas(&self) -> Vec<String> {
-        self.ivars().formula_layers.describe()
+    /// `x y w h kind` of each typeset formula in view, for probe mode.
+    pub fn describe_formulas(view: &NSTextView) -> Vec<String> {
+        crate::formula_fragment::describe_visible(view)
     }
 
     fn style_markup(&self, storage: &NSTextStorage, m: &Range<usize>, font: &NSFont, visible: bool) {
@@ -608,7 +582,6 @@ impl LivePreview {
         if let Some(storage) = unsafe { view.textStorage() } {
             self.apply_all(&storage, self.ivars().revealed.get());
         }
-        self.schedule_formulas(view);
     }
 
     /// A click on character `index`: follows a link where its markup is hidden, or anywhere

@@ -644,9 +644,9 @@ impl VaultWindow {
         self.accepting.set(false);
     }
 
-    /// Typeset formula layers of the note, for probe mode.
+    /// Typeset formulas of the note in view, for probe mode.
     pub fn describe_formulas(&self) -> Vec<String> {
-        self.live_preview.describe_formulas()
+        LivePreview::describe_formulas(&self.note_text)
     }
 
     pub fn describe_completion(&self) -> String {
