@@ -723,3 +723,66 @@ fn content_finds_halves_of_words_anywhere_in_a_note_and_block_in_one_block() {
     let (_vault, out) = probe_notes(&refs, &[("KNOTES_PROBE_SEARCH", "block: люцифер баптист")]);
     assert_eq!(list_titles(&out), ["razom"], "{out}");
 }
+
+const FORMULA_NOTE: &str = "Energy $E=mc^2$ here\n\n$$\n\\frac{a+b}{\\sqrt{x^2+y^2}}\n$$\n\nlast line";
+
+/// `formula-layer: x y w h kind` lines of the probe.
+fn formula_layers(out: &str) -> Vec<(f64, f64, f64, f64, String)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("formula-layer: "))
+        .map(|l| {
+            let p: Vec<&str> = l.split(' ').collect();
+            (p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap(), p[4].to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn formulas_show_typeset_outside_the_cursor_with_their_source_hidden() {
+    let (_vault, out) = probe_notes(&[("f.md", FORMULA_NOTE)], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[formula]$E=mc^2$|"), "{runs}");
+    assert!(runs.contains("[formula]$$⏎\\frac{a+b}{\\sqrt{x^2+y^2}}⏎$$|"), "{runs}");
+    let layers = formula_layers(&out);
+    assert_eq!(layers.len(), 2, "{out}");
+    let layout = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).unwrap();
+    let column: f64 = layout.split(' ').find_map(|p| p.strip_prefix("column=")).unwrap().parse().unwrap();
+    let (ix, iy, iw, ih, _) = &layers[0];
+    assert!(*iy < 60.0 && *iw > 20.0 && *ih > 8.0 && *ix > 40.0, "inline formula on the first line: {layers:?}");
+    let (dx, dy, dw, dh, _) = &layers[1];
+    assert!(((dx + dw / 2.0) - column / 2.0).abs() < 3.0, "display formula centred in the column {column}: {layers:?}");
+    assert!(*dy > iy + ih && *dh > 25.0, "below the first line, two levels tall: {layers:?}");
+}
+
+#[test]
+fn the_cursor_in_a_display_formula_shows_its_source_and_a_preview_below() {
+    let inside = FORMULA_NOTE.find("frac").unwrap().to_string();
+    let (_vault, out) = probe_notes(&[("f.md", FORMULA_NOTE)], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", &inside)]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[math]$$⏎\\frac"), "the source shows: {runs}");
+    let layers = formula_layers(&out);
+    assert!(layers.iter().any(|l| l.4 == "preview"), "{layers:?}");
+    assert!(layers.iter().any(|l| l.4 == "typeset"), "the inline one stays typeset: {layers:?}");
+}
+
+#[test]
+fn invalid_latex_shows_its_source_as_an_error() {
+    let (_vault, out) = probe_notes(&[("f.md", "bad $\\nosuchcommand x$ here\n\nend")], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(editor_runs(&out).contains("[math-error]$\\nosuchcommand x$"), "{out}");
+    assert!(formula_layers(&out).is_empty(), "{out}");
+}
+
+#[test]
+fn formulas_that_scroll_into_view_get_their_images() {
+    let note: String = (0..300).map(|i| format!("Рядок {i} з формулою $x_{{{i}}}^2$ у тексті.\n\n")).collect();
+    let (_vault, out) = probe_notes(&[("long.md", &note)], &[("KNOTES_PROBE_OPEN", "long.md"), ("KNOTES_PROBE_NOTE_SCROLL", "end")]);
+    let visible = out.lines().find_map(|l| l.strip_prefix("note-visible: ")).unwrap_or_else(|| panic!("{out}"));
+    let (top, bottom): (f64, f64) = {
+        let mut p = visible.split(' ').map(|v| v.parse::<f64>().unwrap());
+        (p.next().unwrap(), p.next().unwrap())
+    };
+    let layers = formula_layers(&out);
+    assert!(top > 1000.0, "scrolled down: {visible}");
+    assert!(!layers.is_empty() && layers.len() < 100, "only the formulas in view: {}", layers.len());
+    assert!(layers.iter().all(|l| l.1 > top - 400.0 && l.1 < bottom + 400.0), "{visible}: {layers:?}");
+}

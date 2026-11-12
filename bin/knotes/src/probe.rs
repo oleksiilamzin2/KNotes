@@ -42,6 +42,15 @@ pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&text), not_found) };
 }
 
+/// `KNOTES_PROBE_NOTE_SCROLL=end`: scrolls the note to its end, as the scroll wheel does.
+pub fn note_scroll_requested(view: &objc2_app_kit::NSTextView) {
+    if std::env::var("KNOTES_PROBE_NOTE_SCROLL").as_deref() != Ok("end") {
+        return;
+    }
+    let end = view.string().length();
+    view.scrollRangeToVisible(objc2_foundation::NSRange::new(end, 0));
+}
+
 /// `KNOTES_PROBE_KEYS=down,return,…`: key commands as the keyboard sends them to the text
 /// view (`doCommandBySelector:`, which asks the delegate first).
 pub fn keys_requested(view: &objc2_app_kit::NSTextView) {
@@ -524,6 +533,13 @@ fn report_list(table: &NSTableView) {
 fn report_note(window: &VaultWindow) {
     println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
+    for layer in window.describe_formulas() {
+        println!("formula-layer: {layer}");
+    }
+    if let Some(scroll) = window.note_text.enclosingScrollView() {
+        let shown = scroll.contentView().bounds();
+        println!("note-visible: {:.1} {:.1}", shown.origin.y, shown.origin.y + shown.size.height);
+    }
     let view = &window.note_text;
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);

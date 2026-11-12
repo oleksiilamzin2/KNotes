@@ -6,16 +6,24 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::sync::Arc;
 
+use dispatch2::{DispatchQueue, MainThreadBound};
+
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{Edit, Highlight, LinkRun, Run, Style, changed_region, highlight};
+use knotes_editor::{Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, Run, Style, changed_region, highlight};
+
+use crate::formula_layers::{Anchor, FormulaLayers, PREVIEW_GAP, Placement, viewport};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSTextDelegate, NSTextStorage,
-    NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
+    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSKernAttributeName,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextDelegate, NSTextStorage, NSTextView, NSTextViewDelegate,
+    NSViewBoundsDidChangeNotification, NSViewFrameDidChangeNotification,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSRange, NSSize, NSString, NSValue};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
+    NSValue,
+};
 
 pub const STYLE_KEY: &str = "knotes.style";
 /// Longest line of note text, as Obsidian's "readable line length" (700 CSS px = 700 pt).
@@ -39,6 +47,8 @@ struct Look {
     accent: Retained<NSColor>,
     /// Links to missing notes (ADR 0013).
     missing: Retained<NSColor>,
+    /// Formulas that do not typeset (ADR 0017).
+    error: Retained<NSColor>,
     clear: Retained<NSColor>,
     style_key: Retained<NSString>,
 }
@@ -60,6 +70,13 @@ pub struct Ivars {
     links: RefCell<Option<Arc<dyn LinkResolver>>>,
     /// Vault path of the shown note: relative links start from its folder.
     path: RefCell<String>,
+    /// Typeset formulas, by source, and the layers that show them (ADR 0017).
+    formula_cache: RefCell<FormulaCache>,
+    formula_layers: FormulaLayers,
+    /// Light or dark: formulas are typeset in the text colour.
+    dark: Cell<bool>,
+    /// A formula placement is scheduled.
+    placing: Cell<bool>,
     /// The edit being made and its inserted text, between `shouldChangeText` and
     /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
     pending: Cell<Option<Edit>>,
@@ -101,10 +118,26 @@ define_class!(
 
     impl LivePreview {
         /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
+        /// The note scrolled: formulas that came into view need their layers.
+        #[unsafe(method(boundsDidChange:))]
+        fn bounds_did_change(&self, notification: &NSNotification) {
+            let view = notification
+                .object()
+                .and_then(|o| o.downcast::<objc2_app_kit::NSClipView>().ok())
+                .and_then(|clip| clip.documentView())
+                .and_then(|v| v.downcast::<NSTextView>().ok());
+            if let Some(view) = view
+                && !self.ivars().styled.borrow().formulas.is_empty()
+            {
+                self.schedule_formulas(&view);
+            }
+        }
+
         #[unsafe(method(frameDidChange:))]
         fn frame_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
                 fit_readable_width(&view);
+                self.schedule_formulas(&view);
             }
         }
     }
@@ -135,6 +168,15 @@ define_class!(
             }
         }
 
+        /// No spelling marks in formulas: their source is not words (and hidden glyphs would
+        /// still show the marks as dots).
+        #[unsafe(method(textView:shouldSetSpellingState:range:))]
+        fn should_set_spelling_state(&self, _view: &NSTextView, state: NSInteger, range: NSRange) -> NSInteger {
+            let styled = self.ivars().styled.borrow();
+            let end = range.location + range.length;
+            if styled.formulas.iter().any(|f| f.range.start < end && f.range.end > range.location) { 0 } else { state }
+        }
+
         #[unsafe(method(textView:doCommandBySelector:))]
         fn do_command(&self, _view: &NSTextView, command: Sel) -> bool {
             self.ivars().on_command.borrow().as_ref().is_some_and(|callback| callback(command))
@@ -156,6 +198,7 @@ impl LivePreview {
             muted: NSColor::tertiaryLabelColor(),
             accent: NSColor::linkColor(),
             missing: NSColor::linkColor().colorWithAlphaComponent(0.45),
+            error: NSColor::systemRedColor(),
             clear: NSColor::clearColor(),
             style_key: NSString::from_str(STYLE_KEY),
             body,
@@ -167,6 +210,10 @@ impl LivePreview {
             on_command: RefCell::new(None),
             links: RefCell::new(None),
             path: RefCell::new(String::new()),
+            formula_cache: RefCell::new(FormulaCache::default()),
+            formula_layers: FormulaLayers::default(),
+            dark: Cell::new(false),
+            placing: Cell::new(false),
             pending: Cell::new(None),
             inserted: RefCell::new(String::new()),
             source: RefCell::new(String::new()),
@@ -220,6 +267,7 @@ impl LivePreview {
             // An edit not announced through shouldChangeText: restyle everything.
             None => self.apply_all(&storage, revealed),
         }
+        self.schedule_formulas(view);
     }
 
     fn resync(&self, storage: &NSTextStorage) {
@@ -234,6 +282,7 @@ impl LivePreview {
         let clip = |r: &Range<usize>| r.start.max(region.0)..r.end.min(region.1);
         storage.beginEditing();
         set(storage, NSRange::new(region.0, region.1 - region.0), &look.body, &look.text, "plain", look);
+        clear_layout(storage, NSRange::new(region.0, region.1 - region.0));
         for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
             let (font, color, name) = self.run_look(run, &styled);
             set(storage, ns(&clip(&run.range)), font, color, &name, look);
@@ -241,6 +290,11 @@ impl LivePreview {
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| m.start < region.1 && m.end > region.0) {
             self.style_markup(storage, m, font, overlaps(m, revealed));
         }
+        for f in styled.formulas.iter().filter(|f| f.range.start < region.1 && f.range.end > region.0) {
+            self.style_formula(storage, f, overlaps(&f.range, revealed));
+        }
+        drop((styled, fonts));
+        self.fit_formula_lines_in(storage, region, revealed);
         storage.endEditing();
     }
 
@@ -259,6 +313,20 @@ impl LivePreview {
             );
         }
         fit_readable_width(view);
+        // Scrolling brings other formulas into view.
+        if let Some(scroll) = view.enclosingScrollView() {
+            let clip = scroll.contentView();
+            clip.setPostsBoundsChangedNotifications(true);
+            // SAFETY: as above.
+            unsafe {
+                NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                    observer,
+                    sel!(boundsDidChange:),
+                    Some(NSViewBoundsDidChangeNotification),
+                    Some(clip.as_ref()),
+                );
+            }
+        }
     }
 
     /// Shows `source` in `view` with live preview styles.
@@ -285,7 +353,9 @@ impl LivePreview {
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
         let para = paragraph(&storage, view.selectedRange());
         self.ivars().revealed.set(para);
+        self.ivars().dark.set(is_dark(view));
         self.apply_all(&storage, para);
+        self.schedule_formulas(view);
     }
 
     fn apply_all(&self, storage: &NSTextStorage, revealed: (usize, usize)) {
@@ -294,6 +364,7 @@ impl LivePreview {
         storage.beginEditing();
         let full = NSRange::new(0, storage.length());
         set(storage, full, &look.body, &look.text, "plain", look);
+        clear_layout(storage, full);
         for run in &styled.runs {
             let (font, color, name) = self.run_look(run, &styled);
             set(storage, ns(&run.range), font, color, &name, look);
@@ -302,6 +373,11 @@ impl LivePreview {
         for (m, font) in styled.markup.iter().zip(fonts.iter()) {
             self.style_markup(storage, m, font, overlaps(m, revealed));
         }
+        for f in &styled.formulas {
+            self.style_formula(storage, f, overlaps(&f.range, revealed));
+        }
+        drop((styled, fonts));
+        self.fit_formula_lines_in(storage, (0, storage.length()), revealed);
         storage.endEditing();
     }
 
@@ -326,7 +402,177 @@ impl LivePreview {
                 self.style_markup(&storage, m, font, overlaps(m, new));
             }
         }
+        let mut touched = false;
+        for f in styled.formulas.iter().filter(|f| overlaps(&f.range, old) || overlaps(&f.range, new)) {
+            self.style_formula(&storage, f, overlaps(&f.range, new));
+            touched = true;
+        }
+        drop((fonts, styled));
+        if touched {
+            self.fit_formula_lines_in(&storage, (old.0.min(new.0), old.1.max(new.1)), new);
+        }
         storage.endEditing();
+        if touched {
+            self.schedule_formulas(view);
+        }
+    }
+
+    /// Text colour for typeset formulas, and the typeset image of `f` (cached).
+    fn formula_image(&self, f: &FormulaRun) -> Result<Arc<FormulaImage>, String> {
+        let rgb = if self.ivars().dark.get() { [235, 235, 235] } else { [29, 29, 31] };
+        let style = FormulaStyle { display: f.display, size_pt: BODY_SIZE + 1.0, rgb, scale: 2.0 };
+        self.ivars().formula_cache.borrow_mut().get(&f.tex, &style)
+    }
+
+    /// A formula outside the cursor's paragraph: its source hidden and its room reserved
+    /// (width by kerning, height by the line height) for the typeset image. With the cursor
+    /// in it: its source, and room below for a display formula's preview. A formula that
+    /// does not typeset shows its source marked as an error.
+    fn style_formula(&self, storage: &NSTextStorage, f: &FormulaRun, revealed: bool) {
+        let look = &self.ivars().look;
+        let range = ns(&f.range);
+        let paragraphs = paragraph(storage, range);
+        // SAFETY: AppKit's attribute name constant lives for the whole process.
+        unsafe { storage.removeAttribute_range(NSKernAttributeName, range) };
+        let block = f.display && is_block(storage, f);
+        if block {
+            // A display formula owns its lines: their paragraph styles are its own.
+            // SAFETY: as above.
+            unsafe { storage.removeAttribute_range(NSParagraphStyleAttributeName, NSRange::new(paragraphs.0, paragraphs.1 - paragraphs.0)) };
+        }
+        let image = match self.formula_image(f) {
+            Ok(image) => image,
+            Err(_) => {
+                set(storage, range, &look.mono, &look.error, "math-error", look);
+                return;
+            }
+        };
+        if revealed {
+            set(storage, range, &look.mono, &look.text, "math", look);
+            if block {
+                // Room for the preview under the source's last line.
+                let last = paragraph(storage, NSRange::new(f.range.end.saturating_sub(1), 0));
+                let style = NSMutableParagraphStyle::new();
+                style.setParagraphSpacing(image.height_pt + 2.0 * PREVIEW_GAP);
+                add_paragraph_style(storage, last, &style);
+            }
+            return;
+        }
+        set(storage, range, &look.hidden, &look.clear, "formula", look);
+        if block {
+            // One centred line as tall as the image; the source's other lines fold away.
+            let first = paragraph(storage, NSRange::new(f.range.start, 0));
+            let line = NSMutableParagraphStyle::new();
+            line.setAlignment(NSTextAlignment::Center);
+            line.setMinimumLineHeight(image.height_pt + 2.0 * PREVIEW_GAP);
+            line.setMaximumLineHeight(image.height_pt + 2.0 * PREVIEW_GAP);
+            add_paragraph_style(storage, first, &line);
+            if first.1 < paragraphs.1 {
+                let folded = NSMutableParagraphStyle::new();
+                folded.setMinimumLineHeight(0.0);
+                folded.setMaximumLineHeight(0.01);
+                add_paragraph_style(storage, (first.1, paragraphs.1), &folded);
+            }
+            let first_line_end = f.range.end.min(first.1);
+            // On the first line's last character before its line break.
+            let ends_line = first_line_end > 0 && storage.string().characterAtIndex(first_line_end - 1) == 0x0a;
+            let kern_at = first_line_end.saturating_sub(if ends_line { 2 } else { 1 }).max(f.range.start);
+            add_kern(storage, kern_at, image.width_pt);
+        } else {
+            add_kern(storage, f.range.end - 1, image.width_pt);
+        }
+    }
+
+    /// Line height of a paragraph with inline formulas: enough for the tallest typeset one
+    /// above and below the baseline. Paragraphs of display formulas are left to them.
+    fn fit_formula_lines(&self, storage: &NSTextStorage, paragraph_range: (usize, usize), revealed: (usize, usize)) {
+        let styled = self.ivars().styled.borrow();
+        let in_paragraph = |f: &&FormulaRun| f.range.start < paragraph_range.1 && f.range.end > paragraph_range.0;
+        if styled.formulas.iter().filter(in_paragraph).any(|f| f.display && is_block(storage, f)) {
+            return;
+        }
+        let range = NSRange::new(paragraph_range.0, paragraph_range.1 - paragraph_range.0);
+        // SAFETY: AppKit's attribute name constant lives for the whole process.
+        unsafe { storage.removeAttribute_range(NSParagraphStyleAttributeName, range) };
+        let font = &self.ivars().look.body;
+        let (ascent, descent) = (font.ascender(), -font.descender());
+        let (mut above, mut below) = (ascent, descent);
+        for f in styled.formulas.iter().filter(in_paragraph).filter(|f| !overlaps(&f.range, revealed)) {
+            if let Ok(image) = self.formula_image(f) {
+                above = above.max(image.baseline_pt);
+                below = below.max(image.height_pt - image.baseline_pt);
+            }
+        }
+        if above > ascent || below > descent {
+            let line = NSMutableParagraphStyle::new();
+            line.setMinimumLineHeight(above + below + 2.0);
+            add_paragraph_style(storage, paragraph_range, &line);
+        }
+    }
+
+    /// Fits the lines of every paragraph holding an inline formula that meets `region`.
+    fn fit_formula_lines_in(&self, storage: &NSTextStorage, region: (usize, usize), revealed: (usize, usize)) {
+        let paragraphs: Vec<(usize, usize)> = {
+            let styled = self.ivars().styled.borrow();
+            let mut list: Vec<(usize, usize)> = styled
+                .formulas
+                .iter()
+                .filter(|f| f.range.start < region.1 && f.range.end > region.0)
+                .map(|f| paragraph(storage, ns(&f.range)))
+                .collect();
+            list.dedup();
+            list
+        };
+        for p in paragraphs {
+            self.fit_formula_lines(storage, p, revealed);
+        }
+    }
+
+    /// Places the formula layers on the next turn of the run loop, once AppKit has taken in
+    /// the restyle (placing at once read frames of paragraphs not laid out again yet);
+    /// requests in between make one placement.
+    fn schedule_formulas(&self, view: &NSTextView) {
+        if self.ivars().placing.replace(true) {
+            return;
+        }
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = MainThreadBound::new((self.retain(), view.retain()), mtm);
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            let (preview, view) = target.get(mtm);
+            preview.ivars().placing.set(false);
+            preview.place_formulas(view);
+        });
+    }
+
+    /// Puts each typeset formula's image (or a display formula's preview) at its place.
+    fn place_formulas(&self, view: &NSTextView) {
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let styled = self.ivars().styled.borrow();
+        let revealed = self.ivars().revealed.get();
+        // Only formulas TextKit laid out for the visible part: placing the others would lay out
+        // the whole note (~0.5 s for 1000 formulas in 300 KB); scrolling places them later.
+        let Some((from, to)) = viewport(view) else { return };
+        let mut placements = Vec::new();
+        for f in styled.formulas.iter().filter(|f| f.range.end >= from && f.range.start <= to) {
+            let Ok(image) = self.formula_image(f) else { continue };
+            let block = f.display && is_block(&storage, f);
+            let anchor = match (overlaps(&f.range, revealed), block) {
+                (false, true) => Anchor::Line,
+                (false, false) => Anchor::Inline,
+                (true, true) => Anchor::Below,
+                (true, false) => continue,
+            };
+            let index = if anchor == Anchor::Below { f.range.end.saturating_sub(1) } else { f.range.start };
+            placements.push(Placement { image, index, anchor });
+        }
+        drop(styled);
+        self.ivars().formula_layers.place(view, &placements);
+    }
+
+    /// `x y w h kind` of each formula layer, for probe mode.
+    pub fn describe_formulas(&self) -> Vec<String> {
+        self.ivars().formula_layers.describe()
     }
 
     fn style_markup(&self, storage: &NSTextStorage, m: &Range<usize>, font: &NSFont, visible: bool) {
@@ -362,6 +608,7 @@ impl LivePreview {
         if let Some(storage) = unsafe { view.textStorage() } {
             self.apply_all(&storage, self.ivars().revealed.get());
         }
+        self.schedule_formulas(view);
     }
 
     /// A click on character `index`: follows a link where its markup is hidden, or anywhere
@@ -411,7 +658,7 @@ impl LivePreview {
         let key = NSString::from_str(STYLE_KEY);
         let text = storage.string().to_string();
         let utf16: Vec<u16> = text.encode_utf16().collect();
-        let mut parts = Vec::new();
+        let mut parts: Vec<(String, String)> = Vec::new();
         let mut at = 0;
         while at < storage.length() {
             let mut range = NSRange::new(0, 0);
@@ -419,10 +666,14 @@ impl LivePreview {
             let name = value.and_then(|v| v.downcast::<NSString>().ok()).map(|s| s.to_string()).unwrap_or_default();
             let end = (range.location + range.length).max(at + 1);
             let piece = String::from_utf16_lossy(&utf16[at..end]).replace('\n', "⏎");
-            parts.push(format!("[{name}]{piece}"));
+            // Other attributes (kerning) split effective ranges: merge runs of one style.
+            match parts.last_mut() {
+                Some((last, text)) if *last == name => text.push_str(&piece),
+                _ => parts.push((name, piece)),
+            }
             at = end;
         }
-        parts.join("|")
+        parts.iter().map(|(name, piece)| format!("[{name}]{piece}")).collect::<Vec<_>>().join("|")
     }
 }
 
@@ -468,6 +719,38 @@ fn set(storage: &NSTextStorage, range: NSRange, font: &NSFont, color: &NSColor, 
     let values: [&AnyObject; 3] = [font.as_ref(), color.as_ref(), style.as_ref()];
     let attrs = NSDictionary::from_slices(&keys, &values);
     unsafe { storage.setAttributes_range(Some(&attrs), range) };
+}
+
+/// Drops kerning and paragraph styles (set only for formulas) from `range`.
+fn clear_layout(storage: &NSTextStorage, range: NSRange) {
+    // SAFETY: AppKit's attribute name constants live for the whole process.
+    unsafe {
+        storage.removeAttribute_range(NSKernAttributeName, range);
+        storage.removeAttribute_range(NSParagraphStyleAttributeName, range);
+    }
+}
+
+fn add_kern(storage: &NSTextStorage, index: usize, points: f64) {
+    let value = NSNumber::numberWithDouble(points);
+    // SAFETY: an NSNumber is the kerning attribute's value type.
+    unsafe { storage.addAttribute_value_range(NSKernAttributeName, &value, NSRange::new(index, 1)) };
+}
+
+fn add_paragraph_style(storage: &NSTextStorage, paragraphs: (usize, usize), style: &NSMutableParagraphStyle) {
+    // SAFETY: a paragraph style is the attribute's value type.
+    unsafe { storage.addAttribute_value_range(NSParagraphStyleAttributeName, style, NSRange::new(paragraphs.0, paragraphs.1 - paragraphs.0)) };
+}
+
+/// Whether a display formula fills its paragraphs (its own lines) rather than sitting in text.
+fn is_block(storage: &NSTextStorage, f: &FormulaRun) -> bool {
+    let (start, end) = paragraph(storage, ns(&f.range));
+    let text = storage.string();
+    let trailing = (f.range.end..end).all(|i| matches!(text.characterAtIndex(i), 0x0a | 0x0d | 0x20));
+    start == f.range.start && trailing
+}
+
+fn is_dark(view: &NSTextView) -> bool {
+    objc2_app_kit::NSAppearanceCustomization::effectiveAppearance(view).name().to_string().contains("Dark")
 }
 
 fn paragraph(storage: &NSTextStorage, selection: NSRange) -> (usize, usize) {

@@ -33,3 +33,14 @@ live preview (ADR 0005, 0011) should show them typeset. A spike rendered eight f
 - Formulas may look a little different from Obsidian's (STIX Two Math instead of Computer
   Modern; macros such as `\newcommand` untested).
 - Layers must follow layout: they are placed after every restyle and resize.
+
+## Built (2026-11-12)
+
+- Layers are placed on the next turn of the run loop after a restyle (placing at once read
+  frames of paragraphs not laid out again yet: images landed a line off), only for the
+  formulas TextKit laid out for the visible part, and again when the note scrolls.
+- 300 KB note with ~1000 formulas (M5 Pro, release): placing every formula took 480–580 ms
+  (it laid out the whole note); placing the visible ones takes ~1.8 ms. Keystroke p50
+  1.6 ms, unchanged.
+- Spelling marks are kept out of formulas: their source is not words, and on hidden glyphs
+  the marks showed as stray dots.

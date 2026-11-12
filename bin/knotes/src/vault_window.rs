@@ -434,6 +434,7 @@ impl VaultWindow {
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
             probe::click_requested(&self.note_text);
+            probe::note_scroll_requested(&self.note_text);
             probe::schedule(true);
         }
     }
@@ -641,6 +642,11 @@ impl VaultWindow {
         let after = from + text.encode_utf16().count() + if closed { 2 } else { 0 };
         view.setSelectedRange(NSRange::new(after, 0));
         self.accepting.set(false);
+    }
+
+    /// Typeset formula layers of the note, for probe mode.
+    pub fn describe_formulas(&self) -> Vec<String> {
+        self.live_preview.describe_formulas()
     }
 
     pub fn describe_completion(&self) -> String {

@@ -62,11 +62,14 @@ pub fn render_formula(tex: &str, style: &FormulaStyle) -> Result<FormulaImage, S
     })
 }
 
+/// Source, display, size, colour and scale of a typeset formula.
+type FormulaKey = (String, bool, u64, [u8; 3], u64);
+
 /// Typeset formulas by source and style: a note's formulas are typeset once, not on every
 /// restyle.
 #[derive(Default)]
 pub struct FormulaCache {
-    images: HashMap<(String, bool, u64, [u8; 3], u64), Result<Arc<FormulaImage>, String>>,
+    images: HashMap<FormulaKey, Result<Arc<FormulaImage>, String>>,
     renders: usize,
 }
 
