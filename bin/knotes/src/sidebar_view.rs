@@ -11,12 +11,16 @@ use objc2_app_kit::{
     NSColor, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSScrollView,
     NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification, NSView,
 };
-use objc2_foundation::{NSInteger, NSObject, NSObjectProtocol, NSString, ns_string};
+use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
 
 use crate::strings;
 
+type OnSelect = Box<dyn Fn(SidebarItem)>;
+
 pub struct Ivars {
     model: RefCell<Sidebar>,
+    /// Called with the newly selected item.
+    on_select: RefCell<Option<OnSelect>>,
     /// One object per item key: the outline view identifies items by object, so reusing them
     /// keeps expansion and selection across reloads.
     objects: RefCell<HashMap<String, Retained<NSString>>>,
@@ -64,6 +68,16 @@ define_class!(
             matches!(item_of(item), Some(SidebarItem::FoldersSection | SidebarItem::TagsSection))
         }
 
+        #[unsafe(method(outlineViewSelectionDidChange:))]
+        fn selection_did_change(&self, notification: &NSNotification) {
+            let Some(outline) = notification.object().and_then(|o| o.downcast::<NSOutlineView>().ok()) else { return };
+            let row = outline.selectedRow();
+            let item = (row >= 0).then(|| outline.itemAtRow(row)).flatten().and_then(|o| item_of(&o));
+            if let (Some(item), Some(callback)) = (item, self.ivars().on_select.borrow().as_ref()) {
+                callback(item);
+            }
+        }
+
         #[unsafe(method(outlineView:shouldSelectItem:))]
         fn should_select(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
             !matches!(item_of(item), Some(SidebarItem::FoldersSection | SidebarItem::TagsSection))
@@ -73,7 +87,11 @@ define_class!(
 
 impl SidebarSource {
     pub fn new(mtm: MainThreadMarker, model: Sidebar) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { model: RefCell::new(model), objects: RefCell::new(HashMap::new()) });
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            model: RefCell::new(model),
+            on_select: RefCell::new(None),
+            objects: RefCell::new(HashMap::new()),
+        });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -101,6 +119,10 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             count.setStringValue(&NSString::from_str(&text));
         }
         Some(Retained::into_super(cell))
+    }
+
+    pub fn on_select(&self, callback: impl Fn(SidebarItem) + 'static) {
+        *self.ivars().on_select.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn set_model(&self, model: Sidebar) {

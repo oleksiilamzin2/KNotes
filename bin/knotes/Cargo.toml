@@ -15,6 +15,7 @@ objc2-core-foundation = "0.3.2"
 knotes-app.workspace = true
 knotes-core.workspace = true
 knotes-session.workspace = true
+knotes-index.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

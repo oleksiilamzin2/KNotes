@@ -33,7 +33,7 @@ define_class!(
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
             let mtm = self.mtm();
-            let window = Rc::new(VaultWindow::new(mtm));
+            let window = VaultWindow::new(mtm);
             if probe::enabled() {
                 probe::watch(&window);
             }
@@ -46,6 +46,7 @@ define_class!(
             match vault_path() {
                 Some(vault) => match VaultSession::open(&vault, &app_data()) {
                     Ok((session, events)) => {
+                        window.set_index_dir(session.index_dir().to_path_buf());
                         forward(events, &window, mtm);
                         *self.ivars().session.borrow_mut() = Some(session);
                     }

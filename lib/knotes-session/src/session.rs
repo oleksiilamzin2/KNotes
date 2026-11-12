@@ -26,6 +26,7 @@ pub enum Event {
 
 /// An open vault. Dropping it stops the background thread, then releases the lock.
 pub struct VaultSession {
+    dir: PathBuf,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     _lock: VaultLock,
@@ -40,14 +41,19 @@ impl VaultSession {
         let (tx, rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let worker = {
-            let (vault, stop) = (vault.to_path_buf(), Arc::clone(&stop));
+            let (vault, stop, dir) = (vault.to_path_buf(), Arc::clone(&stop), dir.clone());
             thread::Builder::new().name("knotes-index".into()).spawn(move || {
                 if let Err(e) = run(&vault, &dir, &tx, &stop) {
                     let _ = tx.send(Event::Error(e.to_string()));
                 }
             })?
         };
-        Ok((Self { stop, worker: Some(worker), _lock: lock }, rx))
+        Ok((Self { dir, stop, worker: Some(worker), _lock: lock }, rx))
+    }
+
+    /// Folder of the vault's index, for read-only connections (`SqliteIndex::open_reader`).
+    pub fn index_dir(&self) -> &Path {
+        &self.dir
     }
 }
 

@@ -193,6 +193,7 @@ dependencies = [
  "dispatch2",
  "knotes-app",
  "knotes-core",
+ "knotes-index",
  "knotes-session",
  "objc2",
  "objc2-app-kit",

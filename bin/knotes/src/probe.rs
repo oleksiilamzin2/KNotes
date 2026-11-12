@@ -24,6 +24,11 @@ pub fn enabled() -> bool {
     std::env::var_os("KNOTES_PROBE").is_some()
 }
 
+/// Sidebar item to select before reporting (`KNOTES_PROBE_SELECT=f:Folder` or `t:tag`).
+pub fn requested_selection() -> Option<knotes_app::SidebarItem> {
+    knotes_app::SidebarItem::from_key(&std::env::var("KNOTES_PROBE_SELECT").ok()?)
+}
+
 pub fn watch(window: &Rc<VaultWindow>) {
     WINDOW.with(|w| *w.borrow_mut() = Some(Rc::clone(window)));
 }

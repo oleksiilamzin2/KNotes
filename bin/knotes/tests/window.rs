@@ -9,9 +9,14 @@ fn probe() -> String {
 
 /// Runs the app in probe mode with a throwaway HOME, so no real settings or index are touched.
 fn probe_with(args: &[&std::path::Path], home: Option<&std::path::Path>) -> String {
+    probe_env(args, home, &[])
+}
+
+fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(&str, &str)]) -> String {
     let scratch_home = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_knotes"))
         .args(args)
+        .envs(env.iter().copied())
         .env("KNOTES_PROBE", "1")
         .env("HOME", home.unwrap_or(scratch_home.path()))
         .stdout(std::process::Stdio::piped())
@@ -102,4 +107,27 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
     assert!(w[0] >= 240.0 && w[1] >= 300.0 && w[3] >= 280.0 && w[2] >= 400.0, "{widths}");
+}
+
+fn list_titles(out: &str) -> Vec<String> {
+    let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
+    list.split(" | ").filter(|r| !r.starts_with('[')).map(|r| r.split(" ~ ").next().unwrap().to_owned()).collect()
+}
+
+#[test]
+fn selecting_a_folder_or_tag_filters_the_list() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault.path().join("Projects/Sub")).unwrap();
+    std::fs::create_dir_all(vault.path().join("Inbox")).unwrap();
+    write_aged(&vault.path().join("Projects/a.md"), "#radar a", Duration::from_secs(10));
+    write_aged(&vault.path().join("Projects/Sub/b.md"), "b", Duration::from_secs(20));
+    write_aged(&vault.path().join("Inbox/c.md"), "#radar c", Duration::from_secs(30));
+
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects")]);
+    assert!(out.contains("title: Projects") && out.contains("subtitle: 2 нотатки"), "{out}");
+    assert_eq!(list_titles(&out), ["a", "b"]);
+
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "t:radar")]);
+    assert!(out.contains("title: #radar") && out.contains("subtitle: 2 нотатки"), "{out}");
+    assert_eq!(list_titles(&out), ["a", "c"]);
 }
