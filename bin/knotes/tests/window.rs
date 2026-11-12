@@ -178,3 +178,19 @@ fn chat_column_has_title_and_question_field() {
     let out = probe();
     assert!(out.contains("chat: Чат | Запитайте свої нотатки…"), "{out}");
 }
+
+#[test]
+fn main_menu_has_the_standard_menus() {
+    let out = probe();
+    assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
+    assert!(out.contains("file-menu: Відкрити базу… ⌘O | Закрити вікно ⌘W"), "{out}");
+}
+
+#[test]
+fn the_last_vault_reopens_without_arguments() {
+    let (vault, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(vault.path().join("only.md"), "x").unwrap();
+    probe_with(&[vault.path()], Some(home.path()));
+    let out = probe_with(&[], Some(home.path()));
+    assert!(out.contains("sidebar: Усі нотатки (1)"), "{out}");
+}

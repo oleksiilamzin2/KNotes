@@ -120,6 +120,9 @@ fn report_toolbar(window: &NSWindow) {
 
 fn report(window: &NSWindow) {
     report_toolbar(window);
+    let (menus, file) = crate::main_menu::describe(&NSApplication::sharedApplication(window.mtm()));
+    println!("menu: {menus}");
+    println!("file-menu: {file}");
     println!("title: {}", window.title());
     println!("subtitle: {}", window.subtitle());
     let frame = window.frame();
