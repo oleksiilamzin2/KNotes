@@ -174,7 +174,14 @@ impl VaultWindow {
             collapse_observer: RefCell::new(None),
         });
         let toolbar = this.toolbar_delegate.clone();
-        let observer = CollapseObserver::watch(mtm, &this.sidebar_item, move |collapsed| toolbar.set_sidebar_shown(!collapsed));
+        let list_item = split.splitViewItems().objectAtIndex(1);
+        let observer = CollapseObserver::watch(mtm, &this.sidebar_item, move |collapsed| {
+            toolbar.set_sidebar_shown(!collapsed);
+            // With the sidebar collapsed, the traffic lights, the sidebar button, the title and
+            // the list options all sit over the list column: it must be wide enough for the
+            // toolbar separator to stay on the list/note boundary.
+            list_item.setMinimumThickness(if collapsed { COLLAPSED_LIST_MIN } else { COLUMNS[1].0 });
+        });
         *this.collapse_observer.borrow_mut() = Some(observer);
         *this.this.borrow_mut() = Rc::downgrade(&this);
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -967,6 +974,9 @@ pub fn split_items(
 /// Minimum and maximum width and holding priority per column: when the window resizes, the
 /// note column stretches and the others keep their width. Explicit maximums: the inspector
 /// role caps itself at 270 points otherwise.
+/// Narrowest list column while the sidebar is collapsed (see `VaultWindow::new`).
+const COLLAPSED_LIST_MIN: f64 = 360.0;
+
 const COLUMNS: [(f64, f64, f32); 4] = [(200.0, 480.0, 260.0), (260.0, 640.0, 255.0), (360.0, f64::MAX, 250.0), (260.0, 640.0, 255.0)];
 
 pub fn split_controller(

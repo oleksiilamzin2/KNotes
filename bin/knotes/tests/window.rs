@@ -105,7 +105,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(2), sidebar-separator, flexible-space, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
+        "toggle-sidebar, sidebar-mode(2), sidebar-separator, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -606,4 +606,22 @@ fn the_sidebar_switch_hides_with_the_sidebar() {
     assert!(out.contains("sidebar-mode: folders"), "{out}");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "toggle-sidebar")]);
     assert!(out.contains("sidebar-mode: hidden"), "{out}");
+}
+
+/// x of the toolbar's separator line and of the list/note column boundary.
+fn separator_and_boundary(out: &str) -> (f64, f64) {
+    let line = out.lines().find_map(|l| l.strip_prefix("list-separator: ")).unwrap_or_else(|| panic!("{out}"));
+    let (sep, boundary) = line.split_once(" boundary ").unwrap();
+    (sep.parse().unwrap(), boundary.parse().unwrap())
+}
+
+#[test]
+fn the_toolbar_separator_stays_on_the_column_boundary_when_the_sidebar_collapses() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    for action in ["none", "toggle-sidebar"] {
+        let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", action)]);
+        let (sep, boundary) = separator_and_boundary(&out);
+        assert!((sep - boundary).abs() <= 1.5, "{action}: separator at {sep}, boundary at {boundary}");
+    }
 }

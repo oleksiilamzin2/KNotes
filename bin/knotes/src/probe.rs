@@ -211,6 +211,7 @@ pub fn schedule(with_sidebar: bool) {
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
+                    report_list_separator(&window.window);
                     report_list(&window.table);
                     println!("list-menu: {}", window.list_menu.describe());
                     report_note(window);
@@ -323,6 +324,30 @@ fn report(window: &NSWindow) {
 }
 
 /// Visible sidebar rows as `name (count)`, read back from the outline view's cells.
+/// x of the toolbar separator line over the list/note boundary, and of that boundary.
+fn report_list_separator(window: &NSWindow) {
+    fn separators(view: &objc2_app_kit::NSView, out: &mut Vec<f64>) {
+        if view.class().name().to_str().unwrap_or("").contains("SeparatorToolbarItemView") {
+            let f = view.convertRect_toView(view.bounds(), None);
+            out.push(f.origin.x + f.size.width / 2.0);
+        }
+        for sub in view.subviews().iter() {
+            separators(&sub, out);
+        }
+    }
+    let Some(split) = window.contentViewController().and_then(|c| c.downcast::<NSSplitViewController>().ok()) else { return };
+    let item = split.splitViewItems().objectAtIndex(1);
+    let list = item.viewController(window.mtm()).view();
+    let boundary = list.convertRect_toView(list.bounds(), None);
+    let boundary = boundary.origin.x + boundary.size.width;
+    let mut lines = Vec::new();
+    if let Some(frame) = window.contentView().and_then(|c| unsafe { c.superview() }) {
+        separators(&frame, &mut lines);
+    }
+    let nearest = lines.iter().copied().min_by(|a, b| (a - boundary).abs().total_cmp(&(b - boundary).abs())).unwrap_or(f64::NAN);
+    println!("list-separator: {nearest:.1} boundary {boundary:.1}");
+}
+
 fn report_sidebar_mode(window: &NSWindow) {
     let mode = match sidebar_switch(window).map(|g| (g.isHidden(), g.selectedIndex())) {
         Some((true, _)) => "hidden",

@@ -245,7 +245,9 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         system[0].copy(),
         custom(SIDEBAR_MODE),
         system[1].copy(),
-        system[2].copy(),
+        // No flexible space before the list options: the title already takes the free width,
+        // and with the sidebar collapsed every point is needed for the separator to stay on
+        // the list/note boundary.
         custom(LIST_OPTIONS),
         custom(LIST_SEPARATOR),
         custom(NEW_NOTE),
