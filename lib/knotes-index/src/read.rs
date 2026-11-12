@@ -1,8 +1,9 @@
-use knotes_core::{BoxError, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, NoteText, Span, TagIndex};
-use rusqlite::OptionalExtension;
+use knotes_core::{BlockHit, BoxError, ContentSearch, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, NoteText, Span, TagIndex};
+use rusqlite::{OptionalExtension, params};
 
 use crate::SqliteIndex;
 use crate::codec::link_kind_from;
+use crate::fts_query::match_expression;
 
 impl FileStates for SqliteIndex {
     fn file_states(&self) -> Result<Vec<FileState>, BoxError> {
@@ -75,5 +76,34 @@ impl NoteText for SqliteIndex {
             Some((Some(off), Some(len))) => Ok(Some(self.pack.read_string(off as u64, len as u64)?)),
             _ => Ok(None),
         }
+    }
+}
+
+impl ContentSearch for SqliteIndex {
+    fn search_blocks(&self, query: &str, limit: usize) -> Result<Vec<BlockHit>, BoxError> {
+        let Some(expr) = match_expression(query) else { return Ok(Vec::new()) };
+        // Top-k first, then joins only for the k winners.
+        let mut st = self.conn.prepare_cached(
+            "WITH top AS (
+                 SELECT rowid, bm25(blocks_fts) AS score FROM blocks_fts
+                 WHERE blocks_fts MATCH ?1 ORDER BY score LIMIT ?2
+             )
+             SELECT f.path, b.ord, b.start, b.end, h.text, top.score
+             FROM top
+             JOIN blocks b ON b.id = top.rowid
+             JOIN files f ON f.id = b.file_id
+             LEFT JOIN headings h ON h.file_id = b.file_id AND h.ord = b.heading_ord
+             ORDER BY top.score",
+        )?;
+        let rows = st.query_map(params![expr, limit as i64], |r| {
+            Ok(BlockHit {
+                path: r.get(0)?,
+                ord: r.get(1)?,
+                span: Span { start: r.get(2)?, end: r.get(3)? },
+                heading: r.get(4)?,
+                score: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 }

@@ -6,12 +6,22 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use crate::SqliteIndex;
 use crate::codec::{file_kind_code, link_kind_code};
 
+/// FTS work of a batch, done after all other rows: any statement that opens a savepoint
+/// (the `files` upsert does) makes FTS5 flush its pending terms to a new segment and merge.
+/// Interleaved, that is one segment per note: measured 12 s instead of 4 s for a cold 50k build.
+#[derive(Default)]
+struct FtsWork<'a> {
+    deletes: Vec<i64>,
+    inserts: Vec<(i64, &'a str)>,
+}
+
 impl IndexWriter for SqliteIndex {
     fn apply(&mut self, changes: &[IndexChange<'_>]) -> Result<(), BoxError> {
         // Texts of the batch go to the pack in one write before the commit; offsets start at
         // the length on disk, so an aborted batch leaves only dead bytes.
         let base = self.pack.len()?;
         let mut texts = Vec::new();
+        let mut fts = FtsWork::default();
         let tx = self.conn.transaction()?;
         for change in changes {
             match change {
@@ -22,19 +32,33 @@ impl IndexWriter for SqliteIndex {
                         (off, source.len() as u64)
                     });
                     let id = upsert_file(&tx, file, range)?;
-                    delete_note_rows(&tx, id)?;
-                    if let Some((_source, parsed)) = note {
-                        insert_note_rows(&tx, id, parsed)?;
+                    delete_note_rows(&tx, id, &mut fts)?;
+                    if let Some((source, parsed)) = note {
+                        insert_note_rows(&tx, id, source, parsed, &mut fts)?;
                     }
                 }
                 IndexChange::Remove { path } => {
                     let id: Option<i64> =
                         tx.prepare_cached("SELECT id FROM files WHERE path = ?1")?.query_row([path], |r| r.get(0)).optional()?;
                     if let Some(id) = id {
-                        delete_note_rows(&tx, id)?;
+                        delete_note_rows(&tx, id, &mut fts)?;
                         tx.prepare_cached("DELETE FROM files WHERE id = ?1")?.execute([id])?;
                     }
                 }
+            }
+        }
+        // Deletes first (by rowid; `rowid IN (SELECT ...)` would scan the whole FTS index),
+        // then inserts with ascending rowids, so FTS5 buffers them until the commit.
+        {
+            let mut st = tx.prepare_cached("DELETE FROM blocks_fts WHERE rowid = ?1")?;
+            for rowid in &fts.deletes {
+                st.execute([rowid])?;
+            }
+        }
+        {
+            let mut st = tx.prepare_cached("INSERT INTO blocks_fts(rowid, text) VALUES (?1, ?2)")?;
+            for (rowid, text) in &fts.inserts {
+                st.execute(params![rowid, text])?;
             }
         }
         self.pack.append(&texts)?;
@@ -62,14 +86,30 @@ fn upsert_file(tx: &Transaction, file: &VaultFile, pack: Option<(u64, u64)>) -> 
     Ok(id)
 }
 
-fn delete_note_rows(tx: &Transaction, id: i64) -> Result<(), BoxError> {
-    for table in ["headings", "links", "tags"] {
+fn delete_note_rows(tx: &Transaction, id: i64, fts: &mut FtsWork) -> Result<(), BoxError> {
+    let mut st = tx.prepare_cached("SELECT id FROM blocks WHERE file_id = ?1")?;
+    for rowid in st.query_map([id], |r| r.get(0))? {
+        fts.deletes.push(rowid?);
+    }
+    for table in ["blocks", "headings", "links", "tags"] {
         tx.prepare_cached(&format!("DELETE FROM {table} WHERE file_id = ?1"))?.execute([id])?;
     }
     Ok(())
 }
 
-fn insert_note_rows(tx: &Transaction, id: i64, note: &ParsedNote) -> Result<(), BoxError> {
+fn insert_note_rows<'a>(
+    tx: &Transaction,
+    id: i64,
+    source: &'a str,
+    note: &ParsedNote,
+    fts: &mut FtsWork<'a>,
+) -> Result<(), BoxError> {
+    let mut st = tx.prepare_cached("INSERT INTO blocks(file_id, ord, heading_ord, start, end) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+    for (ord, b) in note.blocks.iter().enumerate() {
+        st.execute(params![id, ord as i64, b.heading, b.span.start, b.span.end])?;
+        fts.inserts.push((tx.last_insert_rowid(), &source[b.span.start as usize..b.span.end as usize]));
+    }
+
     let mut st = tx.prepare_cached("INSERT INTO headings(file_id, ord, level, text, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
     for (ord, h) in note.headings.iter().enumerate() {
         st.execute(params![id, ord as i64, h.level, h.text, h.span.start, h.span.end])?;

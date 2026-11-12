@@ -2,6 +2,7 @@
 
 mod codec;
 mod content_pack;
+mod fts_query;
 mod read;
 mod schema;
 mod sqlite_index;

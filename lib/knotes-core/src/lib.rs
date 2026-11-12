@@ -1,5 +1,6 @@
 //! Domain model and traits (ports) of Knotes. No I/O lives here.
 
+mod content_search;
 mod file_states;
 mod index_writer;
 mod link_graph;
@@ -11,6 +12,7 @@ mod tag_index;
 mod vault_file;
 mod vault_scanner;
 
+pub use content_search::{BlockHit, ContentSearch};
 pub use file_states::{FileState, FileStates};
 pub use index_writer::{IndexChange, IndexWriter};
 pub use link_graph::LinkGraph;
