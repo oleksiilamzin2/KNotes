@@ -49,6 +49,24 @@ pub struct ListSettings {
     pub include_subfolders: bool,
 }
 
+/// One choice from the list options menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListOption {
+    SortBy(SortOrder),
+    GroupByDate(bool),
+    IncludeSubfolders(bool),
+}
+
+impl ListSettings {
+    pub fn with(self, option: ListOption) -> Self {
+        match option {
+            ListOption::SortBy(sort) => Self { sort, ..self },
+            ListOption::GroupByDate(group_by_date) => Self { group_by_date, ..self },
+            ListOption::IncludeSubfolders(include_subfolders) => Self { include_subfolders, ..self },
+        }
+    }
+}
+
 impl Default for ListSettings {
     fn default() -> Self {
         Self { sort: SortOrder::Modified, group_by_date: true, include_subfolders: true }

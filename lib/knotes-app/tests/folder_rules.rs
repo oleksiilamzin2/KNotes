@@ -42,3 +42,25 @@ fn broken_or_odd_files() {
     let odd = rules(&[("", r#"{"list": {"sort": "weird", "groupByDate": "yes"}}"#)]);
     assert_eq!(resolve_list_settings("", &odd), ListSettings::default());
 }
+
+#[test]
+fn a_menu_choice_writes_only_its_own_field() {
+    use knotes_app::ListOption;
+    let mut r = FolderRules::parse(r#"{"list": {"note": "kept"}}"#).unwrap();
+    r.set_option(ListOption::SortBy(SortOrder::Title));
+    let back: serde_json::Value = serde_json::from_str(&r.to_json()).unwrap();
+    assert_eq!(back["list"]["sort"], "title");
+    assert!(back["list"].get("groupByDate").is_none() && back["list"].get("includeSubfolders").is_none());
+    assert_eq!(back["list"]["note"], "kept");
+    r.set_option(ListOption::GroupByDate(false));
+    r.set_option(ListOption::IncludeSubfolders(false));
+    let back: serde_json::Value = serde_json::from_str(&r.to_json()).unwrap();
+    assert_eq!((back["list"]["groupByDate"].clone(), back["list"]["includeSubfolders"].clone()), (false.into(), false.into()));
+}
+
+#[test]
+fn options_change_settings() {
+    use knotes_app::ListOption;
+    let s = ListSettings::default().with(ListOption::SortBy(SortOrder::Title)).with(ListOption::GroupByDate(false));
+    assert_eq!(s, ListSettings { sort: SortOrder::Title, group_by_date: false, include_subfolders: true });
+}

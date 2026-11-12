@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 
-use crate::{ListSettings, SortOrder};
+use crate::{ListOption, ListSettings, SortOrder};
 
 pub const RULES_FILE: &str = ".knotes";
 
@@ -41,18 +41,25 @@ impl FolderRules {
 
     /// Writes all list fields, keeping every other key.
     pub fn set_list(&mut self, settings: &ListSettings) {
+        self.set_option(ListOption::SortBy(settings.sort));
+        self.set_option(ListOption::GroupByDate(settings.group_by_date));
+        self.set_option(ListOption::IncludeSubfolders(settings.include_subfolders));
+    }
+
+    /// Writes only the field of `option`: the other fields keep following the parent folders.
+    pub fn set_option(&mut self, option: ListOption) {
         let list = self.root.entry("list").or_insert_with(|| json!({}));
         if !list.is_object() {
             *list = json!({});
         }
         let list = list.as_object_mut().expect("object");
-        let sort = match settings.sort {
-            SortOrder::Modified => "modified",
-            SortOrder::Title => "title",
+        let (key, value) = match option {
+            ListOption::SortBy(SortOrder::Modified) => ("sort", json!("modified")),
+            ListOption::SortBy(SortOrder::Title) => ("sort", json!("title")),
+            ListOption::GroupByDate(on) => ("groupByDate", json!(on)),
+            ListOption::IncludeSubfolders(on) => ("includeSubfolders", json!(on)),
         };
-        list.insert("sort".into(), json!(sort));
-        list.insert("groupByDate".into(), json!(settings.group_by_date));
-        list.insert("includeSubfolders".into(), json!(settings.include_subfolders));
+        list.insert(key.into(), value);
     }
 
     /// Pretty JSON with a trailing newline.
