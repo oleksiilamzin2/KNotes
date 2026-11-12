@@ -51,6 +51,14 @@ pub struct Tag {
     pub span: Span,
 }
 
+/// Obsidian block identifier `^name` at the end of a line; target of `[[note#^name]]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockAnchor {
+    pub name: String,
+    /// Covers `^name`.
+    pub span: Span,
+}
+
 /// YAML frontmatter at the top of a note. Invalid YAML gives empty values, not an error.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Frontmatter {
@@ -70,4 +78,5 @@ pub struct ParsedNote {
     pub links: Vec<Link>,
     /// Inline tags only; frontmatter tags live in `frontmatter.tags`.
     pub tags: Vec<Tag>,
+    pub anchors: Vec<BlockAnchor>,
 }

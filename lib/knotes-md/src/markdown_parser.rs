@@ -3,6 +3,7 @@ use std::ops::Range;
 use knotes_core::{Heading, Link, LinkKind, NoteParser, ParsedNote, Span};
 use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
+use crate::anchor_scan::scan_anchors;
 use crate::frontmatter::parse_frontmatter;
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
 use crate::tag_scan::scan_tags;
@@ -116,7 +117,8 @@ impl Collector<'_> {
 
     fn flush_run(&mut self) {
         if let Some(run) = self.run.take() {
-            scan_tags(self.source, run, &mut self.note.tags);
+            scan_tags(self.source, run.clone(), &mut self.note.tags);
+            scan_anchors(self.source, run, &mut self.note.anchors);
         }
     }
 

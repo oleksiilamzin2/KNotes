@@ -1,5 +1,6 @@
 //! Obsidian-flavoured Markdown parser built on pulldown-cmark.
 
+mod anchor_scan;
 mod frontmatter;
 mod link_target;
 mod markdown_parser;
