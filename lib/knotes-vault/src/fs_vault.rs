@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use knotes_core::{FileKind, FolderRulesStore, VaultFile, VaultReader, VaultScanner};
+use knotes_core::{FileKind, FolderRulesStore, NoteWriter, VaultFile, VaultReader, VaultScanner};
 use rayon::prelude::*;
 
 pub struct FsVault {
@@ -90,6 +90,27 @@ impl FolderRulesStore for FsVault {
         let tmp = dir.join(format!("{RULES_FILE}.tmp"));
         fs::write(&tmp, text)?;
         fs::rename(&tmp, dir.join(RULES_FILE)).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+    }
+}
+
+impl NoteWriter for FsVault {
+    /// Writes a hidden temporary file next to the note (the scanner and the watcher skip it)
+    /// and renames it over the note.
+    fn write_note(&self, path: &str, text: &str) -> io::Result<()> {
+        let rel = Path::new(path);
+        let inside = !path.is_empty() && rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !inside {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("not a path inside the vault: {path}")));
+        }
+        let target = self.root.join(rel);
+        let dir = target.parent().unwrap_or(&self.root);
+        fs::create_dir_all(dir)?;
+        let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("note");
+        let tmp = dir.join(format!(".{name}.knotes-tmp"));
+        fs::write(&tmp, text)?;
+        fs::rename(&tmp, &target).inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
         })
     }
