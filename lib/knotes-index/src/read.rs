@@ -1,4 +1,6 @@
 use knotes_core::{BackLink, BoxError, CatalogEntry, FileState, FileStates, Heading, Link, LinkGraph, NoteCatalog, NoteOutline, NoteText, OutLink, Span, TagIndex};
+use std::collections::{BTreeMap, HashSet};
+
 use rusqlite::OptionalExtension;
 
 use crate::SqliteIndex;
@@ -75,6 +77,20 @@ impl TagIndex for SqliteIndex {
         )?;
         let rows = st.query_map([tag.to_lowercase()], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn tag_counts(&self) -> Result<Vec<(String, usize)>, BoxError> {
+        // Each (tag, note) row counts for the tag and all its parents, once per note.
+        let mut notes: BTreeMap<String, HashSet<i64>> = BTreeMap::new();
+        let mut st = self.conn.prepare_cached("SELECT tag, file_id FROM tags")?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (tag, file) = row?;
+            for (i, _) in tag.match_indices('/') {
+                notes.entry(tag[..i].to_owned()).or_default().insert(file);
+            }
+            notes.entry(tag).or_default().insert(file);
+        }
+        Ok(notes.into_iter().map(|(tag, files)| (tag, files.len())).collect())
     }
 }
 
