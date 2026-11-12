@@ -80,7 +80,9 @@ define_class!(
         /// Quitting writes every unsaved note first.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _notification: &NSNotification) {
-            self.save_all();
+            for vault in self.ivars().vaults.borrow().iter() {
+                vault.window.leave();
+            }
         }
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
@@ -96,7 +98,7 @@ define_class!(
             let Some(closing) = notification.object() else { return };
             let is_closing = |v: &OpenVault| std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject);
             if let Some(vault) = self.ivars().vaults.borrow().iter().find(|v| is_closing(v)) {
-                vault.window.save();
+                vault.window.leave();
             }
             self.ivars().vaults.borrow_mut().retain(|v| !std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject));
         }
@@ -107,6 +109,14 @@ define_class!(
         #[unsafe(method(openVault:))]
         fn open_vault_action(&self, _sender: Option<&AnyObject>) {
             self.ask_for_vault();
+        }
+
+        /// File → New Note: in the window in front.
+        #[unsafe(method(newNote:))]
+        fn new_note_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.new_note();
+            }
         }
 
         /// File → Save: writes the unsaved notes of all windows (autosave would in 2 s anyway).
@@ -121,6 +131,15 @@ impl AppDelegate {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars::default());
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// The key (or main) vault window; the first one when the app is not active.
+    fn front_window(&self) -> Option<Rc<VaultWindow>> {
+        let app = NSApplication::sharedApplication(self.mtm());
+        let front = app.keyWindow().or_else(|| app.mainWindow());
+        let vaults = self.ivars().vaults.borrow();
+        let is_front = |v: &&OpenVault| front.as_ref().is_some_and(|f| std::ptr::eq(&*v.window.window, &**f));
+        vaults.iter().find(is_front).or_else(|| vaults.first()).map(|v| Rc::clone(&v.window))
     }
 
     fn save_all(&self) {

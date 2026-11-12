@@ -339,6 +339,11 @@ impl LivePreview {
     }
 
     /// Restyles everything from `source` (the edit path's worst case), for the editor bench.
+    /// The shown note was renamed or moved.
+    pub fn set_path(&self, path: &str) {
+        *self.ivars().path.borrow_mut() = path.to_owned();
+    }
+
     pub fn on_cursor(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_cursor.borrow_mut() = Some(Box::new(callback));
     }

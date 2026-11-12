@@ -91,6 +91,18 @@ pub fn write_requested(window: &VaultWindow) {
     std::fs::write(vault.join(path), text).expect("outside write");
 }
 
+/// `KNOTES_PROBE_ACTION=new`: File → New Note through the responder chain, like the menu.
+/// True when it was requested.
+pub fn new_note_requested() -> bool {
+    if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("new") {
+        return false;
+    }
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: a nil target sends the action up the responder chain.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(objc2::sel!(newNote:), None, None) };
+    true
+}
+
 /// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
 pub fn save_requested() {
     if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {
@@ -330,6 +342,8 @@ fn report_note(window: &VaultWindow) {
     }
     println!("document: {}", if window.is_dirty() { "dirty" } else { "clean" });
     println!("completion: {}", window.describe_completion());
+    let focus = window.window.firstResponder().is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, &*window.note_text as *const _ as *const u8));
+    println!("focus: {}", if focus { "editor" } else { "other" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");

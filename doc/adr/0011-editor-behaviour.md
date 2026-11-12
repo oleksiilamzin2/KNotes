@@ -19,6 +19,12 @@ TextKit 2, its riskiest parts are checked in a spike. The owner decided how edit
 - A new note (toolbar, Cmd+N) is created in the selected folder as `Без назви.md`; after a
   pause its file takes the name of the first line (or `#` heading), once. Later edits of
   that line do not rename the file.
+  Refined when built (2026-11-12): "after a pause" means once the first line is finished, by
+  a line break after it or by leaving the note (another note opens, the window closes, the
+  app quits): a 2 s pause mid-line would cut the name where the user stopped to think.
+  Markup and characters that break file names or links are left out (`/` becomes `-`), at
+  most 100 characters, a number is added when the name is taken. A new note left empty
+  keeps its `Без назви.md` file: nothing is deleted behind the user's back.
 - Renaming or moving a note rewrites every link to it in other notes, found through the
   backlinks of the index.
 - If a note changes on disk while the editor has unsaved edits, both versions are kept:

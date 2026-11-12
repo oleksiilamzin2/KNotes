@@ -11,9 +11,9 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, new_notes_folder,
-    resolve_list_settings,
+    note_file_stem, resolve_list_settings, unique_note_path,
 };
-use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
@@ -194,6 +194,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_new_note(move || {
+            if let Some(window) = weak.upgrade() {
+                window.new_note();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.toolbar_delegate.on_navigate(move |forward| {
             if let Some(window) = weak.upgrade() {
                 window.navigate(forward);
@@ -251,9 +257,12 @@ impl VaultWindow {
 
     fn show(&self, snapshot: &Snapshot) {
         {
+            let open = self.open_path();
             let mut state = self.state.borrow_mut();
             let paths: HashSet<&str> = snapshot.rows.iter().map(|r| r.path.as_str()).collect();
-            state.history.retain(|p| paths.contains(p));
+            // The open note stays even when this snapshot predates its file (just created or
+            // renamed).
+            state.history.retain(|p| paths.contains(p) || open.as_deref() == Some(p));
         }
         let changed = self.open_path().filter(|open| snapshot.changed.iter().any(|p| p == open));
         {
@@ -300,6 +309,9 @@ impl VaultWindow {
             if let Some(option) = probe::requested_option() {
                 self.choose(option);
             }
+            if probe::new_note_requested() {
+                probe::type_requested(&self.note_text);
+            }
             for (i, path) in probe::requested_notes().iter().enumerate() {
                 if let Some(row) = self.list.row_of(path) {
                     // Selecting the row goes through the same delegate path as a click.
@@ -332,7 +344,7 @@ impl VaultWindow {
 
     /// Shows a note in the note column; `record` adds it to the back/forward history.
     pub fn open_note(&self, path: &str, record: bool) {
-        self.save();
+        self.leave();
         self.completion.hide();
         let text = {
             let mut state = self.state.borrow_mut();
@@ -581,9 +593,72 @@ impl VaultWindow {
         });
     }
 
+    /// File → New Note: an empty `Без назви.md` in the selected folder (the new notes folder
+    /// for "All notes" and tags), opened with the cursor in it (ADR 0011, 0013).
+    pub fn new_note(&self) {
+        let (vault, folder) = {
+            let state = self.state.borrow();
+            let Some(vault) = state.vault.clone() else { return };
+            let folder = match &state.selection {
+                SidebarItem::Folder(path) => path.clone(),
+                _ => new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER),
+            };
+            (vault, folder)
+        };
+        let path = unique_note_path(&folder, strings::UNTITLED, |p| vault.join(p).exists());
+        if let Err(e) = FsVault::new(&vault).write_note(&path, "") {
+            eprintln!("knotes: cannot create {path}: {e}");
+            return;
+        }
+        self.open_note(&path, true);
+        if let Some(editing) = self.editing.borrow_mut().as_mut() {
+            editing.document = Document::untitled();
+        }
+        self.highlight_open_note();
+        self.window.makeFirstResponder(Some(&self.note_text));
+    }
+
+    /// Saves and names a new note after its first line: the user leaves the note (another
+    /// note opens, the window closes, the app quits).
+    pub fn leave(&self) {
+        self.write_edits();
+        self.name_new_note(true);
+    }
+
+    /// Autosave and File → Save; names a new note whose first line is finished.
+    pub fn save(&self) {
+        self.write_edits();
+        self.name_new_note(false);
+    }
+
+    /// Renames a new note's file after its first line, once (ADR 0011).
+    fn name_new_note(&self, leaving: bool) {
+        let text = self.note_text.string().to_string();
+        let old = match self.editing.borrow().as_ref() {
+            Some(editing) if editing.document.wants_name(&text, leaving) => editing.path.clone(),
+            _ => return,
+        };
+        let Some(stem) = note_file_stem(text.lines().next().unwrap_or("")) else { return };
+        let Some(vault) = self.vault() else { return };
+        let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let path = unique_note_path(folder, &stem, |p| p != old && vault.join(p).exists());
+        if path != old
+            && let Err(e) = FsVault::new(&vault).move_note(&old, &path)
+        {
+            eprintln!("knotes: cannot rename {old} to {path}: {e}");
+            return;
+        }
+        if let Some(editing) = self.editing.borrow_mut().as_mut() {
+            editing.path = path.clone();
+            editing.document.named();
+        }
+        self.state.borrow_mut().history.rename(&old, &path);
+        self.live_preview.set_path(&path);
+    }
+
     /// Writes the editor's text if it has unsaved edits. A change on disk the window has not
     /// seen yet is kept next to the note as a conflict copy instead of being overwritten.
-    pub fn save(&self) {
+    fn write_edits(&self) {
         let Some(vault) = self.state.borrow().vault.clone() else { return };
         let mut editing = self.editing.borrow_mut();
         let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return };

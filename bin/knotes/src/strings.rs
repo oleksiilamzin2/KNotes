@@ -50,3 +50,5 @@ pub const OPEN: &str = "Відкрити";
 pub const SAVE: &str = "Зберегти";
 /// Folder for notes created from links when the root `.knotes` names none (ADR 0013).
 pub const NEW_NOTES_FOLDER: &str = "Вхідні";
+/// File name of a new note until its first line names it (ADR 0011).
+pub const UNTITLED: &str = "Без назви";

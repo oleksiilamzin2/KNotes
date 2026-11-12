@@ -23,12 +23,14 @@ pub const HISTORY: &str = "knotes.history";
 pub const CHAT: &str = "knotes.chat";
 
 type OnNavigate = Box<dyn Fn(bool)>;
+type OnNewNote = Box<dyn Fn()>;
 
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
     list_menu: Retained<NSMenu>,
     /// Called with `true` for forward, `false` for back.
     on_navigate: RefCell<Option<OnNavigate>>,
+    on_new_note: RefCell<Option<OnNewNote>>,
     history: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     /// Back/forward availability, applied when the group item is created later.
     history_state: Cell<(bool, bool)>,
@@ -61,9 +63,12 @@ define_class!(
     }
 
     impl ToolbarDelegate {
-        /// Creating notes comes with the editor stage.
         #[unsafe(method(newNote:))]
-        fn new_note(&self, _sender: Option<&AnyObject>) {}
+        fn new_note(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_new_note.borrow().as_ref() {
+                callback();
+            }
+        }
 
         #[unsafe(method(navigate:))]
         fn navigate(&self, sender: &NSToolbarItemGroup) {
@@ -81,10 +86,15 @@ impl ToolbarDelegate {
             split_view,
             list_menu,
             on_navigate: RefCell::new(None),
+            on_new_note: RefCell::new(None),
             history: RefCell::new(None),
             history_state: Cell::new((false, false)),
         });
         unsafe { msg_send![super(this), init] }
+    }
+
+    pub fn on_new_note(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_new_note.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_navigate(&self, callback: impl Fn(bool) + 'static) {

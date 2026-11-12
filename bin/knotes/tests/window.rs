@@ -183,7 +183,7 @@ fn chat_column_has_title_and_question_field() {
 fn main_menu_has_the_standard_menus() {
     let out = probe();
     assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
-    assert!(out.contains("file-menu: Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вікно ⌘W"), "{out}");
+    assert!(out.contains("file-menu: Нова нотатка ⌘N | Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вікно ⌘W"), "{out}");
 }
 
 #[test]
@@ -545,4 +545,39 @@ fn a_cold_index_leaves_no_more_memory_behind_than_a_warm_start() {
     let cold = footprint_mb(&probe_env(&[vault.path()], Some(home.path()), &env));
     let warm = footprint_mb(&probe_env(&[vault.path()], Some(home.path()), &env));
     assert!(cold - warm < 45.0, "cold {cold} MB, warm {warm} MB");
+}
+
+#[test]
+fn cmd_n_creates_an_untitled_note_in_the_selected_folder_and_focuses_it() {
+    let (vault, out) = probe_notes(&[("Projects/a.md", "a")], &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_ACTION", "new")]);
+    assert!(vault.path().join("Projects/Без назви.md").is_file(), "{out}");
+    assert!(out.contains("note: Projects/Без назви.md"), "{out}");
+    assert!(out.contains("focus: editor"), "{out}");
+}
+
+#[test]
+fn without_a_selected_folder_new_notes_go_to_the_new_notes_folder_numbered() {
+    let (vault, out) = probe_notes(&[("a.md", "a"), ("Вхідні/Без назви.md", "")], &[("KNOTES_PROBE_ACTION", "new")]);
+    assert!(vault.path().join("Вхідні/Без назви 1.md").is_file(), "{out}");
+    assert!(out.contains("note: Вхідні/Без назви 1.md"), "{out}");
+}
+
+#[test]
+fn return_after_the_first_line_names_the_note_after_it() {
+    let (vault, out) = probe_notes(
+        &[("a.md", "a")],
+        &[("KNOTES_PROBE_ACTION", "new"), ("KNOTES_PROBE_TYPE", "# Список покупок\nмолоко"), ("KNOTES_PROBE_DELAY_MS", "3500")],
+    );
+    assert_eq!(read(vault.path(), "Вхідні/Список покупок.md"), "# Список покупок\nмолоко", "{out}");
+    assert!(!vault.path().join("Вхідні/Без назви.md").exists());
+    assert!(out.contains("note: Вхідні/Список покупок.md"), "{out}");
+    assert!(out.contains("selected-row: Список покупок"), "{out}");
+}
+
+#[test]
+fn an_unfinished_first_line_names_the_note_when_leaving_it() {
+    let (vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "new"), ("KNOTES_PROBE_TYPE", "Ідея")]);
+    assert!(out.contains("note: Вхідні/Без назви.md"), "not named mid-line: {out}");
+    assert_eq!(read(vault.path(), "Вхідні/Ідея.md"), "Ідея", "quitting leaves the note");
+    assert!(!vault.path().join("Вхідні/Без назви.md").exists());
 }
