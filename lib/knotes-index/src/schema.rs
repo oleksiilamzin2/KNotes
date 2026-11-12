@@ -1,8 +1,11 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 7;
+pub(crate) const VERSION: i64 = 8;
 
 pub(crate) const CREATE: &str = "
+CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
+-- Must equal the generation in the content.pack header.
+INSERT INTO meta VALUES ('pack_generation', 0);
 CREATE TABLE files(
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,

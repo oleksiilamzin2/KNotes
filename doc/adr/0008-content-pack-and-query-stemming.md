@@ -39,3 +39,17 @@ Word forms:
 - Prefix matching brings some false hits (`мовчання` for `мова`); quality is measured
   and an index-side stemmer stays the fallback.
 - Pack and index must stay consistent; the pack generation is recorded in SQLite.
+
+## Update 2026-11-12: generations and compaction
+
+- The pack starts with a 16-byte header: magic `KNPACK01` and a generation number. The
+  same generation is stored in the SQLite `meta` table; `open` rebuilds the index when they
+  differ or the header is missing.
+- Compaction writes the live texts to `content.pack.new` (synced), moves the offsets and
+  bumps the generation in one transaction, and renames the new file over the old one
+  before the commit. A crash at any step leaves different generations, so stale offsets
+  are never used. Snapshots taken earlier keep their mapping of the old file.
+- Idle maintenance compacts when at least 16 MB are dead and dead bytes outnumber live
+  ones. Measured on 50k notes with half the pack dead: 537 MB -> 269 MB in 157 ms.
+- Other processes (the MCP server) must compare the generation they mapped with the one in
+  SQLite inside the same read transaction and remap on change.
