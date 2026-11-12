@@ -6,7 +6,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSImage, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
+    NSImage, NSMenu, NSMenuToolbarItem, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
     NSToolbarItem, NSToolbarItemGroup, NSToolbarItemGroupSelectionMode, NSToolbarSidebarTrackingSeparatorItemIdentifier,
     NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
@@ -15,12 +15,14 @@ use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString,
 use crate::strings;
 
 pub const LIST_SEPARATOR: &str = "knotes.list-separator";
+pub const LIST_OPTIONS: &str = "knotes.list-options";
 pub const NEW_NOTE: &str = "knotes.new-note";
 pub const HISTORY: &str = "knotes.history";
 pub const CHAT: &str = "knotes.chat";
 
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
+    list_menu: Retained<NSMenu>,
 }
 
 define_class!(
@@ -61,8 +63,8 @@ define_class!(
 );
 
 impl ToolbarDelegate {
-    pub fn new(mtm: MainThreadMarker, split_view: Retained<NSSplitView>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { split_view });
+    pub fn new(mtm: MainThreadMarker, split_view: Retained<NSSplitView>, list_menu: Retained<NSMenu>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars { split_view, list_menu });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -75,6 +77,15 @@ impl ToolbarDelegate {
                 &self.ivars().split_view,
                 1,
             ))),
+            LIST_OPTIONS => {
+                let item = NSMenuToolbarItem::initWithItemIdentifier(NSMenuToolbarItem::alloc(mtm), id);
+                item.setImage(symbol("ellipsis", strings::LIST_OPTIONS).as_deref());
+                item.setLabel(&NSString::from_str(strings::LIST_OPTIONS));
+                item.setToolTip(Some(&NSString::from_str(strings::LIST_OPTIONS)));
+                item.setShowsIndicator(false);
+                item.setMenu(&self.ivars().list_menu);
+                Some(Retained::into_super(item))
+            }
             NEW_NOTE => {
                 let item = button(mtm, id, "square.and.pencil", strings::NEW_NOTE);
                 unsafe {
@@ -124,6 +135,8 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
     NSArray::from_retained_slice(&[
         system[0].copy(),
         system[1].copy(),
+        system[2].copy(),
+        custom(LIST_OPTIONS),
         custom(LIST_SEPARATOR),
         custom(NEW_NOTE),
         custom(HISTORY),

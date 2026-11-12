@@ -195,10 +195,12 @@ dependencies = [
  "knotes-core",
  "knotes-index",
  "knotes-session",
+ "knotes-vault",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
+ "serde_json",
  "tempfile",
 ]
 

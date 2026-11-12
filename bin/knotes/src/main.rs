@@ -1,6 +1,7 @@
 //! Knotes: the AppKit app (ADR 0002, 0010).
 
 mod app_delegate;
+mod list_menu;
 mod note_list_view;
 mod probe;
 mod sidebar_view;

@@ -16,6 +16,8 @@ knotes-app.workspace = true
 knotes-core.workspace = true
 knotes-session.workspace = true
 knotes-index.workspace = true
+knotes-vault.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

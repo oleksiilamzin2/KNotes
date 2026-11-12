@@ -29,6 +29,19 @@ pub fn requested_selection() -> Option<knotes_app::SidebarItem> {
     knotes_app::SidebarItem::from_key(&std::env::var("KNOTES_PROBE_SELECT").ok()?)
 }
 
+/// List option to choose before reporting (`KNOTES_PROBE_ACTION=sort=title`, `group=off`, …),
+/// through the same handler as the menu.
+pub fn requested_option() -> Option<knotes_app::ListOption> {
+    use knotes_app::{ListOption, SortOrder};
+    match std::env::var("KNOTES_PROBE_ACTION").ok()?.as_str() {
+        "sort=title" => Some(ListOption::SortBy(SortOrder::Title)),
+        "sort=modified" => Some(ListOption::SortBy(SortOrder::Modified)),
+        "group=off" => Some(ListOption::GroupByDate(false)),
+        "subfolders=off" => Some(ListOption::IncludeSubfolders(false)),
+        _ => None,
+    }
+}
+
 pub fn watch(window: &Rc<VaultWindow>) {
     WINDOW.with(|w| *w.borrow_mut() = Some(Rc::clone(window)));
 }
@@ -48,6 +61,7 @@ pub fn schedule(with_sidebar: bool) {
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_list(&window.table);
+                    println!("list-menu: {}", window.list_menu.describe());
                 }
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PNG") {
                     render_png(&window.window, &path.to_string_lossy());

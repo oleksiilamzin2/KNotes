@@ -103,7 +103,10 @@ fn note_list_shows_date_groups_titles_times_and_snippets() {
 fn toolbar_has_v1_buttons_and_columns_have_room() {
     let out = probe();
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(toolbar, "toggle-sidebar, sidebar-separator, list-separator, new-note, history(2), flexible-space, inspector-separator, chat");
+    assert_eq!(
+        toolbar,
+        "toggle-sidebar, sidebar-separator, flexible-space, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
+    );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
     assert!(w[0] >= 240.0 && w[1] >= 300.0 && w[3] >= 280.0 && w[2] >= 400.0, "{widths}");
@@ -130,4 +133,31 @@ fn selecting_a_folder_or_tag_filters_the_list() {
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "t:radar")]);
     assert!(out.contains("title: #radar") && out.contains("subtitle: 2 нотатки"), "{out}");
     assert_eq!(list_titles(&out), ["a", "c"]);
+}
+
+fn projects_vault() -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault.path().join("Projects")).unwrap();
+    write_aged(&vault.path().join("Projects/b note.md"), "b", Duration::from_secs(10));
+    write_aged(&vault.path().join("Projects/a note.md"), "a", Duration::from_secs(20));
+    vault
+}
+
+#[test]
+fn list_options_menu_shows_the_folder_settings() {
+    let vault = projects_vault();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects")]);
+    let menu = out.lines().find_map(|l| l.strip_prefix("list-menu: ")).unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(menu, "Сортувати за > [✓ Датою зміни, Назвою] | ✓ Групувати за датою | ✓ Нотатки з підтек");
+}
+
+#[test]
+fn choosing_a_sort_order_reorders_and_saves_only_that_field() {
+    let vault = projects_vault();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_ACTION", "sort=title")]);
+    assert_eq!(list_titles(&out), ["a note", "b note"]);
+    assert!(out.contains("list-menu: Сортувати за > [Датою зміни, ✓ Назвою]"), "{out}");
+    let saved = std::fs::read_to_string(vault.path().join("Projects/.knotes")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(json, serde_json::json!({"list": {"sort": "title"}}));
 }
