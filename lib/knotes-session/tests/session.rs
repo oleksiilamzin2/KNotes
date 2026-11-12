@@ -50,3 +50,17 @@ fn a_vault_opens_only_once() {
     drop(first);
     assert!(VaultSession::open(vault.path(), data.path()).is_ok());
 }
+
+#[test]
+fn snapshots_carry_folder_rules_and_follow_their_changes() {
+    use knotes_app::{SortOrder, resolve_list_settings};
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::create_dir(vault.path().join("Projects")).unwrap();
+    fs::write(vault.path().join("Projects/a.md"), "a").unwrap();
+    fs::write(vault.path().join("Projects/.knotes"), r#"{"list": {"sort": "title"}}"#).unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| !s.rows.is_empty());
+    assert_eq!(resolve_list_settings("Projects", &first.rules).sort, SortOrder::Title);
+    fs::write(vault.path().join("Projects/.knotes"), r#"{"list": {"sort": "modified"}}"#).unwrap();
+    wait_for(&events, |s| resolve_list_settings("Projects", &s.rules).sort == SortOrder::Modified);
+}
