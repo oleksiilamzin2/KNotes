@@ -3,12 +3,17 @@
 
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSBackingStoreType, NSViewController, NSWindow, NSWindowStyleMask};
-use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
+use objc2_app_kit::{NSBackingStoreType, NSSplitViewController, NSViewController, NSWindow, NSWindowStyleMask};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSUserDefaults, ns_string};
 
+use crate::probe;
 use crate::vault_window::split_controller;
 
-pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController, list: &NSViewController) -> Retained<NSWindow> {
+/// Initial column widths (sidebar, list, chat) when the user has not resized them yet.
+const INITIAL_WIDTHS: [f64; 3] = [260.0, 340.0, 320.0];
+const SPLIT_AUTOSAVE: &str = "KnotesMainSplit";
+
+pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController, list: &NSViewController) -> (Retained<NSWindow>, Retained<NSSplitViewController>) {
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -27,5 +32,22 @@ pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController, list: &NSViewCon
     // Setting the controller sizes the window to its (still empty) views; restore the size.
     window.setContentSize(frame.size);
     window.center();
-    window
+    let split_view = split.splitView();
+    // Probe runs come from tests: they must not read or write the user's saved widths
+    // (user defaults ignore HOME).
+    let saved = !probe::enabled()
+        && NSUserDefaults::standardUserDefaults()
+            .objectForKey(&NSString::from_str(&format!("NSSplitView Subview Frames {SPLIT_AUTOSAVE}")))
+            .is_some();
+    if !probe::enabled() {
+        split_view.setAutosaveName(Some(&NSString::from_str(SPLIT_AUTOSAVE)));
+    }
+    if !saved {
+        split.view().layoutSubtreeIfNeeded();
+        let [sidebar_w, list_w, chat_w] = INITIAL_WIDTHS;
+        split_view.setPosition_ofDividerAtIndex(sidebar_w, 0);
+        split_view.setPosition_ofDividerAtIndex(sidebar_w + list_w, 1);
+        split_view.setPosition_ofDividerAtIndex(frame.size.width - chat_w, 2);
+    }
+    (window, split)
 }

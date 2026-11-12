@@ -1,0 +1,154 @@
+//! Window toolbar as in Knotes v1: sidebar toggle, list title (window title and subtitle),
+//! new note and back/forward over the note, chat toggle over the inspector. Separators track
+//! the split view columns, so each group sits above its column; macOS draws the glass.
+
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::{
+    NSImage, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
+    NSToolbarItem, NSToolbarItemGroup, NSToolbarItemGroupSelectionMode, NSToolbarSidebarTrackingSeparatorItemIdentifier,
+    NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
+};
+use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
+
+use crate::strings;
+
+pub const LIST_SEPARATOR: &str = "knotes.list-separator";
+pub const NEW_NOTE: &str = "knotes.new-note";
+pub const HISTORY: &str = "knotes.history";
+pub const CHAT: &str = "knotes.chat";
+
+pub struct Ivars {
+    split_view: Retained<NSSplitView>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesToolbarDelegate"]
+    #[ivars = Ivars]
+    pub struct ToolbarDelegate;
+
+    unsafe impl NSObjectProtocol for ToolbarDelegate {}
+
+    unsafe impl NSToolbarDelegate for ToolbarDelegate {
+        #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
+        fn item_for_identifier(&self, _toolbar: &NSToolbar, id: &NSString, _inserted: bool) -> Option<Retained<NSToolbarItem>> {
+            self.make_item(id)
+        }
+
+        #[unsafe(method_id(toolbarDefaultItemIdentifiers:))]
+        fn default_identifiers(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSString>> {
+            identifiers()
+        }
+
+        #[unsafe(method_id(toolbarAllowedItemIdentifiers:))]
+        fn allowed_identifiers(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSString>> {
+            identifiers()
+        }
+    }
+
+    impl ToolbarDelegate {
+        /// Creating notes comes with the editor stage.
+        #[unsafe(method(newNote:))]
+        fn new_note(&self, _sender: Option<&AnyObject>) {}
+
+        /// Note history comes with note selection.
+        #[unsafe(method(navigate:))]
+        fn navigate(&self, _sender: Option<&AnyObject>) {}
+    }
+);
+
+impl ToolbarDelegate {
+    pub fn new(mtm: MainThreadMarker, split_view: Retained<NSSplitView>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars { split_view });
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn make_item(&self, id: &NSString) -> Option<Retained<NSToolbarItem>> {
+        let mtm = self.mtm();
+        let target: &AnyObject = self.as_ref();
+        match id.to_string().as_str() {
+            LIST_SEPARATOR => Some(Retained::into_super(NSTrackingSeparatorToolbarItem::trackingSeparatorToolbarItemWithIdentifier_splitView_dividerIndex(
+                id,
+                &self.ivars().split_view,
+                1,
+            ))),
+            NEW_NOTE => {
+                let item = button(mtm, id, "square.and.pencil", strings::NEW_NOTE);
+                unsafe {
+                    item.setTarget(Some(target));
+                    item.setAction(Some(sel!(newNote:)));
+                }
+                Some(item)
+            }
+            HISTORY => {
+                let images = NSArray::from_retained_slice(&[symbol("chevron.left", strings::BACK)?, symbol("chevron.right", strings::FORWARD)?]);
+                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::BACK), NSString::from_str(strings::FORWARD)]);
+                let group = unsafe {
+                    NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
+                        id,
+                        &images,
+                        NSToolbarItemGroupSelectionMode::Momentary,
+                        Some(&labels),
+                        Some(target),
+                        Some(sel!(navigate:)),
+                        mtm,
+                    )
+                };
+                Some(Retained::into_super(group))
+            }
+            CHAT => {
+                let item = button(mtm, id, "brain", strings::CHAT);
+                // Up the responder chain to the split view controller.
+                unsafe { item.setAction(Some(sel!(toggleInspector:))) };
+                Some(item)
+            }
+            _ => None,
+        }
+    }
+}
+
+pub fn identifiers() -> Retained<NSArray<NSString>> {
+    // SAFETY: AppKit's identifier constants are immutable strings for the process lifetime.
+    let system = unsafe {
+        [
+            NSToolbarToggleSidebarItemIdentifier,
+            NSToolbarSidebarTrackingSeparatorItemIdentifier,
+            NSToolbarFlexibleSpaceItemIdentifier,
+            NSToolbarInspectorTrackingSeparatorItemIdentifier,
+        ]
+    };
+    let custom = |s: &str| NSString::from_str(s);
+    NSArray::from_retained_slice(&[
+        system[0].copy(),
+        system[1].copy(),
+        custom(LIST_SEPARATOR),
+        custom(NEW_NOTE),
+        custom(HISTORY),
+        system[2].copy(),
+        system[3].copy(),
+        custom(CHAT),
+    ])
+}
+
+pub fn install(window: &objc2_app_kit::NSWindow, delegate: &ToolbarDelegate) {
+    let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(window.mtm()), ns_string!("KnotesMainToolbar"));
+    toolbar.setDelegate(Some(ProtocolObject::from_ref(delegate)));
+    toolbar.setDisplayMode(objc2_app_kit::NSToolbarDisplayMode::IconOnly);
+    window.setToolbar(Some(&toolbar));
+    window.setToolbarStyle(objc2_app_kit::NSWindowToolbarStyle::Unified);
+}
+
+fn symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
+    NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), Some(&NSString::from_str(description)))
+}
+
+fn button(mtm: MainThreadMarker, id: &NSString, symbol_name: &str, label: &str) -> Retained<NSToolbarItem> {
+    let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), id);
+    item.setImage(symbol(symbol_name, label).as_deref());
+    item.setLabel(&NSString::from_str(label));
+    item.setToolTip(Some(&NSString::from_str(label)));
+    item
+}

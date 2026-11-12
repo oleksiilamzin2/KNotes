@@ -9,6 +9,7 @@ use objc2_foundation::{NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSSt
 
 use crate::note_list_view::{self, NoteListSource};
 use crate::sidebar_view::{self, SidebarSource};
+use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
 
 pub struct VaultWindow {
@@ -17,6 +18,8 @@ pub struct VaultWindow {
     pub outline: Retained<NSOutlineView>,
     pub list: Retained<NoteListSource>,
     pub table: Retained<NSTableView>,
+    /// Kept alive here: the toolbar holds its delegate weakly.
+    _toolbar: Retained<ToolbarDelegate>,
 }
 
 impl VaultWindow {
@@ -30,8 +33,10 @@ impl VaultWindow {
         let (list_scroll, table) = note_list_view::table(mtm, &list);
         let list_vc = NSViewController::new(mtm);
         list_vc.setView(&list_scroll);
-        let window = window::build(mtm, &sidebar_vc, &list_vc);
-        Self { window, sidebar, outline, list, table }
+        let (window, split) = window::build(mtm, &sidebar_vc, &list_vc);
+        let toolbar = ToolbarDelegate::new(mtm, split.splitView());
+        toolbar::install(&window, &toolbar);
+        Self { window, sidebar, outline, list, table, _toolbar: toolbar }
     }
 
     pub fn apply(&self, event: Event) {
@@ -80,9 +85,19 @@ pub fn split_items(sidebar: &NSViewController, list: &NSViewController, mtm: Mai
     ]
 }
 
+/// Minimum and maximum width and holding priority per column: when the window resizes, the
+/// note column stretches and the others keep their width. Explicit maximums: the inspector
+/// role caps itself at 270 points otherwise.
+const COLUMNS: [(f64, f64, f32); 4] = [(200.0, 480.0, 260.0), (260.0, 640.0, 255.0), (360.0, f64::MAX, 250.0), (260.0, 640.0, 255.0)];
+
 pub fn split_controller(sidebar: &NSViewController, list: &NSViewController, mtm: MainThreadMarker) -> Retained<NSSplitViewController> {
     let split = NSSplitViewController::new(mtm);
-    for item in &split_items(sidebar, list, mtm) {
+    for (item, (min, max, holding)) in split_items(sidebar, list, mtm).iter().zip(COLUMNS) {
+        item.setMinimumThickness(min);
+        if max < f64::MAX {
+            item.setMaximumThickness(max);
+        }
+        item.setHoldingPriority(holding);
         split.addSplitViewItem(item);
     }
     split

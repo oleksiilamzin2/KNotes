@@ -5,8 +5,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime};
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSOutlineView, NSSplitViewController, NSSplitViewItemBehavior, NSTableCellView, NSTableView, NSWindow};
+use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier, NSToolbarItemGroup, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier, NSOutlineView, NSSplitViewController, NSSplitViewItemBehavior, NSTableCellView, NSTableView, NSWindow};
 
 use objc2_foundation::{NSDictionary, NSString};
 
@@ -53,7 +53,37 @@ pub fn schedule(with_sidebar: bool) {
     });
 }
 
+fn report_toolbar(window: &NSWindow) {
+    let Some(toolbar) = window.toolbar() else { return };
+    // SAFETY: AppKit's identifier constants are immutable strings for the process lifetime.
+    let system = unsafe {
+        [
+            (NSToolbarToggleSidebarItemIdentifier, "toggle-sidebar"),
+            (NSToolbarSidebarTrackingSeparatorItemIdentifier, "sidebar-separator"),
+            (NSToolbarFlexibleSpaceItemIdentifier, "flexible-space"),
+            (NSToolbarInspectorTrackingSeparatorItemIdentifier, "inspector-separator"),
+        ]
+    };
+    let names: Vec<String> = toolbar
+        .items()
+        .iter()
+        .map(|item| {
+            let id = item.itemIdentifier();
+            if let Some((_, name)) = system.iter().find(|(s, _)| id.isEqualToString(s)) {
+                return (*name).to_owned();
+            }
+            let short = id.to_string().trim_start_matches("knotes.").to_owned();
+            match item.downcast_ref::<NSToolbarItemGroup>() {
+                Some(group) => format!("{short}({})", group.subitems().count()),
+                None => short,
+            }
+        })
+        .collect();
+    println!("toolbar: {}", names.join(", "));
+}
+
 fn report(window: &NSWindow) {
+    report_toolbar(window);
     println!("title: {}", window.title());
     println!("subtitle: {}", window.subtitle());
     let frame = window.frame();
@@ -70,6 +100,9 @@ fn report(window: &NSWindow) {
             })
             .collect();
         println!("columns: {}", roles.join(", "));
+        let widths: Vec<String> =
+            split.splitViewItems().iter().map(|item| format!("{:.0}", item.viewController(window.mtm()).view().frame().size.width)).collect();
+        println!("widths: {}", widths.join(" "));
     }
 }
 

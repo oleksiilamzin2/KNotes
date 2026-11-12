@@ -12,3 +12,7 @@ pub const PREVIOUS_30_DAYS: &str = "Попередні 30 днів";
 pub fn notes_count(n: usize, formatted: &str) -> String {
     format!("{formatted} {}", knotes_app::plural_uk(n as u64, "нотатка", "нотатки", "нотаток"))
 }
+pub const NEW_NOTE: &str = "Нова нотатка";
+pub const BACK: &str = "Назад";
+pub const FORWARD: &str = "Вперед";
+pub const CHAT: &str = "Чат";

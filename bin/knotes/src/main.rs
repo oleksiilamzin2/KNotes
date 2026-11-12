@@ -5,6 +5,7 @@ mod note_list_view;
 mod probe;
 mod sidebar_view;
 mod strings;
+mod toolbar;
 mod vault_window;
 mod window;
 

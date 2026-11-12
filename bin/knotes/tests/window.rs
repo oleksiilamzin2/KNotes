@@ -93,3 +93,13 @@ fn note_list_shows_date_groups_titles_times_and_snippets() {
         assert!(!parts[1].is_empty(), "{row}");
     }
 }
+
+#[test]
+fn toolbar_has_v1_buttons_and_columns_have_room() {
+    let out = probe();
+    let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(toolbar, "toggle-sidebar, sidebar-separator, list-separator, new-note, history(2), flexible-space, inspector-separator, chat");
+    let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
+    let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
+    assert!(w[0] >= 240.0 && w[1] >= 300.0 && w[3] >= 280.0 && w[2] >= 400.0, "{widths}");
+}
