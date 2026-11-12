@@ -147,7 +147,7 @@ fn insert_links(tx: &Transaction, links: &[NewLink]) -> Result<(), BoxError> {
         let target_id = match (&n.key, l.kind) {
             (_, LinkKind::External) => None,
             (None, _) => Some(n.file_id),
-            (Some(key), kind) => candidates.choose(kind, &l.target, key, n.source),
+            (Some(key), kind) => candidates.choose(kind, &l.target, key, n.source).copied(),
         };
         st.execute(params![
             n.file_id,

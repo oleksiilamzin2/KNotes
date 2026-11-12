@@ -8,21 +8,22 @@ use rusqlite::types::Value;
 use rusqlite::{Transaction, params};
 
 use crate::codec::link_kind_from;
-use crate::name_key::fold;
+use crate::name_key::{file_name_key, fold};
 
-struct Candidate {
-    id: i64,
+struct Candidate<I> {
+    /// What the choice returns: a file id in SQLite, the vault path in memory.
+    id: I,
     /// Folded vault path.
     path: String,
 }
 
 /// Files that links with the given name keys can point to.
-pub(crate) struct Candidates(HashMap<String, Vec<Candidate>>);
+pub(crate) struct Candidates<I>(HashMap<String, Vec<Candidate<I>>>);
 
-impl Candidates {
+impl Candidates<i64> {
     pub fn load<'k>(tx: &Transaction, keys: impl IntoIterator<Item = &'k str>) -> Result<Self, BoxError> {
         let keys: HashSet<&str> = keys.into_iter().collect();
-        let mut map: HashMap<String, Vec<Candidate>> = HashMap::new();
+        let mut map: HashMap<String, Vec<Candidate<i64>>> = HashMap::new();
         if keys.is_empty() {
             return Ok(Self(map));
         }
@@ -32,21 +33,38 @@ impl Candidates {
             let (id, path, key) = row?;
             map.entry(key).or_default().push(Candidate { id, path: fold(&path) });
         }
-        // Shortest path first, then path order: the deterministic pick for ambiguous names.
+        Ok(Self::sorted(map))
+    }
+}
+
+impl Candidates<String> {
+    /// All `paths` of the vault, by name key; the id is the path itself.
+    pub fn from_paths<'p>(paths: impl IntoIterator<Item = &'p str>) -> Self {
+        let mut map: HashMap<String, Vec<Candidate<String>>> = HashMap::new();
+        for path in paths {
+            map.entry(file_name_key(path)).or_default().push(Candidate { id: path.to_owned(), path: fold(path) });
+        }
+        Self::sorted(map)
+    }
+}
+
+impl<I> Candidates<I> {
+    /// Shortest path first, then path order: the deterministic pick for ambiguous names.
+    fn sorted(mut map: HashMap<String, Vec<Candidate<I>>>) -> Self {
         for list in map.values_mut() {
             list.sort_by(|a, b| (a.path.len(), &a.path).cmp(&(b.path.len(), &b.path)));
         }
-        Ok(Self(map))
+        Self(map)
     }
 
     /// 1. Markdown links: relative to the folder of the source note.
     /// 2. Links with a folder (and Markdown links): exact vault path, then a path ending with it.
     /// 3. Bare names: the candidate with the shortest path.
-    pub fn choose(&self, kind: LinkKind, target: &str, key: &str, source: &str) -> Option<i64> {
+    pub fn choose(&self, kind: LinkKind, target: &str, key: &str, source: &str) -> Option<&I> {
         let candidates = self.0.get(key)?;
         let target = fold(target);
         let exact =
-            |path: &str| candidates.iter().find(|c| c.path == path || c.path.strip_suffix(".md") == Some(path)).map(|c| c.id);
+            |path: &str| candidates.iter().find(|c| c.path == path || c.path.strip_suffix(".md") == Some(path)).map(|c| &c.id);
         if kind == LinkKind::Markdown {
             let folder = fold(source.rsplit_once('/').map_or("", |(dir, _)| dir));
             if let Some(relative) = join_relative(&folder, &target)
@@ -62,10 +80,10 @@ impl Candidates {
                 candidates
                     .iter()
                     .find(|c| c.path.ends_with(&suffix) || c.path.strip_suffix(".md").is_some_and(|p| p.ends_with(&suffix)))
-                    .map(|c| c.id)
+                    .map(|c| &c.id)
             });
         }
-        candidates.first().map(|c| c.id)
+        candidates.first().map(|c| &c.id)
     }
 }
 
@@ -95,7 +113,7 @@ pub(crate) fn reresolve(tx: &Transaction, changed_keys: &HashSet<String>, skip: 
     let candidates = Candidates::load(tx, changed_keys.iter().map(String::as_str))?;
     let mut update = tx.prepare_cached("UPDATE links SET target_id = ?3 WHERE file_id = ?1 AND ord = ?2")?;
     for (file_id, ord, kind, target, key, current, source) in links {
-        let found = candidates.choose(kind, &target, &key, &source);
+        let found = candidates.choose(kind, &target, &key, &source).copied();
         if found != current {
             update.execute(params![file_id, ord, found])?;
         }

@@ -6,6 +6,7 @@ mod corpus;
 mod fts_query;
 mod light_stemmer;
 mod link_resolver;
+mod link_targets;
 mod name_key;
 mod read;
 mod schema;
@@ -15,4 +16,5 @@ mod stemmer;
 mod write;
 
 pub use corpus::TextSnapshot;
+pub use link_targets::LinkTargets;
 pub use sqlite_index::{MaintenanceReport, SqliteIndex};
