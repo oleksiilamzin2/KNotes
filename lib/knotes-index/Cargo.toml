@@ -10,6 +10,7 @@ publish.workspace = true
 knotes-core.workspace = true
 rusqlite.workspace = true
 memmap2.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 knotes-md.workspace = true

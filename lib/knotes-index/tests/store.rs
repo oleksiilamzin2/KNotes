@@ -36,7 +36,7 @@ fn stores_headings_links_and_tags_of_a_note() {
     let headings = index.headings("Folder/Note.md").unwrap();
     assert_eq!(headings.iter().map(|h| (h.level, h.text.as_str())).collect::<Vec<_>>(), [(1, "Title"), (2, "Next")]);
 
-    let links = index.links_from("Folder/Note.md").unwrap();
+    let links: Vec<_> = index.links_from("Folder/Note.md").unwrap().into_iter().map(|l| l.link).collect();
     assert_eq!(links.len(), 2);
     assert_eq!((links[0].kind, links[0].target.as_str()), (LinkKind::Wiki, "Other"));
     assert_eq!((links[0].subpath.as_deref(), links[0].display.as_deref()), (Some("Part"), Some("it")));

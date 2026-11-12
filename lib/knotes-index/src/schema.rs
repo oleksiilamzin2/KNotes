@@ -1,6 +1,6 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 4;
+pub(crate) const VERSION: i64 = 5;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE files(
@@ -9,10 +9,13 @@ CREATE TABLE files(
     kind INTEGER NOT NULL,
     size INTEGER NOT NULL,
     mtime_ns INTEGER NOT NULL,
+    -- Folded file name used to resolve links (name_key.rs).
+    name_key TEXT NOT NULL,
     -- Range of the note text in content.pack; NULL for files that are not notes.
     pack_off INTEGER,
     pack_len INTEGER
 );
+CREATE INDEX files_by_name ON files(name_key);
 CREATE TABLE headings(
     file_id INTEGER NOT NULL,
     ord INTEGER NOT NULL,
@@ -32,8 +35,14 @@ CREATE TABLE links(
     display TEXT,
     start INTEGER NOT NULL,
     end INTEGER NOT NULL,
+    -- Folded target name; NULL for external links and links inside the same note.
+    target_key TEXT,
+    -- Resolved file; NULL when broken or external.
+    target_id INTEGER,
     PRIMARY KEY(file_id, ord)
 ) WITHOUT ROWID;
+CREATE INDEX links_by_key ON links(target_key);
+CREATE INDEX links_by_target ON links(target_id);
 CREATE TABLE tags(
     file_id INTEGER NOT NULL,
     tag TEXT NOT NULL,

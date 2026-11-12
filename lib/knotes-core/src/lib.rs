@@ -20,7 +20,7 @@ pub use content_search::{BlockHit, ContentSearch};
 pub use corpus_source::CorpusSource;
 pub use file_states::{FileState, FileStates};
 pub use index_writer::{IndexChange, IndexWriter};
-pub use link_graph::LinkGraph;
+pub use link_graph::{BackLink, LinkGraph, OutLink};
 pub use note::{Block, BlockAnchor, Frontmatter, Heading, Link, LinkKind, ParsedNote, Span, Tag};
 pub use note_outline::NoteOutline;
 pub use note_parser::NoteParser;

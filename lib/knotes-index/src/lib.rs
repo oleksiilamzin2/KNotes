@@ -5,6 +5,8 @@ mod content_pack;
 mod corpus;
 mod fts_query;
 mod light_stemmer;
+mod link_resolver;
+mod name_key;
 mod read;
 mod schema;
 mod search;

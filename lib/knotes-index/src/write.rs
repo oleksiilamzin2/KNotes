@@ -1,10 +1,21 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
-use knotes_core::{BoxError, IndexChange, IndexWriter, ParsedNote, VaultFile};
+use knotes_core::{BoxError, IndexChange, IndexWriter, Link, LinkKind, ParsedNote, VaultFile};
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::SqliteIndex;
 use crate::codec::{file_kind_code, link_kind_code};
+use crate::link_resolver::{Candidates, reresolve};
+use crate::name_key::{file_name_key, link_target_key};
+
+/// A link of a note written in this batch, resolved once all files of the batch are known.
+struct NewLink<'a> {
+    file_id: i64,
+    ord: usize,
+    source: &'a str,
+    link: &'a Link,
+    key: Option<String>,
+}
 
 /// FTS work of a batch, done after all other rows: any statement that opens a savepoint
 /// (the `files` upsert does) makes FTS5 flush its pending terms to a new segment and merge.
@@ -22,6 +33,9 @@ impl IndexWriter for SqliteIndex {
         let base = self.pack.len()?;
         let mut texts = Vec::new();
         let mut fts = FtsWork::default();
+        // Names of files that came or went (their links re-resolve) and notes with new links.
+        let mut changed_keys = HashSet::new();
+        let mut links = Vec::new();
         let tx = self.conn.transaction()?;
         for change in changes {
             match change {
@@ -31,22 +45,41 @@ impl IndexWriter for SqliteIndex {
                         texts.extend_from_slice(source.as_bytes());
                         (off, source.len() as u64)
                     });
-                    let id = upsert_file(&tx, file, range)?;
+                    let key = file_name_key(&file.path);
+                    let (id, is_new) = upsert_file(&tx, file, &key, range)?;
+                    if is_new {
+                        changed_keys.insert(key);
+                    }
                     delete_note_rows(&tx, id, &mut fts)?;
                     if let Some((source, parsed)) = note {
                         insert_note_rows(&tx, id, source, parsed, &mut fts)?;
+                        links.extend(parsed.links.iter().enumerate().map(|(ord, link)| NewLink {
+                            file_id: id,
+                            ord,
+                            source: &file.path,
+                            link,
+                            key: link_target_key(&link.target).filter(|_| link.kind != LinkKind::External),
+                        }));
                     }
                 }
                 IndexChange::Remove { path } => {
-                    let id: Option<i64> =
-                        tx.prepare_cached("SELECT id FROM files WHERE path = ?1")?.query_row([path], |r| r.get(0)).optional()?;
-                    if let Some(id) = id {
+                    let found: Option<(i64, String)> = tx
+                        .prepare_cached("SELECT id, name_key FROM files WHERE path = ?1")?
+                        .query_row([path], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .optional()?;
+                    if let Some((id, key)) = found {
                         delete_note_rows(&tx, id, &mut fts)?;
                         tx.prepare_cached("DELETE FROM files WHERE id = ?1")?.execute([id])?;
+                        changed_keys.insert(key);
                     }
                 }
             }
         }
+        // New links are resolved before insertion (no UPDATE per link); older links only when
+        // a file with their target name came or went.
+        insert_links(&tx, &links)?;
+        let written: HashSet<i64> = links.iter().map(|l| l.file_id).collect();
+        reresolve(&tx, &changed_keys, &written)?;
         // Deletes first (by rowid; `rowid IN (SELECT ...)` would scan the whole FTS index),
         // then inserts with ascending rowids, so FTS5 buffers them until the commit.
         {
@@ -69,22 +102,56 @@ impl IndexWriter for SqliteIndex {
 }
 
 /// `pack` is the `(offset, length)` of the note text in the content pack.
-fn upsert_file(tx: &Transaction, file: &VaultFile, pack: Option<(u64, u64)>) -> Result<i64, BoxError> {
+/// Returns the file id and whether the file is new to the index.
+fn upsert_file(tx: &Transaction, file: &VaultFile, key: &str, pack: Option<(u64, u64)>) -> Result<(i64, bool), BoxError> {
     let (off, len) = match pack {
         Some((off, len)) => (Some(i64::try_from(off)?), Some(i64::try_from(len)?)),
         None => (None, None),
     };
+    let existing: Option<i64> = tx.prepare_cached("SELECT id FROM files WHERE path = ?1")?.query_row([&file.path], |r| r.get(0)).optional()?;
     let id = tx
         .prepare_cached(
-            "INSERT INTO files(path, kind, size, mtime_ns, pack_off, pack_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO files(path, kind, size, mtime_ns, name_key, pack_off, pack_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, size = excluded.size, mtime_ns = excluded.mtime_ns,
                  pack_off = excluded.pack_off, pack_len = excluded.pack_len
              RETURNING id",
         )?
-        .query_row(params![file.path, file_kind_code(file.kind), i64::try_from(file.size)?, file.mtime_ns, off, len], |r| {
-            r.get(0)
-        })?;
-    Ok(id)
+        .query_row(
+            params![file.path, file_kind_code(file.kind), i64::try_from(file.size)?, file.mtime_ns, key, off, len],
+            |r| r.get(0),
+        )?;
+    Ok((id, existing.is_none()))
+}
+
+fn insert_links(tx: &Transaction, links: &[NewLink]) -> Result<(), BoxError> {
+    let candidates = Candidates::load(tx, links.iter().filter_map(|l| l.key.as_deref()))?;
+    let mut st = tx.prepare_cached(
+        "INSERT INTO links(file_id, ord, kind, embed, target, subpath, display, start, end, target_key, target_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+    )?;
+    for n in links {
+        let l = n.link;
+        // External links never resolve; `[[#Heading]]` (no key) points into the note itself.
+        let target_id = match (&n.key, l.kind) {
+            (_, LinkKind::External) => None,
+            (None, _) => Some(n.file_id),
+            (Some(key), kind) => candidates.choose(kind, &l.target, key, n.source),
+        };
+        st.execute(params![
+            n.file_id,
+            n.ord as i64,
+            link_kind_code(l.kind),
+            l.embed,
+            l.target,
+            l.subpath,
+            l.display,
+            l.span.start,
+            l.span.end,
+            n.key,
+            target_id
+        ])?;
+    }
+    Ok(())
 }
 
 fn delete_note_rows(tx: &Transaction, id: i64, fts: &mut FtsWork) -> Result<(), BoxError> {
@@ -114,14 +181,6 @@ fn insert_note_rows<'a>(
     let mut st = tx.prepare_cached("INSERT INTO headings(file_id, ord, level, text, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
     for (ord, h) in note.headings.iter().enumerate() {
         st.execute(params![id, ord as i64, h.level, h.text, h.span.start, h.span.end])?;
-    }
-
-    let mut st = tx.prepare_cached(
-        "INSERT INTO links(file_id, ord, kind, embed, target, subpath, display, start, end)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-    )?;
-    for (ord, l) in note.links.iter().enumerate() {
-        st.execute(params![id, ord as i64, link_kind_code(l.kind), l.embed, l.target, l.subpath, l.display, l.span.start, l.span.end])?;
     }
 
     let inline = note.tags.iter().map(|t| t.name.as_str());

@@ -1,4 +1,4 @@
-use knotes_core::{BoxError, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, NoteText, Span, TagIndex};
+use knotes_core::{BackLink, BoxError, FileState, FileStates, Heading, Link, LinkGraph, NoteOutline, NoteText, OutLink, Span, TagIndex};
 use rusqlite::OptionalExtension;
 
 use crate::SqliteIndex;
@@ -25,22 +25,36 @@ impl NoteOutline for SqliteIndex {
     }
 }
 
+/// Columns 0..=6 of a `links l` row.
+const LINK_COLUMNS: &str = "l.kind, l.embed, l.target, l.subpath, l.display, l.start, l.end";
+
+fn link_at(r: &rusqlite::Row) -> rusqlite::Result<Link> {
+    Ok(Link {
+        kind: link_kind_from(r.get(0)?),
+        embed: r.get(1)?,
+        target: r.get(2)?,
+        subpath: r.get(3)?,
+        display: r.get(4)?,
+        span: Span { start: r.get(5)?, end: r.get(6)? },
+    })
+}
+
 impl LinkGraph for SqliteIndex {
-    fn links_from(&self, path: &str) -> Result<Vec<Link>, BoxError> {
-        let mut st = self.conn.prepare_cached(
-            "SELECT l.kind, l.embed, l.target, l.subpath, l.display, l.start, l.end
-             FROM links l JOIN files f ON f.id = l.file_id WHERE f.path = ?1 ORDER BY l.ord",
-        )?;
-        let rows = st.query_map([path], |r| {
-            Ok(Link {
-                kind: link_kind_from(r.get(0)?),
-                embed: r.get(1)?,
-                target: r.get(2)?,
-                subpath: r.get(3)?,
-                display: r.get(4)?,
-                span: Span { start: r.get(5)?, end: r.get(6)? },
-            })
-        })?;
+    fn links_from(&self, path: &str) -> Result<Vec<OutLink>, BoxError> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {LINK_COLUMNS}, t.path FROM links l JOIN files f ON f.id = l.file_id
+             LEFT JOIN files t ON t.id = l.target_id WHERE f.path = ?1 ORDER BY l.ord"
+        ))?;
+        let rows = st.query_map([path], |r| Ok(OutLink { link: link_at(r)?, resolved: r.get(7)? }))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn backlinks(&self, path: &str) -> Result<Vec<BackLink>, BoxError> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {LINK_COLUMNS}, s.path FROM files t JOIN links l ON l.target_id = t.id JOIN files s ON s.id = l.file_id
+             WHERE t.path = ?1 AND l.file_id != t.id ORDER BY s.path, l.ord"
+        ))?;
+        let rows = st.query_map([path], |r| Ok(BackLink { link: link_at(r)?, source: r.get(7)? }))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 }
