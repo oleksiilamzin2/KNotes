@@ -8,7 +8,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
 
 use crate::vault_window::split_controller;
 
-pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController) -> Retained<NSWindow> {
+pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController, list: &NSViewController) -> Retained<NSWindow> {
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -22,7 +22,7 @@ pub fn build(mtm: MainThreadMarker, sidebar: &NSViewController) -> Retained<NSWi
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(ns_string!("Knotes"));
 
-    let split = split_controller(sidebar, mtm);
+    let split = split_controller(sidebar, list, mtm);
     window.setContentViewController(Some(&split));
     // Setting the controller sizes the window to its (still empty) views; restore the size.
     window.setContentSize(frame.size);

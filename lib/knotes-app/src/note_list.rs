@@ -122,6 +122,17 @@ fn date_group(mtime_ns: i64, clock: &Clock) -> DateGroup {
     }
 }
 
+/// Days since 1970-01-01 of a calendar date (Howard Hinnant's days-from-civil).
+pub fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let m = i64::from(month);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Year and month of a day count since 1970-01-01 (Howard Hinnant's civil-from-days).
 fn civil_from_days(days: i64) -> (i32, u8) {
     let z = days + 719_468;
@@ -133,4 +144,19 @@ fn civil_from_days(days: i64) -> (i32, u8) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     (year as i32, month as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn civil_round_trip() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2026, 11, 12), 20_769);
+        for days in [-1000, 0, 59, 60, 20_769, 40_000] {
+            let (y, m) = civil_from_days(days);
+            assert!(days_from_civil(y, m, 1) <= days && days < days_from_civil(y, m, 1) + 31);
+        }
+    }
 }

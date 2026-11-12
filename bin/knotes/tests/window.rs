@@ -64,3 +64,32 @@ fn sidebar_shows_all_notes_folders_and_tags_of_the_vault() {
     let width: f64 = size.split_once('x').unwrap().0.parse().unwrap();
     assert!(width >= 1000.0, "window shrank after data arrived: {size}");
 }
+
+fn write_aged(path: &std::path::Path, text: &str, age: Duration) {
+    std::fs::write(path, text).unwrap();
+    let file = std::fs::File::options().write(true).open(path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - age).unwrap();
+}
+
+#[test]
+fn note_list_shows_date_groups_titles_times_and_snippets() {
+    let vault = tempfile::tempdir().unwrap();
+    let day = Duration::from_secs(86_400);
+    write_aged(&vault.path().join("A.md"), "# A\n\nbody a", Duration::from_secs(60));
+    write_aged(&vault.path().join("B.md"), "body b", day + Duration::from_secs(3600));
+    write_aged(&vault.path().join("C.md"), "body c", day * 40);
+    let out = probe_with(&[vault.path()], None);
+    assert!(out.contains("title: Усі нотатки"), "{out}");
+    assert!(out.contains("subtitle: 3 нотатки"), "{out}");
+    let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
+    let rows: Vec<&str> = list.split(" | ").collect();
+    assert_eq!(rows.len(), 6, "{list}");
+    assert_eq!((rows[0], rows[2]), ("[Сьогодні]", "[Вчора]"), "{list}");
+    assert!(rows[4].starts_with('[') && rows[4].ends_with(']'), "{list}");
+    for (row, (title, snippet)) in [rows[1], rows[3], rows[5]].iter().zip([("A", "body a"), ("B", "body b"), ("C", "body c")]) {
+        let parts: Vec<&str> = row.split(" ~ ").collect();
+        assert_eq!(parts.len(), 3, "{row}");
+        assert_eq!((parts[0], parts[2]), (title, snippet), "{row}");
+        assert!(!parts[1].is_empty(), "{row}");
+    }
+}

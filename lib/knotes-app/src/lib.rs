@@ -12,6 +12,6 @@ pub use folder_rules::{FolderRules, RULES_FILE, resolve_list_settings};
 pub use folder_tree::{FolderNode, folder_tree};
 pub use labels::{TimeStyle, plural_uk, time_style};
 pub use natural_order::{natural_cmp, natural_key};
-pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListSettings, SortOrder, build_note_list, title_of};
+pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListSettings, SortOrder, build_note_list, days_from_civil, title_of};
 pub use sidebar::{Sidebar, SidebarItem};
 pub use tag_tree::{TagNode, tag_tree};

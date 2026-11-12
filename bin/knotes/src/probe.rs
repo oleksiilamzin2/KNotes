@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSOutlineView, NSSplitViewController, NSSplitViewItemBehavior, NSTableCellView, NSWindow};
+use objc2_app_kit::{NSApplication, NSBitmapImageFileType, NSOutlineView, NSSplitViewController, NSSplitViewItemBehavior, NSTableCellView, NSTableView, NSWindow};
 
 use objc2_foundation::{NSDictionary, NSString};
 
+use crate::note_list_view::{SNIPPET_ID, TIME_ID, TITLE_ID, field};
 use crate::sidebar_view::count_field;
 use crate::vault_window::VaultWindow;
 
@@ -41,6 +42,7 @@ pub fn schedule(with_sidebar: bool) {
                 report(&window.window);
                 if with_sidebar {
                     report_sidebar(&window.outline);
+                    report_list(&window.table);
                 }
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PNG") {
                     render_png(&window.window, &path.to_string_lossy());
@@ -53,6 +55,7 @@ pub fn schedule(with_sidebar: bool) {
 
 fn report(window: &NSWindow) {
     println!("title: {}", window.title());
+    println!("subtitle: {}", window.subtitle());
     let frame = window.frame();
     println!("size: {:.0}x{:.0}", frame.size.width, frame.size.height);
     if let Some(split) = window.contentViewController().and_then(|c| c.downcast::<NSSplitViewController>().ok()) {
@@ -94,4 +97,19 @@ fn render_png(window: &NSWindow, path: &str) {
     if let Some(png) = png {
         png.writeToFile_atomically(&NSString::from_str(path), true);
     }
+}
+
+/// First rows of the note list: `[header]` or `title ~ time ~ snippet`, read from the cells.
+fn report_list(table: &NSTableView) {
+    let rows: Vec<String> = (0..table.numberOfRows().min(40))
+        .filter_map(|row| {
+            let cell = table.viewAtColumn_row_makeIfNecessary(0, row, true)?.downcast::<NSTableCellView>().ok()?;
+            let text = |id: &str| field(&cell, id).map(|f| f.stringValue().to_string());
+            match text(TITLE_ID) {
+                Some(title) => Some(format!("{title} ~ {} ~ {}", text(TIME_ID).unwrap_or_default(), text(SNIPPET_ID).unwrap_or_default())),
+                None => Some(format!("[{}]", unsafe { cell.textField() }?.stringValue())),
+            }
+        })
+        .collect();
+    println!("list: {}", rows.join(" | "));
 }
