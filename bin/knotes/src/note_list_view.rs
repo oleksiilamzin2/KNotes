@@ -17,6 +17,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
 
+use crate::quiet_scroll_view::QuietScrollView;
 use crate::strings;
 
 const NOTE_ROW_HEIGHT: CGFloat = 52.0;
@@ -242,7 +243,8 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
         table.setDataSource(Some(ProtocolObject::from_ref(source)));
         table.setDelegate(Some(ProtocolObject::from_ref(source)));
     }
-    let scroll = NSScrollView::new(mtm);
+    // Keeps the toolbar's glass without its separator line (ADR 0016).
+    let scroll: Retained<NSScrollView> = Retained::into_super(QuietScrollView::new(mtm));
     scroll.setDocumentView(Some(&table));
     scroll.setHasVerticalScroller(true);
     (scroll, table)

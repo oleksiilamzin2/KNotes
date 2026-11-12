@@ -4,6 +4,8 @@
 use std::cell::RefCell;
 
 use objc2::rc::Retained;
+
+use crate::quiet_scroll_view::QuietScrollView;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSEvent, NSEventModifierFlags, NSFont, NSResponder, NSScrollView, NSText, NSTextInputClient, NSTextView, NSView};
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
@@ -83,7 +85,8 @@ fn contains(rect: NSRect, p: NSPoint) -> bool {
 }
 
 pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NoteTextView>) {
-    let scroll = NSScrollView::new(mtm);
+    // Keeps the toolbar's glass without its separator line (ADR 0016).
+    let scroll: Retained<NSScrollView> = Retained::into_super(QuietScrollView::new(mtm));
     scroll.setHasVerticalScroller(true);
     scroll.setDrawsBackground(false);
     let size = scroll.contentSize();

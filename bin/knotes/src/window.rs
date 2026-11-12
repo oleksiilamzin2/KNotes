@@ -32,9 +32,6 @@ pub fn build(
     // Rust owns the window; AppKit must not release it again on close.
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(ns_string!("Knotes"));
-    // The scroll pockets under the toolbar draw a line along its bottom unless the titlebar is
-    // transparent (titlebarSeparatorStyle does not reach them on macOS 26 and later).
-    window.setTitlebarAppearsTransparent(true);
 
     let split = split_controller(sidebar, list, note, chat, mtm);
     window.setContentViewController(Some(&split));

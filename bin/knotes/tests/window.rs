@@ -41,9 +41,11 @@ fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(
 #[test]
 fn window_has_four_columns_with_native_roles() {
     let out = probe();
-    // A transparent titlebar drops the line the scroll pockets draw under the toolbar
-    // (checked on a screen capture; offscreen rendering does not show it).
-    assert!(out.contains("titlebar: transparent"), "{out}");
+    // The list and the note scroll under the toolbar's glass (an opaque titlebar keeps it),
+    // and their scroll pockets draw no separator line (checked on screen captures; offscreen
+    // rendering shows neither).
+    assert!(out.contains("titlebar: opaque"), "{out}");
+    assert!(out.contains("column-pockets: 2, separators on: 0"), "{out}");
     assert!(out.contains("columns: sidebar, content-list, content, inspector"), "{out}");
     assert!(out.contains("title: Knotes"), "{out}");
 }

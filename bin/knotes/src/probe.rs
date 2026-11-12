@@ -362,8 +362,32 @@ fn footprint_mb() -> f64 {
     if ok { info.phys_footprint as f64 / (1 << 20) as f64 } else { 0.0 }
 }
 
+/// Scroll pockets of the list and note columns (inside our scroll views) and how many of
+/// them still draw a separator line.
+fn report_pockets(window: &NSWindow) {
+    fn walk(view: &objc2_app_kit::NSView, found: &mut (usize, usize)) {
+        if crate::quiet_scroll_view::is_pocket(view)
+            && unsafe { view.superview() }.is_some_and(|s| s.downcast_ref::<crate::quiet_scroll_view::QuietScrollView>().is_some())
+        {
+            found.0 += 1;
+            // SAFETY: `is_pocket` checked the class, which answers allowsSeparator.
+            let on: bool = unsafe { objc2::msg_send![view, allowsSeparator] };
+            found.1 += usize::from(on);
+        }
+        for sub in view.subviews().iter() {
+            walk(&sub, found);
+        }
+    }
+    let mut found = (0, 0);
+    if let Some(content) = window.contentView() {
+        walk(&content, &mut found);
+    }
+    println!("column-pockets: {}, separators on: {}", found.0, found.1);
+}
+
 fn report(window: &NSWindow) {
     report_toolbar(window);
+    report_pockets(window);
     println!("memory: footprint {:.1} MB", footprint_mb());
     let (menus, file) = crate::main_menu::describe(&NSApplication::sharedApplication(window.mtm()));
     println!("menu: {menus}");
