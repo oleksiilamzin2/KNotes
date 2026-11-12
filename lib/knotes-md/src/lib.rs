@@ -2,5 +2,6 @@
 
 mod link_target;
 mod markdown_parser;
+mod tag_scan;
 
 pub use markdown_parser::MarkdownParser;

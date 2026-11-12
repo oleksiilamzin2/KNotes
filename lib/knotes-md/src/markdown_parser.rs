@@ -1,7 +1,10 @@
+use std::ops::Range;
+
 use knotes_core::{Heading, Link, LinkKind, NoteParser, ParsedNote, Span};
 use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
+use crate::tag_scan::scan_tags;
 
 /// Obsidian-flavoured Markdown: wikilinks, math, YAML frontmatter, GFM tables, alerts.
 const OPTIONS: Options = Options::ENABLE_WIKILINKS
@@ -24,8 +27,11 @@ impl MarkdownParser {
 
 impl NoteParser for MarkdownParser {
     fn parse(&self, source: &str) -> ParsedNote {
-        let mut c = Collector::default();
+        let mut c = Collector { source, ..Collector::default() };
         for (event, range) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
+            if !matches!(event, Event::Text(_)) {
+                c.flush_run();
+            }
             let span = Span::new(range.start, range.end);
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
@@ -35,31 +41,64 @@ impl NoteParser for MarkdownParser {
                 Event::Start(Tag::Link { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, false, span),
                 Event::Start(Tag::Image { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, true, span),
                 Event::End(TagEnd::Link | TagEnd::Image) => c.end_link(),
-                Event::Text(t) | Event::Code(t) | Event::InlineMath(t) => c.text(&t),
+                Event::Start(Tag::CodeBlock(_) | Tag::MetadataBlock(_)) => c.in_verbatim = true,
+                Event::End(TagEnd::CodeBlock | TagEnd::MetadataBlock(_)) => c.in_verbatim = false,
+                Event::Text(t) => {
+                    c.text(&t);
+                    c.plain_text(range);
+                }
+                Event::Code(t) | Event::InlineMath(t) => c.text(&t),
                 Event::SoftBreak | Event::HardBreak => c.text(" "),
                 _ => {}
             }
         }
+        c.flush_run();
         c.note
     }
 }
 
 /// Single-pass state over the pulldown-cmark event stream.
 #[derive(Default)]
-struct Collector {
+struct Collector<'s> {
+    source: &'s str,
     note: ParsedNote,
     heading: Option<Heading>,
     /// Open links: index into `note.links` and whether their text is the display text.
     open_links: Vec<(usize, bool)>,
+    /// Inside a code block or frontmatter: text there is not prose.
+    in_verbatim: bool,
+    /// Contiguous run of prose; pulldown-cmark splits text at `_`, `*`, `[` and similar.
+    run: Option<Range<usize>>,
 }
 
-impl Collector {
+impl Collector<'_> {
     fn text(&mut self, t: &str) {
         if let Some(h) = self.heading.as_mut() {
             h.text.push_str(t);
         }
         if let Some(&(i, true)) = self.open_links.last() {
             self.note.links[i].display.get_or_insert_with(String::new).push_str(t);
+        }
+    }
+
+    /// Extends the prose run with a text event, unless the text is code, frontmatter or link text.
+    fn plain_text(&mut self, range: Range<usize>) {
+        if self.in_verbatim || !self.open_links.is_empty() {
+            self.flush_run();
+            return;
+        }
+        match self.run.as_mut() {
+            Some(run) if run.end == range.start => run.end = range.end,
+            _ => {
+                self.flush_run();
+                self.run = Some(range);
+            }
+        }
+    }
+
+    fn flush_run(&mut self) {
+        if let Some(run) = self.run.take() {
+            scan_tags(self.source, run, &mut self.note.tags);
         }
     }
 

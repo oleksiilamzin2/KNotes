@@ -44,9 +44,17 @@ pub struct Link {
     pub span: Span,
 }
 
+/// Inline tag `#name` or `#area/sub`; `name` is as written, without `#`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tag {
+    pub name: String,
+    pub span: Span,
+}
+
 /// Everything the indexer extracts from one note.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParsedNote {
     pub headings: Vec<Heading>,
     pub links: Vec<Link>,
+    pub tags: Vec<Tag>,
 }
