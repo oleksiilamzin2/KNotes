@@ -47,3 +47,4 @@ pub const FULL_SCREEN: &str = "Повноекранний режим";
 pub const MINIMIZE: &str = "Згорнути";
 pub const ZOOM: &str = "Масштабувати";
 pub const OPEN: &str = "Відкрити";
+pub const SAVE: &str = "Зберегти";

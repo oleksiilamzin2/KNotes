@@ -50,6 +50,7 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     ]);
     submenu(mtm, &bar, s::MENU_FILE, &[
         Some(item(mtm, s::OPEN_VAULT, sel!(openVault:), "o", cmd(none))),
+        Some(item(mtm, s::SAVE, sel!(saveDocument:), "s", cmd(none))),
         Some(item(mtm, s::CLOSE_WINDOW, sel!(performClose:), "w", cmd(none))),
     ]);
     submenu(mtm, &bar, s::MENU_EDIT, &[

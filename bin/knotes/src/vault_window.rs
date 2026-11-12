@@ -5,9 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
+use std::time::Duration;
+
+use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, TagNode, build_note_list, resolve_list_settings};
-use knotes_core::{FolderRulesStore, NoteRow, NoteText, TagIndex};
+use knotes_core::{FolderRulesStore, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_editor::{DiskChange, Document, conflict_path};
 use knotes_index::SqliteIndex;
 use knotes_session::{Event, Snapshot};
 use knotes_vault::FsVault;
@@ -15,7 +19,7 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextView, NSViewController, NSWindow};
-use objc2_foundation::{NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString};
+use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString};
 
 use crate::chat_view::{self, ChatView};
 use crate::list_menu::ListMenu;
@@ -42,6 +46,15 @@ struct State {
     reader: Option<SqliteIndex>,
 }
 
+/// Autosave runs after this long without edits (ADR 0011).
+const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
+
+/// The note open in the editor.
+struct Editing {
+    path: String,
+    document: Document,
+}
+
 pub struct VaultWindow {
     pub window: Retained<NSWindow>,
     pub sidebar: Retained<SidebarSource>,
@@ -56,8 +69,12 @@ pub struct VaultWindow {
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
     state: RefCell<State>,
-    /// Set while the window selects a sidebar row itself, so the selection callback ignores it.
+    /// Set while the window selects a sidebar or list row itself, so selection callbacks ignore it.
     highlighting: Cell<bool>,
+    editing: RefCell<Option<Editing>>,
+    /// Bumped on every edit: a scheduled autosave runs only if no edit came after it.
+    edits: Cell<u64>,
+    this: RefCell<Weak<Self>>,
 }
 
 impl VaultWindow {
@@ -109,6 +126,16 @@ impl VaultWindow {
             toolbar_delegate: toolbar,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
+            editing: RefCell::new(None),
+            edits: Cell::new(0),
+            this: RefCell::new(Weak::new()),
+        });
+        *this.this.borrow_mut() = Rc::downgrade(&this);
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.live_preview.on_change(move || {
+            if let Some(window) = weak.upgrade() {
+                window.edited();
+            }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.sidebar.on_select(move |item| {
@@ -118,7 +145,10 @@ impl VaultWindow {
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.list.on_select(move |path| {
-            if let Some(window) = weak.upgrade() {
+            if let Some(window) = weak.upgrade()
+                && !window.highlighting.get()
+                && window.open_path().as_deref() != Some(path.as_str())
+            {
                 window.open_note(&path, true);
             }
         });
@@ -179,13 +209,12 @@ impl VaultWindow {
     }
 
     fn show(&self, snapshot: &Snapshot) {
-        let reopen = {
+        {
             let mut state = self.state.borrow_mut();
             let paths: HashSet<&str> = snapshot.rows.iter().map(|r| r.path.as_str()).collect();
             state.history.retain(|p| paths.contains(p));
-            let current = state.history.current().map(str::to_owned);
-            current.filter(|c| snapshot.changed.iter().any(|p| p == c))
-        };
+        }
+        let changed = self.open_path().filter(|open| snapshot.changed.iter().any(|p| p == open));
         {
             let mut state = self.state.borrow_mut();
             state.rows = Arc::clone(&snapshot.rows);
@@ -206,11 +235,11 @@ impl VaultWindow {
         }
         self.highlight(&selection);
         self.refresh_list();
-        if let Some(path) = reopen {
-            self.open_note(&path, false);
+        if let Some(path) = changed {
+            self.changed_on_disk(&path);
         }
         self.update_navigation();
-        if probe::enabled() && !snapshot.rows.is_empty() {
+        if probe::enabled() && !snapshot.rows.is_empty() && probe::act_once() {
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
                 self.select(item);
@@ -218,12 +247,16 @@ impl VaultWindow {
             if let Some(option) = probe::requested_option() {
                 self.choose(option);
             }
-            for path in probe::requested_notes() {
-                if let Some(row) = self.list.row_of(&path) {
+            for (i, path) in probe::requested_notes().iter().enumerate() {
+                if let Some(row) = self.list.row_of(path) {
                     // Selecting the row goes through the same delegate path as a click.
                     self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
                 }
+                if i == 0 {
+                    probe::type_requested(&self.note_text);
+                }
             }
+            probe::save_requested();
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -232,9 +265,10 @@ impl VaultWindow {
                 self.window.setContentSize(objc2_foundation::NSSize::new(width, height));
                 self.window.layoutIfNeeded();
             }
-            if std::env::var("KNOTES_PROBE_CURSOR").as_deref() == Ok("end") {
+            if let Ok(cursor) = std::env::var("KNOTES_PROBE_CURSOR") {
                 let end = self.note_text.string().length();
-                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(end, 0));
+                let at = if cursor == "end" { end } else { cursor.parse().unwrap_or(0).min(end) };
+                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
             probe::schedule(true);
         }
@@ -242,16 +276,103 @@ impl VaultWindow {
 
     /// Shows a note in the note column; `record` adds it to the back/forward history.
     pub fn open_note(&self, path: &str, record: bool) {
+        self.save();
         let text = {
             let mut state = self.state.borrow_mut();
             if record {
                 state.history.visit(path);
             }
-            self.ensure_reader(&mut state);
-            state.reader.as_ref().and_then(|r| r.note_text(path).ok().flatten()).unwrap_or_default()
+            // The file, not the index: the index may not have caught up with the last save yet.
+            state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(path).ok()).unwrap_or_default()
         };
+        *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
         self.live_preview.show(&self.note_text, &text);
         self.update_navigation();
+    }
+
+    /// Path of the note in the editor.
+    pub fn open_path(&self) -> Option<String> {
+        self.editing.borrow().as_ref().map(|e| e.path.clone())
+    }
+
+    /// The open note's file as it is on disk now (probe mode).
+    pub fn disk_text(&self) -> Option<String> {
+        let path = self.open_path()?;
+        let vault = self.state.borrow().vault.clone()?;
+        FsVault::new(&vault).read_text(&path).ok()
+    }
+
+    /// Whether the editor has edits not written yet.
+    pub fn is_dirty(&self) -> bool {
+        self.editing.borrow().as_ref().is_some_and(|e| e.document.is_dirty())
+    }
+
+    /// A user edit: autosave once the user pauses.
+    fn edited(&self) {
+        match self.editing.borrow_mut().as_mut() {
+            Some(editing) => editing.document.edited(),
+            None => return,
+        }
+        let edit = self.edits.get() + 1;
+        self.edits.set(edit);
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        let when = DispatchTime::try_from(AUTOSAVE_DELAY).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(window) = target.get(mtm).upgrade()
+                && window.edits.get() == edit
+            {
+                window.save();
+            }
+        });
+    }
+
+    /// Writes the editor's text if it has unsaved edits. A change on disk the window has not
+    /// seen yet is kept next to the note as a conflict copy instead of being overwritten.
+    pub fn save(&self) {
+        let Some(vault) = self.state.borrow().vault.clone() else { return };
+        let mut editing = self.editing.borrow_mut();
+        let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return };
+        let vault = FsVault::new(&vault);
+        let text = self.note_text.string().to_string();
+        if let Ok(disk) = vault.read_text(&editing.path) {
+            match editing.document.on_disk(&disk, &text) {
+                DiskChange::Conflict => keep_conflict_copy(&vault, &editing.path, &disk),
+                DiskChange::Ignore if !editing.document.is_dirty() => return,
+                _ => {}
+            }
+        }
+        write(&vault, editing, &text);
+    }
+
+    /// The open note changed on disk: our own save is ignored, a clean editor reloads, and
+    /// edits on both sides keep both versions.
+    fn changed_on_disk(&self, path: &str) {
+        let Some(vault) = self.state.borrow().vault.clone() else { return };
+        let Ok(disk) = FsVault::new(&vault).read_text(path) else { return };
+        let text = self.note_text.string().to_string();
+        let change = match self.editing.borrow_mut().as_mut() {
+            Some(editing) => editing.document.on_disk(&disk, &text),
+            None => return,
+        };
+        match change {
+            DiskChange::Ignore => {}
+            DiskChange::Reload => {
+                let cursor = self.note_text.selectedRange();
+                self.live_preview.show(&self.note_text, &disk);
+                let end = self.note_text.string().length();
+                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
+            }
+            DiskChange::Conflict => {
+                // The editor's text keeps the note's name; the copy holds the other side.
+                let vault = FsVault::new(&vault);
+                keep_conflict_copy(&vault, path, &disk);
+                if let Some(editing) = self.editing.borrow_mut().as_mut() {
+                    write(&vault, editing, &text);
+                }
+            }
+        }
     }
 
     /// Opens the current note again (editor bench).
@@ -275,11 +396,7 @@ impl VaultWindow {
         };
         if let Some(path) = target {
             self.open_note(&path, false);
-            if let Some(row) = self.list.row_of(&path) {
-                self.highlighting.set(true);
-                self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
-                self.highlighting.set(false);
-            }
+            self.highlight_open_note();
         }
     }
 
@@ -335,6 +452,7 @@ impl VaultWindow {
         self.list.set_items(Arc::clone(&state.rows), items);
         drop(state);
         self.table.reloadData();
+        self.highlight_open_note();
         self.window.setTitle(&NSString::from_str(&title));
         let count = self.list.note_count();
         let formatted = NSNumberFormatter::localizedStringFromNumber_numberStyle(
@@ -342,6 +460,17 @@ impl VaultWindow {
             NSNumberFormatterStyle::DecimalStyle,
         );
         self.window.setSubtitle(&NSString::from_str(&strings::notes_count(count, &formatted.to_string())));
+    }
+
+    /// Selects the open note's row (it moves when the note is saved), or none if it is not listed.
+    fn highlight_open_note(&self) {
+        self.highlighting.set(true);
+        match self.open_path().and_then(|p| self.list.row_of(&p)) {
+            Some(row) => self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false),
+            // SAFETY: a nil sender is allowed.
+            None => unsafe { self.table.deselectAll(None) },
+        }
+        self.highlighting.set(false);
     }
 
     fn notes_with_tag(&self, state: &mut State, tag: &str) -> HashSet<String> {
@@ -367,6 +496,28 @@ impl VaultWindow {
             self.outline.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
             self.highlighting.set(false);
         }
+    }
+}
+
+fn write(vault: &FsVault, editing: &mut Editing, text: &str) {
+    match vault.write_note(&editing.path, text) {
+        Ok(()) => editing.document.saved(text),
+        Err(e) => eprintln!("knotes: cannot save {}: {e}", editing.path),
+    }
+}
+
+/// Writes the disk version of `path` as "Name (конфлікт date time).md" next to it.
+fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) {
+    let formatter = NSDateFormatter::new();
+    formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm")));
+    let stamp = formatter.stringFromDate(&NSDate::now()).to_string();
+    let mut copy = conflict_path(path, &stamp);
+    if vault.read_text(&copy).is_ok() {
+        formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm.ss")));
+        copy = conflict_path(path, &formatter.stringFromDate(&NSDate::now()).to_string());
+    }
+    if let Err(e) = vault.write_note(&copy, disk) {
+        eprintln!("knotes: cannot keep conflict copy {copy}: {e}");
     }
 }
 

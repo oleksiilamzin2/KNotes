@@ -183,7 +183,7 @@ fn chat_column_has_title_and_question_field() {
 fn main_menu_has_the_standard_menus() {
     let out = probe();
     assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
-    assert!(out.contains("file-menu: Відкрити базу… ⌘O | Закрити вікно ⌘W"), "{out}");
+    assert!(out.contains("file-menu: Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вікно ⌘W"), "{out}");
 }
 
 #[test]
@@ -258,4 +258,105 @@ fn note_text_is_at_most_700_points_wide_and_centered() {
     assert!(column > 900.0, "column {column}");
     assert!((width - 700.0).abs() < 0.2, "width {width}");
     assert!((left - (column - 700.0) / 2.0).abs() < 0.2, "left {left} of column {column}");
+}
+
+fn read(vault: &std::path::Path, name: &str) -> String {
+    std::fs::read_to_string(vault.join(name)).unwrap()
+}
+
+#[test]
+fn typing_is_saved_two_seconds_later_without_moving_the_cursor() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    let out = probe_env(
+        &[vault.path()],
+        None,
+        &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", " world"), ("KNOTES_PROBE_DELAY_MS", "3500")],
+    );
+    assert_eq!(read(vault.path(), "n.md"), "hello world");
+    assert!(out.contains("document: clean"), "{out}");
+    assert!(out.contains("cursor: 11"), "own save and the snapshot after it must not reload: {out}");
+}
+
+#[test]
+fn nothing_is_saved_before_two_seconds_but_quitting_saves() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", "!")]);
+    assert!(out.contains("document: dirty"), "{out}");
+    assert!(out.contains("disk: \"hello\""), "{out}");
+    assert_eq!(read(vault.path(), "n.md"), "hello!", "quitting must write unsaved edits");
+}
+
+#[test]
+fn cmd_s_saves_at_once() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", "!"), ("KNOTES_PROBE_ACTION", "save")]);
+    assert!(out.contains("document: clean"), "{out}");
+    assert!(out.contains("disk: \"hello!\""), "{out}");
+}
+
+#[test]
+fn opening_another_note_saves_the_previous_one() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    std::fs::write(vault.path().join("b.md"), "b").unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TYPE", "+")]);
+    assert_eq!(read(vault.path(), "a.md"), "a+");
+}
+
+/// The editor line after typing `typed` at the end of `start` equals the one after opening the
+/// final text with the cursor at the end: restyling only the edited region loses nothing.
+fn assert_typing_restyles_like_opening(start: &str, typed: &str) {
+    let end = start.encode_utf16().count();
+    assert_replacing_restyles_like_opening(start, end, 0, typed);
+}
+
+/// Same for replacing `removed` UTF-16 units at `at` with `typed` (ASCII texts).
+fn assert_replacing_restyles_like_opening(start: &str, at: usize, removed: usize, typed: &str) {
+    let editor = |vault: &std::path::Path, env: &[(&str, &str)]| {
+        let out = probe_env(&[vault], None, env);
+        out.lines().find(|l| l.starts_with("editor: ")).unwrap_or_default().to_owned()
+    };
+    let typing = tempfile::tempdir().unwrap();
+    std::fs::write(typing.path().join("n.md"), start).unwrap();
+    let range = format!("{at},{removed}");
+    let after_typing = editor(typing.path(), &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", typed), ("KNOTES_PROBE_RANGE", &range)]);
+    let opening = tempfile::tempdir().unwrap();
+    let text = format!("{}{typed}{}", &start[..at], &start[at + removed..]);
+    std::fs::write(opening.path().join("n.md"), text).unwrap();
+    let cursor = (at + typed.len()).to_string();
+    let after_opening = editor(opening.path(), &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", &cursor)]);
+    assert_eq!(after_typing, after_opening, "replaced {at},{removed} with {typed:?}");
+}
+
+#[test]
+fn deleting_a_setext_underline_restyles_the_line_above() {
+    assert_replacing_restyles_like_opening("Title\n===\n\nbody **b**", 5, 4, "");
+}
+
+#[test]
+fn opening_a_fence_above_text_restyles_everything_below() {
+    assert_replacing_restyles_like_opening("intro\n\n**a** and _b_\n\n# H", 7, 0, "```\n");
+}
+
+#[test]
+fn closing_a_fence_restyles_the_text_after_it() {
+    assert_replacing_restyles_like_opening("```\ncode\n\n**a**\n\n# H", 9, 0, "```\n");
+}
+
+#[test]
+fn typing_inline_markup_restyles_like_opening() {
+    assert_typing_restyles_like_opening("# Title\n\nhello", " **b** _i_ `c` [[Link]] #tag");
+}
+
+#[test]
+fn typing_a_heading_restyles_like_opening() {
+    assert_typing_restyles_like_opening("intro **x**\n\ntext", "\n## Heading");
+}
+
+#[test]
+fn typing_a_code_block_at_the_end_restyles_like_opening() {
+    assert_typing_restyles_like_opening("# Title\n\n**a**\n\nb", "\n```\nlet x = 1;");
 }

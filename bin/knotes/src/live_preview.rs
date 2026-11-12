@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 
-use knotes_editor::{Highlight, Style, highlight};
+use knotes_editor::{Edit, Highlight, Style, changed_region, highlight};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
@@ -13,7 +13,7 @@ use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSTextDelegate, NSTextStorage,
     NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
-use objc2_foundation::{NSDictionary, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSRange, NSSize, NSString};
+use objc2_foundation::{NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSRange, NSSize, NSString, NSValue};
 
 pub const STYLE_KEY: &str = "knotes.style";
 /// Longest line of note text, as Obsidian's "readable line length" (700 CSS px = 700 pt).
@@ -39,7 +39,20 @@ struct Look {
     style_key: Retained<NSString>,
 }
 
+type OnChange = Box<dyn Fn()>;
+
 pub struct Ivars {
+    /// Called after every user edit.
+    on_change: RefCell<Option<OnChange>>,
+    /// The edit being made and its inserted text, between `shouldChangeText` and
+    /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
+    pending: Cell<Option<Edit>>,
+    inserted: RefCell<String>,
+    /// Rust copy of the text, kept in step by applying each edit (copying a 300 KB `NSString`
+    /// costs about 1 ms, more than the rest of a keystroke).
+    source: RefCell<String>,
+    /// Its length in UTF-16 units, checked against the view after each edit.
+    source_units: Cell<usize>,
     /// UTF-16 ranges of the shown note.
     styled: RefCell<Highlight>,
     /// Font of each markup range when visible (that of the run around it).
@@ -58,7 +71,17 @@ define_class!(
 
     unsafe impl NSObjectProtocol for LivePreview {}
 
-    unsafe impl NSTextDelegate for LivePreview {}
+    unsafe impl NSTextDelegate for LivePreview {
+        #[unsafe(method(textDidChange:))]
+        fn text_did_change(&self, notification: &NSNotification) {
+            if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
+                self.restyle_after_edit(&view);
+            }
+            if let Some(callback) = self.ivars().on_change.borrow().as_ref() {
+                callback();
+            }
+        }
+    }
 
     impl LivePreview {
         /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
@@ -71,6 +94,21 @@ define_class!(
     }
 
     unsafe impl NSTextViewDelegate for LivePreview {
+        /// Every edit is announced here (AppKit calls the single-range variant only when this one
+        /// is missing). One range is applied to the Rust copy; several (Replace All) resync it.
+        #[unsafe(method(textView:shouldChangeTextInRanges:replacementStrings:))]
+        fn should_change_text(&self, _view: &NSTextView, ranges: &NSArray<NSValue>, replacements: Option<&NSArray<NSString>>) -> bool {
+            let single = (ranges.count() == 1).then(|| ranges.objectAtIndex(0).get_range()).flatten();
+            let edit = single.map(|range| {
+                let text = replacements.filter(|r| r.count() == 1).map(|r| r.objectAtIndex(0).to_string()).unwrap_or_default();
+                let edit = Edit { location: range.location, removed: range.length, inserted: text.encode_utf16().count() };
+                *self.ivars().inserted.borrow_mut() = text;
+                edit
+            });
+            self.ivars().pending.set(edit);
+            true
+        }
+
         #[unsafe(method(textViewDidChangeSelection:))]
         fn selection_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
@@ -98,6 +136,11 @@ impl LivePreview {
             body,
         };
         let ivars = Ivars {
+            on_change: RefCell::new(None),
+            pending: Cell::new(None),
+            inserted: RefCell::new(String::new()),
+            source: RefCell::new(String::new()),
+            source_units: Cell::new(0),
             styled: RefCell::new(Highlight::default()),
             markup_fonts: RefCell::new(Vec::new()),
             revealed: Cell::new((0, 0)),
@@ -105,6 +148,70 @@ impl LivePreview {
         };
         let this = Self::alloc(mtm).set_ivars(ivars);
         unsafe { msg_send![super(this), init] }
+    }
+
+    pub fn on_change(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_change.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Restyles after a user edit: only the paragraphs whose styles changed (ADR 0012), plus
+    /// the old and new cursor paragraphs, whose markup visibility changes.
+    fn restyle_after_edit(&self, view: &NSTextView) {
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let total = storage.length();
+        let mut edit = self.ivars().pending.take();
+        if let Some(e) = edit {
+            e.apply(&mut self.ivars().source.borrow_mut(), &self.ivars().inserted.borrow());
+            self.ivars().source_units.set((self.ivars().source_units.get() + e.inserted).saturating_sub(e.removed));
+        }
+        if self.ivars().source_units.get() != total {
+            edit = None;
+        }
+        if edit.is_none() {
+            self.resync(&storage);
+        }
+        let source = self.ivars().source.borrow();
+        let new = highlight(&source).to_utf16(&source);
+        drop(source);
+        let revealed = paragraph(&storage, view.selectedRange());
+        let region = edit.map(|edit| {
+            let (start, end) = changed_region(&self.ivars().styled.borrow(), &new, edit);
+            let old = self.ivars().revealed.get();
+            let old = edit.move_range(&(old.0..old.1));
+            let start = start.min(old.start).min(revealed.0).min(total);
+            let end = end.max(old.end).max(revealed.1).min(total);
+            paragraph(&storage, NSRange::new(start, end - start))
+        });
+        *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&new, &self.ivars().look);
+        *self.ivars().styled.borrow_mut() = new;
+        self.ivars().revealed.set(revealed);
+        match region {
+            Some(region) => self.apply_region(&storage, region, revealed),
+            // An edit not announced through shouldChangeText: restyle everything.
+            None => self.apply_all(&storage, revealed),
+        }
+    }
+
+    fn resync(&self, storage: &NSTextStorage) {
+        *self.ivars().source.borrow_mut() = storage.string().to_string();
+        self.ivars().source_units.set(storage.length());
+    }
+
+    fn apply_region(&self, storage: &NSTextStorage, region: (usize, usize), revealed: (usize, usize)) {
+        let look = &self.ivars().look;
+        let styled = self.ivars().styled.borrow();
+        let fonts = self.ivars().markup_fonts.borrow();
+        let clip = |r: &Range<usize>| r.start.max(region.0)..r.end.min(region.1);
+        storage.beginEditing();
+        set(storage, NSRange::new(region.0, region.1 - region.0), &look.body, &look.text, "plain", look);
+        for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
+            let (font, color, name) = run_look(run.style, look);
+            set(storage, ns(&clip(&run.range)), font, color, &name, look);
+        }
+        for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| m.start < region.1 && m.end > region.0) {
+            self.style_markup(storage, m, font, overlaps(m, revealed));
+        }
+        storage.endEditing();
     }
 
     /// Makes `view` keep its text at the readable width as it resizes.
@@ -127,6 +234,12 @@ impl LivePreview {
     /// Shows `source` in `view` with live preview styles.
     pub fn show(&self, view: &NSTextView, source: &str) {
         view.setString(&NSString::from_str(source));
+        *self.ivars().source.borrow_mut() = source.to_owned();
+        self.ivars().source_units.set(view.string().length());
+        // Undo steps of the previous note would edit this one at stale offsets.
+        if let Some(undo) = view.undoManager() {
+            undo.removeAllActions();
+        }
         // A note opens at its start (setString leaves the cursor at the end).
         view.setSelectedRange(NSRange::new(0, 0));
         view.scrollRangeToVisible(NSRange::new(0, 0));
@@ -159,6 +272,10 @@ impl LivePreview {
 
     /// Hides the markup of the previously revealed paragraph and shows that of the cursor's.
     fn reveal_cursor_paragraph(&self, view: &NSTextView) {
+        if self.ivars().pending.get().is_some() {
+            // Mid-edit: the highlight still has the old offsets; the edit restyles this itself.
+            return;
+        }
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
         let new = paragraph(&storage, view.selectedRange());
         let old = self.ivars().revealed.replace(new);
@@ -242,14 +359,7 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, String) {
 
 /// The font each markup range takes when shown: that of the innermost run containing it.
 fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
-    styled
-        .markup
-        .iter()
-        .map(|m| {
-            let run = styled.runs.iter().rev().find(|r| r.range.start <= m.start && m.end <= r.range.end);
-            run.map_or_else(|| look.body.clone(), |r| run_look(r.style, look).0.retain())
-        })
-        .collect()
+    styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
 }
 
 fn set(storage: &NSTextStorage, range: NSRange, font: &NSFont, color: &NSColor, name: &str, look: &Look) {

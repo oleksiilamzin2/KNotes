@@ -77,6 +77,12 @@ define_class!(
             true
         }
 
+        /// Quitting writes every unsaved note first.
+        #[unsafe(method(applicationWillTerminate:))]
+        fn will_terminate(&self, _notification: &NSNotification) {
+            self.save_all();
+        }
+
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn should_terminate_after_last_window_closed(&self, _app: &NSApplication) -> bool {
             true
@@ -88,6 +94,10 @@ define_class!(
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, notification: &NSNotification) {
             let Some(closing) = notification.object() else { return };
+            let is_closing = |v: &OpenVault| std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject);
+            if let Some(vault) = self.ivars().vaults.borrow().iter().find(|v| is_closing(v)) {
+                vault.window.save();
+            }
             self.ivars().vaults.borrow_mut().retain(|v| !std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject));
         }
     }
@@ -98,6 +108,12 @@ define_class!(
         fn open_vault_action(&self, _sender: Option<&AnyObject>) {
             self.ask_for_vault();
         }
+
+        /// File → Save: writes the unsaved notes of all windows (autosave would in 2 s anyway).
+        #[unsafe(method(saveDocument:))]
+        fn save_document(&self, _sender: Option<&AnyObject>) {
+            self.save_all();
+        }
     }
 );
 
@@ -105,6 +121,12 @@ impl AppDelegate {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars::default());
         unsafe { msg_send![super(this), init] }
+    }
+
+    fn save_all(&self) {
+        for vault in self.ivars().vaults.borrow().iter() {
+            vault.window.save();
+        }
     }
 
     fn ask_for_vault(&self) {

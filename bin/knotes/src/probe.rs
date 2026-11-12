@@ -18,6 +18,38 @@ thread_local! {
     /// The window to report on; main thread only.
     static WINDOW: RefCell<Option<Rc<VaultWindow>>> = const { RefCell::new(None) };
     static SCHEDULED: Cell<bool> = const { Cell::new(false) };
+    static ACTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// True the first time only: requested actions run on the first snapshot, not on the ones
+/// that follow the app's own saves.
+pub fn act_once() -> bool {
+    !ACTED.with(|a| a.replace(true))
+}
+
+/// Types `KNOTES_PROBE_TYPE` the way the keyboard inserts text: at the end of the note, or
+/// over `KNOTES_PROBE_RANGE=location,length` (UTF-16; empty text there deletes).
+pub fn type_requested(view: &objc2_app_kit::NSTextView) {
+    let Ok(text) = std::env::var("KNOTES_PROBE_TYPE") else { return };
+    let range = std::env::var("KNOTES_PROBE_RANGE").ok().and_then(|r| {
+        let (location, length) = r.split_once(',')?;
+        Some(objc2_foundation::NSRange::new(location.parse().ok()?, length.parse().ok()?))
+    });
+    let range = range.unwrap_or_else(|| objc2_foundation::NSRange::new(view.string().length(), 0));
+    view.setSelectedRange(range);
+    let not_found = objc2_foundation::NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+    // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+    unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&text), not_found) };
+}
+
+/// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
+pub fn save_requested() {
+    if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {
+        return;
+    }
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: a nil target sends the action up the responder chain.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(objc2::sel!(saveDocument:), None, None) };
 }
 
 pub fn enabled() -> bool {
@@ -66,7 +98,8 @@ pub fn schedule(with_sidebar: bool) {
     if SCHEDULED.with(|s| s.replace(true)) {
         return;
     }
-    let when = DispatchTime::try_from(Duration::from_millis(500)).expect("short delay");
+    let delay = std::env::var("KNOTES_PROBE_DELAY_MS").ok().and_then(|d| d.parse().ok()).unwrap_or(500);
+    let when = DispatchTime::try_from(Duration::from_millis(delay)).expect("short delay");
     let _ = DispatchQueue::main().after(when, move || {
         let mtm = MainThreadMarker::new().expect("main queue");
         WINDOW.with(|w| {
@@ -214,6 +247,11 @@ fn report_note(window: &VaultWindow) {
         let text: String = window.note_text.string().to_string().replace('\n', "⏎").chars().take(60).collect();
         println!("note: {path} | {text}");
     }
+    println!("document: {}", if window.is_dirty() { "dirty" } else { "clean" });
+    println!("cursor: {}", window.note_text.selectedRange().location);
+    if let Some(disk) = window.disk_text() {
+        println!("disk: {disk:?}");
+    }
     if let Some(group) = window.window.toolbar().and_then(|t| {
         t.items().iter().find_map(|i| i.downcast::<NSToolbarItemGroup>().ok())
     }) {
@@ -308,7 +346,29 @@ fn editor_bench(window: &VaultWindow) {
         window.live_preview_restyle(&source);
         restyles.push(t.elapsed());
     }
+    // Typing in the middle of the note, a key at a time, then deleting it all again (so the
+    // note matches the file and quitting writes nothing).
+    let middle = ns.paragraphRangeForRange(NSRange::new(ns.length() / 2, 0));
+    let start = middle.location + middle.length.saturating_sub(1);
+    view.setSelectedRange(NSRange::new(start, 0));
+    view.scrollRangeToVisible(NSRange::new(start, 0));
+    let mut keys = Vec::new();
+    let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+    for c in "typing **bold** and `code` in the middle ".chars().cycle().take(200) {
+        let t = std::time::Instant::now();
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(&c.to_string()), not_found) };
+        view.layoutSubtreeIfNeeded();
+        if let Some(scroll) = view.enclosingScrollView() {
+            scroll.displayIfNeeded();
+        }
+        keys.push(t.elapsed());
+    }
+    view.setSelectedRange(NSRange::new(start, 200));
+    // SAFETY: as above.
+    unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(""), not_found) };
     println!("editor-bench: {} bytes; open+style {:.2}ms", source.len(), open.as_secs_f64() * 1e3);
+    println!("editor-bench: keystroke {}", quantiles(keys));
     println!("editor-bench: cursor move {}", quantiles(moves));
     println!("editor-bench: scroll {}", quantiles(scrolls));
     println!("editor-bench: full restyle {}", quantiles(restyles));
