@@ -29,7 +29,7 @@ fn vault(n: usize) -> Vec<String> {
 #[test]
 fn frequent_word_is_dropped_when_other_words_remain() {
     let (_d, index) = index_with(&vault(2500));
-    let mut found: Vec<String> = index.search_blocks("і радар", 10).unwrap().into_iter().map(|h| h.path).collect();
+    let mut found: Vec<String> = index.search_blocks("і радар", None, 10).unwrap().into_iter().map(|h| h.path).collect();
     found.sort();
     assert_eq!(found, ["n02498.md", "n02499.md"]);
 }
@@ -37,12 +37,20 @@ fn frequent_word_is_dropped_when_other_words_remain() {
 #[test]
 fn query_of_only_frequent_words_still_returns_blocks() {
     let (_d, index) = index_with(&vault(2500));
-    assert_eq!(index.search_blocks("і", 10).unwrap().len(), 10);
+    assert_eq!(index.search_blocks("і", None, 10).unwrap().len(), 10);
 }
 
 #[test]
 fn small_vaults_keep_every_word() {
     let (_d, index) = index_with(&vault(50));
-    let found: Vec<String> = index.search_blocks("і радар", 10).unwrap().into_iter().map(|h| h.path).collect();
+    let found: Vec<String> = index.search_blocks("і радар", None, 10).unwrap().into_iter().map(|h| h.path).collect();
     assert_eq!(found, ["n00048.md"]);
+}
+
+#[test]
+fn scope_applies_to_frequent_only_queries() {
+    let (_d, index) = index_with(&vault(2500));
+    let scope = vec!["n00007.md".to_owned()];
+    let found: Vec<String> = index.search_blocks("і", Some(&scope), 10).unwrap().into_iter().map(|h| h.path).collect();
+    assert_eq!(found, ["n00007.md"]);
 }

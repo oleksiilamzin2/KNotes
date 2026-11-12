@@ -16,5 +16,6 @@ pub struct BlockHit {
 /// Ranked full-text search over note blocks. The query is plain user text, never syntax:
 /// every word must occur in the block.
 pub trait ContentSearch {
-    fn search_blocks(&self, query: &str, limit: usize) -> Result<Vec<BlockHit>, BoxError>;
+    /// `scope`: only blocks of these note paths (unknown paths are ignored); `None`: all notes.
+    fn search_blocks(&self, query: &str, scope: Option<&[String]>, limit: usize) -> Result<Vec<BlockHit>, BoxError>;
 }

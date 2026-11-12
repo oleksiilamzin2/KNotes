@@ -18,14 +18,14 @@ fn upsert(index: &mut SqliteIndex, path: &str, source: &str) {
 }
 
 fn paths(index: &SqliteIndex, query: &str) -> Vec<String> {
-    index.search_blocks(query, 50).unwrap().into_iter().map(|h| h.path).collect()
+    index.search_blocks(query, None, 50).unwrap().into_iter().map(|h| h.path).collect()
 }
 
 #[test]
 fn finds_the_block_and_its_span_and_heading() {
     let src = "intro text\n\n## Signals\n\nThe radar emits a chirp.\n";
     let (_d, index) = index_with(&[("a.md", src), ("b.md", "nothing here\n")]);
-    let hits = index.search_blocks("chirp", 10).unwrap();
+    let hits = index.search_blocks("chirp", None, 10).unwrap();
     assert_eq!(hits.len(), 1);
     let h = &hits[0];
     assert_eq!((h.path.as_str(), h.ord, h.heading.as_deref()), ("a.md", 1, Some("Signals")));
@@ -76,7 +76,7 @@ fn updated_and_removed_notes_leave_the_index() {
 fn query_syntax_characters_are_plain_text() {
     let (_d, index) = index_with(&[("a.md", "alpha beta\n")]);
     for q in ["\"alpha", "alpha AND", "NOT beta", "(alpha", "alpha*", "-", "", "  "] {
-        assert!(index.search_blocks(q, 10).is_ok(), "query {q:?} failed");
+        assert!(index.search_blocks(q, None, 10).is_ok(), "query {q:?} failed");
     }
     assert_eq!(paths(&index, "alpha AND"), Vec::<String>::new(), "AND is a word that must occur");
 }
@@ -86,7 +86,7 @@ fn limit_is_respected() {
     let notes: Vec<(String, String)> = (0..20).map(|i| (format!("n{i}.md"), "common word\n".to_owned())).collect();
     let refs: Vec<(&str, &str)> = notes.iter().map(|(p, s)| (p.as_str(), s.as_str())).collect();
     let (_d, index) = index_with(&refs);
-    assert_eq!(index.search_blocks("common", 5).unwrap().len(), 5);
+    assert_eq!(index.search_blocks("common", None, 5).unwrap().len(), 5);
 }
 
 #[test]
@@ -122,4 +122,14 @@ fn short_words_match_exactly_and_punctuation_is_ignored() {
 fn several_inflected_words_match_together() {
     let (_d, index) = index_with(&[("a.md", "робота з системою даних\n"), ("b.md", "система без нічого\n")]);
     assert_eq!(paths(&index, "системами даних"), ["a.md"]);
+}
+
+#[test]
+fn scope_limits_results_to_given_notes() {
+    let (_d, index) = index_with(&[("a.md", "radar here\n"), ("b.md", "radar there\n"), ("c.md", "radar too\n")]);
+    let scope = vec!["b.md".to_owned(), "c.md".to_owned(), "missing.md".to_owned()];
+    let mut found: Vec<String> = index.search_blocks("radar", Some(&scope), 10).unwrap().into_iter().map(|h| h.path).collect();
+    found.sort();
+    assert_eq!(found, ["b.md", "c.md"]);
+    assert!(index.search_blocks("radar", Some(&[]), 10).unwrap().is_empty());
 }

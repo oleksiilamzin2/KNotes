@@ -53,6 +53,8 @@ impl SqliteIndex {
             return Ok(None);
         }
         conn.execute_batch(schema::PRAGMAS)?;
+        // `rarray(?)` passes lists of paths (search scopes) as one parameter.
+        rusqlite::vtab::array::load_module(&conn)?;
         if version == 0 {
             conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = {}; COMMIT;", schema::CREATE, schema::VERSION))?;
         }
