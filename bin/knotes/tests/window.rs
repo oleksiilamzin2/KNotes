@@ -194,3 +194,13 @@ fn the_last_vault_reopens_without_arguments() {
     let out = probe_with(&[], Some(home.path()));
     assert!(out.contains("sidebar: Усі нотатки (1)"), "{out}");
 }
+
+#[test]
+fn closing_the_last_window_quits_the_app() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "x").unwrap();
+    // probe_env waits for the process to exit on its own; in "close" mode the probe only
+    // closes the window instead of terminating.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "close")]);
+    assert!(out.contains("closing window"), "{out}");
+}

@@ -85,7 +85,17 @@ pub fn schedule(with_sidebar: bool) {
                 }
             }
         });
-        NSApplication::sharedApplication(mtm).terminate(None);
+        if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("close") {
+            // The app must quit by itself once its last window closes.
+            println!("closing window");
+            WINDOW.with(|w| {
+                if let Some(window) = w.borrow_mut().take() {
+                    window.window.performClose(None);
+                }
+            });
+        } else {
+            NSApplication::sharedApplication(mtm).terminate(None);
+        }
     });
 }
 

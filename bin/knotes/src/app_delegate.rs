@@ -65,6 +65,18 @@ define_class!(
             }
         }
 
+        /// Dock click or `open` while running without windows: reopen the last vault.
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_handle_reopen(&self, _app: &NSApplication, has_visible_windows: bool) -> bool {
+            if !has_visible_windows {
+                match AppSettings::load(&app_data()).last_vault.filter(|p| p.is_dir()) {
+                    Some(vault) => self.open_vault(&vault),
+                    None => self.ask_for_vault(),
+                }
+            }
+            true
+        }
+
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn should_terminate_after_last_window_closed(&self, _app: &NSApplication) -> bool {
             true
