@@ -1,0 +1,17 @@
+[package]
+name = "knotes-indexer"
+description = "Keeps the Knotes index in sync with the vault folder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+knotes-index.workspace = true
+knotes-md.workspace = true
+knotes-vault.workspace = true
+tempfile.workspace = true

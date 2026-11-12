@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use knotes_core::{FileKind, VaultFile, VaultScanner};
+use knotes_core::{FileKind, VaultFile, VaultReader, VaultScanner};
 use rayon::prelude::*;
 
 pub struct FsVault {
@@ -58,4 +58,11 @@ fn scan_dir(abs: &Path, rel: &str) -> io::Result<Vec<VaultFile>> {
 
 fn mtime_ns(meta: &Metadata) -> i64 {
     meta.mtime() * 1_000_000_000 + meta.mtime_nsec()
+}
+
+impl VaultReader for FsVault {
+    fn read_text(&self, path: &str) -> io::Result<String> {
+        let bytes = fs::read(self.root.join(path))?;
+        Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+    }
 }

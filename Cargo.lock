@@ -164,6 +164,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-indexer"
+version = "0.1.0"
+dependencies = [
+ "knotes-core",
+ "knotes-index",
+ "knotes-md",
+ "knotes-vault",
+ "rayon",
+ "tempfile",
+]
+
+[[package]]
 name = "knotes-md"
 version = "0.1.0"
 dependencies = [

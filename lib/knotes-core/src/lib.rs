@@ -14,6 +14,7 @@ mod note_text;
 mod tag_index;
 mod title_search;
 mod vault_file;
+mod vault_reader;
 mod vault_scanner;
 
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};
@@ -30,6 +31,7 @@ pub use note_text::NoteText;
 pub use tag_index::TagIndex;
 pub use title_search::{TitleHit, TitleSearch};
 pub use vault_file::{FileKind, VaultFile};
+pub use vault_reader::VaultReader;
 pub use vault_scanner::VaultScanner;
 
 /// Error type of the ports; adapters box their own errors into it.
