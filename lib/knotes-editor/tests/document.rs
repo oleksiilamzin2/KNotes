@@ -36,3 +36,15 @@ fn conflict_copies_sit_next_to_the_note() {
     assert_eq!(conflict_path("Folder/Name.md", "2026-11-12 15.30"), "Folder/Name (конфлікт 2026-11-12 15.30).md");
     assert_eq!(conflict_path("n.md", "2026-11-12 15.30"), "n (конфлікт 2026-11-12 15.30).md");
 }
+
+#[test]
+fn a_new_note_takes_its_name_once_the_first_line_is_finished_or_left() {
+    let mut doc = Document::untitled();
+    assert!(!doc.wants_name("Іде", false), "the first line is still being typed");
+    assert!(doc.wants_name("Ідея\nтекст", false), "Return finished the first line");
+    assert!(doc.wants_name("Ідея", true), "leaving the note finishes it too");
+    assert!(!doc.wants_name("", true), "nothing to name it after");
+    doc.named();
+    assert!(!doc.wants_name("Інша назва\n", true), "only once");
+    assert!(!Document::open("Existing\n").wants_name("Existing\n", true), "existing notes keep their names");
+}

@@ -17,11 +17,31 @@ pub struct Document {
     /// Text last written by the editor or read from disk.
     saved: String,
     dirty: bool,
+    /// Created by "new note" and not named after its first line yet.
+    untitled: bool,
 }
 
 impl Document {
     pub fn open(text: &str) -> Self {
-        Self { saved: text.to_owned(), dirty: false }
+        Self { saved: text.to_owned(), dirty: false, untitled: false }
+    }
+
+    /// A new, empty note whose file takes the name of its first line once (ADR 0011).
+    pub fn untitled() -> Self {
+        Self { untitled: true, ..Self::open("") }
+    }
+
+    /// Whether to name the file now: the note is new and its first line is not empty and is
+    /// finished, by a line break after it or by `leaving` the note. Naming mid-line would
+    /// give a name cut where the user paused.
+    pub fn wants_name(&self, text: &str, leaving: bool) -> bool {
+        let first = text.lines().next().unwrap_or("");
+        self.untitled && !first.trim().is_empty() && (leaving || text.contains('\n'))
+    }
+
+    /// The file got its name; it is never renamed automatically again.
+    pub fn named(&mut self) {
+        self.untitled = false;
     }
 
     pub fn edited(&mut self) {
