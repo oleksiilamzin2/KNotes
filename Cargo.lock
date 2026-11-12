@@ -270,6 +270,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-session"
+version = "0.1.0"
+dependencies = [
+ "knotes-app",
+ "knotes-core",
+ "knotes-index",
+ "knotes-indexer",
+ "knotes-md",
+ "knotes-vault",
+ "tempfile",
+]
+
+[[package]]
 name = "knotes-synth"
 version = "0.1.0"
 dependencies = [

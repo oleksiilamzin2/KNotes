@@ -26,6 +26,7 @@ serde_json = "1.0.154"
 knotes-search = { path = "lib/knotes-search" }
 knotes-indexer = { path = "lib/knotes-indexer" }
 knotes-app = { path = "lib/knotes-app" }
+knotes-session = { path = "lib/knotes-session" }
 rand = { version = "0.10.3", default-features = false }
 rand_chacha = { version = "0.10.0", default-features = false }
 rayon = "1.12.0"
