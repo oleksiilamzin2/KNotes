@@ -56,3 +56,6 @@ pub const UNTITLED: &str = "Без назви";
 pub const UNTAGGED: &str = "Без тегів";
 /// Placeholder of the search field over the note list.
 pub const SEARCH: &str = "Пошук";
+/// Search modes over the note list (Obsidian's `file:` and `content:`).
+pub const SEARCH_FILES: &str = "Файли";
+pub const SEARCH_CONTENT: &str = "Вміст";

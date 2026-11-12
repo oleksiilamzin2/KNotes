@@ -5,8 +5,8 @@ Status: accepted, 2026-11-12
 ## Context
 
 The owner asked for a search icon over the second column that searches the list. Choices
-made with the owner: titles and text, within the list the sidebar selected (the whole vault
-for "All notes").
+made with the owner: within the list the sidebar selected (the whole vault for "All notes");
+first titles and text together, then Obsidian's operators with file names by default.
 
 ## Decision
 
@@ -14,10 +14,13 @@ for "All notes").
   list column, under the toolbar; the list scrolls beneath it. A search field in the toolbar
   itself (NSSearchToolbarItem, 220 pt open) did not fit next to the list title and pushed the
   toolbar separator 100–170 pt past the list/note boundary.
-- Results: notes whose title matches the fuzzy title search come first (best first), then
-  notes whose text matched (full-text search over blocks, word forms through the query
-  stemmer, best block first), each note once, all within the selected list. A row with a
-  text match shows the text around the match instead of the note's start.
+- Operators as in Obsidian (owner's follow-up): file names by default (`file:` or `files:`
+  says so explicitly), `content:` searches the notes' text. File names: fuzzy title search,
+  best first. Content: full-text search over blocks, word forms through the query stemmer,
+  best block first, each note once, the row showing the text around the match instead of
+  the note's start. Always within the selected list.
+- A Files/Content switch in the search row rewrites the operator in the query, so the text
+  stays the only truth; typing the operator moves the switch.
 - The search runs in a background thread with its own read-only index connection; queries
   typed while it runs replace each other, and only the answer to the latest one is shown.
 - Clicking the glass again hides the row and restores the list.

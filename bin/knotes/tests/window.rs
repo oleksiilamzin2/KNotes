@@ -648,29 +648,45 @@ fn the_inbox_is_listed_once_and_selectable_before_it_exists() {
     assert!(out.contains("subtitle: 0 нотаток"), "{out}");
 }
 
+const SEARCH_NOTES: [(&str, &str); 4] = [
+    ("Projects/Radar.md", "about sensors"),
+    ("Projects/notes.md", "# Notes\n\nToday we discuss radar modes and filters."),
+    ("Projects/other.md", "nothing here"),
+    ("outside.md", "radar outside the folder"),
+];
+
 #[test]
-fn searching_lists_title_matches_then_text_matches_in_the_selected_folder() {
-    let (_vault, out) = probe_notes(
-        &[
-            ("Projects/Radar.md", "about sensors"),
-            ("Projects/notes.md", "# Notes\n\nToday we discuss radar modes and filters."),
-            ("Projects/other.md", "nothing here"),
-            ("outside.md", "radar outside the folder"),
-        ],
-        &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_SEARCH", "radar")],
-    );
-    assert_eq!(list_titles(&out), ["Radar", "notes"], "{out}");
+fn search_looks_at_file_names_by_default_within_the_selected_folder() {
+    let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_SEARCH", "radar")]);
+    assert_eq!(list_titles(&out), ["Radar"], "{out}");
+    assert!(out.contains("search-mode: files"), "{out}");
+    assert!(out.contains("subtitle: 1 нотатка"), "{out}");
+}
+
+#[test]
+fn content_searches_the_text_and_shows_the_found_words() {
+    let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_SEARCH", "content: radar")]);
+    assert_eq!(list_titles(&out), ["notes"], "{out}");
     let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap();
-    assert!(list.contains("notes ~") && list.contains("radar modes"), "the row shows the found text: {list}");
-    assert!(out.contains("search: radar"), "{out}");
-    assert!(out.contains("subtitle: 2 нотатки"), "{out}");
+    assert!(list.contains("radar modes"), "{list}");
+    assert!(out.contains("search-mode: content"), "the switch follows the typed operator: {out}");
+}
+
+#[test]
+fn the_switch_rewrites_the_query_operator() {
+    let (_vault, out) = probe_notes(
+        &SEARCH_NOTES,
+        &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_SEARCH", "radar"), ("KNOTES_PROBE_SEARCH_MODE", "content")],
+    );
+    assert!(out.contains("search-field: content: radar"), "{out}");
+    assert_eq!(list_titles(&out), ["notes"], "{out}");
 }
 
 #[test]
 fn word_forms_are_found_and_an_empty_search_restores_the_list() {
     let (_vault, out) = probe_notes(
         &[("a.md", "Пишемо українською мовою"), ("b.md", "інше")],
-        &[("KNOTES_PROBE_SEARCH", "мова")],
+        &[("KNOTES_PROBE_SEARCH", "content: мова")],
     );
     assert_eq!(list_titles(&out), ["a"], "{out}");
     let (_vault, out) = probe_notes(&[("a.md", "a"), ("b.md", "b")], &[("KNOTES_PROBE_SEARCH", "")]);

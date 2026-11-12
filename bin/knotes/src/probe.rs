@@ -139,12 +139,44 @@ pub fn search_requested(window: &NSWindow) {
     }
     let Some(field) = search_field(window) else { return };
     field.setStringValue(&NSString::from_str(&query));
+    // KNOTES_PROBE_SEARCH_MODE=content: then a click on that segment of the switch.
+    let switch_to = std::env::var("KNOTES_PROBE_SEARCH_MODE").ok();
     if let Some(action) = field.action() {
         let target = field.target();
         // SAFETY: the field's own action and target, with the field as sender.
         unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&field)) };
     }
+    if let Some(mode) = switch_to
+        && let Some(switch) = search_switch(window)
+    {
+        switch.setSelectedSegment(if mode == "content" { 1 } else { 0 });
+        if let Some(action) = switch.action() {
+            let target = switch.target();
+            // SAFETY: the switch's own action and target, with the switch as sender.
+            unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&switch)) };
+        }
+    }
     println!("search: {query}");
+}
+
+/// The files/content switch of the search row.
+fn search_switch(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit::NSSegmentedControl>> {
+    fn find(view: &objc2_app_kit::NSView) -> Option<objc2::rc::Retained<objc2_app_kit::NSSegmentedControl>> {
+        if let Some(control) = view.downcast_ref::<objc2_app_kit::NSSegmentedControl>() {
+            return Some(objc2::Message::retain(control));
+        }
+        view.subviews().iter().find_map(|sub| find(&sub))
+    }
+    let content = window.contentView()?;
+    find(&content)
+}
+
+/// Mode shown by the search switch and the text in the search field.
+fn report_search(window: &NSWindow) {
+    if let (Some(switch), Some(field)) = (search_switch(window), search_field(window)) {
+        println!("search-mode: {}", if switch.selectedSegment() == 1 { "content" } else { "files" });
+        println!("search-field: {}", field.stringValue());
+    }
 }
 
 /// The search field of the list column, if the window has one.
@@ -246,6 +278,7 @@ pub fn schedule(with_sidebar: bool) {
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
                     report_list_separator(&window.window);
+                    report_search(&window.window);
                     report_list(&window.table);
                     println!("list-menu: {}", window.list_menu.describe());
                     report_note(window);

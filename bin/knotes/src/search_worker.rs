@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 
-use knotes_app::{ContentMatch, found_snippet};
+use knotes_app::{ContentMatch, SearchMode, found_snippet};
 use knotes_core::{ContentSearch, NoteText, TitleSearch};
 use knotes_index::SqliteIndex;
 use knotes_search::TitleIndex;
@@ -20,6 +20,9 @@ const SNIPPET_CHARS: usize = 120;
 pub struct SearchRequest {
     /// Increases with every request; only the answer to the latest one is shown.
     pub generation: u64,
+    /// File names (fuzzy) or the notes' text (full-text).
+    pub mode: SearchMode,
+    /// The text to search, without the operator.
     pub query: String,
     /// Notes of the selected list; `None` for all notes.
     pub scope: Option<Vec<String>>,
@@ -69,9 +72,11 @@ impl SearchWorker {
 
 fn search(request: &SearchRequest, reader: Option<&SqliteIndex>) -> SearchResponse {
     let query = request.query.trim();
-    let titles = request.titles.as_ref().map(|t| t.search_titles(query, MAX_TITLES).into_iter().map(|h| h.path).collect()).unwrap_or_default();
+    let mut titles = Vec::new();
     let mut content = Vec::new();
-    if let Some(reader) = reader
+    if request.mode == SearchMode::Files {
+        titles = request.titles.as_ref().map(|t| t.search_titles(query, MAX_TITLES).into_iter().map(|h| h.path).collect()).unwrap_or_default();
+    } else if let Some(reader) = reader
         && let Ok(hits) = reader.search_blocks(query, request.scope.as_deref(), MAX_BLOCKS)
     {
         let mut seen = HashSet::new();

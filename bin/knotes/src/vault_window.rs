@@ -10,7 +10,8 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Sidebar, SidebarItem, SidebarMode, TagNode, search_list, build_note_list, new_notes_folder,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
+    search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -250,6 +251,12 @@ impl VaultWindow {
         this.toolbar_delegate.on_toggle_search(move || {
             if let Some(window) = weak.upgrade() {
                 window.toggle_search();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_search_mode(move |mode| {
+            if let Some(window) = weak.upgrade() {
+                window.set_search_mode(mode);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -902,6 +909,13 @@ impl VaultWindow {
         self.highlighting.set(false);
     }
 
+    /// The files/content switch: rewrites the query's operator and searches again.
+    pub fn set_search_mode(&self, mode: SearchMode) {
+        let text = with_search_mode(&self.search_bar.field.stringValue().to_string(), mode);
+        self.search_bar.set_text(&text);
+        self.search(&text);
+    }
+
     /// The magnifying glass: shows the search row, or hides it and drops the search.
     pub fn toggle_search(&self) {
         let shown = !self.search_bar.is_shown();
@@ -913,8 +927,11 @@ impl VaultWindow {
 
     /// The search field changed: the list shows the results within the selected list.
     pub fn search(&self, query: &str) {
-        self.state.borrow_mut().search = query.to_owned();
-        if query.trim().is_empty() {
+        let (mode, text) = parse_search(query);
+        self.search_bar.show_mode(mode);
+        // An operator alone (`content:`) searches nothing yet: the list stays.
+        self.state.borrow_mut().search = if text.is_empty() { String::new() } else { query.to_owned() };
+        if text.is_empty() {
             *self.search_results.borrow_mut() = None;
             self.refresh_list();
         } else {
@@ -935,6 +952,10 @@ impl VaultWindow {
             let scope = (!filter_all).then(|| self.list.paths());
             (state.search.clone(), scope, state.titles.clone(), state.index_dir.clone())
         };
+        let (mode, query) = {
+            let (mode, text) = parse_search(&query);
+            (mode, text.to_owned())
+        };
         if self.search_worker.borrow().is_none() {
             let Some(index_dir) = index_dir else { return };
             let Some(mtm) = MainThreadMarker::new() else { return };
@@ -951,7 +972,7 @@ impl VaultWindow {
             *self.search_worker.borrow_mut() = Some(worker);
         }
         if let Some(worker) = self.search_worker.borrow().as_ref() {
-            worker.request(SearchRequest { generation, query, scope, titles });
+            worker.request(SearchRequest { generation, mode, query, scope, titles });
         }
     }
 

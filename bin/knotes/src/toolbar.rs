@@ -8,13 +8,13 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSImage, NSMenu, NSMenuToolbarItem, NSSearchField, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
+    NSImage, NSMenu, NSMenuToolbarItem, NSSearchField, NSSegmentedControl, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
     NSToolbarItem, NSToolbarItemGroup, NSToolbarItemGroupSelectionMode, NSToolbarSidebarTrackingSeparatorItemIdentifier,
     NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
 use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
 
-use knotes_app::SidebarMode;
+use knotes_app::{SearchMode, SidebarMode};
 
 use crate::strings;
 
@@ -31,6 +31,7 @@ type OnNewNote = Box<dyn Fn()>;
 type OnSidebarMode = Box<dyn Fn(SidebarMode)>;
 type OnSearch = Box<dyn Fn(String)>;
 type OnToggleSearch = Box<dyn Fn()>;
+type OnSearchMode = Box<dyn Fn(SearchMode)>;
 
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
@@ -41,6 +42,7 @@ pub struct Ivars {
     on_sidebar_mode: RefCell<Option<OnSidebarMode>>,
     on_search: RefCell<Option<OnSearch>>,
     on_toggle_search: RefCell<Option<OnToggleSearch>>,
+    on_search_mode: RefCell<Option<OnSearchMode>>,
     /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
     sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     sidebar_mode_state: Cell<SidebarMode>,
@@ -112,6 +114,15 @@ define_class!(
             }
         }
 
+        /// The files/content switch in the search row.
+        #[unsafe(method(searchModeChanged:))]
+        fn search_mode_changed(&self, sender: &NSSegmentedControl) {
+            let mode = if sender.selectedSegment() == 1 { SearchMode::Content } else { SearchMode::Files };
+            if let Some(callback) = self.ivars().on_search_mode.borrow().as_ref() {
+                callback(mode);
+            }
+        }
+
         #[unsafe(method(navigate:))]
         fn navigate(&self, sender: &NSToolbarItemGroup) {
             let forward = sender.selectedIndex() == 1;
@@ -132,6 +143,7 @@ impl ToolbarDelegate {
             on_sidebar_mode: RefCell::new(None),
             on_search: RefCell::new(None),
             on_toggle_search: RefCell::new(None),
+            on_search_mode: RefCell::new(None),
             sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
             sidebar_shown: Cell::new(true),
@@ -147,6 +159,10 @@ impl ToolbarDelegate {
 
     pub fn on_toggle_search(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_toggle_search.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_search_mode(&self, callback: impl Fn(SearchMode) + 'static) {
+        *self.ivars().on_search_mode.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_search(&self, callback: impl Fn(String) + 'static) {
