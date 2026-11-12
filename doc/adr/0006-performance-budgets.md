@@ -37,3 +37,9 @@ read-only.
 - Every stage that touches a budgeted path adds or updates a benchmark.
 - A missed budget blocks the stage until it is fixed or the budget is renegotiated
   with the owner in a new ADR.
+
+## Measured 2026-11-12
+
+Core operations: `doc/bench/2026-11-12-core.md`; UI: `doc/bench/2026-11-12-ui.md`. All budgets
+hold on an M5 Pro with at least 2x margin, including list scrolling (0.23 ms p95 per step),
+idle CPU (~0 %, ~2 wakeups per second) and memory (245 MB at 50k notes).
