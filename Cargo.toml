@@ -24,6 +24,7 @@ unicode-normalization = "0.1.26"
 notify = "8.2.2"
 knotes-search = { path = "lib/knotes-search" }
 knotes-indexer = { path = "lib/knotes-indexer" }
+knotes-app = { path = "lib/knotes-app" }
 rand = { version = "0.10.3", default-features = false }
 rand_chacha = { version = "0.10.0", default-features = false }
 rayon = "1.12.0"
