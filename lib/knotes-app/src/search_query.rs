@@ -1,16 +1,20 @@
 //! Search operators as in Obsidian (ADR 0015): `file:` searches note names (the default),
-//! `content:` the text of the notes.
+//! `content:` the text of the notes (every word anywhere in a note), `block:` every word in
+//! one block.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchMode {
     /// Fuzzy search over note names and paths.
     #[default]
     Files,
-    /// Full-text search over the notes' text.
+    /// Full-text search: every word anywhere in a note.
     Content,
+    /// Full-text search: every word in one block.
+    Block,
 }
 
-const OPERATORS: [(&str, SearchMode); 3] = [("content:", SearchMode::Content), ("files:", SearchMode::Files), ("file:", SearchMode::Files)];
+const OPERATORS: [(&str, SearchMode); 4] =
+    [("content:", SearchMode::Content), ("block:", SearchMode::Block), ("files:", SearchMode::Files), ("file:", SearchMode::Files)];
 
 /// The mode a query asks for and the text to search: a leading `content:`, `file:` or
 /// `files:` (any case) picks the mode; without one, file names are searched.
@@ -30,5 +34,6 @@ pub fn with_search_mode(query: &str, mode: SearchMode) -> String {
     match mode {
         SearchMode::Files => text.to_owned(),
         SearchMode::Content => format!("content: {text}"),
+        SearchMode::Block => format!("block: {text}"),
     }
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 
 use knotes_app::{ContentMatch, SearchMode, found_snippet};
-use knotes_core::{ContentSearch, NoteText, TitleSearch};
+use knotes_core::{ContentQuery, ContentSearch, NoteText, TitleSearch, Within};
 use knotes_index::SqliteIndex;
 use knotes_search::TitleIndex;
 
@@ -74,10 +74,15 @@ fn search(request: &SearchRequest, reader: Option<&SqliteIndex>) -> SearchRespon
     let query = request.query.trim();
     let mut titles = Vec::new();
     let mut content = Vec::new();
-    if request.mode == SearchMode::Files {
+    let within = match request.mode {
+        SearchMode::Files => None,
+        SearchMode::Content => Some(Within::Note),
+        SearchMode::Block => Some(Within::Block),
+    };
+    if within.is_none() {
         titles = request.titles.as_ref().map(|t| t.search_titles(query, MAX_TITLES).into_iter().map(|h| h.path).collect()).unwrap_or_default();
-    } else if let Some(reader) = reader
-        && let Ok(hits) = reader.search_blocks(query, request.scope.as_deref(), MAX_BLOCKS)
+    } else if let (Some(reader), Some(within)) = (reader, within)
+        && let Ok(hits) = reader.search(&ContentQuery { text: query, within, prefixes: true, scope: request.scope.as_deref(), limit: MAX_BLOCKS })
     {
         let mut seen = HashSet::new();
         for hit in hits {

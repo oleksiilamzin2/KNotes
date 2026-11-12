@@ -18,3 +18,10 @@ fn choosing_a_mode_rewrites_the_operator_and_keeps_the_text() {
     assert_eq!(with_search_mode("content: radar", SearchMode::Files), "radar");
     assert_eq!(with_search_mode("", SearchMode::Content), "content: ");
 }
+
+#[test]
+fn block_asks_for_every_word_in_one_block() {
+    assert_eq!(parse_search("block: люцифер баптист"), (SearchMode::Block, "люцифер баптист"));
+    assert_eq!(with_search_mode("block: radar", SearchMode::Content), "content: radar");
+    assert_eq!(with_search_mode("radar", SearchMode::Block), "block: radar");
+}

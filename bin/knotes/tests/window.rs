@@ -702,3 +702,24 @@ fn the_search_field_scrolls_to_show_what_is_typed() {
     assert!(out.contains(&format!("search-field: {long}")), "{out}");
     assert!(out.contains("search-caret-visible: true"), "the end of the text must stay in view: {out}");
 }
+
+fn half_word_notes() -> Vec<(&'static str, String)> {
+    let filler = "слово ".repeat(500);
+    vec![
+        ("razom.md", "Сьогодні Люцифер і Баптист прийшли разом.".to_owned()),
+        ("okremo.md", format!("Люцифер тут.\n\n{filler}\n\n# Інший розділ\n\nБаптист там.")),
+        ("odyn.md", "Лише Люцифер, без другого.".to_owned()),
+    ]
+}
+
+#[test]
+fn content_finds_halves_of_words_anywhere_in_a_note_and_block_in_one_block() {
+    let notes = half_word_notes();
+    let refs: Vec<(&str, &str)> = notes.iter().map(|(p, s)| (*p, s.as_str())).collect();
+    let (_vault, out) = probe_notes(&refs, &[("KNOTES_PROBE_SEARCH", "content: люц бап")]);
+    let mut titles = list_titles(&out);
+    titles.sort();
+    assert_eq!(titles, ["okremo", "razom"], "{out}");
+    let (_vault, out) = probe_notes(&refs, &[("KNOTES_PROBE_SEARCH", "block: люцифер баптист")]);
+    assert_eq!(list_titles(&out), ["razom"], "{out}");
+}

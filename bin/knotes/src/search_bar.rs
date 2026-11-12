@@ -83,7 +83,8 @@ impl SearchBar {
     pub fn show_mode(&self, mode: SearchMode) {
         self.mode.setSelectedSegment(match mode {
             SearchMode::Files => 0,
-            SearchMode::Content => 1,
+            // `block:` is a stricter content search.
+            SearchMode::Content | SearchMode::Block => 1,
         });
     }
 
