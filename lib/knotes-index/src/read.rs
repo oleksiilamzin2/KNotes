@@ -1,10 +1,10 @@
-use knotes_core::{BackLink, BoxError, CatalogEntry, FileState, FileStates, Heading, Link, LinkGraph, NoteCatalog, NoteOutline, NoteText, OutLink, Span, TagIndex};
+use knotes_core::{BackLink, BoxError, CatalogEntry, FileKind, FileState, FileStates, NoteRow, NoteRows, Heading, Link, LinkGraph, NoteCatalog, NoteOutline, NoteText, OutLink, Span, TagIndex};
 use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::OptionalExtension;
 
 use crate::SqliteIndex;
-use crate::codec::link_kind_from;
+use crate::codec::{file_kind_code, link_kind_from};
 
 impl FileStates for SqliteIndex {
     fn file_states(&self) -> Result<Vec<FileState>, BoxError> {
@@ -124,5 +124,16 @@ impl NoteCatalog for SqliteIndex {
             }
         }
         Ok(entries)
+    }
+}
+
+impl NoteRows for SqliteIndex {
+    fn note_rows(&self) -> Result<Vec<NoteRow>, BoxError> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT path, mtime_ns, COALESCE(snippet, '') FROM files WHERE kind = {} ORDER BY path",
+            file_kind_code(FileKind::Markdown)
+        ))?;
+        let rows = st.query_map([], |r| Ok(NoteRow { path: r.get(0)?, mtime_ns: r.get(1)?, snippet: r.get(2)? }))?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 }

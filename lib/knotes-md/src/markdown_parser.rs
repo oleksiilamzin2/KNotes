@@ -7,10 +7,11 @@ use crate::anchor_scan::scan_anchors;
 use crate::chunking::{TopBlock, chunk};
 use crate::frontmatter::parse_frontmatter;
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
+use crate::snippet::snippet;
 use crate::tag_scan::scan_tags;
 
 /// Obsidian-flavoured Markdown: wikilinks, math, YAML frontmatter, GFM tables, alerts.
-const OPTIONS: Options = Options::ENABLE_WIKILINKS
+pub(crate) const OPTIONS: Options = Options::ENABLE_WIKILINKS
     .union(Options::ENABLE_MATH)
     .union(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS)
     .union(Options::ENABLE_TABLES)
@@ -18,6 +19,9 @@ const OPTIONS: Options = Options::ENABLE_WIKILINKS
     .union(Options::ENABLE_TASKLISTS)
     .union(Options::ENABLE_FOOTNOTES)
     .union(Options::ENABLE_GFM);
+
+/// Characters of the note-list preview.
+const SNIPPET_CHARS: usize = 200;
 
 /// Default block size: a few hundred tokens of Ukrainian or English text.
 pub const DEFAULT_MAX_BLOCK_BYTES: usize = 2048;
@@ -81,6 +85,7 @@ impl NoteParser for MarkdownParser {
         }
         c.flush_run();
         chunk(source, &c.top, self.max_block_bytes, &mut c.note.blocks);
+        c.note.snippet = snippet(source, SNIPPET_CHARS);
         c.note
     }
 }

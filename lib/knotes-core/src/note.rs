@@ -90,4 +90,6 @@ pub struct ParsedNote {
     pub anchors: Vec<BlockAnchor>,
     /// In source order; frontmatter is excluded.
     pub blocks: Vec<Block>,
+    /// Plain-text start of the note for the note list (no title, frontmatter or code).
+    pub snippet: String,
 }

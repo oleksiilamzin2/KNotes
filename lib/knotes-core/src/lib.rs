@@ -11,6 +11,7 @@ mod note;
 mod note_catalog;
 mod note_outline;
 mod note_parser;
+mod note_rows;
 mod note_text;
 mod tag_index;
 mod title_search;
@@ -29,6 +30,7 @@ pub use note::{Block, BlockAnchor, Frontmatter, Heading, Link, LinkKind, ParsedN
 pub use note_catalog::{CatalogEntry, NoteCatalog};
 pub use note_outline::NoteOutline;
 pub use note_parser::NoteParser;
+pub use note_rows::{NoteRow, NoteRows};
 pub use note_text::NoteText;
 pub use tag_index::TagIndex;
 pub use title_search::{TitleHit, TitleSearch};

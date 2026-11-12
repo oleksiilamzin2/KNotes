@@ -1,6 +1,6 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 8;
+pub(crate) const VERSION: i64 = 9;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
@@ -16,7 +16,9 @@ CREATE TABLE files(
     name_key TEXT NOT NULL,
     -- Range of the note text in content.pack; NULL for files that are not notes.
     pack_off INTEGER,
-    pack_len INTEGER
+    pack_len INTEGER,
+    -- Note-list preview; NULL for files that are not notes.
+    snippet TEXT
 );
 CREATE INDEX files_by_name ON files(name_key);
 CREATE TABLE headings(

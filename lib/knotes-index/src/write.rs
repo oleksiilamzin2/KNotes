@@ -46,7 +46,8 @@ impl IndexWriter for SqliteIndex {
                         (off, source.len() as u64)
                     });
                     let key = file_name_key(&file.path);
-                    let (id, is_new) = upsert_file(&tx, file, &key, range)?;
+                    let snippet = note.map(|(_, parsed)| parsed.snippet.as_str());
+                    let (id, is_new) = upsert_file(&tx, file, &key, range, snippet)?;
                     if is_new {
                         changed_keys.insert(key);
                     }
@@ -107,7 +108,13 @@ impl IndexWriter for SqliteIndex {
 
 /// `pack` is the `(offset, length)` of the note text in the content pack.
 /// Returns the file id and whether the file is new to the index.
-fn upsert_file(tx: &Transaction, file: &VaultFile, key: &str, pack: Option<(u64, u64)>) -> Result<(i64, bool), BoxError> {
+fn upsert_file(
+    tx: &Transaction,
+    file: &VaultFile,
+    key: &str,
+    pack: Option<(u64, u64)>,
+    snippet: Option<&str>,
+) -> Result<(i64, bool), BoxError> {
     let (off, len) = match pack {
         Some((off, len)) => (Some(i64::try_from(off)?), Some(i64::try_from(len)?)),
         None => (None, None),
@@ -115,13 +122,14 @@ fn upsert_file(tx: &Transaction, file: &VaultFile, key: &str, pack: Option<(u64,
     let existing: Option<i64> = tx.prepare_cached("SELECT id FROM files WHERE path = ?1")?.query_row([&file.path], |r| r.get(0)).optional()?;
     let id = tx
         .prepare_cached(
-            "INSERT INTO files(path, kind, size, mtime_ns, name_key, pack_off, pack_len) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO files(path, kind, size, mtime_ns, name_key, pack_off, pack_len, snippet)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, size = excluded.size, mtime_ns = excluded.mtime_ns,
-                 pack_off = excluded.pack_off, pack_len = excluded.pack_len
+                 pack_off = excluded.pack_off, pack_len = excluded.pack_len, snippet = excluded.snippet
              RETURNING id",
         )?
         .query_row(
-            params![file.path, file_kind_code(file.kind), i64::try_from(file.size)?, file.mtime_ns, key, off, len],
+            params![file.path, file_kind_code(file.kind), i64::try_from(file.size)?, file.mtime_ns, key, off, len, snippet],
             |r| r.get(0),
         )?;
     Ok((id, existing.is_none()))
