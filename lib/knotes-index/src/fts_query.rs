@@ -15,28 +15,38 @@ const EXACT_MAX_CHARS: usize = 3;
 ///
 /// Words are quoted FTS5 phrases, so user input is never FTS syntax; FTS5 tokenizes inside the
 /// quotes with the table tokenizer (`пам'ять` becomes `пам ять`). Punctuation around a word is
-/// dropped, and so are words without letters or digits. `None` means nothing to search for.
-pub(crate) fn match_expression(query: &str, stemmer: &impl Stemmer) -> Option<String> {
-    let mut out = String::new();
+/// dropped, and so are words without letters or digits.
+pub(crate) fn query_groups(query: &str, stemmer: &impl Stemmer) -> Vec<QueryGroup> {
+    let mut groups = Vec::new();
     for raw in query.split_whitespace() {
         let word = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
         if word.is_empty() {
             continue;
         }
-        // Explicit AND: FTS5 has no implicit AND between parenthesized groups.
-        if !out.is_empty() {
-            out.push_str(" AND ");
-        }
         let stem = stemmer.stem(&word);
+        let mut expr = String::new();
         if word.chars().count() <= EXACT_MAX_CHARS {
-            let _ = write!(out, "{}", quoted(&word));
+            let _ = write!(expr, "{}", quoted(&word));
         } else if stem == word {
-            let _ = write!(out, "{}*", quoted(&word));
+            let _ = write!(expr, "{}*", quoted(&word));
         } else {
-            let _ = write!(out, "({} OR {}*)", quoted(&word), quoted(stem));
+            let _ = write!(expr, "({} OR {}*)", quoted(&word), quoted(stem));
         }
+        groups.push(QueryGroup { word, expr });
     }
-    (!out.is_empty()).then_some(out)
+    groups
+}
+
+/// One query word and its FTS5 expression.
+pub(crate) struct QueryGroup {
+    /// Lowercased word as typed, used to look up how frequent it is.
+    pub word: String,
+    pub expr: String,
+}
+
+/// Explicit AND: FTS5 has no implicit AND between parenthesized groups.
+pub(crate) fn join<'a>(groups: impl IntoIterator<Item = &'a QueryGroup>) -> String {
+    groups.into_iter().map(|g| g.expr.as_str()).collect::<Vec<_>>().join(" AND ")
 }
 
 fn quoted(s: &str) -> String {
@@ -45,11 +55,12 @@ fn quoted(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::match_expression;
+    use super::{join, query_groups};
     use crate::light_stemmer::LightStemmer;
 
     fn expr(q: &str) -> Option<String> {
-        match_expression(q, &LightStemmer)
+        let groups = query_groups(q, &LightStemmer);
+        (!groups.is_empty()).then(|| join(&groups))
     }
 
     #[test]

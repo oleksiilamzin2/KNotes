@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 
@@ -13,6 +14,8 @@ pub(crate) const DB_FILE: &str = "index.sqlite";
 pub struct SqliteIndex {
     pub(crate) conn: Connection,
     pub(crate) pack: ContentPack,
+    /// Cached number of search blocks; reset by every write.
+    pub(crate) block_count: Cell<Option<i64>>,
 }
 
 impl SqliteIndex {
@@ -48,6 +51,6 @@ impl SqliteIndex {
         if needed as u64 > pack.len()? {
             return Ok(None);
         }
-        Ok(Some(Self { conn, pack }))
+        Ok(Some(Self { conn, pack, block_count: Cell::new(None) }))
     }
 }

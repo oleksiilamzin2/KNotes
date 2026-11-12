@@ -1,6 +1,6 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 3;
+pub(crate) const VERSION: i64 = 4;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE files(
@@ -58,6 +58,8 @@ CREATE VIRTUAL TABLE blocks_fts USING fts5(
 -- Pending-terms buffer before FTS5 writes a segment (default 1 MB): fewer segments and merges
 -- during bulk indexing. Measured on 50k notes: FTS build 6.6 s -> 4.1 s with a larger buffer.
 INSERT INTO blocks_fts(blocks_fts, rank) VALUES ('hashsize', 67108864);
+-- Number of blocks per term, to recognise words found almost everywhere.
+CREATE VIRTUAL TABLE blocks_vocab USING fts5vocab(blocks_fts, 'row');
 ";
 
 /// Set on every connection.

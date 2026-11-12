@@ -6,6 +6,7 @@ mod fts_query;
 mod light_stemmer;
 mod read;
 mod schema;
+mod search;
 mod sqlite_index;
 mod stemmer;
 mod write;

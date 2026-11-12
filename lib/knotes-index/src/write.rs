@@ -63,6 +63,7 @@ impl IndexWriter for SqliteIndex {
         }
         self.pack.append(&texts)?;
         tx.commit()?;
+        self.block_count.set(None);
         Ok(())
     }
 }
