@@ -12,6 +12,11 @@ publish = false
 knotes-core = { path = "lib/knotes-core" }
 pulldown-cmark = { version = "0.13.6", default-features = false }
 yaml-rust2 = { version = "0.13.0", default-features = false }
+knotes-md = { path = "lib/knotes-md" }
+rand = { version = "0.10.3", default-features = false }
+rand_chacha = { version = "0.10.0", default-features = false }
+rayon = "1.12.0"
+tempfile = "3"
 
 [profile.release]
 lto = "thin"
