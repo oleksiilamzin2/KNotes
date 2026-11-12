@@ -35,6 +35,22 @@ pub struct Highlight {
     pub markup: Vec<Range<usize>>,
 }
 
+impl Highlight {
+    /// The same highlight with UTF-16 ranges (what `NSString` counts), converted in one pass.
+    pub fn to_utf16(&self, source: &str) -> Highlight {
+        let mut bounds: Vec<usize> =
+            self.runs.iter().flat_map(|r| [r.range.start, r.range.end]).chain(self.markup.iter().flat_map(|m| [m.start, m.end])).collect();
+        bounds.sort_unstable();
+        bounds.dedup();
+        let units = crate::utf16_offsets(source, &bounds);
+        let map = |b: usize| units[bounds.binary_search(&b).expect("collected bound")];
+        Highlight {
+            runs: self.runs.iter().map(|r| Run { range: map(r.range.start)..map(r.range.end), style: r.style }).collect(),
+            markup: self.markup.iter().map(|m| map(m.start)..map(m.end)).collect(),
+        }
+    }
+}
+
 pub fn highlight(source: &str) -> Highlight {
     let mut h = Highlight::default();
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {

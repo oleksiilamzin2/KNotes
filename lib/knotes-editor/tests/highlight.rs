@@ -63,3 +63,13 @@ fn byte_offsets_convert_to_utf16() {
     let src = "aж😀b";
     assert_eq!(utf16_offsets(src, &[0, 1, 3, 7, 8]), [0, 1, 2, 4, 5]);
 }
+
+#[test]
+fn whole_highlight_converts_to_utf16_ranges() {
+    let src = "ж **б** [[N|a]]";
+    let h = highlight(src).to_utf16(src);
+    let utf16: Vec<u16> = src.encode_utf16().collect();
+    let text = |r: std::ops::Range<usize>| String::from_utf16(&utf16[r]).unwrap();
+    assert_eq!(h.runs.iter().map(|r| (r.style, text(r.range.clone()))).collect::<Vec<_>>(), [(Style::Strong, "**б**".to_owned()), (Style::WikiLink, "[[N|a]]".to_owned())]);
+    assert_eq!(h.markup.iter().map(|r| text(r.clone())).collect::<Vec<_>>(), ["**", "**", "[[N|", "]]"]);
+}
