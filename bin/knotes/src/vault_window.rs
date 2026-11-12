@@ -257,6 +257,7 @@ impl VaultWindow {
                 }
             }
             probe::save_requested();
+            probe::write_requested(self);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -293,6 +294,10 @@ impl VaultWindow {
     /// Path of the note in the editor.
     pub fn open_path(&self) -> Option<String> {
         self.editing.borrow().as_ref().map(|e| e.path.clone())
+    }
+
+    pub fn vault(&self) -> Option<PathBuf> {
+        self.state.borrow().vault.clone()
     }
 
     /// The open note's file as it is on disk now (probe mode).

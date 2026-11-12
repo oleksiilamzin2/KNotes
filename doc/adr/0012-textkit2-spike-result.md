@@ -36,3 +36,18 @@ whose markup is revealed as soon as the caret arrives.
 - Native text behaviour stays: IME, Ukrainian spell check, dictation, undo.
 - Cursor moves can occasionally cost ~12 ms on an M1 (one dropped 120 Hz frame); watch it
   with the editor bench (`KNOTES_PROBE_ACTION=editor-bench`).
+
+## Measured with editing, 2026-11-12
+
+Edits restyle the region from `knotes_editor::changed_region`: the inserted text plus the
+runs and markup between the common prefix and suffix of the old highlight (moved by the
+edit) and the new one. The highlight is computed on a Rust copy of the text, updated by
+each edit, because copying a 300 KB `NSString` alone took about 1 ms.
+
+| Operation, 300 KB note, M5 Pro | p50 / p95 / max | M1 estimate | Budget |
+|---|---|---|---|
+| Keystroke: highlight, region, restyle, layout, display | 2.0 / 2.2 / 6.3 ms | ~4 ms p50 | 4 ms of own work per frame, layout and drawing aside |
+
+Of the keystroke, about 1 ms is own work (highlight 0.6 ms, UTF-16 offsets 0.35 ms); the
+rest is layout and display. A fence typed near the top restyles everything below it, like
+a full restyle (~4.5 ms): rare, at most a dropped frame on an M1.

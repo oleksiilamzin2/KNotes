@@ -42,6 +42,12 @@ pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&text), not_found) };
 }
 
+/// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
+pub fn write_requested(window: &VaultWindow) {
+    let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
+    std::fs::write(vault.join(path), text).expect("outside write");
+}
+
 /// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
 pub fn save_requested() {
     if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {

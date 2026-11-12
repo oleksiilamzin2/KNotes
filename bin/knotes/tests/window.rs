@@ -360,3 +360,41 @@ fn typing_a_heading_restyles_like_opening() {
 fn typing_a_code_block_at_the_end_restyles_like_opening() {
     assert_typing_restyles_like_opening("# Title\n\n**a**\n\nb", "\n```\nlet x = 1;");
 }
+
+#[test]
+fn an_outside_change_to_a_clean_note_reloads_it() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    let out = probe_env(
+        &[vault.path()],
+        None,
+        &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_WRITE", "changed outside"), ("KNOTES_PROBE_DELAY_MS", "1500")],
+    );
+    assert!(out.contains("note: n.md | changed outside"), "{out}");
+    assert!(out.contains("document: clean"), "{out}");
+}
+
+#[test]
+fn an_outside_change_to_an_edited_note_keeps_both_versions() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    let out = probe_env(
+        &[vault.path()],
+        None,
+        &[
+            ("KNOTES_PROBE_OPEN", "n.md"),
+            ("KNOTES_PROBE_TYPE", "!"),
+            ("KNOTES_PROBE_WRITE", "changed outside"),
+            ("KNOTES_PROBE_DELAY_MS", "1500"),
+        ],
+    );
+    assert_eq!(read(vault.path(), "n.md"), "hello!", "the editor's text keeps the name: {out}");
+    let copies: Vec<String> = std::fs::read_dir(vault.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("n (конфлікт ") && n.ends_with(").md"))
+        .collect();
+    assert_eq!(copies.len(), 1, "{copies:?}");
+    assert_eq!(read(vault.path(), &copies[0]), "changed outside");
+    assert!(out.contains("document: clean"), "{out}");
+}
