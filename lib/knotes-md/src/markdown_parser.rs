@@ -3,6 +3,7 @@ use std::ops::Range;
 use knotes_core::{Heading, Link, LinkKind, NoteParser, ParsedNote, Span};
 use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
+use crate::frontmatter::parse_frontmatter;
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
 use crate::tag_scan::scan_tags;
 
@@ -41,9 +42,17 @@ impl NoteParser for MarkdownParser {
                 Event::Start(Tag::Link { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, false, span),
                 Event::Start(Tag::Image { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, true, span),
                 Event::End(TagEnd::Link | TagEnd::Image) => c.end_link(),
-                Event::Start(Tag::CodeBlock(_) | Tag::MetadataBlock(_)) => c.in_verbatim = true,
-                Event::End(TagEnd::CodeBlock | TagEnd::MetadataBlock(_)) => c.in_verbatim = false,
+                Event::Start(Tag::CodeBlock(_)) => c.in_verbatim = true,
+                Event::End(TagEnd::CodeBlock) => c.in_verbatim = false,
+                Event::Start(Tag::MetadataBlock(_)) => {
+                    c.in_verbatim = true;
+                    c.yaml = Some((span, String::new()));
+                }
+                Event::End(TagEnd::MetadataBlock(_)) => c.end_frontmatter(),
                 Event::Text(t) => {
+                    if let Some((_, yaml)) = c.yaml.as_mut() {
+                        yaml.push_str(&t);
+                    }
                     c.text(&t);
                     c.plain_text(range);
                 }
@@ -69,9 +78,18 @@ struct Collector<'s> {
     in_verbatim: bool,
     /// Contiguous run of prose; pulldown-cmark splits text at `_`, `*`, `[` and similar.
     run: Option<Range<usize>>,
+    /// Frontmatter being read: block span and YAML text.
+    yaml: Option<(Span, String)>,
 }
 
 impl Collector<'_> {
+    fn end_frontmatter(&mut self) {
+        self.in_verbatim = false;
+        if let Some((span, yaml)) = self.yaml.take() {
+            self.note.frontmatter = Some(parse_frontmatter(&yaml, span));
+        }
+    }
+
     fn text(&mut self, t: &str) {
         if let Some(h) = self.heading.as_mut() {
             h.text.push_str(t);

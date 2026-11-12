@@ -9,3 +9,4 @@ publish.workspace = true
 [dependencies]
 knotes-core.workspace = true
 pulldown-cmark.workspace = true
+yaml-rust2.workspace = true

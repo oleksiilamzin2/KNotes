@@ -51,10 +51,23 @@ pub struct Tag {
     pub span: Span,
 }
 
+/// YAML frontmatter at the top of a note. Invalid YAML gives empty values, not an error.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Frontmatter {
+    /// The whole block, `---` lines included.
+    pub span: Span,
+    /// From `tags` / `tag`, without `#`.
+    pub tags: Vec<String>,
+    /// From `aliases` / `alias`.
+    pub aliases: Vec<String>,
+}
+
 /// Everything the indexer extracts from one note.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ParsedNote {
+    pub frontmatter: Option<Frontmatter>,
     pub headings: Vec<Heading>,
     pub links: Vec<Link>,
+    /// Inline tags only; frontmatter tags live in `frontmatter.tags`.
     pub tags: Vec<Tag>,
 }

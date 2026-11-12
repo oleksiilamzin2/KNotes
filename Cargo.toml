@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 knotes-core = { path = "lib/knotes-core" }
 pulldown-cmark = { version = "0.13.6", default-features = false }
+yaml-rust2 = { version = "0.13.0", default-features = false }
 
 [profile.release]
 lto = "thin"
