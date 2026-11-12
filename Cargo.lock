@@ -160,6 +160,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-bench"
+version = "0.1.0"
+dependencies = [
+ "knotes-core",
+ "knotes-index",
+ "knotes-indexer",
+ "knotes-md",
+ "knotes-search",
+ "knotes-vault",
+ "tempfile",
+]
+
+[[package]]
 name = "knotes-core"
 version = "0.1.0"
 
