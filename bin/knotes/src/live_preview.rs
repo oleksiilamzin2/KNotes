@@ -446,6 +446,7 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, String) {
         Style::Link => (&look.body, &look.accent, "link".into()),
         Style::WikiLink => (&look.body, &look.accent, "wikilink".into()),
         Style::Tag => (&look.body, &look.accent, "tag".into()),
+        Style::Math => (&look.body, &look.text, "math".into()),
     }
 }
 

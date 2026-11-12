@@ -117,3 +117,15 @@ fn links_carry_their_targets_over_the_whole_link_source() {
         ]
     );
 }
+
+#[test]
+fn formulas_carry_their_source_and_kind() {
+    let src = "Energy $E = mc^2$ here.\n\n$$\n\\frac{a}{b}\n$$\n\nPrices $5 and $10 stay text.";
+    let h = highlight(src);
+    let formulas: Vec<(&str, &str, bool)> = h.formulas.iter().map(|f| (&src[f.range.clone()], f.tex.as_str(), f.display)).collect();
+    assert_eq!(formulas, [("$E = mc^2$", "E = mc^2", false), ("$$\n\\frac{a}{b}\n$$", "\\frac{a}{b}", true)]);
+    assert!(styles(src).contains(&(Style::Math, "$E = mc^2$")), "{:?}", styles(src));
+    assert!(styles(src).contains(&(Style::Math, "$$\n\\frac{a}{b}\n$$")));
+    let utf16 = highlight("Їж $x$").to_utf16("Їж $x$");
+    assert_eq!(utf16.formulas[0].range, 3..6);
+}

@@ -17,6 +17,8 @@ pub enum Style {
     Link,
     WikiLink,
     Tag,
+    /// A formula, `$…$` or `$$…$$` with its dollars.
+    Math,
 }
 
 /// A styled byte range of the source.
@@ -24,6 +26,14 @@ pub enum Style {
 pub struct Run {
     pub range: Range<usize>,
     pub style: Style,
+}
+
+/// A formula: its source range with the dollars, the LaTeX inside, display or inline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormulaRun {
+    pub range: Range<usize>,
+    pub tex: String,
+    pub display: bool,
 }
 
 /// A link and the source range it covers, brackets and destination included.
@@ -42,6 +52,8 @@ pub struct Highlight {
     pub markup: Vec<Range<usize>>,
     /// Links with their targets, sorted by start.
     pub links: Vec<LinkRun>,
+    /// Formulas, sorted by start.
+    pub formulas: Vec<FormulaRun>,
 }
 
 impl Highlight {
@@ -72,6 +84,7 @@ impl Highlight {
             .flat_map(|r| [r.range.start, r.range.end])
             .chain(self.markup.iter().flat_map(|m| [m.start, m.end]))
             .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
+            .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -81,6 +94,11 @@ impl Highlight {
             runs: self.runs.iter().map(|r| Run { range: map(r.range.start)..map(r.range.end), style: r.style }).collect(),
             markup: self.markup.iter().map(|m| map(m.start)..map(m.end)).collect(),
             links: self.links.iter().map(|l| LinkRun { range: map(l.range.start)..map(l.range.end), link: l.link.clone() }).collect(),
+            formulas: self
+                .formulas
+                .iter()
+                .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
+                .collect(),
         }
     }
 }
@@ -110,6 +128,8 @@ pub fn highlight(source: &str) -> Highlight {
                 delimited(&mut h, r, Style::Code, n);
             }
             Event::Start(Tag::CodeBlock(_)) => h.runs.push(Run { range: r.start..r.start + text.trim_end().len(), style: Style::CodeBlock }),
+            Event::InlineMath(tex) => formula(&mut h, r, &tex, false),
+            Event::DisplayMath(tex) => formula(&mut h, r, &tex, true),
             Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole }, .. }) => {
                 h.runs.push(Run { range: r.clone(), style: Style::WikiLink });
                 let open = if has_pothole { text.find('|').map_or(2, |i| i + 1) } else { 2 };
@@ -140,6 +160,11 @@ pub fn highlight(source: &str) -> Highlight {
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
+}
+
+fn formula(h: &mut Highlight, r: Range<usize>, tex: &str, display: bool) {
+    h.runs.push(Run { range: r.clone(), style: Style::Math });
+    h.formulas.push(FormulaRun { range: r, tex: tex.trim().to_owned(), display });
 }
 
 /// A run whose first and last `n` bytes are its delimiters.
