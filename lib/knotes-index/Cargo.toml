@@ -1,0 +1,15 @@
+[package]
+name = "knotes-index"
+description = "SQLite index of a Knotes vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+knotes-md.workspace = true
+tempfile.workspace = true
