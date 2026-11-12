@@ -216,3 +216,24 @@ fn scrolling_the_note_list_fits_a_120_hz_frame() {
     let p95: f64 = line.split("p95=").nth(1).unwrap().split("ms").next().unwrap().parse().unwrap();
     assert!(p95 < 8.33, "{line}");
 }
+
+fn editor_runs(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("editor: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn live_preview_hides_markup_outside_the_cursor_line() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "## Title\n\nsome **bold** text\n\nlast line").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md")]);
+    assert!(out.contains("textkit: 2"), "{out}");
+    assert_eq!(
+        editor_runs(&out),
+        "[markup]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
+    );
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert_eq!(
+        editor_runs(&out),
+        "[hidden]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
+    );
+}

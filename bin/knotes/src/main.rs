@@ -3,6 +3,7 @@
 mod app_delegate;
 mod chat_view;
 mod list_menu;
+mod live_preview;
 mod main_menu;
 mod note_list_view;
 mod note_view;

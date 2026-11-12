@@ -16,6 +16,7 @@ knotes-app.workspace = true
 knotes-core.workspace = true
 knotes-session.workspace = true
 knotes-index.workspace = true
+knotes-editor.workspace = true
 knotes-vault.workspace = true
 
 [dev-dependencies]

@@ -193,6 +193,7 @@ dependencies = [
  "dispatch2",
  "knotes-app",
  "knotes-core",
+ "knotes-editor",
  "knotes-index",
  "knotes-session",
  "knotes-vault",

@@ -13,11 +13,13 @@ use knotes_session::{Event, Snapshot};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
+use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextView, NSViewController, NSWindow};
 use objc2_foundation::{NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSString};
 
 use crate::chat_view::{self, ChatView};
 use crate::list_menu::ListMenu;
+use crate::live_preview::LivePreview;
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view;
 use crate::sidebar_view::{self, SidebarSource};
@@ -48,6 +50,8 @@ pub struct VaultWindow {
     pub table: Retained<NSTableView>,
     pub list_menu: ListMenu,
     pub note_text: Retained<NSTextView>,
+    /// Delegate of `note_text`, kept alive here.
+    live_preview: Retained<LivePreview>,
     pub chat: ChatView,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
@@ -68,6 +72,8 @@ impl VaultWindow {
         let list_vc = NSViewController::new(mtm);
         list_vc.setView(&list_scroll);
         let (note_scroll, note_text) = note_view::note_view(mtm);
+        let live_preview = LivePreview::new(mtm);
+        note_text.setDelegate(Some(ProtocolObject::from_ref(&*live_preview)));
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
         let chat = chat_view::chat_view(mtm);
@@ -97,6 +103,7 @@ impl VaultWindow {
             table,
             list_menu,
             note_text,
+            live_preview,
             chat,
             toolbar_delegate: toolbar,
             state: RefCell::new(state),
@@ -219,6 +226,10 @@ impl VaultWindow {
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
+            if std::env::var("KNOTES_PROBE_CURSOR").as_deref() == Ok("end") {
+                let end = self.note_text.string().length();
+                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(end, 0));
+            }
             probe::schedule(true);
         }
     }
@@ -233,7 +244,7 @@ impl VaultWindow {
             self.ensure_reader(&mut state);
             state.reader.as_ref().and_then(|r| r.note_text(path).ok().flatten()).unwrap_or_default()
         };
-        self.note_text.setString(&NSString::from_str(&text));
+        self.live_preview.show(&self.note_text, &text);
         self.update_navigation();
     }
 

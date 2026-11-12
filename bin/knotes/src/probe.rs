@@ -201,6 +201,8 @@ fn report_list(table: &NSTableView) {
 
 /// Open note (from the text view itself), history buttons (from the toolbar) and list selection.
 fn report_note(window: &VaultWindow) {
+    println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
+    println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
     let (path, _, _) = window.describe_note();
     if let Some(path) = path {
         let text: String = window.note_text.string().to_string().replace('\n', "⏎").chars().take(60).collect();
