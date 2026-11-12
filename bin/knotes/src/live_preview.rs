@@ -473,13 +473,13 @@ impl LivePreview {
                 folded.setMaximumLineHeight(0.01);
                 add_paragraph_style(storage, (first.1, paragraphs.1), &folded);
             }
-            let first_line_end = f.range.end.min(first.1);
-            // On the first line's last character before its line break.
-            let ends_line = first_line_end > 0 && storage.string().characterAtIndex(first_line_end - 1) == 0x0a;
-            let kern_at = first_line_end.saturating_sub(if ends_line { 2 } else { 1 }).max(f.range.start);
-            add_kern(storage, kern_at, image.width_pt);
+            add_kern(storage, f.range.start, image.width_pt);
         } else {
-            add_kern(storage, f.range.end - 1, image.width_pt);
+            // On the first character: the source has spaces where lines may break, and the
+            // reserved width must stay with the image (on the last character a break inside
+            // the source carried it to the next line). A formula too wide for the rest of a
+            // line now moves to the next one whole.
+            add_kern(storage, f.range.start, image.width_pt);
         }
     }
 

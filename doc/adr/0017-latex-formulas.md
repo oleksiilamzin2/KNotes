@@ -44,3 +44,6 @@ live preview (ADR 0005, 0011) should show them typeset. A spike rendered eight f
   1.6 ms, unchanged.
 - Spelling marks are kept out of formulas: their source is not words, and on hidden glyphs
   the marks showed as stray dots.
+- A fixture note (`lib/knotes-editor/tests/fixtures/formulas.md`, 87 formulas of the kinds
+  Obsidian notes use) typesets in full; the one gap found, `\middle`, is kept in a test of
+  known gaps.

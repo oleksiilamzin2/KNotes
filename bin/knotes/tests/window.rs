@@ -786,3 +786,15 @@ fn formulas_that_scroll_into_view_get_their_images() {
     assert!(!layers.is_empty() && layers.len() < 100, "only the formulas in view: {}", layers.len());
     assert!(layers.iter().all(|l| l.1 > top - 400.0 && l.1 < bottom + 400.0), "{visible}: {layers:?}");
 }
+
+#[test]
+fn a_wide_inline_formula_at_a_line_end_moves_down_whole_instead_of_overflowing() {
+    let note = "Енергія спокою $E = mc^2$, теорема Піфагора $a^2 + b^2 = c^2$, а корені квадратного рівняння дорівнюють $x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$.\n\nend";
+    let (_vault, out) = probe_notes(&[("q.md", note)], &[("KNOTES_PROBE_OPEN", "q.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let layout = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).unwrap();
+    let field = |name: &str| -> f64 { layout.split(' ').find_map(|p| p.strip_prefix(name)).unwrap().parse().unwrap() };
+    let right = field("left=") + field("width=");
+    let layers = formula_layers(&out);
+    assert_eq!(layers.len(), 3, "{out}");
+    assert!(layers.iter().all(|l| l.0 + l.2 <= right + 1.0), "inside the text column (right edge {right}): {layers:?}");
+}
