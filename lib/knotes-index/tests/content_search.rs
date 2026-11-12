@@ -88,3 +88,38 @@ fn limit_is_respected() {
     let (_d, index) = index_with(&refs);
     assert_eq!(index.search_blocks("common", 5).unwrap().len(), 5);
 }
+
+#[test]
+fn ukrainian_word_forms_match() {
+    let (_d, index) = index_with(&[("a.md", "рідна мова\n"), ("b.md", "дві мови\n"), ("c.md", "розмова мовою\n"), ("d.md", "інше\n")]);
+    let mut found = paths(&index, "мовою");
+    found.sort();
+    assert_eq!(found, ["a.md", "b.md", "c.md"]);
+}
+
+#[test]
+fn exact_form_ranks_above_other_forms() {
+    let (_d, index) = index_with(&[("other.md", "про радари тут\n"), ("exact.md", "про радарами тут\n")]);
+    assert_eq!(paths(&index, "радарами"), ["exact.md", "other.md"]);
+}
+
+#[test]
+fn english_word_forms_match() {
+    let (_d, index) = index_with(&[("a.md", "we searched everything\n"), ("b.md", "searches run\n")]);
+    let mut found = paths(&index, "searching");
+    found.sort();
+    assert_eq!(found, ["a.md", "b.md"]);
+}
+
+#[test]
+fn short_words_match_exactly_and_punctuation_is_ignored() {
+    let (_d, index) = index_with(&[("a.md", "кава і чай\n"), ("b.md", "кава із чаєм\n")]);
+    assert_eq!(paths(&index, "і"), ["a.md"]);
+    assert_eq!(paths(&index, "кава,").len(), 2);
+}
+
+#[test]
+fn several_inflected_words_match_together() {
+    let (_d, index) = index_with(&[("a.md", "робота з системою даних\n"), ("b.md", "система без нічого\n")]);
+    assert_eq!(paths(&index, "системами даних"), ["a.md"]);
+}

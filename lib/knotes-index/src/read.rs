@@ -4,6 +4,7 @@ use rusqlite::{OptionalExtension, params};
 use crate::SqliteIndex;
 use crate::codec::link_kind_from;
 use crate::fts_query::match_expression;
+use crate::light_stemmer::LightStemmer;
 
 impl FileStates for SqliteIndex {
     fn file_states(&self) -> Result<Vec<FileState>, BoxError> {
@@ -81,7 +82,7 @@ impl NoteText for SqliteIndex {
 
 impl ContentSearch for SqliteIndex {
     fn search_blocks(&self, query: &str, limit: usize) -> Result<Vec<BlockHit>, BoxError> {
-        let Some(expr) = match_expression(query) else { return Ok(Vec::new()) };
+        let Some(expr) = match_expression(query, &LightStemmer) else { return Ok(Vec::new()) };
         // Top-k first, then joins only for the k winners.
         let mut st = self.conn.prepare_cached(
             "WITH top AS (
