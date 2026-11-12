@@ -36,3 +36,21 @@ fn hidden_folders_are_ignored() {
     fs::write(root.join(".obsidian/workspace.json"), "{}").unwrap();
     assert_eq!(watcher.next_change(Duration::from_millis(1500)), None);
 }
+
+#[test]
+fn folder_rules_files_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    fs::create_dir(root.join("Journal")).unwrap();
+    let watcher = FsWatcher::new(&root, Duration::from_millis(100)).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    fs::write(root.join("Journal/.knotes"), "{}").unwrap();
+    let mut seen = Vec::new();
+    while let Some(batch) = watcher.next_change(WAIT) {
+        seen.extend(batch);
+        if seen.contains(&"Journal/.knotes".to_owned()) {
+            break;
+        }
+    }
+    assert!(seen.contains(&"Journal/.knotes".to_owned()), "{seen:?}");
+}

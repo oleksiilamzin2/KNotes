@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use knotes_core::{FileKind, VaultFile, VaultReader, VaultScanner};
+use knotes_core::{FileKind, FolderRulesStore, VaultFile, VaultReader, VaultScanner};
 use rayon::prelude::*;
 
 pub struct FsVault {
@@ -64,5 +64,33 @@ impl VaultReader for FsVault {
     fn read_text(&self, path: &str) -> io::Result<String> {
         let bytes = fs::read(self.root.join(path))?;
         Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+    }
+}
+
+/// Name of the per-folder rules file (ADR 0010).
+const RULES_FILE: &str = ".knotes";
+
+impl FolderRulesStore for FsVault {
+    fn read_rules(&self, folders: &[&str]) -> io::Result<Vec<(String, String)>> {
+        let mut found = Vec::new();
+        for folder in folders {
+            match fs::read_to_string(self.root.join(folder).join(RULES_FILE)) {
+                Ok(text) => found.push(((*folder).to_owned(), text)),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(found)
+    }
+
+    /// Writes a temporary file next to the target and renames it over, so readers (and other
+    /// devices syncing the vault) never see half a file.
+    fn write_rules(&self, folder: &str, text: &str) -> io::Result<()> {
+        let dir = self.root.join(folder);
+        let tmp = dir.join(format!("{RULES_FILE}.tmp"));
+        fs::write(&tmp, text)?;
+        fs::rename(&tmp, dir.join(RULES_FILE)).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
     }
 }
