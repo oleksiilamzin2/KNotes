@@ -96,3 +96,24 @@ fn markup_owners_match_a_plain_search_on_a_large_note() {
         .collect();
     assert_eq!(h.markup_owners(), plain);
 }
+
+#[test]
+fn links_carry_their_targets_over_the_whole_link_source() {
+    use knotes_core::LinkKind;
+    let src = "Їжак [[A/Note#H|x]] and [t](b%20c.md) and [w](https://e.com)";
+    let h = highlight(src).to_utf16(src);
+    let utf16: Vec<u16> = src.encode_utf16().collect();
+    let shown: Vec<(String, LinkKind, &str, Option<&str>)> = h
+        .links
+        .iter()
+        .map(|l| (String::from_utf16(&utf16[l.range.clone()]).unwrap(), l.link.kind, l.link.target.as_str(), l.link.subpath.as_deref()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("[[A/Note#H|x]]".to_owned(), LinkKind::Wiki, "A/Note", Some("H")),
+            ("[t](b%20c.md)".to_owned(), LinkKind::Markdown, "b c.md", None),
+            ("[w](https://e.com)".to_owned(), LinkKind::External, "https://e.com", None),
+        ]
+    );
+}

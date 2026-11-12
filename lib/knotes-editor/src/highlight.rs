@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use knotes_core::NoteParser;
+use knotes_core::{Link, NoteParser};
 use knotes_md::{MarkdownParser, OPTIONS};
 use pulldown_cmark::{Event, LinkType, Parser, Tag};
 
@@ -26,6 +26,13 @@ pub struct Run {
     pub style: Style,
 }
 
+/// A link and the source range it covers, brackets and destination included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRun {
+    pub range: Range<usize>,
+    pub link: Link,
+}
+
 #[derive(Debug, Default)]
 pub struct Highlight {
     /// Sorted by start.
@@ -33,6 +40,8 @@ pub struct Highlight {
     /// Delimiters the live preview hides away from the cursor (`**`, `## `, `[[Note|`, `](url)`),
     /// sorted by start.
     pub markup: Vec<Range<usize>>,
+    /// Links with their targets, sorted by start.
+    pub links: Vec<LinkRun>,
 }
 
 impl Highlight {
@@ -57,8 +66,13 @@ impl Highlight {
 
     /// The same highlight with UTF-16 ranges (what `NSString` counts), converted in one pass.
     pub fn to_utf16(&self, source: &str) -> Highlight {
-        let mut bounds: Vec<usize> =
-            self.runs.iter().flat_map(|r| [r.range.start, r.range.end]).chain(self.markup.iter().flat_map(|m| [m.start, m.end])).collect();
+        let mut bounds: Vec<usize> = self
+            .runs
+            .iter()
+            .flat_map(|r| [r.range.start, r.range.end])
+            .chain(self.markup.iter().flat_map(|m| [m.start, m.end]))
+            .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
+            .collect();
         bounds.sort_unstable();
         bounds.dedup();
         let units = crate::utf16_offsets(source, &bounds);
@@ -66,6 +80,7 @@ impl Highlight {
         Highlight {
             runs: self.runs.iter().map(|r| Run { range: map(r.range.start)..map(r.range.end), style: r.style }).collect(),
             markup: self.markup.iter().map(|m| map(m.start)..map(m.end)).collect(),
+            links: self.links.iter().map(|l| LinkRun { range: map(l.range.start)..map(l.range.end), link: l.link.clone() }).collect(),
         }
     }
 }
@@ -116,9 +131,12 @@ pub fn highlight(source: &str) -> Highlight {
             _ => {}
         }
     }
-    for tag in MarkdownParser::new().parse(source).tags {
+    let parsed = MarkdownParser::new().parse(source);
+    for tag in parsed.tags {
         h.runs.push(Run { range: tag.span.start as usize..tag.span.end as usize, style: Style::Tag });
     }
+    h.links = parsed.links.into_iter().map(|link| LinkRun { range: link.span.start as usize..link.span.end as usize, link }).collect();
+    h.links.sort_by_key(|l| l.range.start);
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
