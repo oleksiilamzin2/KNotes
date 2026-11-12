@@ -191,12 +191,14 @@ name = "knotes"
 version = "0.1.0"
 dependencies = [
  "dispatch2",
+ "knotes-alloc",
  "knotes-app",
  "knotes-core",
  "knotes-editor",
  "knotes-index",
  "knotes-search",
  "knotes-session",
+ "knotes-synth",
  "knotes-vault",
  "objc2",
  "objc2-app-kit",
@@ -206,6 +208,10 @@ dependencies = [
  "serde_json",
  "tempfile",
 ]
+
+[[package]]
+name = "knotes-alloc"
+version = "0.1.0"
 
 [[package]]
 name = "knotes-app"
@@ -219,6 +225,7 @@ dependencies = [
 name = "knotes-bench"
 version = "0.1.0"
 dependencies = [
+ "knotes-alloc",
  "knotes-core",
  "knotes-index",
  "knotes-indexer",

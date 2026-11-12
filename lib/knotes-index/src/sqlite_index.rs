@@ -130,7 +130,7 @@ impl SqliteIndex {
 
 impl SqliteIndex {
     /// Frees the clean pages of the writer's page cache. A large write (a cold build) fills
-    /// the 64 MB cache, which SQLite otherwise keeps for the life of the connection.
+    /// the cache, which SQLite otherwise keeps for the life of the connection.
     pub fn release_memory(&self) {
         if let Err(e) = self.conn.release_memory() {
             eprintln!("knotes: sqlite release_memory: {e}");

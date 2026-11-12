@@ -527,3 +527,22 @@ fn escape_closes_the_list_and_leaves_the_text() {
     assert_eq!(completion(&out), "none");
     assert!(out.contains("note: a.md | [[No"), "{out}");
 }
+
+fn footprint_mb(out: &str) -> f64 {
+    out.lines().find_map(|l| l.strip_prefix("memory: footprint ")?.strip_suffix(" MB")?.parse().ok()).unwrap_or_else(|| panic!("{out}"))
+}
+
+/// A cold index must not leave the app much bigger than opening the same vault again: the
+/// SQLite page cache is freed and large blocks bypass malloc's cache (ADR 0006, 0014). At 8k
+/// notes the debug app measured +90 MB with malloc's large cache and +56 MB with a 64 MB
+/// SQLite write cache; now about +33 MB (fragmented small blocks) is left.
+#[test]
+fn a_cold_index_leaves_no_more_memory_behind_than_a_warm_start() {
+    let vault = tempfile::tempdir().unwrap();
+    knotes_synth::SyntheticVault::plan(knotes_synth::VaultSpec::new(8000, 3)).write_to(vault.path()).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let env = [("KNOTES_PROBE_DELAY_MS", "7000")];
+    let cold = footprint_mb(&probe_env(&[vault.path()], Some(home.path()), &env));
+    let warm = footprint_mb(&probe_env(&[vault.path()], Some(home.path()), &env));
+    assert!(cold - warm < 45.0, "cold {cold} MB, warm {warm} MB");
+}

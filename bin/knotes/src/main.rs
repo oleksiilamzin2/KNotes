@@ -19,6 +19,10 @@ use objc2::MainThreadMarker;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
+/// Large blocks bypass malloc's cache of freed blocks (ADR 0014).
+#[global_allocator]
+static ALLOCATOR: knotes_alloc::DirectLarge = knotes_alloc::DirectLarge;
+
 fn main() {
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);

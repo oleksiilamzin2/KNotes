@@ -221,8 +221,35 @@ fn report_toolbar(window: &NSWindow) {
     println!("toolbar: {}", names.join(", "));
 }
 
+/// Physical footprint of this process (what Activity Monitor shows as Memory), in MB.
+fn footprint_mb() -> f64 {
+    #[repr(C)]
+    #[derive(Default)]
+    struct RusageInfoV0 {
+        uuid: [u8; 16],
+        user_time: u64,
+        system_time: u64,
+        pkg_idle_wkups: u64,
+        interrupt_wkups: u64,
+        pageins: u64,
+        wired_size: u64,
+        resident_size: u64,
+        phys_footprint: u64,
+        proc_start_abstime: u64,
+        proc_exit_abstime: u64,
+    }
+    unsafe extern "C" {
+        fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV0) -> i32;
+    }
+    let mut info = RusageInfoV0::default();
+    // SAFETY: flavor 0 (RUSAGE_INFO_V0) fills exactly this struct for our own pid.
+    let ok = unsafe { proc_pid_rusage(std::process::id() as i32, 0, &mut info) } == 0;
+    if ok { info.phys_footprint as f64 / (1 << 20) as f64 } else { 0.0 }
+}
+
 fn report(window: &NSWindow) {
     report_toolbar(window);
+    println!("memory: footprint {:.1} MB", footprint_mb());
     let (menus, file) = crate::main_menu::describe(&NSApplication::sharedApplication(window.mtm()));
     println!("menu: {menus}");
     println!("file-menu: {file}");

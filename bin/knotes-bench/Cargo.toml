@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+knotes-alloc.workspace = true
 knotes-core.workspace = true
 knotes-index.workspace = true
 knotes-indexer.workspace = true

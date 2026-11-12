@@ -92,7 +92,9 @@ PRAGMA synchronous = NORMAL;
 PRAGMA temp_store = MEMORY;
 PRAGMA busy_timeout = 5000;
 PRAGMA mmap_size = 268435456;
-PRAGMA cache_size = -65536;
+-- 16 MB: a cold build of 50k notes is ~3% slower than with 64 MB, and leaves ~60 MB less
+-- fragmented heap behind (ADR 0014).
+PRAGMA cache_size = -16384;
 -- Checkpoints run in maintenance; the automatic one (16384 pages, 64 MB) is only a safety net.
 PRAGMA wal_autocheckpoint = 16384;
 ";

@@ -22,6 +22,10 @@ const MS: fn(u64) -> Duration = Duration::from_millis;
 /// Repetitions of each query.
 const RUNS: usize = 5;
 
+/// The app's allocator, so measurements match it (ADR 0014).
+#[global_allocator]
+static ALLOCATOR: knotes_alloc::DirectLarge = knotes_alloc::DirectLarge;
+
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let (mut vault, mut factor) = (None, 2.0);

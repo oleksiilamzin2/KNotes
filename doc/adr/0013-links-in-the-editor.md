@@ -45,5 +45,4 @@ Completion:
 - Block (`^id`) completion waits until block ids are exposed by the index.
 - Measured at 50k notes (M5 Pro, release): the title index and link targets add about
   14 MB (resident 245 → 259 MB with a warm index). Separately found: after a cold index
-  the physical footprint stays at 432 MB (142 MB on a warm start) until the app restarts,
-  over the 300 MB budget of ADR 0006; to fix in the indexer.
+  the physical footprint stayed at 432 MB until the app restarted; fixed by ADR 0014.

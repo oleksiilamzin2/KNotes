@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+knotes-alloc.workspace = true
 objc2 = "0.6.5"
 objc2-foundation = "0.3.2"
 objc2-app-kit = "0.3.2"
@@ -22,5 +23,6 @@ knotes-vault.workspace = true
 knotes-search.workspace = true
 
 [dev-dependencies]
+knotes-synth.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
