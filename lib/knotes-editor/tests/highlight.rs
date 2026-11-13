@@ -1,8 +1,7 @@
 use knotes_editor::{ListKind, Style, highlight, utf16_offsets};
 
-/// Runs other than the title (a note's first line is one, tested on its own).
 fn styles(src: &str) -> Vec<(Style, &str)> {
-    highlight(src).runs.into_iter().filter(|r| r.style != Style::Title).map(|r| (r.style, &src[r.range])).collect()
+    highlight(src).runs.into_iter().map(|r| (r.style, &src[r.range])).collect()
 }
 
 fn markup(src: &str) -> Vec<&str> {
@@ -11,9 +10,8 @@ fn markup(src: &str) -> Vec<&str> {
 
 #[test]
 fn headings_hide_their_hashes() {
-    // Below the first line, which is the note's title.
-    assert_eq!(styles("intro\n\n## Title\n"), [(Style::Heading(2), "## Title")]);
-    assert_eq!(markup("intro\n\n## Title\n"), ["## "]);
+    assert_eq!(styles("## Title\n"), [(Style::Heading(2), "## Title")]);
+    assert_eq!(markup("## Title\n"), ["## "]);
 }
 
 #[test]
@@ -29,9 +27,8 @@ fn emphasis_strong_strike_and_code_hide_delimiters() {
 
 #[test]
 fn wikilinks_show_only_the_alias_or_target() {
-    // Below the title line, whose links are its name's (ADR 0019).
-    assert_eq!(styles("T\n\nsee [[Note|alias]]"), [(Style::WikiLink, "[[Note|alias]]")]);
-    assert_eq!(markup("T\n\nsee [[Note|alias]]"), ["[[Note|", "]]"]);
+    assert_eq!(styles("see [[Note|alias]]"), [(Style::WikiLink, "[[Note|alias]]")]);
+    assert_eq!(markup("see [[Note|alias]]"), ["[[Note|", "]]"]);
     assert_eq!(markup("[[Note#Part]]"), ["[[", "]]"]);
 }
 
@@ -43,8 +40,8 @@ fn markdown_links_show_only_their_text() {
 
 #[test]
 fn tags_are_styled_but_not_hidden() {
-    assert_eq!(styles("T\n\nplan #todo now"), [(Style::Tag, "#todo")]);
-    assert!(markup("T\n\nplan #todo now").is_empty());
+    assert_eq!(styles("plan #todo now"), [(Style::Tag, "#todo")]);
+    assert!(markup("plan #todo now").is_empty());
 }
 
 #[test]
@@ -69,12 +66,11 @@ fn byte_offsets_convert_to_utf16() {
 
 #[test]
 fn whole_highlight_converts_to_utf16_ranges() {
-    let src = "T\n\nж **б** [[N|a]]";
+    let src = "ж **б** [[N|a]]";
     let h = highlight(src).to_utf16(src);
     let utf16: Vec<u16> = src.encode_utf16().collect();
     let text = |r: std::ops::Range<usize>| String::from_utf16(&utf16[r]).unwrap();
-    let runs: Vec<(Style, String)> = h.runs.iter().map(|r| (r.style, text(r.range.clone()))).collect();
-    assert_eq!(runs, [(Style::Title, "T".to_owned()), (Style::Strong, "**б**".to_owned()), (Style::WikiLink, "[[N|a]]".to_owned())]);
+    assert_eq!(h.runs.iter().map(|r| (r.style, text(r.range.clone()))).collect::<Vec<_>>(), [(Style::Strong, "**б**".to_owned()), (Style::WikiLink, "[[N|a]]".to_owned())]);
     assert_eq!(h.markup.iter().map(|r| text(r.clone())).collect::<Vec<_>>(), ["**", "**", "[[N|", "]]"]);
 }
 
@@ -83,7 +79,7 @@ fn markup_takes_the_style_of_the_innermost_run_around_it() {
     let src = "# Title **b**\n\nplain _i_ [[Note|alias]]";
     let h = highlight(src);
     let owners: Vec<(&str, Option<Style>)> = h.markup.iter().zip(h.markup_owners()).map(|(m, o)| (&src[m.clone()], o)).collect();
-    assert_eq!(owners[0], ("# ", Some(Style::Title)), "the first line is the title");
+    assert_eq!(owners[0], ("# ", Some(Style::Heading(1))));
     assert_eq!(owners[1], ("**", Some(Style::Strong)));
     assert_eq!(owners[2], ("**", Some(Style::Strong)));
     assert!(owners[3..].iter().all(|(_, o)| matches!(o, Some(Style::Emphasis | Style::WikiLink))), "{owners:?}");
@@ -104,7 +100,7 @@ fn markup_owners_match_a_plain_search_on_a_large_note() {
 #[test]
 fn links_carry_their_targets_over_the_whole_link_source() {
     use knotes_core::LinkKind;
-    let src = "T\n\nЇжак [[A/Note#H|x]] and [t](b%20c.md) and [w](https://e.com)";
+    let src = "Їжак [[A/Note#H|x]] and [t](b%20c.md) and [w](https://e.com)";
     let h = highlight(src).to_utf16(src);
     let utf16: Vec<u16> = src.encode_utf16().collect();
     let shown: Vec<(String, LinkKind, &str, Option<&str>)> = h
@@ -220,30 +216,4 @@ fn an_unclosed_or_indented_code_block_has_no_closing_fence() {
     let src = "para\n\n    indented code\n";
     assert!(fences(src).is_empty());
     assert_eq!(highlight(src).code_blocks.into_iter().map(|r| &src[r]).collect::<Vec<_>>(), ["indented code"]);
-}
-
-fn title(src: &str) -> Option<&str> {
-    highlight(src).title.map(|r| &src[r])
-}
-
-#[test]
-fn the_first_line_of_a_heading_or_paragraph_is_the_title() {
-    assert_eq!(title("# My note\n\ntext"), Some("# My note"));
-    assert_eq!(title("First line\nstill the paragraph\n\nmore"), Some("First line"));
-    assert_eq!(title("\n\nAfter blank lines"), Some("After blank lines"));
-    assert_eq!(title("---\ntags: [a]\n---\n\n## Below frontmatter\n"), Some("## Below frontmatter"));
-    let src = "# My note\n\ntext";
-    let runs: Vec<Style> = highlight(src).runs.iter().map(|r| r.style).collect();
-    assert_eq!(runs, [Style::Title], "the heading run is the title run");
-    let src = "**Bold** and [[Link]] in the title";
-    let runs: Vec<Style> = highlight(src).runs.iter().map(|r| r.style).collect();
-    assert_eq!(runs, [Style::Title, Style::Strong], "runs inside show over the title; links there are its name's (ADR 0019)");
-}
-
-#[test]
-fn a_note_starting_with_a_list_code_or_quote_has_no_title() {
-    assert_eq!(title("- item\n"), None);
-    assert_eq!(title("```\ncode\n```\n"), None);
-    assert_eq!(title("> quote\n"), None);
-    assert_eq!(title(""), None);
 }

@@ -33,8 +33,6 @@ const MIN_MARGIN: f64 = 32.0;
 const TOP_MARGIN: f64 = 24.0;
 const BODY_SIZE: f64 = 15.0;
 const HEADING_SIZES: [f64; 6] = [26.0, 22.0, 19.0, 17.0, 15.0, 15.0];
-/// The note's name, larger than any heading (Apple Notes' title).
-const TITLE_SIZE: f64 = 28.0;
 const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"];
 /// Indentation of each list level (the source's own indentation is hidden).
 const LIST_INDENT: f64 = 20.0;
@@ -52,8 +50,6 @@ struct Look {
     /// List numbers: digits of one width, so items' text lines up.
     digits: Retained<NSFont>,
     headings: Vec<Retained<NSFont>>,
-    /// The note's name, its first line (ADR 0019).
-    title: Retained<NSFont>,
     /// Hidden markup: a near-zero font size collapses its width; clear colour hides the rest.
     hidden: Retained<NSFont>,
     text: Retained<NSColor>,
@@ -223,7 +219,6 @@ impl LivePreview {
             mono: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.0),
             digits: NSFont::monospacedDigitSystemFontOfSize_weight(BODY_SIZE, 0.0),
             headings: HEADING_SIZES.iter().map(|&s| NSFont::boldSystemFontOfSize(s)).collect(),
-            title: NSFont::boldSystemFontOfSize(TITLE_SIZE),
             hidden: NSFont::systemFontOfSize(0.01),
             text: NSColor::labelColor(),
             muted: NSColor::tertiaryLabelColor(),
@@ -329,10 +324,8 @@ impl LivePreview {
         for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Strike | Style::Done) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= STRUCK);
         }
-        let in_title = |m: &Range<usize>| styled.title.as_ref().is_some_and(|t| m.start >= t.start && m.end <= t.end);
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
-            // The title's `#` never shows: the line is the name, not a heading being written.
-            let id = if overlaps(m, revealed) && !in_title(m) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
+            let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
             canvas.paint(m.clone(), |p| p.look = id);
         }
         // A done task's text is muted, bold or italic inside it too (links keep their colour).
@@ -798,11 +791,6 @@ impl LivePreview {
         marks
     }
 
-    /// Where the title line ends (UTF-16), if the note has one.
-    pub fn title_end(&self) -> Option<usize> {
-        self.ivars().styled.borrow().title.as_ref().map(|t| t.end)
-    }
-
     /// Probe lines of what is drawn in place of hidden source in view.
     pub fn describe_drawn(view: &NSTextView) -> Vec<String> {
         crate::preview_fragment::describe_visible(view)
@@ -1000,7 +988,6 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'static str) {
         Style::Done => (&look.body, &look.muted, "done"),
         Style::QuoteMarker { .. } => (&look.body, &look.muted, "quote-marker"),
         Style::Fence => (&look.mono, &look.muted, "code-fence"),
-        Style::Title => (&look.title, &look.text, "title"),
     }
 }
 

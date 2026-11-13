@@ -17,8 +17,7 @@ fn src_of(source: &str, span: Span) -> &str {
 
 #[test]
 fn plain_wikilink() {
-    // Below the title line, whose links are its name's (ADR 0019).
-    let src = "Title\n\nsee [[Note]] here";
+    let src = "see [[Note]] here";
     let l = one(src);
     assert_eq!((l.kind, l.embed), (LinkKind::Wiki, false));
     assert_eq!(l.target, "Note");
@@ -109,7 +108,7 @@ fn ukrainian_wikilink() {
 
 #[test]
 fn link_inside_heading_is_collected() {
-    let note = MarkdownParser::new().parse("Title\n\n## About [[Note|alias]]\n");
+    let note = MarkdownParser::new().parse("## About [[Note|alias]]\n");
     assert_eq!(note.headings[0].text, "About alias");
     assert_eq!(note.links[0].target, "Note");
 }

@@ -29,8 +29,6 @@ pub enum Style {
     QuoteMarker { depth: u8 },
     /// A fenced code block's opening (with its language) or closing fence line.
     Fence,
-    /// The note's name: the first line of its first block, a heading or a paragraph (ADR 0019).
-    Title,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,8 +73,6 @@ pub struct Highlight {
     pub formulas: Vec<FormulaRun>,
     /// Code blocks, fences included, sorted by start.
     pub code_blocks: Vec<Range<usize>>,
-    /// The title line (also a `Title` run); its markup is never shown.
-    pub title: Option<Range<usize>>,
 }
 
 impl Highlight {
@@ -109,7 +105,6 @@ impl Highlight {
             .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
             .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
-            .chain(self.title.iter().flat_map(|t| [t.start, t.end]))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -125,7 +120,6 @@ impl Highlight {
                 .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
                 .collect(),
             code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
-            title: self.title.as_ref().map(|t| map(t.start)..map(t.end)),
         }
     }
 }
@@ -138,19 +132,8 @@ pub fn highlight(source: &str) -> Highlight {
     let mut item: Option<usize> = None;
     // Quotes open: only the outermost marks the prefixes of all its lines.
     let mut quotes = 0;
-    let title = knotes_md::title_range(source);
-    h.title = title.clone();
-    // Links in the title are its name's (ADR 0019): no link look there.
-    let in_title = |r: &Range<usize>| title.as_ref().is_some_and(|t| r.start >= t.start && r.end <= t.end);
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
-        // A paragraph's title run goes before the runs inside it, which then show over it; a
-        // heading's run becomes the title run below.
-        if let (Event::Start(Tag::Paragraph), Some(title)) = (&event, &title)
-            && title.start == r.start
-        {
-            h.runs.push(Run { range: title.clone(), style: Style::Title });
-        }
         match event {
             Event::Start(Tag::BlockQuote(_)) => {
                 if quotes == 0 {
@@ -188,11 +171,7 @@ pub fn highlight(source: &str) -> Highlight {
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 let line_end = r.start + text.trim_end().len();
-                let run = match &h.title {
-                    Some(title) if title.start == r.start => Run { range: title.clone(), style: Style::Title },
-                    _ => Run { range: r.start..line_end, style: Style::Heading(level as u8) },
-                };
-                h.runs.push(run);
+                h.runs.push(Run { range: r.start..line_end, style: Style::Heading(level as u8) });
                 let hashes = text.bytes().take_while(|&b| b == b'#').count();
                 if hashes > 0 {
                     let spaces = text[hashes..].bytes().take_while(|&b| b == b' ').count();
@@ -220,17 +199,13 @@ pub fn highlight(source: &str) -> Highlight {
             Event::InlineMath(tex) => formula(&mut h, r, &tex, false),
             Event::DisplayMath(tex) => formula(&mut h, r, &tex, true),
             Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole }, .. }) => {
-                if !in_title(&r) {
-                    h.runs.push(Run { range: r.clone(), style: Style::WikiLink });
-                }
+                h.runs.push(Run { range: r.clone(), style: Style::WikiLink });
                 let open = if has_pothole { text.find('|').map_or(2, |i| i + 1) } else { 2 };
                 h.markup.push(r.start..r.start + open);
                 h.markup.push(r.end - 2..r.end);
             }
             Event::Start(Tag::Link { link_type: LinkType::Inline, .. }) => {
-                if !in_title(&r) {
-                    h.runs.push(Run { range: r.clone(), style: Style::Link });
-                }
+                h.runs.push(Run { range: r.clone(), style: Style::Link });
                 if let Some(close) = text.rfind("](") {
                     h.markup.push(r.start..r.start + 1);
                     h.markup.push(r.start + close..r.end);

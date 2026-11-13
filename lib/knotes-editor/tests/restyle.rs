@@ -36,9 +36,8 @@ fn opening_a_code_fence_restyles_everything_below() {
 
 #[test]
 fn removing_a_setext_underline_restyles_the_line_above() {
-    // Below the first line, which is the note's title either way.
-    let before = "intro\n\nTitle\n===\n\nbody";
-    let (start, end) = region(before, 12, 4, "");
-    assert_eq!(start, 7, "the heading style must leave `Title`");
-    assert!(end >= 12);
+    let before = "Title\n===\n\nbody";
+    let (start, end) = region(before, 5, 4, "");
+    assert_eq!(start, 0, "the heading style must leave `Title`");
+    assert!(end >= 5);
 }

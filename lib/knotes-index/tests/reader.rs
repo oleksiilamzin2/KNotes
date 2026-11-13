@@ -12,12 +12,12 @@ fn upsert(index: &mut SqliteIndex, path: &str, source: &str) {
 fn reader_sees_what_the_writer_commits() {
     let dir = tempfile::tempdir().unwrap();
     let mut writer = SqliteIndex::open(dir.path()).unwrap();
-    upsert(&mut writer, "a.md", "first\n#radar");
+    upsert(&mut writer, "a.md", "first #radar");
     let reader = SqliteIndex::open_reader(dir.path()).unwrap();
     assert_eq!(reader.notes_with_tag("radar").unwrap(), ["a.md"]);
-    upsert(&mut writer, "b.md", "second\n#radar");
+    upsert(&mut writer, "b.md", "second #radar");
     assert_eq!(reader.notes_with_tag("radar").unwrap(), ["a.md", "b.md"]);
-    assert_eq!(reader.note_text("b.md").unwrap().as_deref(), Some("second\n#radar"));
+    assert_eq!(reader.note_text("b.md").unwrap().as_deref(), Some("second #radar"));
 }
 
 #[test]

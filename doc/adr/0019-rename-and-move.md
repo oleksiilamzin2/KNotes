@@ -12,19 +12,11 @@ answered a question round (2026-11-13).
 
 - Where: the note list's context menu (Rename, the title edited in its row; Move to…, a
   folder picked by search), dragging a note onto a sidebar folder, renaming a folder from the
-  sidebar's context menu, and the note's first line (below).
-- The first line is the note's name, as in Apple Notes (owner's choice): the first line of
-  text after the frontmatter shows in a large bold font, its `#` markers hidden. Editing it
-  renames the file when the line is finished with Enter or the note is left (the moment ADR
-  0011 names a new note); later edits rename again (this replaces ADR 0011's "once").
-  Opening a note never renames it. Renaming from the list rewrites the first line when it
-  was the old name; a first line that is something else stays as it is.
-- Tags and links written in the title are the name's, not the note's (owner's choice): they
-  show as plain title text (no colour, no click), the index does not count them, and the
-  file name takes the title's words without tags and with the text links show. A first line
-  of tags and links alone names nothing (Obsidian notes often start with a line of tags),
-  so it is no title and its tags stay the note's. The open note's name shows in the
-  toolbar over the note; clicking it edits it and Return renames the note.
+  sidebar's context menu, and the note's name in the toolbar.
+- A note's name is its file name without `.md` (owner's choice). It shows in the toolbar
+  after the history buttons; clicking it edits it, Return renames the note, Escape gives the
+  name back. The first line is content, as in Obsidian: renaming never changes it and
+  editing it renames nothing (ADR 0011 still names a new note after its first line, once).
 - Links: before a rename that changes links in other notes, the app asks "Update N links in
   M notes?" (Update / Don't update / Cancel). Updating keeps each link's form: a bare name
   stays bare while the new name is unique, otherwise it gets the full path; a full path stays
@@ -38,7 +30,6 @@ answered a question round (2026-11-13).
 
 - A rename touching many notes writes them all; the index catches up through its watcher.
 - Renames done outside Knotes still break links, as in Obsidian.
-- An old note whose first line is a paragraph shows it large, as Apple Notes would.
 
 ## Built (2026-11-13)
 
@@ -52,8 +43,10 @@ answered a question round (2026-11-13).
   typed (a native dialog; a typed new folder is made), instead of a separate search panel.
 - A renamed folder moves in one rename, attachments and files outside the index included;
   links to all its indexed files (images too) are updated.
-- The title is the first line of the first block when that is a heading or a paragraph; a
-  note starting with a list, code or a quote has none.
-- Probe actions: `rename=`, `list-rename=`, `list-move=`, `drag-to=`, `folder-rename=`, with
+- For a few hours the first line was the name, as in Apple Notes (large and bold, renaming
+  the file when edited, its tags and links not the note's). The owner reverted it the same
+  day: the first line is content and the name is the file's. Indexes built meanwhile
+  (version 10) are rebuilt (version 11).
+- Probe actions: `rename=`, `list-rename=`, `list-move=`, `drag-to=`, `folder-rename=`, `toolbar-rename=`, with
   `KNOTES_PROBE_ANSWER` for the question; the drag gesture itself is not driven (its
   pasteboard writer and the folder's drop handler are).

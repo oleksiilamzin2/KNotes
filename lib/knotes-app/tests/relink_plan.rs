@@ -40,12 +40,11 @@ fn plan(vault: &Vault, moves: &[(&str, &str)]) -> knotes_app::Relinks {
 
 #[test]
 fn renaming_a_note_edits_the_notes_that_link_to_it() {
-    // Links below the title lines, whose links are their names' (ADR 0019).
-    let vault = Vault(vec![("a.md", "A\n\nsee [[Old]]"), ("b.md", "B\n\n[x](Old.md) and [[Old|it]]"), ("Old.md", "Old\n\nbody [[a]]"), ("c.md", "nothing")]);
+    let vault = Vault(vec![("a.md", "see [[Old]]"), ("b.md", "[x](Old.md) and [[Old|it]]"), ("Old.md", "body [[a]]"), ("c.md", "nothing")]);
     let plan = plan(&vault, &[("Old.md", "New.md")]);
     let mut edits = plan.edits.clone();
     edits.sort();
-    assert_eq!(edits, [("a.md".to_owned(), "A\n\nsee [[New]]".to_owned()), ("b.md".to_owned(), "B\n\n[x](New.md) and [[New|it]]".to_owned())]);
+    assert_eq!(edits, [("a.md".to_owned(), "see [[New]]".to_owned()), ("b.md".to_owned(), "[x](New.md) and [[New|it]]".to_owned())]);
     assert_eq!((plan.links, plan.edits.len()), (3, 2));
 }
 
