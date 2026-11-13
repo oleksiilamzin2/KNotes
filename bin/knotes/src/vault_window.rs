@@ -79,6 +79,8 @@ struct State {
 const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
 /// The pause in typing after which the outline is listed again.
 const OUTLINE_DELAY: Duration = Duration::from_millis(150);
+/// The vault's tabs, beside its index (ADR 0024).
+const TABS_FILE: &str = "tabs.json";
 
 /// The note open in the editor.
 struct Editing {
@@ -110,8 +112,9 @@ pub struct VaultWindow {
     pub chat: ChatView,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
-    /// The documents open as tabs (ADR 0024).
+    /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
     tabs: RefCell<Tabs>,
+    tabs_restored: Cell<bool>,
     /// What the right panel shows.
     panel_mode: Cell<PanelMode>,
     /// The document the outline shows (a note's or a PDF's path), and whether an edit's
@@ -266,6 +269,7 @@ impl VaultWindow {
             chat,
             outline_panel,
             tabs: RefCell::new(Tabs::default()),
+            tabs_restored: Cell::new(false),
             panel_mode: Cell::new(PanelMode::Ai),
             outline_of: RefCell::new(None),
             outline_due: Cell::new(false),
@@ -788,7 +792,14 @@ impl VaultWindow {
         } else {
             self.live_preview.files_changed(&self.note_text, &snapshot.changed);
         }
+        // Deleted documents lose their tabs.
+        if let Some(vault) = self.vault() {
+            self.tabs.borrow_mut().retain(|p| vault.join(p).is_file());
+        }
         self.rebuild_sidebar();
+        if !self.tabs_restored.replace(true) {
+            self.restore_tabs();
+        }
         let mut selection = self.state.borrow().selection.clone();
         if !self.exists(&selection) {
             selection = SidebarItem::AllNotes;
@@ -910,10 +921,6 @@ impl VaultWindow {
                 self.highlight(&item);
                 self.select(item);
             }
-            // `KNOTES_PROBE_TAB_CLOSE=a.md`: a click on the cross of that document's tab.
-            if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLOSE") {
-                probe::tab_close_requested(&self.outline, &self.sidebar, &path);
-            }
             // After the click: it may open a PDF to rename.
             probe::toolbar_rename_requested(&self.window);
             probe::title_clicks_requested(&self.window);
@@ -962,6 +969,7 @@ impl VaultWindow {
             AfterClose::Nothing => self.show_nothing(),
             AfterClose::Same => {}
         }
+        self.save_tabs();
         if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
             self.rebuild_sidebar();
             self.highlight(&SidebarItem::Gap);
@@ -995,6 +1003,11 @@ impl VaultWindow {
 
     /// The tab shown remembers where its document is, as it is left.
     fn remember_place(&self) {
+        // Only the current tab's document: a tab just closed gives its place to none.
+        let shown = self.pdf_path.borrow().clone().or_else(|| self.open_path());
+        if shown.is_none() || shown.as_deref() != self.tabs.borrow().current_path() {
+            return;
+        }
         let place = if let Some(viewer) = self.pdf_view.borrow().as_ref() {
             Some(TabPlace { top: viewer.place(), cursor: None })
         } else if self.editing.borrow().is_some() {
@@ -1005,6 +1018,35 @@ impl VaultWindow {
         };
         if let Some(place) = place {
             self.tabs.borrow_mut().remember(place);
+        }
+    }
+
+    /// The vault's tabs file, beside its index (ADR 0024).
+    fn tabs_file(&self) -> Option<PathBuf> {
+        self.state.borrow().index_dir.as_ref().map(|dir| dir.join(TABS_FILE))
+    }
+
+    /// Writes the tabs and their places for the next launch.
+    fn save_tabs(&self) {
+        let Some(file) = self.tabs_file() else { return };
+        let text = self.tabs.borrow().to_json().to_string();
+        let tmp = file.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &file)) {
+            eprintln!("knotes: cannot save tabs: {e}");
+        }
+    }
+
+    /// The tabs of the last launch, those whose documents are still there; the one shown
+    /// then is shown again, where it was. Once, on the vault's first snapshot.
+    fn restore_tabs(&self) {
+        let (Some(file), Some(vault)) = (self.tabs_file(), self.vault()) else { return };
+        let Ok(text) = std::fs::read_to_string(file) else { return };
+        let mut tabs = Tabs::from_text(&text);
+        tabs.retain(|p| vault.join(p).is_file());
+        let current = tabs.current_path().map(str::to_owned);
+        *self.tabs.borrow_mut() = tabs;
+        if let Some(path) = current {
+            self.open_note(&path, true);
         }
     }
 
@@ -1471,6 +1513,8 @@ impl VaultWindow {
     pub fn leave(&self) {
         self.write_edits();
         self.name_new_note(true);
+        self.remember_place();
+        self.save_tabs();
     }
 
     /// Autosave and File → Save; names a new note whose first line is finished.
@@ -1603,7 +1647,9 @@ impl VaultWindow {
         }
         for (from, to) in &moved {
             self.state.borrow_mut().history.rename(from, to);
+            self.tabs.borrow_mut().rename(from, to);
         }
+        self.save_tabs();
         if let Some(open) = self.open_path() {
             let path = moved.get(&open).cloned().unwrap_or(open);
             let edited = edits.iter().find(|(p, _)| *p == path).map(|(_, text)| text.clone());

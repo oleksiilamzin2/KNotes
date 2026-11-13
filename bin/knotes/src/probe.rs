@@ -686,6 +686,7 @@ pub fn schedule(with_sidebar: bool) {
         let mtm = MainThreadMarker::new().expect("main queue");
         WINDOW.with(|w| {
             if let Some(window) = w.borrow().as_ref() {
+                tabs_requested(window);
                 report(&window.window);
                 let placeholder = window.chat.question.placeholderString().map(|p| p.to_string()).unwrap_or_default();
                 println!("chat: {} | {placeholder}", window.chat.title.stringValue());
@@ -809,6 +810,24 @@ pub fn toolbar_rename_requested(window: &NSWindow) {
     let mtm = MainThreadMarker::new().expect("main thread");
     // SAFETY: the field's own target and action, sent as Return does.
     unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(field.action().expect("field action"), field.target().as_deref(), Some(&field)) };
+}
+
+/// Tab clicks once the window has settled (a note scrolled `end-later` is scrolled), before
+/// the report: `KNOTES_PROBE_TAB_CLOSE=a.md`, a click on the cross of that document's tab;
+/// `KNOTES_PROBE_TAB_TRIP=b.md`, that document's tab clicked, then the tab shown before.
+fn tabs_requested(window: &VaultWindow) {
+    if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLOSE") {
+        window.window.displayIfNeeded();
+        tab_close_requested(&window.outline, &window.sidebar, &path);
+        window.window.displayIfNeeded();
+    }
+    if let Ok(other) = std::env::var("KNOTES_PROBE_TAB_TRIP") {
+        window.window.displayIfNeeded();
+        let top = window.note_top().map(|top| first_line_at(&window.note_text.string().to_string(), top));
+        println!("note-top-before-trip: {}", top.unwrap_or_default());
+        window.tab_trip(&other);
+        window.window.displayIfNeeded();
+    }
 }
 
 /// The line of `text` starting at UTF-16 offset `at`.
@@ -1100,14 +1119,6 @@ fn report_note(window: &VaultWindow) {
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
     if std::env::var("KNOTES_PROBE_PDF_WIDTH").is_ok() {
         println!("pdf-drawn: {}", window.pdf_drawn().join(" "));
-    }
-    // `KNOTES_PROBE_TAB_TRIP=b.md`: that document's tab clicked, then the tab shown before.
-    if let Ok(other) = std::env::var("KNOTES_PROBE_TAB_TRIP") {
-        window.window.displayIfNeeded();
-        let top = window.note_top().map(|top| first_line_at(&window.note_text.string().to_string(), top));
-        println!("note-top-before-trip: {}", top.unwrap_or_default());
-        window.tab_trip(&other);
-        window.window.displayIfNeeded();
     }
     println!("pdf-top: {}", window.pdf_top_page().map(|p| p.to_string()).unwrap_or_default());
     println!("pdf-view: {}", window.describe_pdf());

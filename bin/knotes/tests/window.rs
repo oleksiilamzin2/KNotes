@@ -2275,3 +2275,36 @@ fn a_tab_brings_its_pdf_back_at_the_page_it_was_at() {
     let out = probe_env(&[vault.path()], Some(home.path()), &env);
     assert!(out.contains("pdf-view: long.pdf 15/30") && out.contains("pdf-top: 15\n"), "{out}");
 }
+
+#[test]
+fn tabs_and_where_their_documents_were_come_back_after_a_restart() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    std::fs::write(vault.path().join("a.md"), long_sections()).unwrap();
+    let env = [("KNOTES_PROBE_OPEN", "b.md,a.md"), ("KNOTES_PROBE_CURSOR", "40"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later")];
+    let first = probe_env(&[vault.path()], Some(home.path()), &env);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[]);
+    assert_eq!(sidebar_tabs(&out), ("b | a".to_owned(), "a".to_owned()), "{out}");
+    assert!(out.contains("note-title: a\n") && out.contains("cursor: 40\n"), "{out}");
+    assert_eq!(note_top(&out), note_top(&first));
+}
+
+#[test]
+fn closing_the_tab_shown_does_not_give_its_place_to_the_next() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    std::fs::write(vault.path().join("a.md"), long_sections()).unwrap();
+    std::fs::write(vault.path().join("b.md"), format!("b start\n{}", "b line\n".repeat(300))).unwrap();
+    // b's place is its top; a scrolled down, then a's tab closed: b shows from its top.
+    let env = [("KNOTES_PROBE_OPEN", "b.md,a.md"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")];
+    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    assert!(out.contains("note-title: b\n"), "{out}");
+    assert_eq!(note_top(&out), "b start");
+}
+
+#[test]
+fn a_deleted_document_loses_its_tab_and_a_renamed_one_keeps_it() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
+    std::fs::remove_file(vault.path().join("a.md")).unwrap();
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "toolbar-rename=c")]);
+    assert_eq!(sidebar_tabs(&out).0, "c", "{out}");
+}

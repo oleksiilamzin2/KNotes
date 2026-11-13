@@ -128,6 +128,11 @@ impl Tabs {
         json!({ "tabs": tabs, "current": self.current })
     }
 
+    /// Tabs read back from the text `to_json` gave; anything broken gives none.
+    pub fn from_text(text: &str) -> Self {
+        serde_json::from_str(text).map(|value| Self::from_json(&value)).unwrap_or_default()
+    }
+
     /// Tabs read back; anything broken gives none.
     pub fn from_json(value: &Value) -> Self {
         let tabs: Vec<Tab> = value

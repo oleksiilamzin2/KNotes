@@ -75,4 +75,6 @@ fn tabs_round_trip_through_json() {
     assert_eq!(back.place_of("a.md"), Some(TabPlace { top: (12, 0.0), cursor: Some((3, 0)) }));
     assert_eq!(back.place_of("doc.pdf"), Some(TabPlace { top: (2, 0.25), cursor: None }));
     assert!(Tabs::from_json(&serde_json::json!("broken")).is_empty());
+    assert_eq!(paths(&Tabs::from_text(&tabs.to_json().to_string())), ["a.md", "doc.pdf"]);
+    assert!(Tabs::from_text("{not json").is_empty());
 }
