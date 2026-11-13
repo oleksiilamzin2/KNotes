@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 
+use objc2::Message;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -108,6 +109,8 @@ pub struct FindBar {
     count: Retained<NSTextField>,
     bar: Retained<NSView>,
     scroll: Retained<NSScrollView>,
+    /// Another scroll view in the column (a PDF's), kept clear of the bar as the note's is.
+    other: std::cell::RefCell<Option<Retained<NSScrollView>>>,
     controls: Retained<FindControls>,
 }
 
@@ -181,7 +184,7 @@ impl FindBar {
         // The count keeps its width; the field takes the rest.
         count.setContentCompressionResistancePriority_forOrientation(800.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         count.setContentHuggingPriority_forOrientation(750.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
-        Self { column, field, count, bar, scroll, controls }
+        Self { column, field, count, bar, scroll, other: std::cell::RefCell::new(None), controls }
     }
 
     /// `on_text` gets the text to find as it is typed, `on_step` `true` for the next occurrence
@@ -201,8 +204,7 @@ impl FindBar {
     /// the bar's height as extra top inset, so no text hides behind it.
     pub fn show(&self, shown: bool) {
         self.bar.setHidden(!shown);
-        let top = if shown { BAR_HEIGHT } else { 0.0 };
-        self.scroll.setAdditionalSafeAreaInsets(NSEdgeInsets { top, left: 0.0, bottom: 0.0, right: 0.0 });
+        self.inset();
         if shown && let Some(window) = self.field.window() {
             window.makeFirstResponder(Some(&self.field));
             if let Some(editor) = self.field.currentEditor() {
@@ -210,6 +212,35 @@ impl FindBar {
                 unsafe { editor.selectAll(None) };
             }
         }
+    }
+
+    /// The scroll views in the column get the bar's height as extra top inset while it shows.
+    fn inset(&self) {
+        let top = if self.is_shown() { BAR_HEIGHT } else { 0.0 };
+        let insets = NSEdgeInsets { top, left: 0.0, bottom: 0.0, right: 0.0 };
+        self.scroll.setAdditionalSafeAreaInsets(insets);
+        if let Some(other) = self.other.borrow().as_ref() {
+            other.setAdditionalSafeAreaInsets(insets);
+        }
+    }
+
+    /// Puts `scroll` (a PDF's) in the column under the bar, kept clear of it as the note is.
+    pub fn add_under(&self, scroll: &NSScrollView) {
+        self.column.addSubview_positioned_relativeTo(scroll, objc2_app_kit::NSWindowOrderingMode::Below, Some(&self.bar));
+        *self.other.borrow_mut() = Some(scroll.retain());
+        self.inset();
+    }
+
+    /// Whether `view` is under the bar in the column (probe mode).
+    pub fn is_over(&self, view: &NSView) -> bool {
+        let subviews = self.column.subviews();
+        let at = |v: &NSView| subviews.iter().position(|s| std::ptr::eq(&*s, v));
+        matches!((at(&self.bar), at(view)), (Some(bar), Some(v)) if bar > v)
+    }
+
+    /// A search under way: the count says so.
+    pub fn show_searching(&self) {
+        self.count.setStringValue(&NSString::from_str(strings::FIND_SEARCHING));
     }
 
     /// Puts `text` in the field (probe mode: as if typed).

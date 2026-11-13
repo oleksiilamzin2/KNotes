@@ -24,6 +24,7 @@ pub const OPEN_IN_NEW_TAB: &str = "Відкрити в новій вкладці
 pub const OUTLINE: &str = "Зміст";
 pub const NO_HEADINGS: &str = "Немає заголовків";
 pub const NO_DOCUMENT: &str = "Немає відкритого документа";
+pub const FIND_SEARCHING: &str = "Пошук…";
 pub const NO_PDF_OUTLINE: &str = "У цьому PDF немає змісту";
 pub const LIST_OPTIONS: &str = "Параметри списку";
 pub const SORT_BY: &str = "Сортувати за";

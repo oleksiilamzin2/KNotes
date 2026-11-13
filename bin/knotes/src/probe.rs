@@ -906,6 +906,13 @@ fn tabs_requested(window: &VaultWindow) {
             println!("window-menu: {} {}⌘{}", close.title(), if shift { "⇧" } else { "" }, close.keyEquivalent().to_string().to_uppercase());
         }
     }
+    // `KNOTES_PROBE_PDF_FIND_STEPS=2`: the next place found in the PDF, that many times, once
+    // the search (on another thread) has found them.
+    if let Some(steps) = std::env::var("KNOTES_PROBE_PDF_FIND_STEPS").ok().and_then(|s| s.parse::<usize>().ok()) {
+        for _ in 0..steps {
+            window.find_action(objc2_app_kit::NSTextFinderAction::NextMatch.0);
+        }
+    }
     if let Ok(other) = std::env::var("KNOTES_PROBE_TAB_TRIP") {
         window.window.displayIfNeeded();
         let top = window.note_top().map(|top| first_line_at(&window.note_text.string().to_string(), top));
@@ -1212,6 +1219,10 @@ fn report_note(window: &VaultWindow) {
     }
     println!("pdf-top: {}", window.pdf_top_page().map(|p| p.to_string()).unwrap_or_default());
     println!("note-column: {}", window.describe_note_column());
+    if let Some((found, over)) = window.describe_pdf_find() {
+        println!("pdf-found: {found}");
+        println!("pdf-find-bar: {}", if over { "over the pages" } else { "under the pages" });
+    }
     println!("pdf-view: {}", window.describe_pdf());
     println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-texts-kept: {}", window.pdf_texts_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));

@@ -71,6 +71,9 @@ pub struct PagesIvars {
     stand_ins: RefCell<HashMap<usize, Retained<NSImage>>>,
     /// Counts width changes: the pages are drawn again once it stops changing.
     resizes: Cell<u64>,
+    /// The places found by Cmd+F (page, characters), in order, and the current one.
+    found: RefCell<Vec<(usize, Range<usize>)>>,
+    found_current: Cell<Option<usize>>,
 }
 
 define_class!(
@@ -289,6 +292,23 @@ impl PdfPages {
                 // SAFETY: a valid image drawn into the current context.
                 unsafe { image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(*frame, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None) };
             }
+            // Places found on it, the current one stronger; its text read only for them.
+            let found: Vec<(usize, Range<usize>)> = {
+                let all = self.ivars().found.borrow();
+                let first = all.partition_point(|(p, _)| *p < i);
+                all[first..].iter().enumerate().take_while(|(_, (p, _))| *p == i).map(|(n, (_, r))| (first + n, r.clone())).collect()
+            };
+            if let Some(text) = (!found.is_empty()).then(|| self.text_of(i)).flatten() {
+                let current = self.ivars().found_current.get();
+                for (n, range) in found {
+                    let colour = if Some(n) == current { NSColor::findHighlightColor() } else { NSColor::systemYellowColor().colorWithAlphaComponent(0.4) };
+                    colour.setFill();
+                    for b in text.highlight(range) {
+                        let at = NSPoint::new(frame.origin.x + b.x * frame.size.width, frame.origin.y + b.y * frame.size.height);
+                        NSRectFillUsingOperation(NSRect::new(at, NSSize::new(b.width * frame.size.width, b.height * frame.size.height)), NSCompositingOperation::Multiply);
+                    }
+                }
+            }
             // The page's text read only when something on it is selected.
             if let Some((range, text)) = self.selected_on(i).and_then(|range| Some((range, self.text_of(i)?))) {
                 NSColor::selectedTextBackgroundColor().setFill();
@@ -506,6 +526,8 @@ impl PdfViewer {
             on_scroll: RefCell::new(None),
             stand_ins: RefCell::new(HashMap::new()),
             resizes: Cell::new(0),
+            found: RefCell::new(Vec::new()),
+            found_current: Cell::new(None),
         };
         let width = scroll.contentSize().width;
         let start = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 0.0));
@@ -592,6 +614,50 @@ impl PdfViewer {
         self.scroll.layoutSubtreeIfNeeded();
         self.pages.keep_at_top((page, at, true));
         self.pages.follow();
+    }
+
+    /// The places Cmd+F found (page, characters), `current` among them.
+    pub fn set_found(&self, found: Vec<(usize, Range<usize>)>, current: Option<usize>) {
+        *self.pages.ivars().found.borrow_mut() = found;
+        self.pages.ivars().found_current.set(current);
+        self.pages.selection_changed();
+    }
+
+    pub fn found_len(&self) -> usize {
+        self.pages.ivars().found.borrow().len()
+    }
+
+    /// Makes place `i` the current one and brings it into view, a third of the way down.
+    pub fn show_found(&self, i: usize) {
+        let ivars = self.pages.ivars();
+        let Some((page, range)) = ivars.found.borrow().get(i).cloned() else { return };
+        ivars.found_current.set(Some(i));
+        let Some(frame) = ivars.frames.borrow().get(page).copied() else { return };
+        let y = self.pages.text_of(page).and_then(|t| t.highlight(range).first().copied()).map_or(0.0, |b| b.y);
+        ivars.jumped.set(true);
+        ivars.current.set(page);
+        self.scroll.layoutSubtreeIfNeeded();
+        let clip = self.scroll.contentView();
+        let top = self.scroll.contentInsets().top;
+        let visible = clip.bounds().size.height - top;
+        // Within the pages: not above the first nor past the last.
+        let lowest = -top;
+        let highest = (self.pages.frame().size.height - clip.bounds().size.height).max(lowest);
+        let target = (frame.origin.y + y * frame.size.height - visible / 3.0 - top).clamp(lowest, highest);
+        clip.scrollToPoint(NSPoint::new(clip.bounds().origin.x, target));
+        self.scroll.reflectScrolledClipView(&clip);
+        self.pages.follow();
+        self.pages.selection_changed();
+    }
+
+    /// `3, the current on page 1` (probe mode).
+    pub fn describe_found(&self) -> String {
+        let ivars = self.pages.ivars();
+        let found = ivars.found.borrow();
+        match ivars.found_current.get().and_then(|i| found.get(i)) {
+            Some((page, _)) => format!("{}, the current on page {}", found.len(), page + 1),
+            None => format!("{}", found.len()),
+        }
     }
 
     /// The page shown (from 1) and how many there are.

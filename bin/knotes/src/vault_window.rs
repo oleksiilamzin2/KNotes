@@ -106,6 +106,8 @@ pub struct VaultWindow {
     pdf_path: RefCell<Option<String>>,
     /// The occurrences found in the note (UTF-16) and the one selected.
     find_matches: RefCell<Vec<(usize, usize)>>,
+    /// Set to call off the search under way in the PDF shown.
+    pdf_find: RefCell<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     find_current: Cell<Option<usize>>,
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
@@ -281,6 +283,7 @@ impl VaultWindow {
             pdf_view: RefCell::new(None),
             pdf_path: RefCell::new(None),
             find_matches: RefCell::new(Vec::new()),
+            pdf_find: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
             find_current: Cell::new(None),
             live_preview,
             chat,
@@ -951,6 +954,12 @@ impl VaultWindow {
                 }
             }
             probe::click_requested(&self.note_text);
+            // The click opened a PDF: the word is found in it.
+            if let (Ok(word), true) = (std::env::var("KNOTES_PROBE_FIND"), self.pdf_view.borrow().is_some()) {
+                self.open_find();
+                self.find_bar.set_text(&word);
+                self.find_text(&word, true);
+            }
             probe::mouse_drag_requested(&self.note_text);
             self.live_preview.probe_code_pointer(&self.note_text);
             if let Ok(spec) = std::env::var("KNOTES_PROBE_LINK_MENU") {
@@ -1051,6 +1060,14 @@ impl VaultWindow {
         if let Some(scroll) = self.note_text.enclosingScrollView() {
             scroll.setHidden(empty || self.pdf_path.borrow().is_some());
         }
+    }
+
+    /// What the PDF viewer highlights as found, and whether the find bar is over its pages
+    /// (probe mode).
+    pub fn describe_pdf_find(&self) -> Option<(String, bool)> {
+        let viewer = self.pdf_view.borrow();
+        let viewer = viewer.as_ref()?;
+        Some((viewer.describe_found(), self.find_bar.is_over(&viewer.scroll)))
     }
 
     /// `empty: …`, `note (editable)` or `pdf`: what the note column shows (probe mode).
@@ -1234,7 +1251,8 @@ impl VaultWindow {
                     window.outline_follow();
                 }
             });
-            self.find_bar.column.addSubview(&viewer.scroll);
+            // Under the find bar: Cmd+F finds in the PDF too.
+            self.find_bar.add_under(&viewer.scroll);
             *self.pdf_view.borrow_mut() = Some(viewer);
         }
         if let Some(scroll) = self.note_text.enclosingScrollView() {
@@ -2095,6 +2113,10 @@ impl VaultWindow {
     /// Done or Escape: the bar and its highlights go, the note gets the focus back.
     pub fn close_find(&self) {
         self.find_bar.show(false);
+        self.pdf_find.borrow().store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            viewer.set_found(Vec::new(), None);
+        }
         self.live_preview.clear_found(&self.note_text);
         self.find_matches.borrow_mut().clear();
         self.find_current.set(None);
@@ -2104,6 +2126,10 @@ impl VaultWindow {
     /// Finds `query` in the note: every occurrence highlighted; with `jump`, the first one from
     /// the cursor on selected and in view (an edit refinds in place).
     fn find_text(&self, query: &str, jump: bool) {
+        if self.pdf_view.borrow().is_some() {
+            self.find_in_pdf(query, jump);
+            return;
+        }
         let text = self.note_text.string().to_string();
         let found = knotes_app::find_all(&text, query);
         let bounds: Vec<usize> = found.iter().flat_map(|r| [r.start, r.end]).collect();
@@ -2120,8 +2146,79 @@ impl VaultWindow {
         self.find_bar.show_count(self.find_current.get(), self.find_matches.borrow().len(), !query.is_empty());
     }
 
+    /// Finds `query` in the PDF shown, its pages read one after another on another thread;
+    /// with `jump`, the first place from the page shown on comes into view.
+    fn find_in_pdf(&self, query: &str, jump: bool) {
+        self.pdf_find.borrow().store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            viewer.set_found(Vec::new(), None);
+        }
+        self.find_current.set(None);
+        let (Some(path), Some(vault), Some(mtm)) = (self.pdf_path.borrow().clone(), self.vault(), MainThreadMarker::new()) else { return };
+        if query.is_empty() {
+            self.find_bar.show_count(None, 0, false);
+            return;
+        }
+        self.find_bar.show_searching();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self.pdf_find.borrow_mut() = std::sync::Arc::clone(&cancelled);
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        let query = query.to_owned();
+        std::thread::spawn(move || {
+            let found = knotes_pdf::find_in_pdf(&vault.join(&path), &query, &cancelled);
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                // A newer search, or the bar closed: this one is stale.
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if let (Some(window), Some(found)) = (target.get(mtm).upgrade(), found) {
+                    window.pdf_found(&path, found, jump);
+                }
+            });
+        });
+    }
+
+    /// The places a search found in the PDF at `path`, shown if it is still the one open: the
+    /// first from the page shown on is the current one.
+    fn pdf_found(&self, path: &str, found: Vec<(usize, std::ops::Range<usize>)>, jump: bool) {
+        if self.pdf_path.borrow().as_deref() != Some(path) {
+            return;
+        }
+        let total = found.len();
+        let current = {
+            let viewer = self.pdf_view.borrow();
+            let Some(viewer) = viewer.as_ref() else { return };
+            let page = viewer.page().0.saturating_sub(1);
+            let current = found.iter().position(|(p, _)| *p >= page).or((total > 0).then_some(0));
+            viewer.set_found(found, current);
+            current
+        };
+        self.find_current.set(current);
+        if jump && let (Some(i), Some(viewer)) = (current, self.pdf_view.borrow().as_ref()) {
+            viewer.show_found(i);
+        }
+        self.find_bar.show_count(current, total, true);
+    }
+
     /// The next (or previous) occurrence, round the note.
     fn find_step(&self, forward: bool) {
+        if let Some(n) = self.pdf_view.borrow().as_ref().map(PdfViewer::found_len) {
+            if n == 0 {
+                return;
+            }
+            let i = match self.find_current.get() {
+                Some(i) if forward => (i + 1) % n,
+                Some(i) => (i + n - 1) % n,
+                None => 0,
+            };
+            self.find_current.set(Some(i));
+            if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+                viewer.show_found(i);
+            }
+            self.find_bar.show_count(Some(i), n, true);
+            return;
+        }
         let n = self.find_matches.borrow().len();
         if n == 0 {
             return;

@@ -2467,3 +2467,22 @@ fn with_no_document_open_the_note_column_says_so_and_takes_no_typing() {
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
     assert_eq!(note_column(&out), "pdf");
 }
+
+/// How many places the PDF viewer highlights as found (`pdf-found:` line).
+fn pdf_found(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("pdf-found: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn cmd_f_finds_words_in_a_pdf_and_steps_through_them() {
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_FIND", "page")];
+    let notes = [("a.md", "See [[doc.pdf]] here\n\nend")];
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &open);
+    assert!(out.contains("find-bar: shown") && out.contains("find: 1 з 3\n"), "{out}");
+    assert_eq!(pdf_found(&out), "3, the current on page 1");
+    assert!(out.contains("pdf-find-bar: over the pages\n"), "the bar is not under the viewer: {out}");
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &[open[0], open[1], open[2], open[3], ("KNOTES_PROBE_PDF_FIND_STEPS", "2")]);
+    assert!(out.contains("find: 3 з 3\n") && out.contains("pdf-view: doc.pdf 3/3"), "{out}");
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &[open[0], open[1], open[2], ("KNOTES_PROBE_FIND", "nothing")]);
+    assert!(out.contains("find: Немає\n"), "{out}");
+}
