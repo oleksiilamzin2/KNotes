@@ -655,6 +655,7 @@ fn report_note(window: &VaultWindow) {
     println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
     println!("editor-struck: {}", crate::live_preview::LivePreview::describe_struck(&window.note_text));
+    println!("editor-shaded: {}", crate::live_preview::LivePreview::describe_shaded(&window.note_text));
     for line in window.describe_drawn() {
         println!("{line}");
     }

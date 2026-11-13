@@ -1053,3 +1053,9 @@ fn a_note_opened_from_a_content_search_shows_its_matches_scrolled_into_view() {
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md")]);
     assert!(out.contains("found-in-note: 0"), "nothing found without a search: {out}");
 }
+
+#[test]
+fn inline_code_has_a_background_and_its_backticks_do_not() {
+    let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");
+}

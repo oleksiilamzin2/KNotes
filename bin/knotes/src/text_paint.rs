@@ -11,7 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSKernAttributeName, NSMutableParagraphStyle, NSParagraphStyle,
-    NSParagraphStyleAttributeName, NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextStorage, NSUnderlineStyle,
+    NSBackgroundColorAttributeName, NSParagraphStyleAttributeName, NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextStorage, NSUnderlineStyle,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSRange, NSString};
 
@@ -26,6 +26,10 @@ pub struct Paint {
 
 /// The `look` bit for struck text.
 pub const STRUCK: u16 = 1 << 15;
+/// The `look` bit for text on a background (inline code).
+pub const SHADED: u16 = 1 << 14;
+/// The look itself, without the bits.
+const LOOK: u16 = !(STRUCK | SHADED);
 
 /// A paragraph style's settings; the default sets nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -106,11 +110,11 @@ impl<'a> Palette<'a> {
 
     /// Look `id` with colour `color` instead of `from` (others unchanged), keeping its line.
     pub fn recolor(&mut self, id: u16, from: &NSColor, color: &'a NSColor) -> u16 {
-        let (font, old, name) = self.looks[usize::from(id & !STRUCK)];
+        let (font, old, name) = self.looks[usize::from(id & LOOK)];
         if !std::ptr::eq(old, from) {
             return id;
         }
-        self.look(font, color, name) | (id & STRUCK)
+        self.look(font, color, name) | (id & !LOOK)
     }
 
     pub fn kern(&mut self, points: f64) -> u32 {
@@ -143,28 +147,32 @@ impl<'a> Palette<'a> {
 /// Attribute sets and paragraph styles made once and shared by every composition.
 pub struct PaintCache {
     style_key: Retained<NSString>,
+    /// Background of inline code.
+    shade: Retained<NSColor>,
     styles: RefCell<HashMap<ParaKey, Retained<NSParagraphStyle>>>,
     attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
 }
 
-/// Font, colour, test name, kerning, paragraph style and line-through of an attribute set.
-type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle, bool);
+/// Font, colour, test name, kerning, paragraph style, line-through and background of an
+/// attribute set.
+type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle, bool, bool);
 
 impl PaintCache {
     /// `style_key` names the attribute carrying each range's test name.
     pub fn new(style_key: &str) -> Self {
-        Self { style_key: NSString::from_str(style_key), styles: RefCell::new(HashMap::new()), attributes: RefCell::new(HashMap::new()) }
+        Self { style_key: NSString::from_str(style_key), shade: NSColor::quaternarySystemFillColor(), styles: RefCell::new(HashMap::new()), attributes: RefCell::new(HashMap::new()) }
     }
 
     fn attributes(&self, palette: &Palette, paint: Paint) -> Retained<NSDictionary<NSString, AnyObject>> {
-        let (font, color, name) = palette.looks[usize::from(paint.look & !STRUCK)];
+        let (font, color, name) = palette.looks[usize::from(paint.look & LOOK)];
         let kern = palette.kerns[paint.kern as usize];
         let struck = paint.look & STRUCK != 0;
+        let shaded = paint.look & SHADED != 0;
         let para = (paint.para != 0).then(|| {
             let para = palette.para_of(paint.para);
             self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style()).clone()
         });
-        let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck);
+        let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, shaded);
         self.attributes
             .borrow_mut()
             .entry(key)
@@ -189,6 +197,11 @@ impl PaintCache {
                     // SAFETY: as above.
                     keys.push(unsafe { NSStrikethroughStyleAttributeName });
                     values.push(line.as_ref());
+                }
+                if shaded {
+                    // SAFETY: as above.
+                    keys.push(unsafe { NSBackgroundColorAttributeName });
+                    values.push(self.shade.as_ref());
                 }
                 NSDictionary::from_slices(&keys, &values)
             })

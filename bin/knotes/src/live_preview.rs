@@ -10,7 +10,7 @@ use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
 use crate::preview_fragment::{Anchor, BULLET_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
-use crate::text_paint::{Paint, PaintCache, Palette, Para, STRUCK};
+use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
@@ -328,6 +328,9 @@ impl LivePreview {
         // After all runs (one inside would replace it), before the markup (which drops it).
         for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Strike | Style::Done) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= STRUCK);
+        }
+        for run in styled.runs.iter().filter(|r| r.style == Style::Code && meets(&r.range)) {
+            canvas.paint(run.range.clone(), |p| p.look |= SHADED);
         }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
             let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
@@ -975,15 +978,27 @@ impl LivePreview {
 
     /// The struck pieces of the text, `|` between those apart, for probe mode.
     pub fn describe_struck(view: &NSTextView) -> String {
+        // SAFETY: AppKit's attribute name constant lives for the whole process.
+        Self::describe_with(view, unsafe { NSStrikethroughStyleAttributeName }, |v| v.downcast_ref::<NSNumber>().is_some_and(|n| n.integerValue() != 0))
+    }
+
+    /// The pieces of text with a background (inline code), `|` between those apart.
+    pub fn describe_shaded(view: &NSTextView) -> String {
+        // SAFETY: AppKit's attribute name constant lives for the whole process.
+        Self::describe_with(view, unsafe { NSBackgroundColorAttributeName }, |_| true)
+    }
+
+    /// The pieces of text whose `key` attribute `has` holds for, `|` between those apart.
+    fn describe_with(view: &NSTextView, key: &NSString, has: impl Fn(&AnyObject) -> bool) -> String {
         let Some(storage) = (unsafe { view.textStorage() }) else { return String::new() };
         let utf16: Vec<u16> = storage.string().to_string().encode_utf16().collect();
         let (mut pieces, mut at, mut last_end) = (String::new(), 0, None);
         while at < storage.length() {
             let mut range = NSRange::new(0, 0);
-            // SAFETY: AppKit's attribute name constant lives for the whole process.
-            let value = unsafe { storage.attribute_atIndex_effectiveRange(NSStrikethroughStyleAttributeName, at, &mut range) };
+            // SAFETY: a valid index and an out pointer for the range.
+            let value = unsafe { storage.attribute_atIndex_effectiveRange(key, at, &mut range) };
             let end = (range.location + range.length).max(at + 1);
-            if value.and_then(|v| v.downcast::<NSNumber>().ok()).is_some_and(|n| n.integerValue() != 0) {
+            if value.is_some_and(|v| has(&v)) {
                 if last_end.is_some_and(|e| e != at) {
                     pieces.push('|');
                 }
