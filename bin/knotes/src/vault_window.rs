@@ -548,6 +548,8 @@ impl VaultWindow {
         };
         if let Some(links) = new_links {
             self.live_preview.set_links(&self.note_text, links);
+        } else {
+            self.live_preview.files_changed(&self.note_text, &snapshot.changed);
         }
         self.rebuild_sidebar();
         let mut selection = self.state.borrow().selection.clone();
@@ -592,6 +594,7 @@ impl VaultWindow {
             }
             probe::save_requested();
             probe::write_requested(self);
+            probe::rewrite_image_requested(self);
             if let (Some(name), Some(open)) = (probe::rename_requested(), self.open_path()) {
                 self.rename_note(&open, &name);
             }

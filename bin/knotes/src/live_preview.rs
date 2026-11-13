@@ -888,6 +888,36 @@ impl LivePreview {
         Some((image, size))
     }
 
+    /// Files changed on disk (vault paths): images among them are read again.
+    pub fn files_changed(&self, view: &NSTextView, paths: &[String]) {
+        let stale: Vec<&String> = {
+            let images = self.ivars().images.borrow();
+            paths.iter().filter(|p| images.contains_key(*p)).collect()
+        };
+        if stale.is_empty() {
+            return;
+        }
+        for path in &stale {
+            self.ivars().images.borrow_mut().remove(*path);
+            self.ivars().bitmaps.borrow_mut().remove(*path);
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let links = self.ivars().links.borrow().clone();
+        let source = self.ivars().path.borrow().clone();
+        let lines: Vec<(usize, usize)> = self
+            .ivars()
+            .styled
+            .borrow()
+            .images
+            .iter()
+            .filter(|i| links.as_ref().and_then(|l| l.resolve(i.link.kind, &i.link.target, &source)).is_some_and(|p| stale.contains(&&p)))
+            .map(|i| paragraph(&storage, ns(&i.range)))
+            .collect();
+        for line in lines {
+            self.restyle(&storage, line);
+        }
+    }
+
     /// How many of the note's images have been decoded, and how many are kept (probe mode).
     pub fn decoded_images(&self) -> (usize, usize) {
         let bitmaps = self.ivars().bitmaps.borrow();

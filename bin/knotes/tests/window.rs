@@ -1376,3 +1376,21 @@ fn opening_another_note_lets_the_last_one_s_images_go() {
     assert!(out.contains("note: b.md"), "{out}");
     assert!(out.contains("images-kept: 1\n"), "only the open note's image is kept: {out}");
 }
+
+#[test]
+fn an_image_rewritten_on_disk_shows_anew() {
+    let wide = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/wide-1600x400.png");
+    let (_vault, out) = probe_images(
+        &[("a.md", "Before\n![[pic.png]]\nAfter")],
+        &[("pic.png", PIC)],
+        &[
+            ("KNOTES_PROBE_OPEN", "a.md"),
+            ("KNOTES_PROBE_CURSOR", "end"),
+            ("KNOTES_PROBE_REWRITE_IMAGE", &format!("pic.png={wide}")),
+            ("KNOTES_PROBE_DELAY_MS", "2500"),
+        ],
+    );
+    let shown = images(&out);
+    assert_eq!(shown.len(), 1, "{out}");
+    assert!(shown[0].2 > 300.0 && (shown[0].2 / shown[0].3 - 4.0).abs() < 0.05, "the new, wide picture: {out}");
+}

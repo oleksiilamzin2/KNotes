@@ -165,6 +165,14 @@ pub fn write_requested(window: &VaultWindow) {
     std::fs::write(vault.join(path), text).expect("outside write");
 }
 
+/// `KNOTES_PROBE_REWRITE_IMAGE=pic.png=/path/new.png`: another program writes a new picture
+/// over an image in the vault.
+pub fn rewrite_image_requested(window: &VaultWindow) {
+    let (Ok(request), Some(vault)) = (std::env::var("KNOTES_PROBE_REWRITE_IMAGE"), window.vault()) else { return };
+    let Some((path, from)) = request.split_once('=') else { return };
+    std::fs::copy(from, vault.join(path)).expect("outside write");
+}
+
 /// `KNOTES_PROBE_ACTION=sidebar=tags` or `sidebar=folders`: a click on that segment of the
 /// toolbar switch, sent to its target as AppKit does.
 pub fn sidebar_mode_requested(window: &NSWindow) {
