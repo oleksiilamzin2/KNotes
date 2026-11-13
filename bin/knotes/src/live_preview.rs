@@ -1459,22 +1459,51 @@ impl LivePreview {
         at
     }
 
-    /// The table actions for the cell holding character `index`: its row's, then its
-    /// column's, with the table's index.
+    /// The table actions for the cell holding character `index` (or nearest to it on a
+    /// table's line): its row's, then its column's, with the table's index.
     fn cell_menu(&self, index: usize) -> Option<(usize, Vec<(&'static str, TableAction)>)> {
-        let (t, row, column) = cell_at(&self.ivars().styled.borrow(), index)?;
+        let cell = {
+            let styled = self.ivars().styled.borrow();
+            cell_at(&styled, index).or_else(|| nearest_cell_edge(&styled, index).and_then(|edge| cell_at(&styled, edge)))
+        };
+        let (t, row, column) = cell?;
         let mut items = self.table_menu(TableControl::RowHandle(t, row));
         items.extend(self.table_menu(TableControl::ColumnHandle(t, column)));
         Some((t, items))
     }
 
-    /// A right click at character `index`: in a table's cell, its row's and column's actions
-    /// come first in the context `menu`, before the text's own items.
-    pub fn add_table_items(&self, menu: &objc2_app_kit::NSMenu, index: usize) {
-        let Some((t, items)) = self.cell_menu(index) else { return };
-        let at = self.fill_table_menu(menu, t, &items, 0);
+    /// The table actions a right click at `point` offers: a handle's (only its row's or
+    /// column's), or a cell's (its row's and column's, the nearest cell on a table's line), with
+    /// the table's index and whether they stand alone (a handle's) or come before the text's.
+    fn context_items(&self, view: &NSTextView, point: NSPoint) -> Option<(usize, Vec<(&'static str, TableAction)>, bool)> {
+        match self.table_control_at(view, point) {
+            Some(control @ (TableControl::RowHandle(..) | TableControl::ColumnHandle(..))) => Some((control_table(control), self.table_menu(control), true)),
+            Some(_) => None,
+            None => self.cell_menu(view.characterIndexForInsertionAtPoint(point)).map(|(t, items)| (t, items, false)),
+        }
+    }
+
+    /// The context menu for a right click at `point`: a handle's menu alone, or the text's
+    /// `menu` with a cell's row and column actions first.
+    pub fn table_context_menu(&self, view: &NSTextView, point: NSPoint, menu: Option<Retained<objc2_app_kit::NSMenu>>) -> Option<Retained<objc2_app_kit::NSMenu>> {
+        let Some((t, items, alone)) = self.context_items(view, point) else { return menu };
+        let menu = match menu {
+            Some(menu) if !alone => menu,
+            _ => objc2_app_kit::NSMenu::new(self.mtm()),
+        };
+        let at = self.fill_table_menu(&menu, t, &items, 0);
         if menu.numberOfItems() > at {
             menu.insertItem_atIndex(&objc2_app_kit::NSMenuItem::separatorItem(self.mtm()), at);
+        }
+        Some(menu)
+    }
+
+    /// `KNOTES_PROBE_TABLE_CONTEXT_AT=x,y`: the table items a right click there offers.
+    pub fn probe_table_context_at(&self, view: &NSTextView, spec: &str) {
+        let point = spec.split_once(',').and_then(|(x, y)| Some(NSPoint::new(x.parse().ok()?, y.parse().ok()?)));
+        match point.and_then(|p| self.context_items(view, p)) {
+            Some((_, items, _)) => println!("table-context: {}", items.iter().map(|(title, _)| *title).collect::<Vec<_>>().join(" | ")),
+            None => println!("table-context: none"),
         }
     }
 

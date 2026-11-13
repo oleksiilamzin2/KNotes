@@ -44,8 +44,9 @@ type OnPress = Box<dyn Fn(&NSTextView, NSPoint) -> bool>;
 /// Gets the text view, where the pointer is in it and a sideways scroll (points); true when it
 /// took the scroll (a wide table).
 type OnScrollSideways = Box<dyn Fn(&NSTextView, NSPoint, f64) -> bool>;
-/// Gets a right click's context menu and the character index it is at, to add to it.
-type OnContextMenu = Box<dyn Fn(&objc2_app_kit::NSMenu, usize)>;
+/// Gets the text view, where a right click is in it and the text's own context menu; gives the
+/// menu to show.
+type OnContextMenu = Box<dyn Fn(&NSTextView, NSPoint, Option<Retained<objc2_app_kit::NSMenu>>) -> Option<Retained<objc2_app_kit::NSMenu>>>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -129,11 +130,11 @@ define_class!(
         fn menu_for_event(&self, event: &NSEvent) -> Option<Retained<objc2_app_kit::NSMenu>> {
             // SAFETY: the superclass builds the text view's own context menu.
             let menu: Option<Retained<objc2_app_kit::NSMenu>> = unsafe { msg_send![super(self), menuForEvent: event] };
-            let index = self.characterIndexForInsertionAtPoint(self.convertPoint_fromView(event.locationInWindow(), None));
-            if let (Some(menu), Some(callback)) = (menu.as_deref(), self.ivars().on_context_menu.borrow().as_ref()) {
-                callback(menu, index);
+            let point = self.convertPoint_fromView(event.locationInWindow(), None);
+            match self.ivars().on_context_menu.borrow().as_ref() {
+                Some(callback) => callback(self, point, menu),
+                None => menu,
             }
-            menu
         }
 
         /// A sideways scroll over a wide table scrolls the table; the rest scrolls the note.
@@ -279,7 +280,10 @@ impl NoteTextView {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
     }
 
-    pub fn on_context_menu(&self, callback: impl Fn(&objc2_app_kit::NSMenu, usize) + 'static) {
+    pub fn on_context_menu(
+        &self,
+        callback: impl Fn(&NSTextView, NSPoint, Option<Retained<objc2_app_kit::NSMenu>>) -> Option<Retained<objc2_app_kit::NSMenu>> + 'static,
+    ) {
         *self.ivars().on_context_menu.borrow_mut() = Some(Box::new(callback));
     }
 

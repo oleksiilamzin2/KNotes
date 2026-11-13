@@ -1711,3 +1711,20 @@ fn a_right_click_in_a_cell_offers_the_table_s_row_and_column_actions() {
     let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_CONTEXT", "70")]);
     assert!(out.contains("table-context: none"), "outside a table: {out}");
 }
+
+#[test]
+fn a_right_click_on_a_handle_or_a_cell_s_padding_offers_deleting() {
+    let (over, out) = table_controls_over(1, 0.8);
+    let row_handle = centre(decorations(&out, "table-row-handle")[0]);
+    let column_handle = centre(decorations(&out, "table-column-handle")[0]);
+    let context = |at: &str| {
+        let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_CONTEXT_AT", at)]);
+        out.lines().find_map(|l| l.strip_prefix("table-context: ")).map(str::to_owned).unwrap_or_else(|| panic!("{out}"))
+    };
+    assert_eq!(context(&row_handle), "Вставити рядок вище | Вставити рядок нижче | Видалити рядок");
+    assert!(context(&column_handle).contains("Видалити колонку"));
+    // On the padding just inside the row's left border, away from any text.
+    let rows = decorations(&out, "table-row");
+    let padding = format!("{},{}", rows[1].0 + 3.0, rows[1].1 + rows[1].3 / 2.0);
+    assert!(context(&padding).contains("Видалити рядок"), "the nearest cell's actions");
+}
