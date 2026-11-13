@@ -19,6 +19,12 @@ answered a question round (2026-11-13).
   0011 names a new note); later edits rename again (this replaces ADR 0011's "once").
   Opening a note never renames it. Renaming from the list rewrites the first line when it
   was the old name; a first line that is something else stays as it is.
+- Tags and links written in the title are the name's, not the note's (owner's choice): they
+  show as plain title text (no colour, no click), the index does not count them, and the
+  file name takes the title's words without tags and with the text links show. A first line
+  of tags and links alone names nothing (Obsidian notes often start with a line of tags),
+  so it is no title and its tags stay the note's. The open note's name shows in the
+  toolbar over the note; clicking it edits it and Return renames the note.
 - Links: before a rename that changes links in other notes, the app asks "Update N links in
   M notes?" (Update / Don't update / Cancel). Updating keeps each link's form: a bare name
   stays bare while the new name is unique, otherwise it gets the full path; a full path stays

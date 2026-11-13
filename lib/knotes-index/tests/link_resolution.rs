@@ -111,7 +111,7 @@ fn decomposed_file_names_match_composed_links() {
 #[test]
 fn backlinks_list_other_notes_with_their_links() {
     let mut v = Vault::new();
-    v.note("b.md", "self [[b]]").note("c.md", "[[b|see b]] and [[b#Part]]").note("a.md", "[[B]]").note("d.md", "[[other]]");
+    v.note("b.md", "self [[b]]").note("c.md", "C\n\n[[b|see b]] and [[b#Part]]").note("a.md", "[[B]]").note("d.md", "[[other]]");
     let back: Vec<(String, Option<String>)> =
         v.index.backlinks("b.md").unwrap().into_iter().map(|b| (b.source, b.link.display)).collect();
     assert_eq!(back, [("a.md".to_owned(), None), ("c.md".to_owned(), some("see b")), ("c.md".to_owned(), None)]);

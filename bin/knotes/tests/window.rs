@@ -64,9 +64,9 @@ fn sidebar_shows_all_notes_folders_and_tags_of_the_vault() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(vault.path().join("Projects/Radar")).unwrap();
     std::fs::create_dir_all(vault.path().join("Inbox")).unwrap();
-    std::fs::write(vault.path().join("Projects/Radar/a.md"), "#radar one").unwrap();
+    std::fs::write(vault.path().join("Projects/Radar/a.md"), "one\n#radar").unwrap();
     std::fs::write(vault.path().join("Projects/b.md"), "two").unwrap();
-    std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
+    std::fs::write(vault.path().join("Inbox/c.md"), "three\n#todo").unwrap();
     let out = probe_with(&[vault.path()], None);
     let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(sidebar, "Усі нотатки (3) | Вхідні (0) | Без тегів (1) | · | Inbox (1) | Projects (2)", "folders unless switched, no heading");
@@ -127,9 +127,9 @@ fn selecting_a_folder_or_tag_filters_the_list() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(vault.path().join("Projects/Sub")).unwrap();
     std::fs::create_dir_all(vault.path().join("Inbox")).unwrap();
-    write_aged(&vault.path().join("Projects/a.md"), "#radar a", Duration::from_secs(10));
+    write_aged(&vault.path().join("Projects/a.md"), "a\n#radar", Duration::from_secs(10));
     write_aged(&vault.path().join("Projects/Sub/b.md"), "b", Duration::from_secs(20));
-    write_aged(&vault.path().join("Inbox/c.md"), "#radar c", Duration::from_secs(30));
+    write_aged(&vault.path().join("Inbox/c.md"), "c\n#radar", Duration::from_secs(30));
 
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects")]);
     assert!(out.contains("title: Projects") && out.contains("subtitle: 2 нотатки"), "{out}");
@@ -430,11 +430,12 @@ fn clicking_a_link_outside_the_cursor_line_opens_its_note() {
 
 #[test]
 fn a_plain_click_in_the_cursor_line_places_the_cursor_and_cmd_click_opens() {
-    let notes = [("a.md", "see [[b]] here"), ("b.md", "target")];
-    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "6")]);
+    // Below the title line, whose links are its name's (ADR 0019).
+    let notes = [("a.md", "T\n\nsee [[b]] here"), ("b.md", "target")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "3"), ("KNOTES_PROBE_CLICK", "9")]);
     assert!(out.contains("note: a.md"), "{out}");
-    assert!(out.contains("cursor: 6") || out.contains("cursor: 7"), "{out}");
-    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "6:cmd")]);
+    assert!(out.contains("cursor: 9") || out.contains("cursor: 10"), "{out}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "9:cmd")]);
     assert!(out.contains("note: b.md | target"), "{out}");
 }
 
@@ -593,8 +594,8 @@ fn an_unfinished_first_line_names_the_note_when_leaving_it() {
 fn the_sidebar_switch_shows_tags_instead_of_folders_and_is_remembered() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(vault.path().join("Inbox")).unwrap();
-    std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
-    std::fs::write(vault.path().join("a.md"), "#radar one").unwrap();
+    std::fs::write(vault.path().join("Inbox/c.md"), "three\n#todo").unwrap();
+    std::fs::write(vault.path().join("a.md"), "one\n#radar").unwrap();
     let home = tempfile::tempdir().unwrap();
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=tags")]);
     assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | radar (1) | todo (1)"), "{out}");
@@ -635,7 +636,7 @@ fn the_toolbar_separator_stays_on_the_column_boundary_when_the_sidebar_collapses
 
 #[test]
 fn untagged_lists_the_notes_without_tags() {
-    let (_vault, out) = probe_notes(&[("a.md", "#todo a"), ("b.md", "plain b"), ("Вхідні/c.md", "plain c")], &[("KNOTES_PROBE_SELECT", "untagged")]);
+    let (_vault, out) = probe_notes(&[("a.md", "a\n#todo"), ("b.md", "plain b"), ("Вхідні/c.md", "plain c")], &[("KNOTES_PROBE_SELECT", "untagged")]);
     assert!(out.contains("title: Без тегів"), "{out}");
     let mut titles = list_titles(&out);
     titles.sort();
@@ -932,7 +933,7 @@ fn a_task_circle_is_centred_on_capital_letters_higher_than_a_bullet_dot() {
     assert!(dot_centre_a_line_up - task_centre > 1.0, "the circle sits higher in its line: {task:?} {dot:?}");
 }
 
-const RENAME_VAULT: [(&str, &str); 3] = [("Old.md", "# Old\n\ntext"), ("a.md", "see [[Old]] and [[Old#Part|p]]"), ("b.md", "[x](Old.md)")];
+const RENAME_VAULT: [(&str, &str); 3] = [("Old.md", "# Old\n\ntext"), ("a.md", "A\n\nsee [[Old]] and [[Old#Part|p]]"), ("b.md", "[x](Old.md)")];
 
 fn renamed(answer: &str) -> (tempfile::TempDir, String) {
     probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "rename=New"), ("KNOTES_PROBE_ANSWER", answer)])
@@ -945,7 +946,7 @@ fn renaming_a_note_asks_and_then_moves_it_and_updates_the_links_to_it() {
     let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
     assert_eq!(read("Old.md"), None, "{out}");
     assert_eq!(read("New.md").as_deref(), Some("# New\n\ntext"), "the title line is the name");
-    assert_eq!(read("a.md").as_deref(), Some("see [[New]] and [[New#Part|p]]"));
+    assert_eq!(read("a.md").as_deref(), Some("A\n\nsee [[New]] and [[New#Part|p]]"));
     assert_eq!(read("b.md").as_deref(), Some("[x](New.md)"));
     assert!(out.contains("note: New.md"), "the open note follows its file: {out}");
 }
@@ -954,7 +955,7 @@ fn renaming_a_note_asks_and_then_moves_it_and_updates_the_links_to_it() {
 fn a_rename_can_keep_the_links_or_be_cancelled() {
     let (vault, out) = renamed("keep");
     let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
-    assert!(read("New.md").is_some() && read("a.md").as_deref() == Some("see [[Old]] and [[Old#Part|p]]"), "{out}");
+    assert!(read("New.md").is_some() && read("a.md").as_deref() == Some("A\n\nsee [[Old]] and [[Old#Part|p]]"), "{out}");
     let (vault, out) = renamed("cancel");
     let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
     assert!(read("Old.md").is_some() && read("New.md").is_none(), "{out}");
@@ -968,7 +969,7 @@ fn a_note_is_renamed_in_its_list_row_from_the_context_menu() {
     );
     assert!(out.contains("list-menu-items: Перейменувати"), "{out}");
     assert!(vault.path().join("Renamed in list.md").exists(), "{out}");
-    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Renamed in list]] and [[Renamed in list#Part|p]]");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "A\n\nsee [[Renamed in list]] and [[Renamed in list#Part|p]]");
 }
 
 #[test]
@@ -1025,12 +1026,12 @@ fn a_rename_leaves_a_first_line_that_was_not_the_name() {
 
 #[test]
 fn editing_the_title_renames_the_note_when_it_is_left() {
-    let notes = [("Old.md", "# Old\n\ntext"), ("a.md", "see [[Old]]")];
+    let notes = [("Old.md", "# Old\n\ntext"), ("a.md", "A\n\nsee [[Old]]")];
     let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Old.md,a.md"), ("KNOTES_PROBE_RANGE", "2,3"), ("KNOTES_PROBE_TYPE", "Fresh")]);
     assert!(out.contains("rename-question: 1 1"), "{out}");
     let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
     assert_eq!(read("Fresh.md").as_deref(), Some("# Fresh\n\ntext"), "{out}");
-    assert_eq!(read("a.md").as_deref(), Some("see [[Fresh]]"));
+    assert_eq!(read("a.md").as_deref(), Some("A\n\nsee [[Fresh]]"));
     assert!(read("Old.md").is_none());
 }
 
@@ -1042,4 +1043,15 @@ fn return_at_the_end_of_the_title_renames_the_note() {
     );
     assert!(vault.path().join("Typed title.md").exists(), "{out}");
     assert!(out.contains("note: Typed title.md"), "{out}");
+}
+
+#[test]
+fn a_title_with_tags_and_links_names_the_file_by_its_words() {
+    let (vault, out) = probe_notes(
+        &[("Old.md", "Old\n\ntext")],
+        &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_RANGE", "0,3"), ("KNOTES_PROBE_TYPE", "Meeting #work about [[Project|proj]]"), ("KNOTES_PROBE_KEYS", "return")],
+    );
+    assert!(vault.path().join("Meeting about proj.md").exists(), "{out}");
+    let runs = editor_runs(&out);
+    assert!(runs.starts_with("[title]Meeting #work about |[hidden][[Project||[title]proj|[hidden]]]|"), "no tag or link look in the title: {runs}");
 }

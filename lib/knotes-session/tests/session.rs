@@ -29,7 +29,7 @@ fn index_dir_is_stable_per_vault_and_outside_it() {
 fn opening_a_vault_delivers_snapshots_and_follows_changes() {
     let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     fs::create_dir(vault.path().join("Projects")).unwrap();
-    fs::write(vault.path().join("Projects/a.md"), "#radar first").unwrap();
+    fs::write(vault.path().join("Projects/a.md"), "first\n#radar").unwrap();
     fs::write(vault.path().join("b.md"), "second").unwrap();
     let (session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
     let first = wait_for(&events, |s| s.rows.len() == 2);

@@ -84,6 +84,12 @@ impl NoteParser for MarkdownParser {
             }
         }
         c.flush_run();
+        // Tags and links in the title belong to the note's name, not to the note (ADR 0019).
+        if let Some(title) = crate::title_range(source) {
+            let outside = |span: &Span| (span.end as usize) <= title.start || (span.start as usize) >= title.end;
+            c.note.tags.retain(|t| outside(&t.span));
+            c.note.links.retain(|l| outside(&l.span));
+        }
         chunk(source, &c.top, self.max_block_bytes, &mut c.note.blocks);
         c.note.snippet = snippet(source, SNIPPET_CHARS);
         c.note

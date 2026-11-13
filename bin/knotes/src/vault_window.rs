@@ -15,7 +15,7 @@ use knotes_app::{Moves, Relinks, plan_relinks,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
-use knotes_md::MarkdownParser;
+use knotes_md::{MarkdownParser, plain_title};
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, replace_title, subpath_offset, title_words, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
@@ -894,7 +894,7 @@ impl VaultWindow {
         let mut edits: Vec<(String, String)> = if update { plan.edits.into_iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
         if let (Some((old_name, name)), Some(to)) = (retitle, moved.values().next()) {
             let base = edits.iter().find(|(p, _)| p == to).map(|(_, text)| text.clone()).or_else(|| vault.read_text(to).ok());
-            let was_name = |words: &str| note_file_stem(words).as_deref() == Some(old_name);
+            let was_name = |words: &str| note_file_stem(&plain_title(words)).as_deref() == Some(old_name);
             if let Some(text) = base.and_then(|base| replace_title(&base, name, was_name)) {
                 edits.retain(|(p, _)| p != to);
                 edits.push((to.clone(), text));
@@ -957,7 +957,8 @@ impl VaultWindow {
             }
             _ => return,
         };
-        let (Some(stem), Some(vault)) = (title_words(&text).and_then(note_file_stem), self.vault()) else { return };
+        // Tags and links in the title are no part of the name; links give their shown text.
+        let (Some(stem), Some(vault)) = (title_words(&text).and_then(|words| note_file_stem(&plain_title(words))), self.vault()) else { return };
         let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
         // A change of case only is a rename of the same file.
         let same = |p: &str| p.to_lowercase() == old.to_lowercase();

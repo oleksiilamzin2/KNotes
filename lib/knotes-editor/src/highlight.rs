@@ -138,24 +138,18 @@ pub fn highlight(source: &str) -> Highlight {
     let mut item: Option<usize> = None;
     // Quotes open: only the outermost marks the prefixes of all its lines.
     let mut quotes = 0;
-    // The first block after the frontmatter decides the title.
-    let mut first_block = true;
+    let title = knotes_md::title_range(source);
+    h.title = title.clone();
+    // Links in the title are its name's (ADR 0019): no link look there.
+    let in_title = |r: &Range<usize>| title.as_ref().is_some_and(|t| r.start >= t.start && r.end <= t.end);
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
-        if let Event::Start(tag) = &event
-            && !matches!(tag, Tag::MetadataBlock(_))
-            && std::mem::take(&mut first_block)
-            && matches!(tag, Tag::Heading { .. } | Tag::Paragraph)
+        // A paragraph's title run goes before the runs inside it, which then show over it; a
+        // heading's run becomes the title run below.
+        if let (Event::Start(Tag::Paragraph), Some(title)) = (&event, &title)
+            && title.start == r.start
         {
-            let line = text.find('\n').map_or(text, |n| &text[..n]).trim_end();
-            if !line.is_empty() {
-                h.title = Some(r.start..r.start + line.len());
-                // A paragraph's title run goes before the runs inside it, which then show over
-                // it; a heading's run becomes the title run below.
-                if matches!(tag, Tag::Paragraph) {
-                    h.runs.push(Run { range: r.start..r.start + line.len(), style: Style::Title });
-                }
-            }
+            h.runs.push(Run { range: title.clone(), style: Style::Title });
         }
         match event {
             Event::Start(Tag::BlockQuote(_)) => {
@@ -226,13 +220,17 @@ pub fn highlight(source: &str) -> Highlight {
             Event::InlineMath(tex) => formula(&mut h, r, &tex, false),
             Event::DisplayMath(tex) => formula(&mut h, r, &tex, true),
             Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole }, .. }) => {
-                h.runs.push(Run { range: r.clone(), style: Style::WikiLink });
+                if !in_title(&r) {
+                    h.runs.push(Run { range: r.clone(), style: Style::WikiLink });
+                }
                 let open = if has_pothole { text.find('|').map_or(2, |i| i + 1) } else { 2 };
                 h.markup.push(r.start..r.start + open);
                 h.markup.push(r.end - 2..r.end);
             }
             Event::Start(Tag::Link { link_type: LinkType::Inline, .. }) => {
-                h.runs.push(Run { range: r.clone(), style: Style::Link });
+                if !in_title(&r) {
+                    h.runs.push(Run { range: r.clone(), style: Style::Link });
+                }
                 if let Some(close) = text.rfind("](") {
                     h.markup.push(r.start..r.start + 1);
                     h.markup.push(r.start + close..r.end);

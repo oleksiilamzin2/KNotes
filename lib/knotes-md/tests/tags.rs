@@ -1,8 +1,9 @@
 use knotes_core::NoteParser;
 use knotes_md::MarkdownParser;
 
+/// Tags of `source` written below a title line (the title's tags are its name's, ADR 0019).
 fn tags(source: &str) -> Vec<String> {
-    MarkdownParser::new().parse(source).tags.into_iter().map(|t| t.name).collect()
+    MarkdownParser::new().parse(&format!("Title\n\n{source}")).tags.into_iter().map(|t| t.name).collect()
 }
 
 #[test]
@@ -17,7 +18,7 @@ fn ukrainian_tags() {
 
 #[test]
 fn tag_span_points_at_hash() {
-    let src = "a #tag, b";
+    let src = "Title\n\na #tag, b";
     let note = MarkdownParser::new().parse(src);
     let s = note.tags[0].span;
     assert_eq!(&src[s.start as usize..s.end as usize], "#tag");

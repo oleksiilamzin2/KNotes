@@ -29,8 +29,9 @@ fn emphasis_strong_strike_and_code_hide_delimiters() {
 
 #[test]
 fn wikilinks_show_only_the_alias_or_target() {
-    assert_eq!(styles("see [[Note|alias]]"), [(Style::WikiLink, "[[Note|alias]]")]);
-    assert_eq!(markup("see [[Note|alias]]"), ["[[Note|", "]]"]);
+    // Below the title line, whose links are its name's (ADR 0019).
+    assert_eq!(styles("T\n\nsee [[Note|alias]]"), [(Style::WikiLink, "[[Note|alias]]")]);
+    assert_eq!(markup("T\n\nsee [[Note|alias]]"), ["[[Note|", "]]"]);
     assert_eq!(markup("[[Note#Part]]"), ["[[", "]]"]);
 }
 
@@ -42,8 +43,8 @@ fn markdown_links_show_only_their_text() {
 
 #[test]
 fn tags_are_styled_but_not_hidden() {
-    assert_eq!(styles("plan #todo now"), [(Style::Tag, "#todo")]);
-    assert!(markup("plan #todo now").is_empty());
+    assert_eq!(styles("T\n\nplan #todo now"), [(Style::Tag, "#todo")]);
+    assert!(markup("T\n\nplan #todo now").is_empty());
 }
 
 #[test]
@@ -68,12 +69,12 @@ fn byte_offsets_convert_to_utf16() {
 
 #[test]
 fn whole_highlight_converts_to_utf16_ranges() {
-    let src = "ж **б** [[N|a]]";
+    let src = "T\n\nж **б** [[N|a]]";
     let h = highlight(src).to_utf16(src);
     let utf16: Vec<u16> = src.encode_utf16().collect();
     let text = |r: std::ops::Range<usize>| String::from_utf16(&utf16[r]).unwrap();
     let runs: Vec<(Style, String)> = h.runs.iter().map(|r| (r.style, text(r.range.clone()))).collect();
-    assert_eq!(runs, [(Style::Title, src.to_owned()), (Style::Strong, "**б**".to_owned()), (Style::WikiLink, "[[N|a]]".to_owned())]);
+    assert_eq!(runs, [(Style::Title, "T".to_owned()), (Style::Strong, "**б**".to_owned()), (Style::WikiLink, "[[N|a]]".to_owned())]);
     assert_eq!(h.markup.iter().map(|r| text(r.clone())).collect::<Vec<_>>(), ["**", "**", "[[N|", "]]"]);
 }
 
@@ -103,7 +104,7 @@ fn markup_owners_match_a_plain_search_on_a_large_note() {
 #[test]
 fn links_carry_their_targets_over_the_whole_link_source() {
     use knotes_core::LinkKind;
-    let src = "Їжак [[A/Note#H|x]] and [t](b%20c.md) and [w](https://e.com)";
+    let src = "T\n\nЇжак [[A/Note#H|x]] and [t](b%20c.md) and [w](https://e.com)";
     let h = highlight(src).to_utf16(src);
     let utf16: Vec<u16> = src.encode_utf16().collect();
     let shown: Vec<(String, LinkKind, &str, Option<&str>)> = h
@@ -234,9 +235,9 @@ fn the_first_line_of_a_heading_or_paragraph_is_the_title() {
     let src = "# My note\n\ntext";
     let runs: Vec<Style> = highlight(src).runs.iter().map(|r| r.style).collect();
     assert_eq!(runs, [Style::Title], "the heading run is the title run");
-    let src = "[[Link]] in the title";
+    let src = "**Bold** and [[Link]] in the title";
     let runs: Vec<Style> = highlight(src).runs.iter().map(|r| r.style).collect();
-    assert_eq!(runs, [Style::Title, Style::WikiLink], "runs inside show over the title");
+    assert_eq!(runs, [Style::Title, Style::Strong], "runs inside show over the title; links there are its name's (ADR 0019)");
 }
 
 #[test]

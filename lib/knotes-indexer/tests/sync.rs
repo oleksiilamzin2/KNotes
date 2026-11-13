@@ -21,7 +21,7 @@ fn sync(vault: &Path, index: &mut SqliteIndex) -> SyncReport {
 #[test]
 fn first_sync_indexes_everything_with_resolved_links() {
     let (vault, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    write(vault.path(), "a.md", "[[Z note]] and ![[pic.png]]");
+    write(vault.path(), "a.md", "A\n\n[[Z note]] and ![[pic.png]]");
     write(vault.path(), "deep/Z note.md", "target");
     write(vault.path(), "att/pic.png", "png");
     let mut index = SqliteIndex::open(idx.path()).unwrap();

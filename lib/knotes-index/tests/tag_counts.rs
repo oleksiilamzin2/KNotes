@@ -20,7 +20,7 @@ fn counts_include_nested_tags_without_double_counting() {
 fn untagged_notes_have_no_inline_or_frontmatter_tag() {
     let dir = tempfile::tempdir().unwrap();
     let mut index = SqliteIndex::open(dir.path()).unwrap();
-    for (path, text) in [("a.md", "#todo here"), ("b.md", "no tags"), ("c.md", "---\ntags: [idea]\n---\nbody"), ("d.md", "")] {
+    for (path, text) in [("a.md", "here\n#todo"), ("b.md", "no tags"), ("c.md", "---\ntags: [idea]\n---\nbody"), ("d.md", "")] {
         let parsed = MarkdownParser::new().parse(text);
         let f = VaultFile { path: path.into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 };
         index.apply(&[IndexChange::Upsert { file: &f, note: Some((text, &parsed)) }]).unwrap();

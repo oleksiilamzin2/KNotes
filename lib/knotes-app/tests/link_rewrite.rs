@@ -20,8 +20,9 @@ fn resolved(text: &str, source: &str, paths: &[&str]) -> Vec<OutLink> {
 #[test]
 fn a_bare_wikilink_takes_the_new_name_keeping_its_heading_alias_and_embed() {
     let paths = ["a.md", "notes/Old.md"];
-    let text = "see [[Old]], [[Old#Part|that part]], [[Old#^b1]] and ![[Old]]";
-    assert_eq!(moved(text, "a.md", "notes/Old.md", "notes/New.md", &paths), "see [[New]], [[New#Part|that part]], [[New#^b1]] and ![[New]]");
+    // Below the title line, whose links are its name's (ADR 0019).
+    let text = "T\n\nsee [[Old]], [[Old#Part|that part]], [[Old#^b1]] and ![[Old]]";
+    assert_eq!(moved(text, "a.md", "notes/Old.md", "notes/New.md", &paths), "T\n\nsee [[New]], [[New#Part|that part]], [[New#^b1]] and ![[New]]");
 }
 
 #[test]
@@ -52,8 +53,8 @@ fn markdown_links_keep_their_relative_or_root_form() {
 #[test]
 fn other_links_and_text_stay_as_they_are() {
     let paths = ["a.md", "Old.md", "Keep.md"];
-    let text = "[[Keep]] [[Old]] [site](https://x.y) Old";
-    assert_eq!(moved(text, "a.md", "Old.md", "New.md", &paths), "[[Keep]] [[New]] [site](https://x.y) Old");
+    let text = "T\n\n[[Keep]] [[Old]] [site](https://x.y) Old";
+    assert_eq!(moved(text, "a.md", "Old.md", "New.md", &paths), "T\n\n[[Keep]] [[New]] [site](https://x.y) Old");
 }
 
 #[test]
