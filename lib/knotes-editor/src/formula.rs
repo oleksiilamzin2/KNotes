@@ -1,9 +1,16 @@
-//! LaTeX formulas typeset to images for the live preview (ADR 0017), with `latex-rust`.
+//! LaTeX formulas typeset to images for the live preview (ADR 0017), with RaTeX (KaTeX's
+//! layout and fonts in Rust).
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use latex_rust::{Color, Dim, MathFont, MathStyle, PngBackground, PngOptions, layout_with_em_size_pt, parse, render_png};
+use ab_glyph::{Font, GlyphId};
+use ratex_font::FontId;
+use ratex_font_loader::SystemFontResolver;
+use ratex_layout::{FallbackGlyphMetrics, LayoutOptions, layout_with_fallback_metrics, to_display_list, validate_layout};
+use ratex_render::{RenderOptions, render_to_png};
+use ratex_types::color::Color;
+use ratex_types::math_style::MathStyle;
 
 /// How to typeset a formula.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,38 +35,53 @@ pub struct FormulaImage {
     pub baseline_pt: f64,
 }
 
-fn font() -> Result<&'static MathFont, String> {
-    static FONT: OnceLock<Result<MathFont, String>> = OnceLock::new();
-    FONT.get_or_init(|| MathFont::stix_two_math().map_err(|e| e.to_string())).as_ref().map_err(Clone::clone)
-}
-
-fn to_f64(d: &Dim) -> f64 {
-    d.as_ratio().map_or(0.0, |(n, d)| n as f64 / d as f64)
-}
-
 /// Typesets `tex` (LaTeX math, without dollars); the error says what is wrong with it.
 pub fn render_formula(tex: &str, style: &FormulaStyle) -> Result<FormulaImage, String> {
-    let font = font()?;
-    let ast = parse(tex).map_err(|e| e.to_string())?;
+    let ast = ratex_parser::parser::parse(tex).map_err(|e| e.to_string())?;
+    let [r, g, b] = style.rgb.map(|c| f32::from(c) / 255.0);
     let math_style = if style.display { MathStyle::Display } else { MathStyle::Text };
-    // Exact rationals in latex-rust: sizes go in as hundredths of a point.
-    let em = Dim::ratio((style.size_pt * 100.0).round() as i64, 100);
-    let tree = layout_with_em_size_pt(&ast, font, math_style, &em).map_err(|e| e.to_string())?;
-    let options = PngOptions {
-        font_size_pt: em.clone(),
-        dpi: Dim::ratio((72.0 * style.scale * 100.0).round() as i64, 100),
-        color: Color::rgb(style.rgb[0], style.rgb[1], style.rgb[2]),
-        background: PngBackground::Transparent,
-        display: style.display,
+    let options = LayoutOptions::default().with_style(math_style).with_color(Color::rgb(r, g, b));
+    let tree = layout_with_fallback_metrics(&ast, &options, Arc::new(fallback_metrics(tex)));
+    validate_layout(&tree)?;
+    let list = to_display_list(&tree);
+    let render = RenderOptions {
+        font_size: style.size_pt as f32,
+        padding: 0.0,
+        background_color: Color::new(0.0, 0.0, 0.0, 0.0),
+        font_dir: String::new(),
+        device_pixel_ratio: style.scale as f32,
     };
-    let png = render_png(&tree, font, &options).map_err(|e| e.to_string())?;
-    let em_pt = style.size_pt;
-    Ok(FormulaImage {
-        png,
-        width_pt: to_f64(&tree.width) * em_pt,
-        height_pt: (to_f64(&tree.height) + to_f64(&tree.depth)) * em_pt,
-        baseline_pt: to_f64(&tree.height) * em_pt,
-    })
+    let png = render_to_png(&list, &render)?;
+    // The display list measures in ems.
+    let em = style.size_pt;
+    Ok(FormulaImage { png, width_pt: list.width * em, height_pt: (list.height + list.depth) * em, baseline_pt: list.height * em })
+}
+
+/// Ems of each letter of `tex` the KaTeX fonts lack (Cyrillic in `\text{…}`, say), measured
+/// in the system font RaTeX draws it with; without them every such letter is half an em wide.
+fn fallback_metrics(tex: &str) -> HashMap<char, FallbackGlyphMetrics> {
+    let mut metrics = HashMap::new();
+    let mut missing: Vec<char> = tex.chars().filter(|&c| !c.is_ascii() && ratex_font::get_char_metrics(FontId::MainRegular, c as u32).is_none()).collect();
+    if missing.is_empty() {
+        return metrics;
+    }
+    missing.sort_unstable();
+    missing.dedup();
+    // The fonts RaTeX falls back to, in its order.
+    let fonts = SystemFontResolver::new();
+    let fonts: Vec<_> = [FontId::CjkRegular, FontId::CjkFallback].into_iter().filter_map(|id| fonts.get(id).ok().flatten().map(|f| f.font().clone())).collect();
+    for c in missing {
+        let found = fonts.iter().find_map(|font| {
+            let glyph = font.glyph_id(c);
+            (glyph != GlyphId(0)).then_some((font, glyph))
+        });
+        let Some((font, glyph)) = found else { continue };
+        let em = f64::from(font.units_per_em().unwrap_or(1000.0));
+        // Unscaled bounds run from the top (`min.y`) to the bottom (`max.y`), y up.
+        let (top, bottom) = font.outline(glyph).map_or((0.0, 0.0), |o| (f64::from(o.bounds.min.y), f64::from(o.bounds.max.y)));
+        metrics.insert(c, FallbackGlyphMetrics { width: f64::from(font.h_advance_unscaled(glyph)) / em, height: top.max(0.0) / em, depth: (-bottom).max(0.0) / em });
+    }
+    metrics
 }
 
 /// Source, display, size, colour and scale of a typeset formula.

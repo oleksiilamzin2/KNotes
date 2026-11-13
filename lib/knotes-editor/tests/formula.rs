@@ -35,3 +35,24 @@ fn the_cache_renders_each_formula_once() {
     cache.get("x^2", &style(true)).unwrap();
     assert_eq!(cache.renders(), 2, "display style is another image");
 }
+
+#[test]
+fn chemistry_and_middle_delimiters_typeset() {
+    for tex in [r"\ce{2H2 + O2 -> 2H2O}", r"\left\langle \psi \middle| \phi \right\rangle"] {
+        render_formula(tex, &style(true)).unwrap_or_else(|e| panic!("{tex}: {e}"));
+    }
+}
+
+#[test]
+fn cyrillic_text_typesets_wider_than_nothing() {
+    let f = render_formula(r"v = \frac{s}{t}\ \text{де швидкість}", &style(false)).unwrap();
+    let bare = render_formula(r"v = \frac{s}{t}", &style(false)).unwrap();
+    assert!(f.width_pt > bare.width_pt + 40.0, "the Cyrillic words take room: {} vs {}", f.width_pt, bare.width_pt);
+}
+
+#[test]
+fn letters_outside_the_math_fonts_take_their_own_width() {
+    let narrow = render_formula(r"\text{ііііі}", &style(false)).unwrap();
+    let wide = render_formula(r"\text{шшшшш}", &style(false)).unwrap();
+    assert!(narrow.width_pt < wide.width_pt * 0.6, "і is narrower than ш: {} vs {}", narrow.width_pt, wide.width_pt);
+}

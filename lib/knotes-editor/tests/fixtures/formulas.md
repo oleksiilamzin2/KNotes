@@ -168,4 +168,8 @@ $$
 \Gamma(z) = \int_0^\infty t^{z-1} e^{-t}\,dt, \qquad \Gamma(n + 1) = n!
 $$
 
+## Дужки й хімія
+
+Скалярний добуток $\left\langle \psi \middle| \phi \right\rangle$ і реакція $\ce{2H2 + O2 -> 2H2O}$.
+
 Кінець нотатки з формулами.

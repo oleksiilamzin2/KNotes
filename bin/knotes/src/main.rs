@@ -31,7 +31,15 @@ use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 #[global_allocator]
 static ALLOCATOR: knotes_alloc::DirectLarge = knotes_alloc::DirectLarge;
 
+/// Letters the math fonts lack (Cyrillic in `\text{…}`) are drawn in this serif face, as
+/// MathJax in Obsidian draws them (ADR 0017); other scripts fall back further.
+const FORMULA_TEXT_FONT: &str = "/System/Library/Fonts/Supplemental/Times New Roman.ttf";
+
 fn main() {
+    if std::env::var_os("RATEX_UNICODE_FONT").is_none() && std::path::Path::new(FORMULA_TEXT_FONT).exists() {
+        // SAFETY: no other thread runs yet; RaTeX reads the variable on the first formula.
+        unsafe { std::env::set_var("RATEX_UNICODE_FONT", FORMULA_TEXT_FONT) };
+    }
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
