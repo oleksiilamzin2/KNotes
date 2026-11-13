@@ -9,7 +9,7 @@ use std::sync::Arc;
 use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
-use crate::preview_fragment::{Anchor, BULLET_ROOM, Mark, PREVIEW_GAP, PreviewFragment};
+use crate::preview_fragment::{Anchor, BULLET_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -308,12 +308,20 @@ impl LivePreview {
             canvas.paint(run.range.clone(), |p| p.look = id);
         }
         // After all runs (one inside would replace it), before the markup (which drops it).
-        for run in styled.runs.iter().filter(|r| r.style == Style::Strike && meets(&r.range)) {
+        for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Strike | Style::Done) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= STRUCK);
         }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
             let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
             canvas.paint(m.clone(), |p| p.look = id);
+        }
+        // A done task's text is muted, bold or italic inside it too (links keep their colour).
+        for run in styled.runs.iter().filter(|r| r.style == Style::Done && meets(&r.range)) {
+            let mut looks: Vec<u16> = run.range.clone().filter_map(|i| canvas.get(i).map(|p| p.look)).collect();
+            looks.sort_unstable();
+            looks.dedup();
+            let muted: Vec<(u16, u16)> = looks.into_iter().map(|id| (id, palette.recolor(id, &look.text, &look.muted))).collect();
+            canvas.paint(run.range.clone(), |p| p.look = muted.iter().find(|m| m.0 == p.look).map_or(p.look, |m| m.1));
         }
         for run in styled.runs.iter().filter(|r| meets(&r.range)) {
             self.paint_list_marker(&mut canvas, &mut palette, storage, run);
@@ -448,9 +456,9 @@ impl LivePreview {
             .collect()
     }
 
-    /// A list item's marker and its paragraph's indentation. A bullet's `- ` is hidden, its room
-    /// kept (by kerning) for the dot the fragment draws, unless the selection touches it;
-    /// numbers show. The source's indentation is hidden: each level indents by `LIST_INDENT`,
+    /// A list item's marker and its paragraph's indentation. A bullet's `- ` or a task's
+    /// `- [ ] ` is hidden, its room kept (by kerning) for the dot or box the fragment draws,
+    /// unless the selection touches it; numbers show. The source's indentation is hidden: each level indents by `LIST_INDENT`,
     /// and wrapped lines line up with the item's text.
     fn paint_list_marker<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, run: &Run) {
         let Style::ListMarker { kind, depth } = run.style else { return };
@@ -461,10 +469,11 @@ impl LivePreview {
             line_start -= 1;
         }
         let blank = line_start == 0 || matches!(text.characterAtIndex(line_start - 1), 0x0a | 0x0d);
-        let hidden = kind == ListKind::Bullet && !touches(&run.range, self.ivars().selection.get());
+        let hidden = kind != ListKind::Ordered && !touches(&run.range, self.ivars().selection.get());
         let font = if kind == ListKind::Ordered { &look.digits } else { &look.body };
+        let hidden_room = if kind == ListKind::Bullet { BULLET_ROOM } else { TASK_ROOM };
         let room = if hidden {
-            BULLET_ROOM
+            hidden_room
         } else if kind == ListKind::Ordered {
             self.number_width(&text, &run.range)
         } else {
@@ -479,8 +488,8 @@ impl LivePreview {
             canvas.paint(line_start..run.range.start, |p| p.look = id);
         }
         if hidden {
-            let id = palette.look(&look.hidden, &look.clear, "bullet");
-            let kern = palette.kern(BULLET_ROOM / run.range.len() as f64);
+            let id = palette.look(&look.hidden, &look.clear, if kind == ListKind::Bullet { "bullet" } else { "task" });
+            let kern = palette.kern(hidden_room / run.range.len() as f64);
             canvas.paint(run.range.clone(), |p| {
                 p.look = id;
                 p.kern = kern;
@@ -609,7 +618,7 @@ impl LivePreview {
 
     /// What the paragraph at `range` draws: each typeset formula starting in it (inline, or a
     /// display formula on its own line), the preview of a display formula with the cursor in
-    /// it below its last paragraph, and the dot of a hidden bullet.
+    /// it below its last paragraph, and the dot or box of a hidden bullet or task marker.
     fn preview_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
         let styled = self.ivars().styled.borrow();
         let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty()) else { return Vec::new() };
@@ -640,8 +649,15 @@ impl LivePreview {
         let centre = self.ivars().look.body.xHeight() / 2.0;
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
-            if matches!(run.style, Style::ListMarker { kind: ListKind::Bullet, .. }) && !touches(&run.range, selection) {
-                marks.push(Mark::Bullet { offset: run.range.start - from, centre });
+            let Style::ListMarker { kind, .. } = run.style else { continue };
+            if touches(&run.range, selection) {
+                continue;
+            }
+            let offset = run.range.start - from;
+            match kind {
+                ListKind::Bullet => marks.push(Mark::Bullet { offset, centre }),
+                ListKind::Task { checked } => marks.push(Mark::Task { offset, centre, checked }),
+                ListKind::Ordered => {}
             }
         }
         marks
@@ -680,7 +696,10 @@ impl LivePreview {
 
     /// A click on character `index`: follows a link where its markup is hidden, or anywhere
     /// with Cmd; elsewhere the click is the text view's (ADR 0013).
-    pub fn click(&self, index: usize, cmd: bool) -> bool {
+    pub fn click(&self, view: &NSTextView, index: usize, cmd: bool) -> bool {
+        if !cmd && self.toggle_task_at(view, index) {
+            return true;
+        }
         let link = {
             let styled = self.ivars().styled.borrow();
             let revealed = self.ivars().revealed.get();
@@ -692,6 +711,34 @@ impl LivePreview {
         };
         if let Some(callback) = self.ivars().on_link.borrow().as_ref() {
             callback(&link);
+        }
+        true
+    }
+
+    /// Ticks or unticks the task whose drawn box holds character `index`: an edit of the
+    /// text, so it can be undone and is saved; the cursor stays.
+    fn toggle_task_at(&self, view: &NSTextView, index: usize) -> bool {
+        let at = {
+            let styled = self.ivars().styled.borrow();
+            let after = styled.runs.partition_point(|r| r.range.start <= index);
+            let task = styled.runs[after.saturating_sub(MARKER_REACH)..after].iter().rev().find(|r| {
+                matches!(r.style, Style::ListMarker { kind: ListKind::Task { .. }, .. }) && r.range.contains(&index) && !touches(&r.range, self.ivars().selection.get())
+            });
+            let Some(task) = task else { return false };
+            let text = view.string();
+            let Some(open) = task.range.clone().find(|&i| text.characterAtIndex(i) == u16::from(b'[')) else { return false };
+            let checked = matches!(task.style, Style::ListMarker { kind: ListKind::Task { checked: true }, .. });
+            (NSRange::new(open + 1, 1), if checked { " " } else { "x" })
+        };
+        let (range, mark) = at;
+        let mark = NSString::from_str(mark);
+        let selection = view.selectedRange();
+        if view.shouldChangeTextInRange_replacementString(range, Some(&mark)) {
+            if let Some(storage) = unsafe { view.textStorage() } {
+                storage.replaceCharactersInRange_withString(range, &mark);
+            }
+            view.didChangeText();
+            view.setSelectedRange(selection);
         }
         true
     }

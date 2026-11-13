@@ -139,7 +139,7 @@ impl VaultWindow {
         note_text.setDelegate(Some(ProtocolObject::from_ref(&*live_preview)));
         live_preview.attach(&note_text);
         let clicks = live_preview.clone();
-        note_text.on_click(move |index, cmd| clicks.click(index, cmd));
+        note_text.on_click(move |view, index, cmd| clicks.click(view, index, cmd));
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
         let chat = chat_view::chat_view(mtm);

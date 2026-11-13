@@ -77,6 +77,11 @@ pub fn click_requested(view: &crate::note_view::NoteTextView) {
     let Ok(spec) = std::env::var("KNOTES_PROBE_CLICK") else { return };
     let (index, cmd) = spec.split_once(':').map_or((spec.as_str(), false), |(i, m)| (i, m == "cmd"));
     let (Ok(index), Some(window)) = (index.parse::<usize>(), view.window()) else { return };
+    // Right after opening, TextKit 2 has not laid out the lines yet: their rects would all be
+    // the first line's.
+    if let Some(layout) = view.textLayoutManager() {
+        layout.textViewportLayoutController().layoutViewport();
+    }
     // SAFETY: the range lies inside the text; a null actual range is allowed.
     let rect = unsafe {
         objc2_app_kit::NSTextInputClient::firstRectForCharacterRange_actualRange(&**view, objc2_foundation::NSRange::new(index, 1), std::ptr::null_mut())

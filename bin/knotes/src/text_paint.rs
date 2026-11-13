@@ -104,6 +104,15 @@ impl<'a> Palette<'a> {
         })
     }
 
+    /// Look `id` with colour `color` instead of `from` (others unchanged), keeping its line.
+    pub fn recolor(&mut self, id: u16, from: &NSColor, color: &'a NSColor) -> u16 {
+        let (font, old, name) = self.looks[usize::from(id & !STRUCK)];
+        if !std::ptr::eq(old, from) {
+            return id;
+        }
+        self.look(font, color, name) | (id & STRUCK)
+    }
+
     pub fn kern(&mut self, points: f64) -> u32 {
         if points == 0.0 {
             return 0;

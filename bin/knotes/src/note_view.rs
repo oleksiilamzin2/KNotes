@@ -10,9 +10,9 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSEvent, NSEventModifierFlags, NSFont, NSResponder, NSScrollView, NSText, NSTextInputClient, NSTextView, NSView};
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
 
-/// Gets the character index under a click and whether Cmd is held; returns true when it
-/// handled the click (the text view then ignores it).
-type OnClick = Box<dyn Fn(usize, bool) -> bool>;
+/// Gets the text view, the character index under a click and whether Cmd is held; returns
+/// true when it handled the click (the text view then ignores it).
+type OnClick = Box<dyn Fn(&NSTextView, usize, bool) -> bool>;
 
 #[derive(Default)]
 pub struct Ivars {
@@ -40,7 +40,7 @@ define_class!(
 );
 
 impl NoteTextView {
-    pub fn on_click(&self, callback: impl Fn(usize, bool) -> bool + 'static) {
+    pub fn on_click(&self, callback: impl Fn(&NSTextView, usize, bool) -> bool + 'static) {
         *self.ivars().on_click.borrow_mut() = Some(Box::new(callback));
     }
 
@@ -48,7 +48,7 @@ impl NoteTextView {
         let callback = self.ivars().on_click.borrow();
         let Some(callback) = callback.as_ref() else { return false };
         let Some(index) = self.character_under(event.locationInWindow()) else { return false };
-        callback(index, event.modifierFlags().contains(NSEventModifierFlags::Command))
+        callback(self, index, event.modifierFlags().contains(NSEventModifierFlags::Command))
     }
 
     /// The character whose glyph is under a point in window coordinates: the insertion index

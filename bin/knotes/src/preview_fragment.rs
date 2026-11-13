@@ -1,5 +1,5 @@
 //! What the live preview draws in place of hidden source, inside TextKit 2 layout fragments
-//! (ADR 0017): typeset formulas and list bullets. The text keeps the source (hidden, its room
+//! (ADR 0017): typeset formulas, list bullets and task boxes. The text keeps the source (hidden, its room
 //! reserved by the live preview) and the paragraph's layout fragment draws at that place, so
 //! the drawing moves with its text however TextKit lays out, scrolls or resizes (layers over
 //! the view lagged a run loop behind and jumped while scrolling). Clicks reach the text.
@@ -33,6 +33,8 @@ pub enum Mark {
     Formula { offset: usize, image: Arc<FormulaImage>, anchor: Anchor },
     /// A list bullet in the room of a hidden `- `, its centre `centre` above the baseline.
     Bullet { offset: usize, centre: f64 },
+    /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
+    Task { offset: usize, centre: f64, checked: bool },
 }
 
 /// Space between a display formula's source and its preview.
@@ -41,6 +43,9 @@ pub const PREVIEW_GAP: f64 = 6.0;
 pub const BULLET_ROOM: f64 = 20.0;
 const BULLET_X: f64 = 7.0;
 const BULLET_SIZE: f64 = 5.0;
+/// Room a hidden task marker keeps, and the circle drawn at its start.
+pub const TASK_ROOM: f64 = 22.0;
+const TASK_BOX: f64 = 14.0;
 
 pub struct Ivars {
     /// Each mark with its image, for formulas.
@@ -73,6 +78,7 @@ define_class!(
                         NSColor::secondaryLabelColor().setFill();
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
+                    (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
                     _ => {}
                 }
             }
@@ -96,7 +102,7 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
-                Mark::Bullet { .. } => Some((m, None)),
+                Mark::Bullet { .. } | Mark::Task { .. } => Some((m, None)),
             })
             .collect();
         let this = Self::alloc().set_ivars(Ivars { marks });
@@ -109,7 +115,7 @@ impl PreviewFragment {
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
-            Mark::Bullet { offset, .. } => (*offset, false),
+            Mark::Bullet { offset, .. } | Mark::Task { offset, .. } => (*offset, false),
         };
         let line: Retained<NSTextLineFragment> =
             if below { lines.iter().last()? } else { lines.iter().find(|l| contains(l, offset)).or_else(|| lines.iter().last())? };
@@ -133,6 +139,9 @@ impl PreviewFragment {
                 let half = BULLET_SIZE / 2.0;
                 NSRect::new(NSPoint::new(x + BULLET_X - half, baseline - centre - half), NSSize::new(BULLET_SIZE, BULLET_SIZE))
             }
+            Mark::Task { centre, .. } => {
+                NSRect::new(NSPoint::new(x + 1.0, baseline - centre - TASK_BOX / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
+            }
         };
         Some(rect)
     }
@@ -154,6 +163,10 @@ impl PreviewFragment {
                         format!("formula-image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}")
                     }
                     Mark::Bullet { .. } => format!("decoration: bullet {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::Task { checked, .. } => {
+                        let kind = if *checked { "task-done" } else { "task" };
+                        format!("decoration: {kind} {x:.1} {y:.1} {w:.1} {h:.1}")
+                    }
                 })
             })
             .collect()
@@ -181,6 +194,31 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// A circle, outlined, or filled in the accent colour with a tick for a done task (the
+/// owner's choice over Obsidian's square boxes).
+fn draw_task_box(rect: NSRect, checked: bool) {
+    let inset = NSRect::new(NSPoint::new(rect.origin.x + 0.5, rect.origin.y + 0.5), NSSize::new(rect.size.width - 1.0, rect.size.height - 1.0));
+    let shape = NSBezierPath::bezierPathWithOvalInRect(inset);
+    if !checked {
+        NSColor::secondaryLabelColor().setStroke();
+        shape.setLineWidth(1.2);
+        shape.stroke();
+        return;
+    }
+    NSColor::controlAccentColor().setFill();
+    shape.fill();
+    let (x, y, s) = (rect.origin.x, rect.origin.y, rect.size.width);
+    let tick = NSBezierPath::bezierPath();
+    tick.moveToPoint(NSPoint::new(x + s * 0.26, y + s * 0.52));
+    tick.lineToPoint(NSPoint::new(x + s * 0.43, y + s * 0.70));
+    tick.lineToPoint(NSPoint::new(x + s * 0.75, y + s * 0.32));
+    tick.setLineWidth(1.8);
+    tick.setLineCapStyle(objc2_app_kit::NSLineCapStyle::Round);
+    tick.setLineJoinStyle(objc2_app_kit::NSLineJoinStyle::Round);
+    NSColor::whiteColor().setStroke();
+    tick.stroke();
 }
 
 fn contains(line: &NSTextLineFragment, offset: usize) -> bool {

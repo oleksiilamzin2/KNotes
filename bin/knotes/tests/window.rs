@@ -833,3 +833,19 @@ fn list_bullets_show_as_dots_indented_by_depth_and_the_marker_shows_with_the_cur
     assert!(editor_runs(&out).starts_with("[list-marker]- |[plain]one⏎|[indent]\t|[bullet]- |"), "{out}");
     assert_eq!(decorations(&out, "bullet").len(), 2, "{out}");
 }
+
+#[test]
+fn tasks_show_as_boxes_done_ones_struck_and_a_click_on_a_box_ticks_it() {
+    let note = "- [ ] buy milk\n- [x] call mom\n\nend";
+    let (_vault, out) = probe_notes(&[("t.md", note)], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.starts_with("[task]- [ ] |[plain]buy milk⏎|[task]- [x] |[done]call mom|"), "{runs}");
+    assert_eq!(decorations(&out, "task").len(), 1, "{out}");
+    assert_eq!(decorations(&out, "task-done").len(), 1, "{out}");
+    assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-struck: ")), Some("call mom"), "{out}");
+    let (_vault, out) = probe_notes(&[("t.md", note)], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "3")]);
+    assert!(out.contains("note: t.md | - [x] buy milk⏎- [x] call mom"), "{out}");
+    assert!(out.contains("cursor: 34"), "the cursor stays: {out}");
+    let (_vault, out) = probe_notes(&[("t.md", note)], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "18")]);
+    assert!(out.contains("note: t.md | - [ ] buy milk⏎- [ ] call mom"), "{out}");
+}
