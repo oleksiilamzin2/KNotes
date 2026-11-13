@@ -33,3 +33,21 @@ answered a question round (2026-11-13).
 - A rename touching many notes writes them all; the index catches up through its watcher.
 - Renames done outside Knotes still break links, as in Obsidian.
 - An old note whose first line is a paragraph shows it large, as Apple Notes would.
+
+## Built (2026-11-13)
+
+- `knotes_app::relink` rewrites every link of a note for a set of moves in one pass over the
+  original spans (links to moved files, and a moved note's own relative Markdown links);
+  `plan_relinks` finds the notes to edit through the index's backlinks and parses their
+  current text again, since the index may lag behind it.
+- A bare name stays bare when it still opens the note under the resolution rules of ADR
+  0009 (the shortest path wins among notes of one name), not only when it is unique.
+- Move to… picks the folder in a combo box of the vault's folders that completes as it is
+  typed (a native dialog; a typed new folder is made), instead of a separate search panel.
+- A renamed folder moves in one rename, attachments and files outside the index included;
+  links to all its indexed files (images too) are updated.
+- The title is the first line of the first block when that is a heading or a paragraph; a
+  note starting with a list, code or a quote has none.
+- Probe actions: `rename=`, `list-rename=`, `list-move=`, `drag-to=`, `folder-rename=`, with
+  `KNOTES_PROBE_ANSWER` for the question; the drag gesture itself is not driven (its
+  pasteboard writer and the folder's drop handler are).
