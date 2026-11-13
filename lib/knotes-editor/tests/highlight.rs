@@ -1,4 +1,4 @@
-use knotes_editor::{ListKind, Style, highlight, utf16_offsets};
+use knotes_editor::{Align, ListKind, Style, highlight, utf16_offsets};
 
 fn styles(src: &str) -> Vec<(Style, &str)> {
     highlight(src).runs.into_iter().map(|r| (r.style, &src[r.range])).collect()
@@ -266,4 +266,46 @@ fn image_embeds_alone_on_their_line_are_images_with_their_size() {
 fn other_embeds_inline_images_and_web_images_are_no_images() {
     let src = "![[note]]\n![[doc.pdf]]\nsee ![[pic.png]] here\n![](https://example.com/a.png)\n[[pic.png]]\n";
     assert!(highlight(src).images.is_empty(), "{:?}", highlight(src).images);
+}
+
+#[test]
+fn tables_know_their_rows_cells_alignment_and_delimiter() {
+    let src = "Text\n\n| Name | **Age** |\n|:---|---:|\n| Ann | 3 \\| x |\n| Bob |\n\nafter\n";
+    let h = highlight(src);
+    assert_eq!(h.tables.len(), 1);
+    let t = &h.tables[0];
+    assert_eq!(&src[t.range.clone()], "| Name | **Age** |\n|:---|---:|\n| Ann | 3 \\| x |\n| Bob |\n");
+    assert_eq!(t.aligns, [Align::Left, Align::Right]);
+    assert_eq!(&src[t.delimiter.clone()], "|:---|---:|");
+    let rows: Vec<(&str, Vec<&str>)> = t.rows.iter().map(|r| (&src[r.range.clone()], r.cells.iter().map(|c| &src[c.clone()]).collect())).collect();
+    assert_eq!(
+        rows,
+        [
+            ("| Name | **Age** |", vec!["Name", "**Age**"]),
+            ("| Ann | 3 \\| x |", vec!["Ann", "3 \\| x"]),
+            ("| Bob |", vec!["Bob"]),
+        ]
+    );
+}
+
+#[test]
+fn a_table_without_outer_pipes_and_with_empty_cells() {
+    let src = "a | b\n--|:-:\nx | y\n| | 2 |\n";
+    let t = &highlight(src).tables[0];
+    assert_eq!(t.aligns, [Align::None, Align::Center]);
+    let cells: Vec<Vec<&str>> = t.rows.iter().map(|r| r.cells.iter().map(|c| &src[c.clone()]).collect()).collect();
+    assert_eq!(cells, [vec!["a", "b"], vec!["x", "y"], vec!["", "2"]]);
+    let row = t.rows[2].range.start;
+    assert_eq!(t.rows[2].cells[0], row + 2..row + 2, "an empty cell sits after the space past its pipe");
+}
+
+#[test]
+fn table_ranges_convert_to_utf16() {
+    let src = "| Ім'я | Вік |\n|---|---|\n| Аня | 3 |\n";
+    let h = highlight(src).to_utf16(src);
+    let units: Vec<u16> = src.encode_utf16().collect();
+    let text = |r: &std::ops::Range<usize>| String::from_utf16(&units[r.clone()]).unwrap();
+    let t = &h.tables[0];
+    assert_eq!(text(&t.rows[1].cells[0]), "Аня");
+    assert_eq!(text(&t.delimiter), "|---|---|");
 }

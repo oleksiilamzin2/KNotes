@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use knotes_core::{FileKind, Link, LinkKind, NoteParser};
 use knotes_md::{MarkdownParser, OPTIONS};
-use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Style {
@@ -77,6 +77,38 @@ pub struct Highlight {
     pub callouts: Vec<CalloutRun>,
     /// Image embeds alone on their line (ADR 0020), sorted by start.
     pub images: Vec<ImageRun>,
+    /// Markdown tables (ADR 0021), sorted by start.
+    pub tables: Vec<TableRun>,
+}
+
+/// A column's alignment, from the delimiter row (`:--`, `:-:`, `--:`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+/// A Markdown table: its lines, with the final line break.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRun {
+    pub range: Range<usize>,
+    /// One per column.
+    pub aligns: Vec<Align>,
+    /// The header row first, then the body rows; the delimiter row is not among them.
+    pub rows: Vec<TableRow>,
+    /// The delimiter row's line, without its line break.
+    pub delimiter: Range<usize>,
+}
+
+/// A table row: its line without the line break, and each cell's text without the pipes and
+/// the spaces around it (empty at the cell's place when there is none). A row may have fewer
+/// cells than the table has columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    pub range: Range<usize>,
+    pub cells: Vec<Range<usize>>,
 }
 
 /// An image embed alone on its line: `![[pic.png|300]]` or `![alt|300x200](pic.png)`.
@@ -134,6 +166,11 @@ impl Highlight {
             .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
+            .chain(self.tables.iter().flat_map(|t| {
+                [t.range.start, t.range.end, t.delimiter.start, t.delimiter.end]
+                    .into_iter()
+                    .chain(t.rows.iter().flat_map(|r| [r.range.start, r.range.end].into_iter().chain(r.cells.iter().flat_map(|c| [c.start, c.end]))))
+            }))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -160,6 +197,20 @@ impl Highlight {
                 })
                 .collect(),
             images: self.images.iter().map(|i| ImageRun { range: map(i.range.start)..map(i.range.end), ..i.clone() }).collect(),
+            tables: self
+                .tables
+                .iter()
+                .map(|t| TableRun {
+                    range: map(t.range.start)..map(t.range.end),
+                    aligns: t.aligns.clone(),
+                    rows: t
+                        .rows
+                        .iter()
+                        .map(|r| TableRow { range: map(r.range.start)..map(r.range.end), cells: r.cells.iter().map(|c| map(c.start)..map(c.end)).collect() })
+                        .collect(),
+                    delimiter: map(t.delimiter.start)..map(t.delimiter.end),
+                })
+                .collect(),
         }
     }
 }
@@ -175,6 +226,43 @@ pub fn highlight(source: &str) -> Highlight {
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
         match event {
+            Event::Start(Tag::Table(aligns)) => {
+                let aligns = aligns
+                    .iter()
+                    .map(|a| match a {
+                        Alignment::None => Align::None,
+                        Alignment::Left => Align::Left,
+                        Alignment::Center => Align::Center,
+                        Alignment::Right => Align::Right,
+                    })
+                    .collect();
+                h.tables.push(TableRun { range: r.clone(), aligns, rows: Vec::new(), delimiter: r.start..r.start });
+            }
+            Event::Start(Tag::TableHead | Tag::TableRow) => {
+                if let Some(table) = h.tables.last_mut() {
+                    table.rows.push(TableRow { range: r.start..r.start + text.trim_end_matches(['\n', '\r']).len(), cells: Vec::new() });
+                }
+            }
+            Event::End(TagEnd::TableHead) => {
+                // The delimiter row is the line after the header's.
+                if let Some(table) = h.tables.last_mut() {
+                    let start = r.end;
+                    let end = source[start..].find('\n').map_or(source.len(), |n| start + n);
+                    table.delimiter = start..start + source[start..end].trim_end_matches('\r').len();
+                }
+            }
+            Event::End(TagEnd::TableCell) => {
+                if let Some(row) = h.tables.last_mut().and_then(|t| t.rows.last_mut())
+                    // A cell the row lacks comes at its end.
+                    && r.start <= row.range.end
+                {
+                    let lead = text.len() - text.trim_start_matches([' ', '\t']).len();
+                    let content = text.trim_matches([' ', '\t']);
+                    let start = r.start + lead.min(text.len());
+                    let start = if content.is_empty() { r.start + text.len().min(1) } else { start };
+                    row.cells.push(start..start + content.len());
+                }
+            }
             Event::Start(Tag::BlockQuote(_)) => {
                 if quotes == 0 {
                     quote_prefixes(&mut h, source, r.clone());
