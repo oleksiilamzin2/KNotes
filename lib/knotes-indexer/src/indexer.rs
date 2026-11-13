@@ -1,6 +1,8 @@
 use std::io;
 
-use knotes_core::{BoxError, FileKind, FileStates, IndexChange, IndexWriter, NoteParser, ParsedNote, VaultFile, VaultReader, VaultScanner};
+use knotes_core::{
+    Block, BoxError, DocumentText, FileKind, FileStates, IndexChange, IndexWriter, NoDocuments, NoteParser, ParsedNote, Span, VaultFile, VaultReader, VaultScanner,
+};
 use rayon::prelude::*;
 
 use crate::plan::plan;
@@ -19,15 +21,28 @@ pub struct SyncReport {
     pub failed: Vec<(String, String)>,
 }
 
+/// Most bytes of a PDF's text in one searched block.
+const DOCUMENT_BLOCK: usize = 2048;
+/// Characters of a PDF's text shown in the note list.
+const DOCUMENT_SNIPPET: usize = 200;
+
 /// Brings an index up to date with the vault: scan, compare with the index, write changes.
-pub struct Indexer<V, P> {
+/// Notes are parsed; PDFs' text (ADR 0022) comes from `documents`.
+pub struct Indexer<V, P, D = NoDocuments> {
     vault: V,
     parser: P,
+    documents: D,
 }
 
-impl<V: VaultScanner + VaultReader + Sync, P: NoteParser + Sync> Indexer<V, P> {
+impl<V: VaultScanner + VaultReader + Sync, P: NoteParser + Sync> Indexer<V, P, NoDocuments> {
     pub fn new(vault: V, parser: P) -> Self {
-        Self { vault, parser }
+        Self { vault, parser, documents: NoDocuments }
+    }
+}
+
+impl<V: VaultScanner + VaultReader + Sync, P: NoteParser + Sync, D: DocumentText + Sync> Indexer<V, P, D> {
+    pub fn with_documents(vault: V, parser: P, documents: D) -> Self {
+        Self { vault, parser, documents }
     }
 
     pub fn sync(&self, index: &mut (impl IndexWriter + FileStates)) -> Result<SyncReport, BoxError> {
@@ -68,8 +83,14 @@ impl<V: VaultScanner + VaultReader + Sync, P: NoteParser + Sync> Indexer<V, P> {
         Ok(report)
     }
 
-    /// Text and parse result for notes; `None` for other files.
+    /// Text and parse result for notes, text in plain blocks for PDFs; `None` for other files.
     fn load(&self, file: &VaultFile) -> io::Result<Option<(String, ParsedNote)>> {
+        if file.kind == FileKind::Pdf {
+            return Ok(self.documents.document_text(&file.path).map(|text| {
+                let parsed = plain_text(&text);
+                (text, parsed)
+            }));
+        }
         if file.kind != FileKind::Markdown {
             return Ok(None);
         }
@@ -77,4 +98,27 @@ impl<V: VaultScanner + VaultReader + Sync, P: NoteParser + Sync> Indexer<V, P> {
         let parsed = self.parser.parse(&text);
         Ok(Some((text, parsed)))
     }
+}
+
+/// A document's text as it is: searched in blocks of paragraphs (no Markdown read into it: a
+/// `#word` in a PDF is no tag), its start for the note list.
+fn plain_text(text: &str) -> ParsedNote {
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    for (at, _) in text.match_indices("\n\n").chain(std::iter::once((text.len(), ""))) {
+        // A block ends at a paragraph break once it is long enough, or where it must.
+        let mut end = at;
+        while end - start > DOCUMENT_BLOCK {
+            let cut = text.floor_char_boundary(start + DOCUMENT_BLOCK);
+            blocks.push(Block { span: Span::new(start, cut), heading: None });
+            start = cut;
+            end = at;
+        }
+        if end > start && (end - start >= DOCUMENT_BLOCK / 2 || at == text.len()) {
+            blocks.push(Block { span: Span::new(start, end), heading: None });
+            start = end;
+        }
+    }
+    let snippet: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(DOCUMENT_SNIPPET).collect();
+    ParsedNote { frontmatter: None, headings: Vec::new(), links: Vec::new(), tags: Vec::new(), anchors: Vec::new(), blocks, snippet }
 }

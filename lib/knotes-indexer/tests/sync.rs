@@ -76,3 +76,28 @@ fn unreadable_note_is_reported_and_retried_next_time() {
     assert_eq!(report.modified, 1);
     assert_eq!(index.note_text("locked.md").unwrap().as_deref(), Some("secret"));
 }
+
+/// Text for PDFs, as the app's PDFKit reader gives it.
+struct Texts;
+
+impl knotes_core::DocumentText for Texts {
+    fn document_text(&self, path: &str) -> Option<String> {
+        path.ends_with(".pdf").then(|| format!("Title of {path}\n\nA #word and [[no link]] in the second paragraph."))
+    }
+}
+
+#[test]
+fn a_pdf_s_text_is_indexed_and_found_as_plain_text() {
+    use knotes_core::{ContentQuery, ContentSearch, TagIndex, Within};
+    let (vault, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(vault.path(), "a.md", "a note");
+    write(vault.path(), "docs/paper.pdf", "%PDF-1.4");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(vault.path()), MarkdownParser::new(), Texts).sync(&mut index).unwrap();
+    assert!(index.note_text("docs/paper.pdf").unwrap().unwrap().contains("second paragraph"));
+    let query = ContentQuery { text: "paragraph", within: Within::Note, prefixes: false, scope: None, limit: 10 };
+    let hits: Vec<String> = index.search(&query).unwrap().into_iter().map(|h| h.path).collect();
+    assert_eq!(hits, ["docs/paper.pdf"]);
+    assert!(index.tag_counts().unwrap().is_empty(), "no tags from a PDF's text");
+    assert!(index.links_from("docs/paper.pdf").unwrap().is_empty(), "no links either");
+}
