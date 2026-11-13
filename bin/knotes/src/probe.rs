@@ -751,7 +751,7 @@ fn report_toolbar(window: &NSWindow) {
         .collect();
     println!("toolbar: {}", names.join(", "));
     if let Some(field) = note_title_field(window) {
-        println!("note-title: {}{}", field.stringValue(), if field.isEditable() || field.stringValue().length() == 0 { "" } else { " (fixed)" });
+        println!("note-title: {}", field.stringValue());
     }
 }
 
@@ -760,6 +760,31 @@ fn note_title_field(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_k
     let id = NSString::from_str(crate::toolbar::NOTE_TITLE);
     let item = window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?;
     item.view()?.downcast::<objc2_app_kit::NSTextField>().ok()
+}
+
+/// `KNOTES_PROBE_TITLE_CLICKS=2`: a double click (or `1`, a click) on the name in the toolbar;
+/// then whether it is being edited and what is selected.
+pub fn title_clicks_requested(window: &NSWindow) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
+    let Some(clicks) = std::env::var("KNOTES_PROBE_TITLE_CLICKS").ok().and_then(|c| c.parse::<isize>().ok()) else { return };
+    let Some(field) = note_title_field(window) else { return };
+    let bounds = field.bounds();
+    let at = field.convertPoint_toView(objc2_foundation::NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0), None);
+    let down = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::LeftMouseDown, at, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, clicks, 1.0,
+    );
+    if let Some(down) = down {
+        NSResponder::mouseDown(&*field, &down);
+    }
+    let state = match field.currentEditor() {
+        None => "no".to_owned(),
+        Some(editor) => {
+            let (name, range) = (field.stringValue().to_string(), editor.selectedRange());
+            let selected: String = String::from_utf16_lossy(&name.encode_utf16().skip(range.location).take(range.length).collect::<Vec<u16>>());
+            format!("{selected} ({})", if range.length == name.encode_utf16().count() { "all selected" } else { "selected" })
+        }
+    };
+    println!("note-title-editing: {state}");
 }
 
 /// `KNOTES_PROBE_ACTION=toolbar-rename=New name`: the name typed over the open note's in the

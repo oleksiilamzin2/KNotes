@@ -2162,5 +2162,30 @@ fn the_toolbar_names_a_pdf_open_by_its_file_name_without_its_folder() {
     std::fs::write(vault.path().join(".knotes/attachments/paper.pdf"), PDF).unwrap();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
     assert!(out.contains("pdf-view: .knotes/attachments/paper.pdf 1/3"), "{out}");
-    assert!(out.contains("note-title: paper.pdf (fixed)\n"), "not renamed from the toolbar: {out}");
+    assert!(out.contains("note-title: paper.pdf\n"), "{out}");
+}
+
+#[test]
+fn a_double_click_on_the_name_in_the_toolbar_starts_renaming_and_a_single_click_does_not() {
+    let editing = |clicks: &str| {
+        let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_TITLE_CLICKS", clicks)]);
+        out.lines().find_map(|l| l.strip_prefix("note-title-editing: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+    };
+    assert_eq!(editing("1"), "no");
+    assert_eq!(editing("2"), "Old (all selected)");
+}
+
+#[test]
+fn a_pdf_is_renamed_from_the_toolbar_and_links_to_it_follow() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "See [[paper.pdf]] here\n\nend").unwrap();
+    std::fs::write(vault.path().join("paper.pdf"), PDF).unwrap();
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    let pdf = |more: (&str, &str)| probe_env(&[vault.path()], None, &[open[0], open[1], open[2], more]);
+    let out = pdf(("KNOTES_PROBE_TITLE_CLICKS", "2"));
+    assert!(out.contains("note-title-editing: paper (selected)\n"), "the name without .pdf: {out}");
+    let out = pdf(("KNOTES_PROBE_ACTION", "toolbar-rename=Report"));
+    assert!(vault.path().join("Report.pdf").exists() && !vault.path().join("paper.pdf").exists(), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "See [[Report.pdf]] here\n\nend");
+    assert!(out.contains("pdf-view: Report.pdf 1/3") && out.contains("note-title: Report.pdf\n"), "{out}");
 }

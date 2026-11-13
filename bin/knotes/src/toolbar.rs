@@ -14,7 +14,8 @@ use objc2_app_kit::{
     NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
 use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
-use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSFont, NSLineBreakMode, NSTextField, NSTextFieldDelegate, NSTextView};
+use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLineBreakMode, NSResponder, NSTextField, NSTextFieldDelegate, NSTextView, NSView};
+use objc2_foundation::NSRange;
 
 use knotes_app::{PanelMode, SearchMode, SidebarMode};
 
@@ -54,7 +55,7 @@ pub struct Ivars {
     /// Called with the name typed over the open note's.
     on_note_title: RefCell<Option<OnSearch>>,
     /// The open note's name field, once the toolbar has made it, and the name it shows.
-    note_title: RefCell<Option<Retained<NSTextField>>>,
+    note_title: RefCell<Option<Retained<TitleField>>>,
     note_title_state: RefCell<String>,
     /// Whether the name shown can be edited (a note's).
     note_title_renamable: Cell<bool>,
@@ -92,6 +93,7 @@ define_class!(
                 if let Some(window) = control.window() {
                     window.makeFirstResponder(None);
                 }
+                end_editing(control);
             }
             cancel
         }
@@ -182,6 +184,7 @@ define_class!(
             if let Some(window) = sender.window() {
                 window.makeFirstResponder(None);
             }
+            end_editing(sender);
         }
 
         #[unsafe(method(navigate:))]
@@ -292,11 +295,11 @@ impl ToolbarDelegate {
     pub fn set_note_title(&self, name: &str, renamable: bool) {
         *self.ivars().note_title_state.borrow_mut() = name.to_owned();
         self.ivars().note_title_renamable.set(renamable);
-        if let Some(field) = self.ivars().note_title.borrow().as_ref()
-            && field.currentEditor().is_none()
-        {
-            field.setStringValue(&NSString::from_str(name));
-            field.setEditable(renamable);
+        if let Some(field) = self.ivars().note_title.borrow().as_ref() {
+            field.ivars().set(renamable);
+            if field.currentEditor().is_none() {
+                field.setStringValue(&NSString::from_str(name));
+            }
         }
     }
 
@@ -383,7 +386,7 @@ impl ToolbarDelegate {
                 Some(Retained::into_super(group))
             }
             NOTE_TITLE => {
-                let field = NSTextField::new(mtm);
+                let field = TitleField::new(mtm, self.ivars().note_title_renamable.get());
                 field.setBezeled(false);
                 field.setDrawsBackground(false);
                 field.setFont(Some(&NSFont::boldSystemFontOfSize(NSFont::systemFontSize())));
@@ -395,7 +398,6 @@ impl ToolbarDelegate {
                 }
                 let name = self.ivars().note_title_state.borrow().clone();
                 field.setStringValue(&NSString::from_str(&name));
-                field.setEditable(self.ivars().note_title_renamable.get());
                 field.setToolTip(Some(&NSString::from_str(strings::NOTE_TITLE)));
                 field.widthAnchor().constraintGreaterThanOrEqualToConstant(60.0).setActive(true);
                 field.widthAnchor().constraintLessThanOrEqualToConstant(360.0).setActive(true);
@@ -441,6 +443,61 @@ impl ToolbarDelegate {
             }
             _ => None,
         }
+    }
+}
+
+define_class!(
+    /// The name of the document open, renamed in place after a double click (a single one
+    /// edits nothing: it was easy to start renaming by accident). Its ivar: whether the
+    /// document can be renamed.
+    #[unsafe(super(NSTextField, NSControl, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesTitleField"]
+    #[ivars = Cell<bool>]
+    pub struct TitleField;
+
+    impl TitleField {
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            if event.clickCount() == 2 && self.ivars().get() && self.currentEditor().is_none() {
+                self.begin_editing();
+            } else {
+                // SAFETY: forwarding the same event to the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+            }
+        }
+    }
+);
+
+impl TitleField {
+    fn new(mtm: MainThreadMarker, renamable: bool) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Cell::new(renamable));
+        // SAFETY: NSTextField's initializer.
+        let field: Retained<Self> = unsafe { msg_send![super(this), init] };
+        end_editing(&field);
+        field
+    }
+
+    /// Lets the name be edited, selected without a PDF's `.pdf`, as Finder selects a name.
+    pub fn begin_editing(&self) {
+        self.setEditable(true);
+        self.setSelectable(true);
+        if let Some(window) = self.window() {
+            window.makeFirstResponder(Some(self));
+        }
+        let name = self.stringValue().to_string();
+        let stem = name.len() - if name.to_lowercase().ends_with(".pdf") { 4 } else { 0 };
+        if let Some(editor) = self.currentEditor() {
+            editor.setSelectedRange(NSRange::new(0, name[..stem].encode_utf16().count()));
+        }
+    }
+}
+
+/// The name field is a label again once editing ends.
+fn end_editing(field: &NSControl) {
+    if let Some(field) = field.downcast_ref::<NSTextField>() {
+        field.setEditable(false);
+        field.setSelectable(false);
     }
 }
 

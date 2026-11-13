@@ -454,11 +454,15 @@ impl VaultWindow {
         let weak: Weak<Self> = Rc::downgrade(&this);
         let weak_title: Weak<Self> = Rc::downgrade(&this);
         this.toolbar_delegate.on_note_title(move |name| {
-            if let Some(window) = weak_title.upgrade()
-                && let Some(open) = window.open_path()
-                && !window.rename_note(&open, &name)
-            {
-                // Declined or impossible: the toolbar shows the name the note kept.
+            let Some(window) = weak_title.upgrade() else { return };
+            let pdf = window.pdf_path.borrow().clone();
+            let renamed = match (window.open_path(), pdf) {
+                (Some(note), _) => window.rename_note(&note, &name),
+                (None, Some(pdf)) => window.rename_pdf(&pdf, &name),
+                (None, None) => false,
+            };
+            if !renamed {
+                // Declined or impossible: the toolbar shows the name the document kept.
                 window.update_navigation();
             }
         });
@@ -819,7 +823,6 @@ impl VaultWindow {
             probe::list_menu_requested(&self.list, &self.table);
             probe::drag_requested(&self.list, &self.table, &self.sidebar);
             probe::folder_rename_requested(&self.sidebar, &self.outline);
-            probe::toolbar_rename_requested(&self.window);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -885,6 +888,9 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            // After the click: it may open a PDF to rename.
+            probe::toolbar_rename_requested(&self.window);
+            probe::title_clicks_requested(&self.window);
             if let Ok(title) = std::env::var("KNOTES_PROBE_OUTLINE_CLICK") {
                 self.window.displayIfNeeded();
                 self.outline_panel.click(&title);
@@ -1513,8 +1519,35 @@ impl VaultWindow {
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
             }
         }
+        // The PDF open moved: shown from its new place, at the page it was at.
+        let pdf = self.pdf_path.borrow().clone();
+        if let Some(new) = pdf.and_then(|p| moved.get(&p).cloned()) {
+            let page = self.pdf_view.borrow().as_ref().map_or(1, |v| v.page().0);
+            self.show_pdf(Some(&new));
+            if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+                self.window.layoutIfNeeded();
+                viewer.go_to(page.saturating_sub(1));
+            }
+            self.refresh_outline();
+        }
         self.update_navigation();
         true
+    }
+
+    /// Renames the PDF at `old` to `name` (`.pdf` added when left out) in its folder, links to
+    /// it updated as a note's are; false when declined or impossible.
+    pub fn rename_pdf(&self, old: &str, name: &str) -> bool {
+        let name = name.trim();
+        let stem = if name.to_lowercase().ends_with(".pdf") { &name[..name.len() - 4] } else { name };
+        let (Some(stem), Some(vault)) = (note_file_stem(stem), self.vault()) else { return false };
+        let folder = old.rsplit_once('/').map_or(String::new(), |(dir, _)| format!("{dir}/"));
+        // A change of case only is a rename of the same file.
+        let free = |p: &str| p.to_lowercase() == old.to_lowercase() || !vault.join(p).exists();
+        let new = (0..)
+            .map(|n| if n == 0 { format!("{folder}{stem}.pdf") } else { format!("{folder}{stem} {n}.pdf") })
+            .find(|p| free(p))
+            .unwrap_or_default();
+        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
     }
 
     /// The link edits `moves` call for, worked out from the index and the files.
@@ -1667,10 +1700,10 @@ impl VaultWindow {
         let state = self.state.borrow();
         self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
         drop(state);
-        // A note's name, renamed in place; a PDF's file name, without its folder.
+        // A note's name; a PDF's file name, without its folder. Both are renamed in place.
         match (self.open_path(), self.pdf_path.borrow().as_deref()) {
             (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true),
-            (None, Some(pdf)) => self.toolbar_delegate.set_note_title(pdf.rsplit('/').next().unwrap_or(pdf), false),
+            (None, Some(pdf)) => self.toolbar_delegate.set_note_title(pdf.rsplit('/').next().unwrap_or(pdf), true),
             (None, None) => self.toolbar_delegate.set_note_title("", false),
         }
     }

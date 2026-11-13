@@ -50,3 +50,8 @@ answered a question round (2026-11-13).
 - Probe actions: `rename=`, `list-rename=`, `list-move=`, `drag-to=`, `folder-rename=`, `toolbar-rename=`, with
   `KNOTES_PROBE_ANSWER` for the question; the drag gesture itself is not driven (its
   pasteboard writer and the folder's drop handler are).
+- Later (2026-11-13, owner's requests): the name in the toolbar is edited only after a double
+  click (a single click started renaming by accident), the name selected without a PDF's
+  `.pdf`, as Finder selects it. A PDF open is named there by its file name, without its folder,
+  and renamed there too: `.pdf` is kept, links to it are updated as a note's are, and the
+  viewer shows it from its new place at the page it was at.
