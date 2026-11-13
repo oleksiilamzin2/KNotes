@@ -238,6 +238,31 @@ pub fn click_requested(view: &crate::note_view::NoteTextView) {
     NSResponder::mouseDown(view, &down);
 }
 
+/// `KNOTES_PROBE_DRAG=x0,y0>x1,y1`: the mouse pressed at x0,y0 (text view coordinates),
+/// dragged to x1,y1 and let go there, as AppKit delivers it (the drag and the release queued
+/// for the press's tracking loop).
+pub fn mouse_drag_requested(view: &crate::note_view::NoteTextView) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
+    let Ok(spec) = std::env::var("KNOTES_PROBE_DRAG") else { return };
+    let point = |p: &str| p.split_once(',').and_then(|(x, y)| Some(objc2_foundation::NSPoint::new(x.parse().ok()?, y.parse().ok()?)));
+    let Some((from, to)) = spec.split_once('>').and_then(|(a, b)| Some((point(a)?, point(b)?))) else { return };
+    let Some(window) = view.window() else { return };
+    if let Some(layout) = view.textLayoutManager() {
+        layout.textViewportLayoutController().layoutViewport();
+    }
+    let event = |kind, at: objc2_foundation::NSPoint| {
+        let at = view.convertPoint_toView(at, None);
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            kind, at, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 1, 1.0,
+        )
+    };
+    let (Some(down), Some(dragged), Some(up)) = (event(NSEventType::LeftMouseDown, from), event(NSEventType::LeftMouseDragged, to), event(NSEventType::LeftMouseUp, to)) else { return };
+    let app = NSApplication::sharedApplication(view.mtm());
+    app.postEvent_atStart(&dragged, false);
+    app.postEvent_atStart(&up, false);
+    NSResponder::mouseDown(view, &down);
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };

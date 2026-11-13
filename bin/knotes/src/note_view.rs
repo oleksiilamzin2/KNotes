@@ -234,17 +234,19 @@ define_class!(
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             let point = self.convertPoint_fromView(event.locationInWindow(), None);
-            // A table's control takes the press first.
-            let pressed = self.ivars().on_press.borrow().as_ref().is_some_and(|press| press(self, point));
+            // An image's right edge resizes it, even where it lies over the image (a PDF's
+            // preview, clicked, would open); then a table's control or a PDF's preview.
+            let edge = self.image_edge(event.locationInWindow());
+            let pressed = edge.is_none() && self.ivars().on_press.borrow().as_ref().is_some_and(|press| press(self, point));
             let clicked = self.ivars().image_clicked.take();
-            if pressed {
+            if let Some((line, rect)) = edge {
+                self.resize_image(line, rect);
+            } else if pressed {
             } else if event.clickCount() >= 2 && let Some(line) = clicked {
                 self.quick_look(line);
             } else {
                 self.ivars().image_clicked.set(crate::preview_fragment::image_at(self, point).map(|(line, _, _)| line));
-                if let Some((line, rect)) = self.image_edge(event.locationInWindow()) {
-                    self.resize_image(line, rect);
-                } else if !self.offer_click(event) {
+                if !self.offer_click(event) {
                     // SAFETY: forwarding the same event to the superclass implementation.
                     let _: () = unsafe { msg_send![super(self), mouseDown: event] };
                 }

@@ -693,6 +693,7 @@ impl VaultWindow {
                 }
             }
             probe::click_requested(&self.note_text);
+            probe::mouse_drag_requested(&self.note_text);
             if std::env::var("KNOTES_PROBE_AFTER_CLICK").as_deref() == Ok("back") {
                 self.navigate(false);
             }

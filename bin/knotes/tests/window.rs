@@ -1823,3 +1823,17 @@ fn the_search_finds_a_pdf_by_its_text_as_an_entry_of_its_own() {
     let (_vault, out) = probe_images(&notes, &pdfs, &[("KNOTES_PROBE_SELECT", "f:Docs")]);
     assert_eq!(list_titles(&out), ["a"], "the folder's list shows its notes only: {out}");
 }
+
+#[test]
+fn dragging_a_pdf_preview_s_right_edge_resizes_it_and_opens_nothing() {
+    let notes = [("a.md", "Before\n![[doc.pdf]]\nAfter")];
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")];
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &env);
+    let (x, y, w, h, _) = images(&out)[0].clone();
+    // From 2 points inside the right edge to 48 points past it: the centred preview's right
+    // edge comes under the pointer, 200 + 2 × 48 wide.
+    let drag = format!("{},{}>{},{}", x + w - 2.0, y + h / 2.0, x + w + 48.0, y + h / 2.0);
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &[env[0], env[1], ("KNOTES_PROBE_DRAG", &drag)]);
+    assert!(out.contains("pdf-view: hidden"), "no viewer: {out}");
+    assert!(out.contains("note: a.md | Before⏎![[doc.pdf|296]]⏎After"), "{out}");
+}
