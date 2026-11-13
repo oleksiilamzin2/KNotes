@@ -466,6 +466,8 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         custom(NOTE_TITLE),
         system[2].copy(),
         system[3].copy(),
+        // The panel's switch and button at its right edge.
+        system[2].copy(),
         custom(PANEL_MODE),
         custom(PANEL),
     ])

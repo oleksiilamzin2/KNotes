@@ -118,7 +118,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, panel-mode(2), panel"
+        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(2), panel"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
