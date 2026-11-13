@@ -610,7 +610,7 @@ fn the_sidebar_switch_shows_tags_instead_of_folders_and_is_remembered() {
     assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | radar (1) | todo (1)"), "{out}");
     assert!(out.contains("sidebar-mode: tags"), "{out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[]);
-    assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | radar (1) | todo (1)"), "remembered: {out}");
+    assert!(out.contains("sidebar-mode: folders"), "every launch starts on the folders (owner's choice): {out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "sidebar=folders")]);
     assert!(out.contains("sidebar: Усі нотатки (2) | Вхідні (0) | Без тегів (0) | · | Inbox (1)"), "{out}");
 }
@@ -2192,13 +2192,16 @@ fn a_pdf_is_renamed_from_the_toolbar_and_links_to_it_follow() {
     assert!(out.contains("pdf-view: Report.pdf 1/3") && out.contains("note-title: Report\n"), "{out}");
 }
 
-/// A HOME whose settings show the tabs in the sidebar.
+/// A HOME of its own, kept between launches.
 fn tabs_home() -> tempfile::TempDir {
-    let home = tempfile::tempdir().unwrap();
-    let data = home.path().join("Library/Application Support/Knotes");
-    std::fs::create_dir_all(&data).unwrap();
-    std::fs::write(data.join("settings-v2.json"), r#"{"sidebar": "tabs"}"#).unwrap();
-    home
+    tempfile::tempdir().unwrap()
+}
+
+/// `vault` probed with the tabs shown in the sidebar (every launch starts on the folders).
+fn probe_tabs(vault: &tempfile::TempDir, home: &tempfile::TempDir, env: &[(&str, &str)]) -> String {
+    let mut env = env.to_vec();
+    env.push(("KNOTES_PROBE_SIDEBAR", "tabs"));
+    probe_env(&[vault.path()], Some(home.path()), &env)
 }
 
 /// A vault with two notes and a PDF the first links to.
@@ -2219,28 +2222,28 @@ fn sidebar_tabs(out: &str) -> (String, String) {
 #[test]
 fn a_note_opens_in_the_tab_shown_and_a_pdf_in_a_new_tab_beside_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
     assert!(out.contains("sidebar-mode: tabs"), "{out}");
     assert!(out.contains("sidebar-segments: Вкладки, Теки, Теги\n"), "tabs first (owner's order): {out}");
     assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()), "b.md in a.md's tab");
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
     assert_eq!(sidebar_tabs(&out), ("a | doc".to_owned(), "doc".to_owned()), "the PDF shown in a tab of its own: {out}");
 }
 
 #[test]
 fn a_note_opens_in_a_new_tab_from_the_list_s_menu_and_a_document_with_a_tab_brings_it_back() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()));
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()));
 }
 
 #[test]
 fn a_click_on_a_tab_shows_its_document() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
     assert!(out.contains("note: a.md"), "{out}");
     assert_eq!(sidebar_tabs(&out).1, "a");
 }
@@ -2248,7 +2251,7 @@ fn a_click_on_a_tab_shows_its_document() {
 #[test]
 fn closing_another_tab_keeps_the_document_shown() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
     assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()));
     assert!(out.contains("note-title: b\n"), "{out}");
 }
@@ -2256,10 +2259,10 @@ fn closing_another_tab_keeps_the_document_shown() {
 #[test]
 fn closing_the_tab_shown_shows_its_neighbour_and_closing_the_last_shows_nothing() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLOSE", "b.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLOSE", "b.md")]);
     assert_eq!(sidebar_tabs(&out), ("a".to_owned(), "a".to_owned()));
     assert!(out.contains("note-title: a\n") && out.contains("text: See [[doc.pdf]] here"), "{out}");
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
     assert_eq!(sidebar_tabs(&out), ("".to_owned(), "none".to_owned()));
     assert!(out.contains("note-title: \n") && out.contains("text: \n"), "{out}");
 }
@@ -2277,7 +2280,7 @@ fn a_tab_brings_its_note_back_where_it_was() {
         ("KNOTES_PROBE_NOTE_SCROLL", "end-later"),
         ("KNOTES_PROBE_TAB_TRIP", "b.md"),
     ];
-    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    let out = probe_tabs(&vault, &home, &env);
     let before = out.lines().find_map(|l| l.strip_prefix("note-top-before-trip: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
     assert_ne!(before, "# A", "scrolled: {out}");
     assert_eq!(note_top(&out), before, "{out}");
@@ -2290,7 +2293,7 @@ fn a_tab_brings_its_pdf_back_at_the_page_it_was_at() {
     std::fs::write(vault.path().join("a.md"), "See [[long.pdf#page=15]] here\n\nend").unwrap();
     std::fs::write(vault.path().join("long.pdf"), pdf_of(30)).unwrap();
     let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_TAB_TRIP", "a.md")];
-    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    let out = probe_tabs(&vault, &home, &env);
     assert!(out.contains("pdf-view: long.pdf 15/30") && out.contains("pdf-top: 15\n"), "{out}");
 }
 
@@ -2306,8 +2309,8 @@ fn tabs_and_where_their_documents_were_come_back_after_a_restart() {
         ("KNOTES_PROBE_TAB_CLICK", "a.md"),
         ("KNOTES_PROBE_NOTE_SCROLL", "end-later"),
     ];
-    let first = probe_env(&[vault.path()], Some(home.path()), &env);
-    let out = probe_env(&[vault.path()], Some(home.path()), &[]);
+    let first = probe_tabs(&vault, &home, &env);
+    let out = probe_tabs(&vault, &home, &[]);
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()), "{out}");
     assert!(out.contains("note-title: a\n") && out.contains("cursor: 40\n"), "{out}");
     assert_eq!(note_top(&out), note_top(&first));
@@ -2320,7 +2323,7 @@ fn closing_the_tab_shown_does_not_give_its_place_to_the_next() {
     std::fs::write(vault.path().join("b.md"), format!("b start\n{}", "b line\n".repeat(300))).unwrap();
     // b's place is its top; a scrolled down, then a's tab closed: b shows from its top.
     let env = [("KNOTES_PROBE_OPEN", "b.md"), ("KNOTES_PROBE_NEW_TAB", "a.md"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")];
-    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    let out = probe_tabs(&vault, &home, &env);
     assert!(out.contains("note-title: b\n"), "{out}");
     assert_eq!(note_top(&out), "b start");
 }
@@ -2328,8 +2331,8 @@ fn closing_the_tab_shown_does_not_give_its_place_to_the_next() {
 #[test]
 fn a_deleted_document_loses_its_tab_and_a_renamed_one_keeps_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
+    probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
     std::fs::remove_file(vault.path().join("a.md")).unwrap();
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "toolbar-rename=c")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_ACTION", "toolbar-rename=c")]);
     assert_eq!(sidebar_tabs(&out).0, "c", "{out}");
 }

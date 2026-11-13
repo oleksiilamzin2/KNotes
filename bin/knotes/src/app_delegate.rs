@@ -220,14 +220,8 @@ impl AppDelegate {
             probe::watch(&window);
         }
         let mut settings = AppSettings::load(&app_data());
-        window.set_sidebar_mode(settings.sidebar_mode);
-        window.on_sidebar_mode(|mode| {
-            let mut settings = AppSettings::load(&app_data());
-            settings.sidebar_mode = mode;
-            if let Err(e) = settings.save(&app_data()) {
-                eprintln!("knotes: cannot save settings: {e}");
-            }
-        });
+        // Every launch starts on the folders (owner's choice); the switch is not kept.
+        window.set_sidebar_mode(knotes_app::SidebarMode::Folders);
         window.set_panel_mode(settings.panel_mode);
         window.on_panel_mode(|mode| {
             let mut settings = AppSettings::load(&app_data());

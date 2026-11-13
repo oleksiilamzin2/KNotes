@@ -371,7 +371,9 @@ pub fn rewrite_image_requested(window: &VaultWindow) {
 /// `KNOTES_PROBE_ACTION=sidebar=tags` or `sidebar=folders`: a click on that segment of the
 /// toolbar switch, sent to its target as AppKit does.
 pub fn sidebar_mode_requested(window: &NSWindow) {
-    let index = match std::env::var("KNOTES_PROBE_ACTION").as_deref() {
+    // `KNOTES_PROBE_SIDEBAR=tabs`: the same, beside another action.
+    let asked = std::env::var("KNOTES_PROBE_SIDEBAR").map(|m| format!("sidebar={m}")).or_else(|_| std::env::var("KNOTES_PROBE_ACTION"));
+    let index = match asked.as_deref() {
         Ok("sidebar=folders") => 1,
         Ok("sidebar=tags") => 2,
         Ok("sidebar=tabs") => 0,

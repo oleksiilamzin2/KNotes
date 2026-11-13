@@ -417,6 +417,14 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        // The tabs/folders/tags switch; the choice lasts the session (every launch starts on the
+        // folders).
+        let weak_mode: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_sidebar_mode(move |mode| {
+            if let Some(window) = weak_mode.upgrade() {
+                window.set_sidebar_mode(mode);
+            }
+        });
         let weak_new_tab: Weak<Self> = Rc::downgrade(&this);
         this.list.on_new_tab(move |path| {
             if let Some(window) = weak_new_tab.upgrade() {
@@ -645,17 +653,6 @@ impl VaultWindow {
         self.toolbar_delegate.on_panel_mode(move |mode| {
             if let Some(window) = weak.upgrade() {
                 window.show_panel(mode);
-            }
-            callback(mode);
-        });
-    }
-
-    /// Called when the user flips the folders/tags switch (the app saves the choice).
-    pub fn on_sidebar_mode(&self, callback: impl Fn(SidebarMode) + 'static) {
-        let weak = self.this.borrow().clone();
-        self.toolbar_delegate.on_sidebar_mode(move |mode| {
-            if let Some(window) = weak.upgrade() {
-                window.set_sidebar_mode(mode);
             }
             callback(mode);
         });

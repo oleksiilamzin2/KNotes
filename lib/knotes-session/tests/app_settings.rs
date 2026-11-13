@@ -1,17 +1,15 @@
 use std::path::PathBuf;
 
-use knotes_app::{PanelMode, SidebarMode};
+use knotes_app::PanelMode;
 use knotes_session::AppSettings;
 
 #[test]
 fn settings_round_trip_through_the_app_data_folder() {
     let data = tempfile::tempdir().unwrap();
     assert_eq!(AppSettings::load(data.path()), AppSettings::default());
-    assert_eq!(AppSettings::default().sidebar_mode, SidebarMode::Folders);
     assert_eq!(AppSettings::default().panel_mode, PanelMode::Ai);
     let settings = AppSettings {
         last_vault: Some(PathBuf::from("/Users/me/Notes")),
-        sidebar_mode: SidebarMode::Tags,
         panel_mode: PanelMode::Outline,
         window_frame: Some([40, 60, 1200, 800]),
     };

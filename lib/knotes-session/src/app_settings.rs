@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use knotes_app::{PanelMode, SidebarMode};
+use knotes_app::PanelMode;
 use serde_json::{Value, json};
 
 pub const SETTINGS_FILE: &str = "settings-v2.json";
@@ -14,8 +14,6 @@ pub const SETTINGS_FILE: &str = "settings-v2.json";
 pub struct AppSettings {
     /// Vault reopened when the app starts without one.
     pub last_vault: Option<PathBuf>,
-    /// Folders or tags under "All notes" in the sidebar.
-    pub sidebar_mode: SidebarMode,
     /// The AI or the outline in the right panel.
     pub panel_mode: PanelMode,
     /// Where the window was and how big (x, y, width, height in screen points), to open it
@@ -30,7 +28,6 @@ impl AppSettings {
         let Ok(value) = serde_json::from_str::<Value>(&text) else { return Self::default() };
         Self {
             last_vault: value.get("lastVault").and_then(Value::as_str).map(PathBuf::from),
-            sidebar_mode: value.get("sidebar").and_then(Value::as_str).and_then(SidebarMode::from_key).unwrap_or_default(),
             panel_mode: value.get("panel").and_then(Value::as_str).and_then(PanelMode::from_key).unwrap_or_default(),
             window_frame: value.get("windowFrame").and_then(Value::as_array).and_then(|v| {
                 let n: Vec<i64> = v.iter().filter_map(Value::as_i64).collect();
@@ -44,7 +41,6 @@ impl AppSettings {
         fs::create_dir_all(app_data)?;
         let value = json!({
             "lastVault": self.last_vault.as_ref().map(|p| p.to_string_lossy()),
-            "sidebar": self.sidebar_mode.key(),
             "panel": self.panel_mode.key(),
             "windowFrame": self.window_frame,
         });
