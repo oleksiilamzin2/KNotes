@@ -183,6 +183,11 @@ impl PaintCache {
     }
 
     fn attributes(&self, palette: &Palette, paint: Paint) -> Retained<NSDictionary<NSString, AnyObject>> {
+        // Kerning takes many values (a table's cells each get their own): the cache starts over
+        // rather than growing without end.
+        if self.attributes.borrow().len() > MAX_ATTRIBUTE_SETS {
+            self.attributes.borrow_mut().clear();
+        }
         let (font, color, name) = palette.looks[usize::from(paint.look & LOOK)];
         let kern = palette.kerns[paint.kern as usize];
         let struck = paint.look & STRUCK != 0;
@@ -227,10 +232,10 @@ impl PaintCache {
             .clone()
     }
 
-    /// Sets the composed attributes, front to back, each run once.
-    pub fn apply(&self, storage: &NSTextStorage, canvas: &Canvas<Paint>, palette: &Palette) {
+    /// Sets the composed attributes within `range`, front to back, each run once.
+    pub fn apply_in(&self, storage: &NSTextStorage, canvas: &Canvas<Paint>, palette: &Palette, range: Range<usize>) {
         storage.beginEditing();
-        for (range, paint) in canvas.runs() {
+        for (range, paint) in canvas.runs_in(range) {
             let attrs = self.attributes(palette, paint);
             // SAFETY: values of their attributes' types.
             unsafe { storage.setAttributes_range(Some(&attrs), ns(&range)) };
@@ -238,6 +243,9 @@ impl PaintCache {
         storage.endEditing();
     }
 }
+
+/// Attribute sets kept for reuse at most.
+const MAX_ATTRIBUTE_SETS: usize = 4096;
 
 fn ns(r: &Range<usize>) -> NSRange {
     NSRange::new(r.start, r.end - r.start)

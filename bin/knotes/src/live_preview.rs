@@ -58,6 +58,8 @@ const TABLE_MIN_COLUMN: f64 = 24.0;
 /// How near a table the pointer shows its controls: beside and under it, and over it.
 const TABLE_NEAR_SIDE: f64 = 26.0;
 const TABLE_NEAR_TOP: f64 = 20.0;
+/// Widths of pieces of table cells kept at most.
+const MAX_PIECE_WIDTHS: usize = 20_000;
 /// Sideways scrolling over a wide table that shows the next column.
 const SCROLL_COLUMN: f64 = 30.0;
 
@@ -87,10 +89,14 @@ struct Look {
     number_widths: Cell<Option<[f64; 4]>>,
     /// Widths of characters in the body font, once measured.
     body_widths: RefCell<std::collections::HashMap<u16, f64>>,
+    /// Widths of pieces of table cells by text and font, once measured.
+    piece_widths: RefCell<std::collections::HashMap<(String, usize), f64>>,
 }
 
 
 type OnChange = Box<dyn Fn()>;
+/// A table's column widths, first column shown and start, as laid out.
+type TableLayout = (Vec<f64>, usize, usize);
 /// A table under the pointer: where it starts, and the row and column under the pointer.
 type TableHover = (usize, Option<usize>, Option<usize>);
 
@@ -157,6 +163,10 @@ pub struct Ivars {
     table_scroll: RefCell<HashMap<usize, usize>>,
     /// Each table's column widths with their padding (by its index), as last laid out.
     table_widths: RefCell<HashMap<usize, Vec<f64>>>,
+    /// Each table's column widths, first column shown and start, as last laid out (by its
+    /// index), and whether a restyle changed any: then all of its rows are set again.
+    table_layouts: RefCell<HashMap<usize, TableLayout>>,
+    tables_changed: Cell<bool>,
     /// Sideways scrolling over a table not yet a column's worth.
     scroll_sideways: Cell<f64>,
     /// The actions of the table menu being shown, by item tag, with the table's index.
@@ -342,6 +352,7 @@ impl LivePreview {
             paint: PaintCache::new(STYLE_KEY),
             number_widths: Cell::new(None),
             body_widths: RefCell::new(std::collections::HashMap::new()),
+            piece_widths: RefCell::new(std::collections::HashMap::new()),
             body,
         };
         let ivars = Ivars {
@@ -365,6 +376,8 @@ impl LivePreview {
             table_scroll: RefCell::new(HashMap::new()),
             table_widths: RefCell::new(HashMap::new()),
             scroll_sideways: Cell::new(0.0),
+            table_layouts: RefCell::new(HashMap::new()),
+            tables_changed: Cell::new(false),
             hovered_table: Cell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
@@ -434,10 +447,15 @@ impl LivePreview {
     /// meeting it. The styles are composed in memory, layer over layer, and set front to back,
     /// each run once (`text_paint`).
     fn restyle(&self, storage: &NSTextStorage, region: (usize, usize)) {
-        let region = self.whole(storage, region);
+        // A table is laid out whole (its columns are as wide as their widest cell), but its
+        // rows outside the region are set again only when its columns changed: setting a row
+        // lays it out again.
+        let asked = self.whole(storage, region, false);
+        let region = self.whole(storage, asked, true);
         if region.0 >= region.1 {
             return;
         }
+        self.ivars().tables_changed.set(false);
         let look = &self.ivars().look;
         let styled = self.ivars().styled.borrow();
         let fonts = self.ivars().markup_fonts.borrow();
@@ -513,12 +531,13 @@ impl LivePreview {
             self.paint_table(&mut canvas, &mut palette, storage, t, table);
         }
         self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region, revealed);
-        look.paint.apply(storage, &canvas, &palette);
+        let applied = if self.ivars().tables_changed.get() { region } else { asked };
+        look.paint.apply_in(storage, &canvas, &palette, applied.0..applied.1);
     }
 
     /// `region` grown to whole paragraphs and to the whole of every formula meeting it (a
     /// display formula styles all its paragraphs).
-    fn whole(&self, storage: &NSTextStorage, region: (usize, usize)) -> (usize, usize) {
+    fn whole(&self, storage: &NSTextStorage, region: (usize, usize), tables: bool) -> (usize, usize) {
         let total = storage.length();
         let styled = self.ivars().styled.borrow();
         let mut r = (region.0.min(total), region.1.min(total));
@@ -529,7 +548,7 @@ impl LivePreview {
                 .formulas
                 .iter()
                 .map(|f| &f.range)
-                .chain(styled.tables.iter().map(|t| &t.range))
+                .chain(styled.tables.iter().map(|t| &t.range).filter(|_| tables))
                 .filter(|r| r.start < para.1 && r.end > para.0)
                 .fold(para, |g, r| (g.0.min(r.start), g.1.max(r.end.min(total))));
             if grown == r {
@@ -646,6 +665,7 @@ impl LivePreview {
         // The last note's images go with it, and its tables' scrolling.
         self.forget_images();
         self.ivars().table_scroll.borrow_mut().clear();
+        self.ivars().table_layouts.borrow_mut().clear();
         *self.ivars().path.borrow_mut() = path.to_owned();
         // setString moves the selection, which reveals markup: the old note's ranges must not
         // be applied to the new text.
@@ -950,22 +970,46 @@ impl LivePreview {
         canvas.paint(f.range.start..f.range.start + 1, |p| p.kern = kern);
     }
 
+    /// Width of `range` of `text` as `canvas` will show it: each run in its font (measured once
+    /// for its text), with its kerning.
+    fn shown_width(&self, canvas: &Canvas<Paint>, palette: &Palette, text: &NSString, range: &Range<usize>) -> f64 {
+        let mut cache = self.ivars().look.piece_widths.borrow_mut();
+        if cache.len() > MAX_PIECE_WIDTHS {
+            cache.clear();
+        }
+        canvas
+            .runs_in(range.clone())
+            .map(|(run, paint)| {
+                let piece = text.substringWithRange(ns(&run));
+                let font = palette.font_of(paint.look);
+                let key = (piece.to_string(), font as *const NSFont as usize);
+                let width = *cache.entry(key).or_insert_with(|| text_width(&piece, font));
+                width + palette.kern_of(paint.kern) * run.len() as f64
+            })
+            .sum()
+    }
+
     /// A table as a grid (ADR 0021): each cell's text moved to its column by kerning on the
     /// hidden pipes and spaces before it, columns as wide as their widest cell, the delimiter
     /// row folded away, rows padded; the fragments draw the borders.
     fn paint_table<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, t: usize, table: &TableRun) {
         let text = storage.string();
         let columns = table.aligns.len().max(table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0));
-        let mut widths: Vec<Vec<f64>> = table.rows.iter().map(|row| row.cells.iter().map(|c| shown_width(canvas, palette, &text, c)).collect()).collect();
+        let mut widths: Vec<Vec<f64>> = table.rows.iter().map(|row| row.cells.iter().map(|c| self.shown_width(canvas, palette, &text, c)).collect()).collect();
         let mut column_widths = vec![TABLE_MIN_COLUMN; columns];
         for row in &widths {
             for (w, column) in row.iter().zip(column_widths.iter_mut()) {
                 *column = column.max(*w);
             }
         }
-        self.ivars().table_widths.borrow_mut().insert(t, column_widths.iter().map(|w| w + 2.0 * TABLE_PAD).collect());
-        // Columns scrolled away collapse to the table's left edge, their text hidden.
+        let padded: Vec<f64> = column_widths.iter().map(|w| w + 2.0 * TABLE_PAD).collect();
         let first = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0).min(columns.saturating_sub(1));
+        let laid_out = (padded.clone(), first, table.range.start);
+        if self.ivars().table_layouts.borrow_mut().insert(t, laid_out.clone()).as_ref() != Some(&laid_out) {
+            self.ivars().tables_changed.set(true);
+        }
+        self.ivars().table_widths.borrow_mut().insert(t, padded);
+        // Columns scrolled away collapse to the table's left edge, their text hidden.
         let hidden = palette.look(&self.ivars().look.hidden, &self.ivars().look.clear, "table");
         for (row, row_widths) in table.rows.iter().zip(widths.iter_mut()) {
             for (cell, w) in row.cells.iter().zip(row_widths.iter_mut()).take(first) {
@@ -2175,16 +2219,6 @@ fn cell_text(text: &str) -> String {
     out
 }
 
-/// Width of `range` of `text` as `canvas` will show it: each run in its font, with its kerning.
-fn shown_width(canvas: &Canvas<Paint>, palette: &Palette, text: &NSString, range: &Range<usize>) -> f64 {
-    canvas
-        .runs_in(range.clone())
-        .map(|(run, paint)| {
-            let piece = text.substringWithRange(ns(&run));
-            text_width(&piece, palette.font_of(paint.look)) + palette.kern_of(paint.kern) * run.len() as f64
-        })
-        .sum()
-}
 
 /// Width of `text` laid out on one line in `font`.
 fn text_width(text: &NSString, font: &NSFont) -> f64 {

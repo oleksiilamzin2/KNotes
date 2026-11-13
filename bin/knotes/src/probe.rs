@@ -578,6 +578,9 @@ pub fn schedule(with_sidebar: bool) {
                 if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("editor-bench") {
                     editor_bench(window);
                 }
+                if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("table-bench") {
+                    table_bench(&window.note_text);
+                }
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
@@ -911,6 +914,34 @@ fn report_note(window: &VaultWindow) {
     }
 }
 
+/// Types 100 characters one at a time into the first cell of the row in the middle of the
+/// note (a table's, `| ` before it), each drawn, and times them.
+fn table_bench(view: &objc2_app_kit::NSTextView) {
+    use objc2_foundation::NSRange;
+    let text = view.string();
+    let line = text.paragraphRangeForRange(NSRange::new(text.length() / 2, 0));
+    let mut at = line.location + 2;
+    let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+    let mut times = Vec::new();
+    for c in "typing in a table cell ".chars().cycle().take(100) {
+        objc2::rc::autoreleasepool(|_| {
+            let t = std::time::Instant::now();
+            view.setSelectedRange(NSRange::new(at, 0));
+            // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+            unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&c.to_string()), not_found) };
+            view.layoutSubtreeIfNeeded();
+            if let Some(scroll) = view.enclosingScrollView() {
+                scroll.displayIfNeeded();
+            }
+            times.push(t.elapsed());
+        });
+        at += 1;
+    }
+    times.sort_unstable();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    println!("table-bench: keystroke p50={:.2}ms p95={:.2}ms max={:.2}ms n={}", ms(times[50]), ms(times[95]), ms(times[99]), times.len());
+}
+
 /// Scrolls the note list in 40-point steps (a fast flick at 120 Hz) and times the main-thread
 /// work of each step: scrolling, laying out and filling newly visible rows, drawing.
 fn scroll_bench(table: &NSTableView) {
@@ -958,14 +989,17 @@ fn editor_bench(window: &VaultWindow) {
     while at < ns.length() && moves.len() < 400 {
         let next = ns.paragraphRangeForRange(NSRange::new(at, 0));
         at = next.location + next.length;
-        let t = std::time::Instant::now();
-        view.setSelectedRange(NSRange::new(at.min(ns.length()), 0));
-        view.scrollRangeToVisible(NSRange::new(at.min(ns.length()), 0));
-        view.layoutSubtreeIfNeeded();
-        if let Some(scroll) = view.enclosingScrollView() {
-            scroll.displayIfNeeded();
-        }
-        moves.push(t.elapsed());
+        // Each move in its own autorelease pool, as each event is in the run loop.
+        objc2::rc::autoreleasepool(|_| {
+            let t = std::time::Instant::now();
+            view.setSelectedRange(NSRange::new(at.min(ns.length()), 0));
+            view.scrollRangeToVisible(NSRange::new(at.min(ns.length()), 0));
+            view.layoutSubtreeIfNeeded();
+            if let Some(scroll) = view.enclosingScrollView() {
+                scroll.displayIfNeeded();
+            }
+            moves.push(t.elapsed());
+        });
     }
     // Scrolling the whole note in 40-point steps.
     let mut scrolls = Vec::new();
@@ -974,12 +1008,14 @@ fn editor_bench(window: &VaultWindow) {
         let height = view.frame().size.height - clip.bounds().size.height;
         let mut y = 0.0;
         while y < height && scrolls.len() < 3000 {
-            let t = std::time::Instant::now();
-            clip.scrollToPoint(NSPoint::new(0.0, y));
-            scroll.reflectScrolledClipView(&clip);
-            view.layoutSubtreeIfNeeded();
-            scroll.displayIfNeeded();
-            scrolls.push(t.elapsed());
+            objc2::rc::autoreleasepool(|_| {
+                let t = std::time::Instant::now();
+                clip.scrollToPoint(NSPoint::new(0.0, y));
+                scroll.reflectScrolledClipView(&clip);
+                view.layoutSubtreeIfNeeded();
+                scroll.displayIfNeeded();
+                scrolls.push(t.elapsed());
+            });
             y += 40.0;
         }
     }
