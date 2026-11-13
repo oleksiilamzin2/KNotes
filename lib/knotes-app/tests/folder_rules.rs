@@ -10,7 +10,7 @@ fn rules(entries: &[(&str, &str)]) -> HashMap<String, FolderRules> {
 fn settings_are_inherited_field_by_field_from_ancestors() {
     let r = rules(&[("", r#"{"list": {"sort": "title"}}"#), ("Journal", r#"{"list": {"groupByDate": false}}"#)]);
     let journal_2026 = resolve_list_settings("Journal/2026", &r);
-    assert_eq!(journal_2026, ListSettings { sort: SortOrder::Title, group_by_date: false, include_subfolders: true });
+    assert_eq!(journal_2026, ListSettings { sort: SortOrder::Title, group_by_date: false, include_subfolders: false });
     let other = resolve_list_settings("Other", &r);
     assert_eq!(other, ListSettings { sort: SortOrder::Title, ..ListSettings::default() });
     assert_eq!(resolve_list_settings("", &HashMap::new()), ListSettings::default());
@@ -62,7 +62,7 @@ fn a_menu_choice_writes_only_its_own_field() {
 fn options_change_settings() {
     use knotes_app::ListOption;
     let s = ListSettings::default().with(ListOption::SortBy(SortOrder::Title)).with(ListOption::GroupByDate(false));
-    assert_eq!(s, ListSettings { sort: SortOrder::Title, group_by_date: false, include_subfolders: true });
+    assert_eq!(s, ListSettings { sort: SortOrder::Title, group_by_date: false, include_subfolders: false });
 }
 
 #[test]

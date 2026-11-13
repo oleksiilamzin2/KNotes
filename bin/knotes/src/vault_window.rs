@@ -134,7 +134,7 @@ impl Drop for VaultWindow {
 
 impl VaultWindow {
     pub fn new(mtm: MainThreadMarker) -> Rc<Self> {
-        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0);
+        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0, &|_| false);
         let sidebar = SidebarSource::new(mtm, empty);
         let (scroll, outline) = sidebar_view::outline(mtm, &sidebar);
         let sidebar_vc = NSViewController::new(mtm);
@@ -398,7 +398,9 @@ impl VaultWindow {
         let model = {
             let state = self.state.borrow();
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
-            Sidebar::new(&state.folders, &state.tags, state.sidebar_mode, Some(&inbox), state.untagged)
+            Sidebar::new(&state.folders, &state.tags, state.sidebar_mode, Some(&inbox), state.untagged, &|path| {
+                resolve_list_settings(path, &state.rules).include_subfolders
+            })
         };
         self.sidebar.set_model(model);
         self.outline.reloadData();

@@ -379,6 +379,7 @@ pub fn requested_option() -> Option<knotes_app::ListOption> {
         "sort=modified" => Some(ListOption::SortBy(SortOrder::Modified)),
         "group=off" => Some(ListOption::GroupByDate(false)),
         "subfolders=off" => Some(ListOption::IncludeSubfolders(false)),
+        "subfolders=on" => Some(ListOption::IncludeSubfolders(true)),
         _ => None,
     }
 }

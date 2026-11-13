@@ -69,7 +69,8 @@ fn sidebar_shows_all_notes_folders_and_tags_of_the_vault() {
     std::fs::write(vault.path().join("Inbox/c.md"), "three #todo").unwrap();
     let out = probe_with(&[vault.path()], None);
     let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(sidebar, "Усі нотатки (3) | Вхідні (0) | Без тегів (1) | · | Inbox (1) | Projects (2)", "folders unless switched, no heading");
+    // A folder counts what its list shows: its own notes (Radar's are in its own row).
+    assert_eq!(sidebar, "Усі нотатки (3) | Вхідні (0) | Без тегів (1) | · | Inbox (1) | Projects (1)", "folders unless switched, no heading");
     let size = out.lines().find_map(|l| l.strip_prefix("size: ")).expect("size line");
     let width: f64 = size.split_once('x').unwrap().0.parse().unwrap();
     assert!(width >= 1000.0, "window shrank after data arrived: {size}");
@@ -131,8 +132,11 @@ fn selecting_a_folder_or_tag_filters_the_list() {
     write_aged(&vault.path().join("Projects/Sub/b.md"), "b", Duration::from_secs(20));
     write_aged(&vault.path().join("Inbox/c.md"), "#radar c", Duration::from_secs(30));
 
+    // A folder lists its own notes; its subfolders' only when asked.
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects")]);
-    assert!(out.contains("title: Projects") && out.contains("subtitle: 2 нотатки"), "{out}");
+    assert!(out.contains("title: Projects") && out.contains("subtitle: 1 нотатка"), "{out}");
+    assert_eq!(list_titles(&out), ["a"]);
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_ACTION", "subfolders=on")]);
     assert_eq!(list_titles(&out), ["a", "b"]);
 
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "t:radar")]);
@@ -153,7 +157,7 @@ fn list_options_menu_shows_the_folder_settings() {
     let vault = projects_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects")]);
     let menu = out.lines().find_map(|l| l.strip_prefix("list-menu: ")).unwrap_or_else(|| panic!("{out}"));
-    assert_eq!(menu, "Сортувати за > [✓ Датою зміни, Назвою] | ✓ Групувати за датою | ✓ Нотатки з підтек");
+    assert_eq!(menu, "Сортувати за > [✓ Датою зміни, Назвою] | ✓ Групувати за датою | Нотатки з підтек");
 }
 
 #[test]

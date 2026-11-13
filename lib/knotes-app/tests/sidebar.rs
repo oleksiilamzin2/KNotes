@@ -7,7 +7,7 @@ fn sidebar() -> Sidebar {
 fn sidebar_in(mode: SidebarMode) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md"]);
     let tags = tag_tree(&[("project".to_owned(), 2), ("project/radar".to_owned(), 1), ("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags, mode, None, 0)
+    Sidebar::new(&folders, &tags, mode, None, 0, &|_| true)
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn items_round_trip_through_their_keys() {
 fn with_inbox(mode: SidebarMode, inbox: &str) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md", "Inbox/Old/w.md"]);
     let tags = tag_tree(&[("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags, mode, Some(inbox), 3)
+    Sidebar::new(&folders, &tags, mode, Some(inbox), 3, &|_| true)
 }
 
 #[test]
@@ -71,4 +71,15 @@ fn the_inbox_shows_before_its_folder_exists_and_may_be_nested() {
     let nested = with_inbox(SidebarMode::Folders, "Projects/Radar");
     assert_eq!(nested.name(&SidebarItem::Folder("Projects/Radar".into())), "Radar");
     assert!(nested.children(Some(&SidebarItem::Folder("Projects".into()))).is_empty(), "not listed twice");
+}
+
+#[test]
+fn a_folder_counts_the_notes_its_list_shows() {
+    let folders = folder_tree(["Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md", "Inbox/Old/w.md"]);
+    let own = Sidebar::new(&folders, &[], SidebarMode::Folders, Some("Inbox"), 0, &|_| false);
+    assert_eq!(own.count(&SidebarItem::Folder("Projects".into())), Some(1), "its own notes, not its subfolders'");
+    assert_eq!(own.count(&SidebarItem::Folder("Inbox".into())), Some(1));
+    assert_eq!(own.count(&SidebarItem::AllNotes), Some(4));
+    let mixed = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|path| path == "Projects");
+    assert_eq!(mixed.count(&SidebarItem::Folder("Projects".into())), Some(2), "a folder that shows its subfolders counts them");
 }

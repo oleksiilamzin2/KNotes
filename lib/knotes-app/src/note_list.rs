@@ -69,7 +69,8 @@ impl ListSettings {
 
 impl Default for ListSettings {
     fn default() -> Self {
-        Self { sort: SortOrder::Modified, group_by_date: true, include_subfolders: true }
+        // A folder lists its own notes (owner's choice); its subfolders' when asked.
+        Self { sort: SortOrder::Modified, group_by_date: true, include_subfolders: false }
     }
 }
 
