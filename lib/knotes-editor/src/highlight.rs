@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use knotes_core::{Link, LinkKind, NoteParser};
+use knotes_core::{FileKind, Link, LinkKind, NoteParser};
 use knotes_md::{MarkdownParser, OPTIONS};
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
@@ -75,6 +75,18 @@ pub struct Highlight {
     pub code_blocks: Vec<Range<usize>>,
     /// Obsidian callouts, sorted by start.
     pub callouts: Vec<CalloutRun>,
+    /// Image embeds alone on their line (ADR 0020), sorted by start.
+    pub images: Vec<ImageRun>,
+}
+
+/// An image embed alone on its line: `![[pic.png|300]]` or `![alt|300x200](pic.png)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageRun {
+    pub range: Range<usize>,
+    pub link: Link,
+    /// Size written after `|`, in points.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// An Obsidian callout: a quote whose first line starts with `[!kind]`.
@@ -121,6 +133,7 @@ impl Highlight {
             .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
+            .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -146,6 +159,7 @@ impl Highlight {
                     title: map(c.title.start)..map(c.title.end),
                 })
                 .collect(),
+            images: self.images.iter().map(|i| ImageRun { range: map(i.range.start)..map(i.range.end), ..i.clone() }).collect(),
         }
     }
 }
@@ -256,9 +270,27 @@ pub fn highlight(source: &str) -> Highlight {
         h.runs.push(Run { range: link.range.clone(), style: Style::Link });
     }
     h.links.sort_by_key(|l| l.range.start);
+    h.images = h.links.iter().filter_map(|l| image(source, l)).collect();
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
+}
+
+/// The image `l` embeds, when it is an image in the vault alone on its line.
+fn image(source: &str, l: &LinkRun) -> Option<ImageRun> {
+    let link = &l.link;
+    if !link.embed || link.kind == LinkKind::External || FileKind::from_path(&link.target) != FileKind::Image {
+        return None;
+    }
+    let line_start = source[..l.range.start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = source[l.range.end..].find('\n').map_or(source.len(), |i| l.range.end + i);
+    if !source[line_start..l.range.start].trim().is_empty() || !source[l.range.end..line_end].trim().is_empty() {
+        return None;
+    }
+    // `300` or `300x200`, after the alias's or alt text's last `|`.
+    let size = link.display.as_deref().map_or("", |d| d.rsplit('|').next().unwrap_or(d)).trim();
+    let (width, height) = size.split_once('x').map_or((size, ""), |(w, h)| (w, h));
+    Some(ImageRun { range: l.range.clone(), link: link.clone(), width: width.parse().ok(), height: height.parse().ok() })
 }
 
 /// Marks the opening fence line of a fenced code block at `block`, and its closing one: its

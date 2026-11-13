@@ -244,3 +244,26 @@ fn a_callout_without_title_or_with_a_fold_sign_and_a_plain_quote() {
     assert_eq!(h.callouts.len(), 1, "a plain quote is no callout");
     assert_eq!((h.callouts[0].kind.as_str(), &src[h.callouts[0].marker.clone()], h.callouts[0].title.is_empty()), ("tip", "[!tip]-", true));
 }
+
+#[test]
+fn image_embeds_alone_on_their_line_are_images_with_their_size() {
+    let src = "Text\n![[pic.png]]\n  ![[Pasted image 1.PNG|300]]  \n![[wide.jpg|300x200]]\n![photo|240](dir/My%20photo.webp)\n";
+    let h = highlight(src);
+    let images: Vec<(&str, &str, Option<u32>, Option<u32>)> =
+        h.images.iter().map(|i| (&src[i.range.clone()], i.link.target.as_str(), i.width, i.height)).collect();
+    assert_eq!(
+        images,
+        [
+            ("![[pic.png]]", "pic.png", None, None),
+            ("![[Pasted image 1.PNG|300]]", "Pasted image 1.PNG", Some(300), None),
+            ("![[wide.jpg|300x200]]", "wide.jpg", Some(300), Some(200)),
+            ("![photo|240](dir/My%20photo.webp)", "dir/My photo.webp", Some(240), None),
+        ]
+    );
+}
+
+#[test]
+fn other_embeds_inline_images_and_web_images_are_no_images() {
+    let src = "![[note]]\n![[doc.pdf]]\nsee ![[pic.png]] here\n![](https://example.com/a.png)\n[[pic.png]]\n";
+    assert!(highlight(src).images.is_empty(), "{:?}", highlight(src).images);
+}
