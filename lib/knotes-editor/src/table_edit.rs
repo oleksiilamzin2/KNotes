@@ -69,4 +69,78 @@ impl TableText {
     pub fn insert_row(&mut self, at: usize) {
         self.rows.insert(at.min(self.rows.len()), vec![String::new(); self.columns()]);
     }
+
+    /// Takes row `at` out; the header's going makes the next row the header. The last row
+    /// stays.
+    pub fn delete_row(&mut self, at: usize) {
+        if self.rows.len() > 1 && at < self.rows.len() {
+            self.rows.remove(at);
+        }
+    }
+
+    /// An empty column before column `at` (`columns()` adds one at the end).
+    pub fn insert_column(&mut self, at: usize) {
+        let at = at.min(self.columns());
+        self.aligns.insert(at, Align::None);
+        for row in &mut self.rows {
+            row.insert(at, String::new());
+        }
+    }
+
+    /// Takes column `at` out. The last column stays.
+    pub fn delete_column(&mut self, at: usize) {
+        if self.columns() > 1 && at < self.columns() {
+            self.aligns.remove(at);
+            for row in &mut self.rows {
+                row.remove(at);
+            }
+        }
+    }
+
+    /// Moves row `from` to be row `to`.
+    pub fn move_row(&mut self, from: usize, to: usize) {
+        if from < self.rows.len() && to < self.rows.len() {
+            let row = self.rows.remove(from);
+            self.rows.insert(to, row);
+        }
+    }
+
+    /// Moves column `from` to be column `to`, with its alignment.
+    pub fn move_column(&mut self, from: usize, to: usize) {
+        if from < self.columns() && to < self.columns() {
+            let align = self.aligns.remove(from);
+            self.aligns.insert(to, align);
+            for row in &mut self.rows {
+                let cell = row.remove(from);
+                row.insert(to, cell);
+            }
+        }
+    }
+
+    pub fn set_align(&mut self, column: usize, align: Align) {
+        if let Some(a) = self.aligns.get_mut(column) {
+            *a = align;
+        }
+    }
+
+    /// Sorts the rows under the header by column `column`: numbers as numbers (before text),
+    /// text ignoring case; equal rows keep their order.
+    pub fn sort_by(&mut self, column: usize, ascending: bool) {
+        let key = |row: &Vec<String>| {
+            let cell = row.get(column).map_or("", |c| c.trim());
+            (cell.replace(',', ".").parse::<f64>().ok(), cell.to_lowercase())
+        };
+        if self.rows.len() > 2 {
+            self.rows[1..].sort_by(|a, b| {
+                let (a, b) = (key(a), key(b));
+                let order = match (a.0, b.0) {
+                    (Some(x), Some(y)) => x.total_cmp(&y),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.1.cmp(&b.1),
+                };
+                if ascending { order } else { order.reverse() }
+            });
+        }
+    }
 }
