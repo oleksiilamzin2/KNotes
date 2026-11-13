@@ -2424,3 +2424,30 @@ fn code_lines_are_numbered_in_a_gutter_left_of_the_code() {
     let back = decorations(&out, "code");
     assert!(numbers.iter().all(|&(_, x, w)| x > back[0].0 && x + w < back[0].0 + 50.0), "in the block's gutter: {numbers:?} {back:?}");
 }
+
+#[test]
+fn a_code_block_names_its_language_at_its_top_right() {
+    let note = "text\n\n```rust\nlet a = 1;\n```\n\n```\nplain\n```\n\nend";
+    let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let labels: Vec<&str> = out.lines().filter_map(|l| l.strip_prefix("decoration: code-label ")).collect();
+    assert_eq!(labels.len(), 1, "the block without a language has none: {out}");
+    assert!(labels[0].starts_with("rust "), "{labels:?}");
+    let (x, w) = {
+        let p: Vec<f64> = labels[0].split(' ').skip(1).map(|v| v.parse().unwrap()).collect();
+        (p[0], p[2])
+    };
+    let back = decorations(&out, "code");
+    assert!((back[0].0 + back[0].2) - (x + w) < 20.0, "at the right: {labels:?} {back:?}");
+}
+
+#[test]
+fn the_pointer_over_a_code_block_shows_a_copy_button_that_copies_its_code() {
+    let note = "text\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\nend";
+    let inside = note.find("let b").unwrap().to_string();
+    let probe = |more: (&str, &str)| probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end"), more]).1;
+    assert!(decorations(&probe(("KNOTES_PROBE_CURSOR", "end")), "code-copy").is_empty(), "no pointer, no button");
+    assert_eq!(decorations(&probe(("KNOTES_PROBE_CODE_HOVER", &inside)), "code-copy").len(), 1);
+    // Copied to a pasteboard of the probe's own, never the user's.
+    let out = probe(("KNOTES_PROBE_CODE_COPY", &inside));
+    assert!(out.contains("code-copied: let a = 1;⏎let b = 2;\n"), "{out}");
+}

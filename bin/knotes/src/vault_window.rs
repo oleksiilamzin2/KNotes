@@ -194,7 +194,10 @@ impl VaultWindow {
         let hovers = live_preview.clone();
         note_text.on_image_hover(move |view, line| hovers.hover_image(view, line));
         let pointers = live_preview.clone();
-        note_text.on_pointer(move |view, point| pointers.hover_table(view, point));
+        note_text.on_pointer(move |view, point| {
+            pointers.hover_table(view, point);
+            pointers.hover_code(view, point);
+        });
         let presses = live_preview.clone();
         note_text.on_press(move |view, point| presses.press(view, point));
         let scrolls = live_preview.clone();
@@ -938,6 +941,7 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            self.live_preview.probe_code_pointer(&self.note_text);
             if let Ok(spec) = std::env::var("KNOTES_PROBE_LINK_MENU") {
                 self.live_preview.probe_link_menu(&spec);
             }

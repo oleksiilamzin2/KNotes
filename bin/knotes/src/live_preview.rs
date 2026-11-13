@@ -180,6 +180,10 @@ pub struct Ivars {
     hovered_image: Cell<Option<usize>>,
     /// The table the pointer is over (where it starts), and the row and column under it.
     hovered_table: Cell<Option<TableHover>>,
+    /// The code block under the pointer (its start): its copy button shows.
+    hovered_code: Cell<Option<usize>>,
+    /// Where a code block's copy button copies to: the general pasteboard, or the probe's.
+    copy_board: RefCell<Option<Retained<objc2_app_kit::NSPasteboard>>>,
     /// How far each wide table is scrolled sideways, in points (by its index in the note).
     table_scroll: RefCell<HashMap<usize, f64>>,
     /// Each table's column widths with their padding (by its index), as last laid out.
@@ -436,6 +440,8 @@ impl LivePreview {
             catch_up: Cell::new(0),
             tables_changed: Cell::new(false),
             hovered_table: Cell::new(None),
+            hovered_code: Cell::new(None),
+            copy_board: RefCell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
             pending: Cell::new(None),
@@ -1601,7 +1607,97 @@ impl LivePreview {
     /// A mouse press at `point`: a table's control, or a PDF's preview (opened in place of the
     /// note, ADR 0022). False when neither is there.
     pub fn press(&self, view: &NSTextView, point: NSPoint) -> bool {
-        self.press_table(view, point) || self.open_pdf_at(view, point)
+        self.press_code_copy(view, point) || self.press_table(view, point) || self.open_pdf_at(view, point)
+    }
+
+    /// The pointer moved over a code block or off it: the copy button shows on the block it is
+    /// over.
+    pub fn hover_code(&self, view: &NSTextView, point: Option<NSPoint>) {
+        let block = point.and_then(|p| {
+            let at = view.characterIndexForInsertionAtPoint(p);
+            let styled = self.ivars().styled.borrow();
+            styled.code_blocks.iter().find(|c| c.start <= at && at <= c.end).map(|c| c.start)
+        });
+        let old = self.ivars().hovered_code.replace(block);
+        if old == block {
+            return;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let firsts: Vec<usize> = {
+            let styled = self.ivars().styled.borrow();
+            [old, block].into_iter().flatten().filter_map(|start| styled.code_blocks.iter().find(|c| c.start == start).cloned()).filter_map(|c| self.code_lines(&storage, &styled, &c).first().copied()).collect()
+        };
+        for at in firsts.into_iter().filter(|&at| at < storage.length()) {
+            self.restyle(&storage, paragraph(&storage, NSRange::new(at, 0)));
+        }
+    }
+
+    /// A click on the copy button of the code block under the pointer: its code (between its
+    /// fences) copied.
+    fn press_code_copy(&self, view: &NSTextView, point: NSPoint) -> bool {
+        let Some(start) = self.ivars().hovered_code.get() else { return false };
+        let Some(storage) = (unsafe { view.textStorage() }) else { return false };
+        let lines = {
+            let styled = self.ivars().styled.borrow();
+            let Some(block) = styled.code_blocks.iter().find(|c| c.start == start).cloned() else { return false };
+            let lines = self.code_lines(&storage, &styled, &block);
+            let first = styled.runs.partition_point(|r| r.range.start < block.start);
+            let end = styled.runs[first..].iter().take_while(|r| r.range.start < block.end).filter(|r| r.style == Style::Fence && r.range.start > block.start && r.range.end == block.end).map(|r| r.range.start).next().unwrap_or(block.end);
+            lines.first().map(|&first| first..end)
+        };
+        let (Some(code), Some(layout)) = (lines, view.textLayoutManager()) else { return false };
+        let Some(content) = layout.textContentManager() else { return false };
+        let Some(fragment) = content.locationFromLocation_withOffset(&content.documentRange().location(), code.start as isize).and_then(|at| layout.textLayoutFragmentForLocation(&at)) else { return false };
+        let Some(button) = fragment.downcast_ref::<crate::preview_fragment::PreviewFragment>().and_then(|f| f.code_copy_rect()) else { return false };
+        let (frame, origin) = (fragment.layoutFragmentFrame(), view.textContainerOrigin());
+        let (x, y) = (origin.x + frame.origin.x + button.origin.x, origin.y + frame.origin.y + button.origin.y);
+        if point.x < x || point.x > x + button.size.width || point.y < y || point.y > y + button.size.height {
+            return false;
+        }
+        let text = storage.string().substringWithRange(ns(&code)).to_string();
+        let board = self.ivars().copy_board.borrow().clone().unwrap_or_else(objc2_app_kit::NSPasteboard::generalPasteboard);
+        board.clearContents();
+        // SAFETY: AppKit's pasteboard type constant lives for the whole process.
+        board.setString_forType(&NSString::from_str(text.strip_suffix('\n').unwrap_or(&text)), unsafe { objc2_app_kit::NSPasteboardTypeString });
+        true
+    }
+
+    /// `KNOTES_PROBE_CODE_HOVER=index`: the pointer over character `index`;
+    /// `KNOTES_PROBE_CODE_COPY=index`: then a click on the copy button, to a pasteboard of the
+    /// probe's own, the code copied printed.
+    pub fn probe_code_pointer(&self, view: &NSTextView) {
+        let (hover, copy) = (std::env::var("KNOTES_PROBE_CODE_HOVER").ok(), std::env::var("KNOTES_PROBE_CODE_COPY").ok());
+        let Some(index) = hover.as_deref().or(copy.as_deref()).and_then(|i| i.parse::<usize>().ok()) else { return };
+        let (Some(layout), Some(window)) = (view.textLayoutManager(), view.window()) else { return };
+        window.displayIfNeeded();
+        let Some(content) = layout.textContentManager() else { return };
+        let Some(fragment) = content.locationFromLocation_withOffset(&content.documentRange().location(), index as isize).and_then(|at| layout.textLayoutFragmentForLocation(&at)) else { return };
+        let (frame, origin) = (fragment.layoutFragmentFrame(), view.textContainerOrigin());
+        self.hover_code(view, Some(NSPoint::new(origin.x + frame.origin.x + 40.0, origin.y + frame.origin.y + frame.size.height / 2.0)));
+        window.displayIfNeeded();
+        if copy.is_none() {
+            return;
+        }
+        let board = objc2_app_kit::NSPasteboard::pasteboardWithUniqueName();
+        *self.ivars().copy_board.borrow_mut() = Some(board.clone());
+        let start = self.ivars().hovered_code.get();
+        let first = start.and_then(|s| {
+            let storage = unsafe { view.textStorage() }?;
+            let styled = self.ivars().styled.borrow();
+            let block = styled.code_blocks.iter().find(|c| c.start == s).cloned()?;
+            self.code_lines(&storage, &styled, &block).first().copied()
+        });
+        let button = first
+            .and_then(|at| content.locationFromLocation_withOffset(&content.documentRange().location(), at as isize))
+            .and_then(|at| layout.textLayoutFragmentForLocation(&at))
+            .and_then(|f| f.downcast_ref::<crate::preview_fragment::PreviewFragment>().and_then(|p| p.code_copy_rect()).map(|r| (r, f.layoutFragmentFrame())));
+        if let Some((r, frame)) = button {
+            let centre = NSPoint::new(origin.x + frame.origin.x + r.origin.x + r.size.width / 2.0, origin.y + frame.origin.y + r.origin.y + r.size.height / 2.0);
+            self.press(view, centre);
+        }
+        // SAFETY: AppKit's pasteboard type constant lives for the whole process.
+        let copied = board.stringForType(unsafe { objc2_app_kit::NSPasteboardTypeString }).map(|s| s.to_string()).unwrap_or_default();
+        println!("code-copied: {}", copied.replace('\n', "⏎"));
     }
 
     /// The PDF whose preview is at `point`, opened as a click on a link to it does.
@@ -2359,6 +2455,17 @@ impl LivePreview {
             let lines = self.code_lines(&storage, &styled, c);
             if let Ok(n) = lines.binary_search(&from) {
                 marks.push(Mark::CodeNumber { number: (n + 1).to_string(), font: self.ivars().look.mono.clone() });
+            }
+            // The first code line: the language (its fence hidden) and, with the pointer over
+            // the block, the copy button.
+            if lines.first() == Some(&from) {
+                let label = (!overlaps(c, revealed))
+                    .then(|| styled.code_langs.iter().find(|r| r.block == *c).and_then(|r| r.language.split_whitespace().next()).map(|l| l.trim_start_matches(['{', '.']).to_owned()))
+                    .flatten();
+                let copy = self.ivars().hovered_code.get() == Some(c.start);
+                if label.is_some() || copy {
+                    marks.push(Mark::CodeCorner { label, copy });
+                }
             }
         }
         let selection = self.ivars().selection.get();

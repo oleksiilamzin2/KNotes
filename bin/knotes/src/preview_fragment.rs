@@ -52,6 +52,9 @@ pub enum Mark {
     CodeBackground { top: bool, bottom: bool },
     /// A code line's number (ADR 0025), dim, in the gutter left of its first character.
     CodeNumber { number: String, font: Retained<NSFont> },
+    /// A code block's top right corner, on its first code line: its language, and a copy
+    /// button while the pointer is over the block.
+    CodeCorner { label: Option<String>, copy: bool },
     /// A callout's tinted box across the column behind the paragraph, rounded at the callout's
     /// top and bottom.
     CalloutBox { colour: Retained<NSColor>, top: bool, bottom: bool },
@@ -84,6 +87,9 @@ const QUOTE_BAR: f64 = 3.0;
 const CODE_CORNER: f64 = 5.0;
 /// Space between a code line's number and its code.
 pub const CODE_NUMBER_GAP: f64 = 10.0;
+/// A code block's copy button, and the space right of the corner's contents.
+const CODE_COPY: f64 = 16.0;
+const CODE_CORNER_INSET: f64 = 8.0;
 /// A callout's icon.
 const CALLOUT_ICON: f64 = 14.0;
 /// Space between a table and its handles; the add bars' thickness.
@@ -192,6 +198,18 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
+                    (Mark::CodeCorner { label, copy }, _) => {
+                        let (label_rect, button) = self.corner_parts(label.as_deref(), *copy);
+                        let shift = |r: NSRect| NSRect::new(NSPoint::new(point.x + r.origin.x, point.y + r.origin.y), r.size);
+                        if let (Some(label), Some(r)) = (label, label_rect) {
+                            let attrs = label_attributes(&corner_font(), &NSColor::tertiaryLabelColor());
+                            // SAFETY: font and colour values of their attributes.
+                            unsafe { NSString::from_str(label).drawAtPoint_withAttributes(shift(r).origin, Some(&attrs)) };
+                        }
+                        if let Some(r) = button {
+                            draw_copy_button(shift(r));
+                        }
+                    }
                     (Mark::CodeNumber { number, font }, _) => {
                         let attrs = label_attributes(font, &NSColor::tertiaryLabelColor());
                         // SAFETY: font and colour values of their attributes.
@@ -287,6 +305,14 @@ impl PreviewFragment {
             let height = row_height(self);
             return Some(NSRect::new(NSPoint::new(left - frame.origin.x, 0.0), NSSize::new(right - left, height)));
         }
+        if let Mark::CodeCorner { label, copy } = mark {
+            let (label, button) = self.corner_parts(label.as_deref(), *copy);
+            return label.into_iter().chain(button).reduce(|a, b| {
+                let (x0, y0) = (a.origin.x.min(b.origin.x), a.origin.y.min(b.origin.y));
+                let (x1, y1) = ((a.origin.x + a.size.width).max(b.origin.x + b.size.width), (a.origin.y + a.size.height).max(b.origin.y + b.size.height));
+                NSRect::new(NSPoint::new(x0, y0), NSSize::new(x1 - x0, y1 - y0))
+            });
+        }
         if let Mark::CodeBackground { .. } | Mark::CalloutBox { .. } = mark {
             let frame = self.layoutFragmentFrame();
             let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
@@ -297,6 +323,7 @@ impl PreviewFragment {
             Mark::Formula { offset, anchor, .. } | Mark::Image { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
             Mark::CodeNumber { .. } => (0, false),
+            Mark::CodeCorner { .. } => return None,
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } => return None,
         };
         // A preview goes below the line its source ends on: the note's last paragraph also
@@ -346,7 +373,7 @@ impl PreviewFragment {
                 let width = CALLOUT_ICON + label.as_deref().map_or(0.0, |l| 4.0 + label_width(l, font));
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - CALLOUT_ICON / 2.0), NSSize::new(width, CALLOUT_ICON))
             }
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } | Mark::CodeCorner { .. } => return None,
         };
         Some(rect)
     }
@@ -388,6 +415,20 @@ impl PreviewFragment {
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeNumber { number, .. } => format!("decoration: code-number {number} {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::CodeCorner { label, copy } => {
+                        let (label_rect, button) = self.corner_parts(label.as_deref(), *copy);
+                        let at = |r: NSRect| (origin.x + frame.origin.x + r.origin.x, origin.y + frame.origin.y + r.origin.y, r.size.width, r.size.height);
+                        let mut lines = Vec::new();
+                        if let (Some(label), Some(r)) = (label, label_rect) {
+                            let (x, y, w, h) = at(r);
+                            lines.push(format!("decoration: code-label {label} {x:.1} {y:.1} {w:.1} {h:.1}"));
+                        }
+                        if let Some(r) = button {
+                            let (x, y, w, h) = at(r);
+                            lines.push(format!("decoration: code-copy {x:.1} {y:.1} {w:.1} {h:.1}"));
+                        }
+                        lines.join("\n")
+                    }
                     Mark::CalloutBox { .. } => format!("decoration: callout-box {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::TableRow { header, columns, controls, .. } => {
                         let mut lines = format!("decoration: table-row {x:.1} {y:.1} {w:.1} {h:.1} {}", if *header { "header" } else { "body" });
@@ -426,6 +467,52 @@ pub fn image_at(view: &NSTextView, point: NSPoint) -> Option<(usize, NSRect, boo
         let rect = NSRect::new(NSPoint::new(origin.x + frame.origin.x + r.origin.x, origin.y + frame.origin.y + r.origin.y), r.size);
         Some((start, rect, *anchor == Anchor::Below))
     })
+}
+
+impl PreviewFragment {
+    /// Where a code block's corner puts its language and its copy button (fragment
+    /// coordinates): right in the text column, centred on the first line.
+    fn corner_parts(&self, label: Option<&str>, copy: bool) -> (Option<NSRect>, Option<NSRect>) {
+        let frame = self.layoutFragmentFrame();
+        let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
+        let line = self.textLineFragments().firstObject().map_or(NSRect::new(NSPoint::new(0.0, 0.0), frame.size), |l| l.typographicBounds());
+        let mut right = column - CODE_CORNER_INSET - frame.origin.x;
+        let button = copy.then(|| {
+            right -= CODE_COPY;
+            NSRect::new(NSPoint::new(right, line.origin.y + (line.size.height - CODE_COPY) / 2.0), NSSize::new(CODE_COPY, CODE_COPY))
+        });
+        if copy {
+            right -= 6.0;
+        }
+        let label = label.map(|l| {
+            let font = corner_font();
+            let (w, h) = (label_width(l, &font), font.ascender() - font.descender());
+            NSRect::new(NSPoint::new(right - w, line.origin.y + (line.size.height - h) / 2.0), NSSize::new(w, h))
+        });
+        (label, button)
+    }
+
+    /// The copy button of the code block whose first line this fragment is (fragment
+    /// coordinates), when it shows.
+    pub fn code_copy_rect(&self) -> Option<NSRect> {
+        self.ivars().marks.iter().find_map(|(mark, _)| match mark {
+            Mark::CodeCorner { label, copy: true } => self.corner_parts(label.as_deref(), true).1,
+            _ => None,
+        })
+    }
+}
+
+/// The font of a code block's language label.
+fn corner_font() -> Retained<NSFont> {
+    NSFont::systemFontOfSize(NSFont::smallSystemFontSize())
+}
+
+/// A copy button: two overlapping pages, as the system's symbol draws it.
+fn draw_copy_button(rect: NSRect) {
+    let Some(symbol) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("doc.on.doc"), None) else { return };
+    NSColor::secondaryLabelColor().set();
+    // SAFETY: a valid image drawn into the current context.
+    unsafe { symbol.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 0.7, true, None) };
 }
 
 /// What TextKit drew in place of hidden source in the visible part of `view` (probe lines).
