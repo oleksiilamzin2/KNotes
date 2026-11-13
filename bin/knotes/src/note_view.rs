@@ -36,6 +36,8 @@ type OnResize = Box<dyn Fn(&NSTextView, usize, f64, bool)>;
 type OnImageFile = Box<dyn Fn(&NSTextView, usize) -> Option<PathBuf>>;
 /// Gets the text view and the image the pointer is now over (where its line starts), if any.
 type OnImageHover = Box<dyn Fn(&NSTextView, Option<usize>)>;
+/// Gets the text view and where the pointer now is in it (`None`: it left the view).
+type OnPointer = Box<dyn Fn(&NSTextView, Option<NSPoint>)>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -55,6 +57,7 @@ pub struct Ivars {
     on_resize: RefCell<Option<OnResize>>,
     on_image_file: RefCell<Option<OnImageFile>>,
     on_image_hover: RefCell<Option<OnImageHover>>,
+    on_pointer: RefCell<Option<OnPointer>>,
     /// The image the last click was on (where its line starts): a second click previews it,
     /// though the first one moved it below its source.
     image_clicked: Cell<Option<usize>>,
@@ -102,7 +105,7 @@ define_class!(
         fn mouse_moved(&self, event: &NSEvent) {
             // SAFETY: forwarding the same event to the superclass implementation.
             let _: () = unsafe { msg_send![super(self), mouseMoved: event] };
-            self.hover_at(self.convertPoint_fromView(event.locationInWindow(), None));
+            self.pointer_at(Some(self.convertPoint_fromView(event.locationInWindow(), None)));
             if self.image_edge(event.locationInWindow()).is_some() {
                 resize_cursor().set();
             } else if self.over_clickable(event.locationInWindow()) {
@@ -114,7 +117,7 @@ define_class!(
         fn mouse_exited(&self, event: &NSEvent) {
             // SAFETY: forwarding the same event to the superclass implementation.
             let _: () = unsafe { msg_send![super(self), mouseExited: event] };
-            self.hover_image(None);
+            self.pointer_at(None);
         }
 
         /// The text view would set the I-beam over a link too.
@@ -235,6 +238,21 @@ impl NoteTextView {
     /// and its rect in the view.
     fn image_edge(&self, in_window: NSPoint) -> Option<(usize, NSRect)> {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
+    }
+
+    pub fn on_pointer(&self, callback: impl Fn(&NSTextView, Option<NSPoint>) + 'static) {
+        *self.ivars().on_pointer.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The pointer moved to a point in the view's coordinates, or left the view.
+    pub fn pointer_at(&self, point: Option<NSPoint>) {
+        match point {
+            Some(point) => self.hover_at(point),
+            None => self.hover_image(None),
+        }
+        if let Some(callback) = self.ivars().on_pointer.borrow().as_ref() {
+            callback(self, point);
+        }
     }
 
     pub fn on_image_hover(&self, callback: impl Fn(&NSTextView, Option<usize>) + 'static) {

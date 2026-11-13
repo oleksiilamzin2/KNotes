@@ -824,7 +824,7 @@ fn decorations(out: &str, kind: &str) -> Vec<(f64, f64, f64, f64)> {
         .filter_map(|l| l.strip_prefix("decoration: "))
         .filter_map(|l| l.strip_prefix(kind).and_then(|rest| rest.strip_prefix(' ')))
         .map(|l| {
-            let p: Vec<f64> = l.split(' ').map(|v| v.parse().unwrap()).collect();
+            let p: Vec<f64> = l.split(' ').take(4).map(|v| v.parse().unwrap()).collect();
             (p[0], p[1], p[2], p[3])
         })
         .collect()
@@ -1585,4 +1585,27 @@ fn tab_in_the_last_cell_adds_a_row() {
 fn a_cursor_between_cells_moves_into_the_nearest_one() {
     assert_eq!(cursor(&table_probe(&[("KNOTES_PROBE_CURSOR", "41")])), 40, "on the hidden pipe after Ann");
     assert_eq!(cursor(&table_probe(&[("KNOTES_PROBE_CURSOR", "28")])), 20, "on the folded delimiter row: the header's end");
+}
+
+#[test]
+fn the_pointer_over_a_table_shows_its_row_and_column_handles_and_add_bars() {
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0")]);
+    assert!(decorations(&out, "table-row-handle").is_empty() && decorations(&out, "table-add-row").is_empty(), "nothing without the pointer: {out}");
+    let rows = decorations(&out, "table-row");
+    let ann = rows[1];
+    let over = format!("{},{}", ann.0 + ann.2 * 0.8, ann.1 + ann.3 / 2.0);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over)]);
+    let handle = decorations(&out, "table-row-handle");
+    assert_eq!(handle.len(), 1, "{out}");
+    assert!(handle[0].0 + handle[0].2 <= ann.0 && (handle[0].1 + handle[0].3 / 2.0 - (ann.1 + ann.3 / 2.0)).abs() < 1.0, "left of the row, halfway down: {handle:?} {ann:?}");
+    let column = decorations(&out, "table-column-handle");
+    assert_eq!(column.len(), 1, "{out}");
+    assert!(column[0].1 + column[0].3 <= rows[0].1 + 1.0 && column[0].0 > ann.0 + ann.2 / 2.0, "over the second column's header: {column:?}");
+    let add_row = decorations(&out, "table-add-row");
+    let last = rows[2];
+    assert!(add_row.len() == 1 && add_row[0].1 >= last.1 + last.3 - 1.0, "under the table: {add_row:?}");
+    assert!(!decorations(&out, "table-add-column").is_empty(), "{out}");
+    let away = format!("{over};{},{}", ann.0 + ann.2 / 2.0, last.1 + last.3 + 120.0);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &away)]);
+    assert!(decorations(&out, "table-row-handle").is_empty(), "gone with the pointer: {out}");
 }

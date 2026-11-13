@@ -15,7 +15,7 @@ use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width};
 
 use crate::image_loader::{self, DeferredImage};
-use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
+use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -27,7 +27,7 @@ use objc2_app_kit::{
     NSBackgroundColorAttributeName, NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
-    NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
+    NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSSize, NSString,
     NSValue,
 };
 
@@ -54,6 +54,9 @@ const TABLE_PAD: f64 = 10.0;
 const TABLE_VPAD: f64 = 5.0;
 /// Narrowest a table column's text is.
 const TABLE_MIN_COLUMN: f64 = 24.0;
+/// How near a table the pointer shows its controls: beside and under it, and over it.
+const TABLE_NEAR_SIDE: f64 = 26.0;
+const TABLE_NEAR_TOP: f64 = 20.0;
 
 struct Look {
     body: Retained<NSFont>,
@@ -85,6 +88,8 @@ struct Look {
 
 
 type OnChange = Box<dyn Fn()>;
+/// A table under the pointer: where it starts, and the row and column under the pointer.
+type TableHover = (usize, Option<usize>, Option<usize>);
 type OnLink = Box<dyn Fn(&Link)>;
 type OnCommand = Box<dyn Fn(Sel) -> bool>;
 
@@ -120,6 +125,8 @@ pub struct Ivars {
     table_columns: RefCell<HashMap<usize, Rc<Vec<f64>>>>,
     /// The image the pointer is over (where its line starts): it shows its resize handle.
     hovered_image: Cell<Option<usize>>,
+    /// The table the pointer is over (where it starts), and the row and column under it.
+    hovered_table: Cell<Option<TableHover>>,
     /// A table edit of the live preview's own is under way: not checked against the table's
     /// structure.
     table_editing: Cell<bool>,
@@ -311,6 +318,7 @@ impl LivePreview {
             table_columns: RefCell::new(HashMap::new()),
             hovered_image: Cell::new(None),
             table_editing: Cell::new(false),
+            hovered_table: Cell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
             pending: Cell::new(None),
@@ -1076,6 +1084,53 @@ impl LivePreview {
         }
     }
 
+    /// The pointer moved to `point` (text view coordinates), or left the view: the table it is
+    /// over, or near enough for its handles and add bars, shows them.
+    pub fn hover_table(&self, view: &NSTextView, point: Option<NSPoint>) {
+        let hover = point.and_then(|p| self.table_at_point(view, p));
+        let old = self.ivars().hovered_table.replace(hover);
+        if old == hover {
+            return;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let ranges: Vec<(usize, usize)> = {
+            let styled = self.ivars().styled.borrow();
+            [old, hover]
+                .into_iter()
+                .flatten()
+                .filter_map(|h| styled.tables.iter().find(|t| t.range.start == h.0))
+                .map(|t| (t.range.start, t.range.end.min(storage.length())))
+                .collect()
+        };
+        for range in ranges {
+            self.restyle(&storage, range);
+        }
+    }
+
+    /// The table at `point` (its start) with the row and column under it, the band around it
+    /// where its handles and add bars are included.
+    fn table_at_point(&self, view: &NSTextView, point: NSPoint) -> Option<TableHover> {
+        let layout = view.textLayoutManager()?;
+        let content = layout.textContentManager()?;
+        let origin = view.textContainerOrigin();
+        let padding = layout.textContainer().map_or(0.0, |c| c.lineFragmentPadding());
+        let styled = self.ivars().styled.borrow();
+        let columns = self.ivars().table_columns.borrow();
+        styled.tables.iter().find_map(|table| {
+            let edges = columns.get(&table.range.start)?;
+            let rows: Vec<(f64, f64)> = table.rows.iter().filter_map(|r| row_band(&layout, &content, r.range.start)).map(|(t, b)| (t + origin.y, b + origin.y)).collect();
+            let (top, bottom) = (rows.first()?.0, rows.last()?.1);
+            let x0 = origin.x + padding;
+            let (left, right) = (x0 + edges.first()?, x0 + edges.last()?);
+            let near = point.x >= left - TABLE_NEAR_SIDE && point.x <= right + TABLE_NEAR_SIDE && point.y >= top - TABLE_NEAR_TOP && point.y <= bottom + TABLE_NEAR_SIDE;
+            near.then(|| {
+                let row = rows.iter().position(|(t, b)| point.y >= *t && point.y < *b);
+                let column = edges.windows(2).position(|w| point.x >= x0 + w[0] && point.x < x0 + w[1]);
+                (table.range.start, row, column)
+            })
+        })
+    }
+
     /// Rewrites table `t` (its index in the note) as `change` makes it, as one edit, and puts
     /// the cursor at the end of the cell (row, column) `change` gives.
     fn rewrite_table(&self, view: &NSTextView, t: usize, change: impl FnOnce(&mut TableText) -> (usize, usize)) {
@@ -1439,8 +1494,19 @@ impl LivePreview {
         }
         for table in styled.tables.iter().filter(|t| t.range.start < to && t.range.end > from) {
             let Some(columns) = self.ivars().table_columns.borrow().get(&table.range.start).cloned() else { continue };
+            let hover = self.ivars().hovered_table.get().filter(|h| h.0 == table.range.start);
+            let last = table.rows.len().saturating_sub(1);
             for (i, _) in table.rows.iter().enumerate().filter(|(_, r)| (from..to).contains(&r.range.start)) {
-                marks.push(Mark::TableRow { columns: Rc::clone(&columns), header: i == 0, top: i == 0 });
+                let controls = hover.map_or(TableControls::default(), |(_, row, column)| TableControls {
+                    handle: row == Some(i),
+                    column_handle: if i == 0 { column } else { None },
+                    add_row: i == last,
+                    add_column: true,
+                    add_column_plus: i == last / 2,
+                    first: i == 0,
+                    last: i == last,
+                });
+                marks.push(Mark::TableRow { columns: Rc::clone(&columns), header: i == 0, top: i == 0, controls });
             }
         }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
@@ -1717,6 +1783,15 @@ fn link_at(styled: &Highlight, index: usize) -> Option<&LinkRun> {
 /// The font each markup range takes when shown: that of the innermost run containing it.
 fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
+}
+
+/// The top and bottom of the row starting at `offset` (text container coordinates), without
+/// the empty line after the note's final line break.
+fn row_band(layout: &NSTextLayoutManager, content: &objc2_app_kit::NSTextContentManager, offset: usize) -> Option<(f64, f64)> {
+    let location = content.locationFromLocation_withOffset(&content.documentRange().location(), offset as isize)?;
+    let fragment = layout.textLayoutFragmentForLocation(&location)?;
+    let top = fragment.layoutFragmentFrame().origin.y;
+    Some((top, top + crate::preview_fragment::row_height(&fragment)))
 }
 
 /// The table, row and cell whose text holds `index` (its end too).

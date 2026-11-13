@@ -56,9 +56,9 @@ pub enum Mark {
     /// no title is written.
     CalloutIcon { offset: usize, centre: f64, colour: Retained<NSColor>, symbol: &'static str, label: Option<String>, font: Retained<NSFont> },
     /// A table row's grid across the paragraph: borders at `columns` (x of each column's left
-    /// edge from the text column's start, and the table's right edge last), the header's
-    /// background, the table's top border.
-    TableRow { columns: Rc<Vec<f64>>, header: bool, top: bool },
+    /// edge from the line's start, and the table's right edge last), the header's background,
+    /// the table's top border; with the pointer over the table, its controls (ADR 0021).
+    TableRow { columns: Rc<Vec<f64>>, header: bool, top: bool, controls: TableControls },
     /// An arrow after a link to a website, `shift` points from the location of character
     /// `offset` (in the room kerning keeps there).
     External { offset: usize, centre: f64, shift: f64 },
@@ -77,6 +77,9 @@ const QUOTE_BAR: f64 = 3.0;
 const CODE_CORNER: f64 = 5.0;
 /// A callout's icon.
 const CALLOUT_ICON: f64 = 14.0;
+/// Space between a table and its handles; the add bars' thickness.
+const TABLE_HANDLE_GAP: f64 = 6.0;
+const TABLE_ADD_BAR: f64 = 14.0;
 /// An image's resize handle: its width, tallest height and inset from the right edge.
 const IMAGE_HANDLE_WIDTH: f64 = 5.0;
 const IMAGE_HANDLE_HEIGHT: f64 = 36.0;
@@ -115,7 +118,7 @@ define_class!(
                         colour.colorWithAlphaComponent(0.1).setFill();
                         rounded(rect, CODE_CORNER, *top, *bottom).fill();
                     }
-                    Mark::TableRow { columns, header, top } => draw_table_row(rect, columns, *header, *top),
+                    Mark::TableRow { columns, header, top, .. } => draw_table_row(rect, columns, *header, *top),
                     _ => {}
                 }
             }
@@ -151,7 +154,17 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
-                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. }, _) => {}
+                    (Mark::TableRow { columns, controls, .. }, _) => {
+                        for (kind, control) in table_controls(rect, columns, controls) {
+                            if kind == "table-add-column" {
+                                // One bar down the table: its parts meet square.
+                                draw_add_bar(control, (controls.first, controls.last), controls.add_column_plus);
+                            } else {
+                                draw_table_control(kind, control);
+                            }
+                        }
+                    }
+                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. }, _) => {}
                     (Mark::CalloutIcon { colour, symbol, label, font, .. }, _) => draw_callout_icon(rect, colour, symbol, label.as_deref(), font),
                     (Mark::External { .. }, _) => draw_external_arrow(rect),
                     (Mark::QuoteBar { .. }, _) => {
@@ -170,7 +183,17 @@ define_class!(
         fn rendering_surface_bounds(&self) -> NSRect {
             // SAFETY: the superclass's bounds of the text.
             let text: NSRect = unsafe { msg_send![super(self), renderingSurfaceBounds] };
-            self.ivars().marks.iter().filter_map(|(mark, _)| self.mark_rect(mark)).fold(text, union)
+            self.ivars()
+                .marks
+                .iter()
+                .filter_map(|(mark, _)| {
+                    let rect = self.mark_rect(mark)?;
+                    Some(match mark {
+                        Mark::TableRow { columns, controls, .. } => table_controls(rect, columns, controls).into_iter().map(|c| c.1).fold(rect, union),
+                        _ => rect,
+                    })
+                })
+                .fold(text, union)
         }
     }
 );
@@ -199,11 +222,10 @@ impl PreviewFragment {
         }
         if let Mark::TableRow { columns, .. } = mark {
             let frame = self.layoutFragmentFrame();
-            let (left, right) = (columns.first().copied().unwrap_or(0.0), columns.last().copied().unwrap_or(0.0));
-            // The note's last row also holds the empty line after its final line break.
-            let lines = self.textLineFragments();
-            let extra = lines.iter().last().filter(|l| lines.count() > 1 && l.characterRange().length == 0);
-            let height = extra.map_or(frame.size.height, |l| l.typographicBounds().origin.y);
+            // Columns start where the line does, past the container's line padding.
+            let padding = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(0.0, |c| c.lineFragmentPadding());
+            let (left, right) = (columns.first().copied().unwrap_or(0.0) + padding, columns.last().copied().unwrap_or(0.0) + padding);
+            let height = row_height(self);
             return Some(NSRect::new(NSPoint::new(left - frame.origin.x, 0.0), NSSize::new(right - left, height)));
         }
         if let Mark::CodeBackground { .. } | Mark::CalloutBox { .. } = mark {
@@ -297,7 +319,13 @@ impl PreviewFragment {
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CalloutBox { .. } => format!("decoration: callout-box {x:.1} {y:.1} {w:.1} {h:.1}"),
-                    Mark::TableRow { header, .. } => format!("decoration: table-row {x:.1} {y:.1} {w:.1} {h:.1} {}", if *header { "header" } else { "body" }),
+                    Mark::TableRow { header, columns, controls, .. } => {
+                        let mut lines = format!("decoration: table-row {x:.1} {y:.1} {w:.1} {h:.1} {}", if *header { "header" } else { "body" });
+                        for (kind, c) in table_controls(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)), columns, controls) {
+                            lines += &format!("\ndecoration: {kind} {:.1} {:.1} {:.1} {:.1}", c.origin.x, c.origin.y, c.size.width, c.size.height);
+                        }
+                        lines
+                    }
                     Mark::CalloutIcon { .. } => format!("decoration: callout-icon {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::External { .. } => format!("decoration: external {x:.1} {y:.1} {w:.1} {h:.1}"),
                 })
@@ -346,6 +374,92 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// A table row fragment's height without the empty line after the note's final line break,
+/// which the note's last paragraph also holds (its whole height before it is laid out).
+pub fn row_height(fragment: &NSTextLayoutFragment) -> f64 {
+    let frame = fragment.layoutFragmentFrame();
+    if fragment.state() != objc2_app_kit::NSTextLayoutFragmentState::LayoutAvailable {
+        return frame.size.height;
+    }
+    let lines = fragment.textLineFragments();
+    let extra = lines.iter().last().filter(|l| lines.count() > 1 && l.characterRange().length == 0);
+    extra.map_or(frame.size.height, |l| l.typographicBounds().origin.y)
+}
+
+/// What a table row shows of the table's controls while the pointer is over the table.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TableControls {
+    /// The row's handle, left of it: the pointer is on this row.
+    pub handle: bool,
+    /// A column's handle over the header: the pointer is in that column.
+    pub column_handle: Option<usize>,
+    /// The bar under the table that adds a row (the last row draws it).
+    pub add_row: bool,
+    /// The bar right of the table that adds a column (each row draws its part).
+    pub add_column: bool,
+    /// The row draws the add column bar's plus (the middle row) and its rounded top (the
+    /// first) and bottom (the last).
+    pub add_column_plus: bool,
+    pub first: bool,
+    pub last: bool,
+}
+
+/// The controls a table row with `rect` (across the table) draws, and where.
+pub fn table_controls(rect: NSRect, columns: &[f64], controls: &TableControls) -> Vec<(&'static str, NSRect)> {
+    let mut out = Vec::new();
+    let (x, y, w, h) = (rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
+    if controls.handle {
+        out.push(("table-row-handle", NSRect::new(NSPoint::new(x - TABLE_HANDLE_GAP - 10.0, y + h / 2.0 - 8.0), NSSize::new(10.0, 16.0))));
+    }
+    if let Some(c) = controls.column_handle
+        && c + 1 < columns.len()
+    {
+        let (left, right) = (x + columns[c] - columns[0], x + columns[c + 1] - columns[0]);
+        out.push(("table-column-handle", NSRect::new(NSPoint::new((left + right) / 2.0 - 8.0, y - TABLE_HANDLE_GAP - 10.0), NSSize::new(16.0, 10.0))));
+    }
+    if controls.add_row {
+        out.push(("table-add-row", NSRect::new(NSPoint::new(x, y + h + 3.0), NSSize::new(w, TABLE_ADD_BAR))));
+    }
+    if controls.add_column {
+        out.push(("table-add-column", NSRect::new(NSPoint::new(x + w + 3.0, y), NSSize::new(TABLE_ADD_BAR, h))));
+    }
+    out
+}
+
+/// A handle as two columns (or rows) of dots; an add bar faint with a plus.
+fn draw_table_control(kind: &str, rect: NSRect) {
+    NSColor::tertiaryLabelColor().setFill();
+    match kind {
+        "table-row-handle" | "table-column-handle" => {
+            let across = kind == "table-row-handle";
+            for i in 0..3 {
+                for j in 0..2 {
+                    let (dx, dy) = if across { (2.0 + j as f64 * 4.0, 2.0 + i as f64 * 5.0) } else { (2.0 + i as f64 * 5.0, 2.0 + j as f64 * 4.0) };
+                    NSBezierPath::bezierPathWithOvalInRect(NSRect::new(NSPoint::new(rect.origin.x + dx, rect.origin.y + dy), NSSize::new(2.4, 2.4))).fill();
+                }
+            }
+        }
+        _ => draw_add_bar(rect, (true, true), true),
+    }
+}
+
+/// An add bar faint, its ends rounded where `ends` says, with a plus when `plus`.
+fn draw_add_bar(rect: NSRect, ends: (bool, bool), plus: bool) {
+    NSColor::quaternarySystemFillColor().setFill();
+    rounded(rect, 3.0, ends.0, ends.1).fill();
+    if plus {
+        let (cx, cy) = (rect.origin.x + rect.size.width / 2.0, rect.origin.y + rect.size.height / 2.0);
+        let path = NSBezierPath::bezierPath();
+        path.moveToPoint(NSPoint::new(cx - 4.0, cy));
+        path.lineToPoint(NSPoint::new(cx + 4.0, cy));
+        path.moveToPoint(NSPoint::new(cx, cy - 4.0));
+        path.lineToPoint(NSPoint::new(cx, cy + 4.0));
+        path.setLineWidth(1.4);
+        NSColor::secondaryLabelColor().setStroke();
+        path.stroke();
+    }
 }
 
 /// A table row's grid in `rect` (the row across the table): the header's background, a border

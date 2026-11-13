@@ -127,6 +127,18 @@ pub fn report_range_xs(view: &objc2_app_kit::NSTextView, ranges: &str) {
     println!("range-x: {}", xs.join(" "));
 }
 
+/// `KNOTES_PROBE_TABLE_HOVER=x,y;x,y`: the pointer moved to each point in turn (text view
+/// coordinates), as mouse moves report it.
+pub fn pointer_requested(view: &crate::note_view::NoteTextView) {
+    let Ok(points) = std::env::var("KNOTES_PROBE_TABLE_HOVER") else { return };
+    for point in points.split(';') {
+        let Some((x, y)) = point.split_once(',') else { continue };
+        if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
+            view.pointer_at(Some(objc2_foundation::NSPoint::new(x, y)));
+        }
+    }
+}
+
 /// `KNOTES_PROBE_RESIZE=line:width`: the image on the line starting at character `line`
 /// dragged to `width` points and let go.
 pub fn resize_requested() -> Option<(usize, f64)> {
