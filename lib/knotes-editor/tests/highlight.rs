@@ -1,4 +1,4 @@
-use knotes_editor::{Style, highlight, utf16_offsets};
+use knotes_editor::{ListKind, Style, highlight, utf16_offsets};
 
 fn styles(src: &str) -> Vec<(Style, &str)> {
     highlight(src).runs.into_iter().map(|r| (r.style, &src[r.range])).collect()
@@ -128,4 +128,43 @@ fn formulas_carry_their_source_and_kind() {
     assert!(styles(src).contains(&(Style::Math, "$$\n\\frac{a}{b}\n$$")));
     let utf16 = highlight("Їж $x$").to_utf16("Їж $x$");
     assert_eq!(utf16.formulas[0].range, 3..6);
+}
+
+fn list_marks(src: &str) -> Vec<(ListKind, u8, &str)> {
+    highlight(src)
+        .runs
+        .into_iter()
+        .filter_map(|r| match r.style {
+            Style::ListMarker { kind, depth } => Some((kind, depth, &src[r.range])),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn list_items_mark_their_bullet_or_number_with_the_space_after_it() {
+    assert_eq!(list_marks("- a\n* b\n"), [(ListKind::Bullet, 0, "- "), (ListKind::Bullet, 0, "* ")]);
+    assert_eq!(list_marks("+ a"), [(ListKind::Bullet, 0, "+ ")]);
+    assert_eq!(list_marks("1. a\n2. b\n"), [(ListKind::Ordered, 0, "1. "), (ListKind::Ordered, 0, "2. ")]);
+    assert_eq!(list_marks("10) a"), [(ListKind::Ordered, 0, "10) ")]);
+}
+
+#[test]
+fn nested_list_items_know_their_depth_and_leave_the_indentation_out() {
+    let src = "- a\n  - b\n    1. c\n- d";
+    assert_eq!(list_marks(src), [(ListKind::Bullet, 0, "- "), (ListKind::Bullet, 1, "- "), (ListKind::Ordered, 2, "1. "), (ListKind::Bullet, 0, "- ")]);
+    let at: Vec<usize> = highlight(src).runs.iter().map(|r| r.range.start).collect();
+    assert_eq!(at, [0, 6, 14, 19]);
+}
+
+#[test]
+fn tasks_mark_their_box_and_done_ones_their_text() {
+    let src = "- [ ] todo\n- [x] done it\n";
+    assert_eq!(list_marks(src), [(ListKind::Task { checked: false }, 0, "- [ ] "), (ListKind::Task { checked: true }, 0, "- [x] ")]);
+    assert_eq!(styles(src).into_iter().filter(|s| s.0 == Style::Done).collect::<Vec<_>>(), [(Style::Done, "done it")]);
+}
+
+#[test]
+fn list_items_in_a_quote_are_marked_too() {
+    assert_eq!(list_marks("> - a"), [(ListKind::Bullet, 0, "- ")]);
 }

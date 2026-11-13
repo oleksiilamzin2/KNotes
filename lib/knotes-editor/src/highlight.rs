@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use knotes_core::{Link, NoteParser};
 use knotes_md::{MarkdownParser, OPTIONS};
-use pulldown_cmark::{Event, LinkType, Parser, Tag};
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Style {
@@ -19,6 +19,18 @@ pub enum Style {
     Tag,
     /// A formula, `$…$` or `$$…$$` with its dollars.
     Math,
+    /// A list item's marker with the space after it (`- `, `1. `, a task's `- [ ] `), without
+    /// the indentation before it; `depth` 0 for a top-level item.
+    ListMarker { kind: ListKind, depth: u8 },
+    /// The text of a done task, on its marker's line.
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ListKind {
+    Bullet,
+    Ordered,
+    Task { checked: bool },
 }
 
 /// A styled byte range of the source.
@@ -105,9 +117,37 @@ impl Highlight {
 
 pub fn highlight(source: &str) -> Highlight {
     let mut h = Highlight::default();
+    // Open lists, ordered or not, and the marker run of the item just started (a task marker
+    // follows it).
+    let mut lists: Vec<bool> = Vec::new();
+    let mut item: Option<usize> = None;
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
         match event {
+            Event::Start(Tag::List(start)) => lists.push(start.is_some()),
+            Event::End(TagEnd::List(_)) => {
+                lists.pop();
+            }
+            Event::Start(Tag::Item) => {
+                let ordered = lists.last().copied().unwrap_or(false);
+                let marker = if ordered { text.bytes().take_while(u8::is_ascii_digit).count() + 1 } else { 1 }.min(text.len());
+                let end = r.start + marker + blanks(&text[marker..]);
+                let kind = if ordered { ListKind::Ordered } else { ListKind::Bullet };
+                h.runs.push(Run { range: r.start..end, style: Style::ListMarker { kind, depth: lists.len().saturating_sub(1) as u8 } });
+                item = Some(h.runs.len() - 1);
+            }
+            Event::TaskListMarker(checked) => {
+                if let Some(i) = item.take()
+                    && let Style::ListMarker { depth, .. } = h.runs[i].style
+                {
+                    let end = r.end + blanks(&source[r.end..]);
+                    h.runs[i] = Run { range: h.runs[i].range.start..end, style: Style::ListMarker { kind: ListKind::Task { checked }, depth } };
+                    let line = &source[end..source[end..].find('\n').map_or(source.len(), |n| end + n)];
+                    if checked && !line.trim_end().is_empty() {
+                        h.runs.push(Run { range: end..end + line.trim_end().len(), style: Style::Done });
+                    }
+                }
+            }
             Event::Start(Tag::Heading { level, .. }) => {
                 let line_end = r.start + text.trim_end().len();
                 h.runs.push(Run { range: r.start..line_end, style: Style::Heading(level as u8) });
@@ -160,6 +200,11 @@ pub fn highlight(source: &str) -> Highlight {
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
+}
+
+/// Length of the spaces and tabs `text` starts with.
+fn blanks(text: &str) -> usize {
+    text.bytes().take_while(|&b| b == b' ' || b == b'\t').count()
 }
 
 fn formula(h: &mut Highlight, r: Range<usize>, tex: &str, display: bool) {
