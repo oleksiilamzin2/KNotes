@@ -221,12 +221,30 @@ impl VaultWindow {
         });
         let toolbar = this.toolbar_delegate.clone();
         let list_item = split.splitViewItems().objectAtIndex(1);
+        let split_view = split.splitView();
+        let list_width = Cell::new(None::<f64>);
         let observer = CollapseObserver::watch(mtm, &this.sidebar_item, move |collapsed| {
             toolbar.set_sidebar_shown(!collapsed);
+            let list = list_item.viewController(mtm).view();
             // With the sidebar collapsed, the traffic lights, the sidebar button, the title and
             // the list options all sit over the list column: it must be wide enough for the
-            // toolbar separator to stay on the list/note boundary.
-            list_item.setMinimumThickness(if collapsed { COLLAPSED_LIST_MIN } else { COLUMNS[1].0 });
+            // toolbar separator to stay on the list/note boundary. The list's own width comes
+            // back with the sidebar.
+            if collapsed {
+                list_width.set(Some(list.frame().size.width));
+                list_item.setMinimumThickness(COLLAPSED_LIST_MIN);
+            } else {
+                list_item.setMinimumThickness(COLUMNS[1].0);
+                if let Some(width) = list_width.take() {
+                    let (list, split_view) = (MainThreadBound::new(list, mtm), MainThreadBound::new(split_view.clone(), mtm));
+                    // Once the sidebar is back in place.
+                    DispatchQueue::main().exec_async(move || {
+                        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                        let list = list.get(mtm);
+                        split_view.get(mtm).setPosition_ofDividerAtIndex(list.frame().origin.x + width, 1);
+                    });
+                }
+            }
         });
         *this.collapse_observer.borrow_mut() = Some(observer);
         *this.this.borrow_mut() = Rc::downgrade(&this);

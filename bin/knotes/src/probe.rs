@@ -137,12 +137,26 @@ fn sidebar_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItem
 /// split view controller (in probe mode the window is not key, so the responder chain would
 /// not reach it).
 pub fn toggle_sidebar_requested(window: &NSWindow) {
-    if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("toggle-sidebar") {
+    let action = std::env::var("KNOTES_PROBE_ACTION");
+    let twice = action.as_deref() == Ok("toggle-sidebar-twice");
+    if action.as_deref() != Ok("toggle-sidebar") && !twice {
         return;
     }
     let Some(controller) = window.contentViewController() else { return };
-    // SAFETY: NSSplitViewController implements toggleSidebar:.
-    unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(objc2::sel!(toggleSidebar:), Some(&controller), None) };
+    let toggle = |controller: &objc2_app_kit::NSViewController| {
+        // SAFETY: NSSplitViewController implements toggleSidebar:.
+        unsafe { NSApplication::sharedApplication(controller.mtm()).sendAction_to_from(objc2::sel!(toggleSidebar:), Some(controller), None) };
+    };
+    toggle(&controller);
+    if twice {
+        // `toggle-sidebar-twice`: back again once it has gone.
+        let target = dispatch2::MainThreadBound::new(controller, window.mtm());
+        let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_millis(700)).expect("short delay");
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            toggle(target.get(mtm));
+        });
+    }
 }
 
 /// `KNOTES_PROBE_SEARCH=text`: typed into the search field over the list, then sent as the

@@ -1155,3 +1155,10 @@ fn the_window_opens_where_and_as_big_as_it_was_left() {
     let out = probe_env(&[notes.path()], Some(home.path()), &[]);
     assert!(out.contains("size: 1180x"), "{out}");
 }
+
+#[test]
+fn the_list_gets_its_width_back_when_the_sidebar_comes_back() {
+    let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "toggle-sidebar-twice"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
+    let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
+    assert!((widths[1] - 340.0).abs() < 2.0, "the list as wide as before the sidebar went: {widths:?}");
+}
