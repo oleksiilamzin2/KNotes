@@ -95,3 +95,13 @@ fn tabs_round_trip_through_json() {
     assert_eq!(paths(&Tabs::from_text(&tabs.to_json().to_string())), ["a.md", "doc.pdf"]);
     assert!(Tabs::from_text("{not json").is_empty());
 }
+
+#[test]
+fn closing_the_other_tabs_keeps_one_and_shows_it() {
+    let mut tabs = tabs_of(&["a.md", "b.md", "c.md"]);
+    assert_eq!(tabs.close_others(1), AfterClose::Show("b.md".into()), "c.md was shown");
+    assert_eq!((paths(&tabs), tabs.current_path()), (vec!["b.md"], Some("b.md")));
+    let mut tabs = tabs_of(&["a.md", "b.md"]);
+    assert_eq!(tabs.close_others(1), AfterClose::Same);
+    assert_eq!(paths(&tabs), ["b.md"]);
+}

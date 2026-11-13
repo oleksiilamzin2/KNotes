@@ -10,7 +10,7 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
+    NSButton, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
     NSOutlineViewDelegate, NSPasteboard, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification,
     NSView,
 };
@@ -31,8 +31,10 @@ pub struct Ivars {
     on_drop: RefCell<Option<OnDrop>>,
     /// Called with a folder's path and the name typed in its row.
     on_rename: RefCell<Option<OnDrop>>,
-    /// Called with the path of a tab whose cross was clicked (ADR 0024).
+    /// Called with the path of a tab whose cross was clicked (ADR 0024), or of the tab whose
+    /// menu closes the others.
     on_close: RefCell<Option<OnClose>>,
+    on_close_others: RefCell<Option<OnClose>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -108,14 +110,41 @@ define_class!(
     unsafe impl NSTextFieldDelegate for SidebarSource {}
 
     unsafe impl NSMenuItemValidation for SidebarSource {
-        /// Only folders are renamed here.
+        /// Only folders are renamed here; a tab's items are on whenever they show.
         #[unsafe(method(validateMenuItem:))]
-        fn validate_menu_item(&self, _item: &NSMenuItem) -> bool {
-            self.menu_folder().is_some()
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            item.action() != Some(sel!(renameFolder:)) || self.menu_folder().is_some()
+        }
+    }
+
+    unsafe impl NSMenuDelegate for SidebarSource {
+        /// The row's menu: a folder's rename, or a tab's closing.
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            let outline = self.ivars().outline.borrow().load();
+            let row = outline.as_ref().map_or(-1, |o| o.clickedRow());
+            let item = outline.filter(|_| row >= 0).and_then(|o| o.itemAtRow(row)).and_then(|o| item_of(&o));
+            self.fill_menu(menu, item.as_ref());
         }
     }
 
     impl SidebarSource {
+        /// A tab's menu: that tab closes.
+        #[unsafe(method(closeTabFromMenu:))]
+        fn close_tab_from_menu(&self, item: &NSMenuItem) {
+            if let (Some(path), Some(callback)) = (menu_tab(item), self.ivars().on_close.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
+        /// A tab's menu: every other tab closes.
+        #[unsafe(method(closeOtherTabs:))]
+        fn close_other_tabs(&self, item: &NSMenuItem) {
+            if let (Some(path), Some(callback)) = (menu_tab(item), self.ivars().on_close_others.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
         /// A tab's cross: the tab closes.
         #[unsafe(method(closeTab:))]
         fn close_tab(&self, sender: &NSView) {
@@ -171,6 +200,7 @@ impl SidebarSource {
             on_drop: RefCell::new(None),
             on_rename: RefCell::new(None),
             on_close: RefCell::new(None),
+            on_close_others: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -225,6 +255,31 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
 
     pub fn on_close(&self, callback: impl Fn(String) + 'static) {
         *self.ivars().on_close.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_close_others(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_close_others.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Fills the context menu for `item`'s row: a folder's rename, a tab's closing, nothing
+    /// for other rows. Each item knows its row's item.
+    pub fn fill_menu(&self, menu: &NSMenu, item: Option<&SidebarItem>) {
+        menu.removeAllItems();
+        let entries: &[(&str, Sel)] = match item {
+            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:))],
+            Some(SidebarItem::Tab(_)) => &[(strings::CLOSE_TAB, sel!(closeTabFromMenu:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))],
+            _ => &[],
+        };
+        for &(title, action) in entries {
+            // SAFETY: the source outlives the menu (the outline keeps it) and implements the action.
+            let entry = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(self.mtm()), &NSString::from_str(title), Some(action), ns_string!("")) };
+            // SAFETY: as above.
+            unsafe {
+                entry.setTarget(Some(self));
+                entry.setRepresentedObject(item.map(|i| NSString::from_str(&i.key())).as_deref().map(|k| k.as_ref()));
+            }
+            menu.addItem(&entry);
+        }
     }
 
     pub fn on_rename(&self, callback: impl Fn(String, String) + 'static) {
@@ -306,6 +361,15 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     }
 }
 
+/// The tab a menu item was made for.
+fn menu_tab(item: &NSMenuItem) -> Option<String> {
+    let key = item.representedObject()?.downcast::<NSString>().ok()?.to_string();
+    match SidebarItem::from_key(&key)? {
+        SidebarItem::Tab(path) => Some(path),
+        _ => None,
+    }
+}
+
 /// The folder a note dropped on `item` moves to; only folders take notes.
 pub fn drop_folder(item: &SidebarItem) -> Option<&str> {
     match item {
@@ -335,11 +399,9 @@ pub fn outline(mtm: MainThreadMarker, source: &SidebarSource) -> (Retained<NSScr
     outline.setFloatsGroupRows(false);
     outline.registerForDraggedTypes(&NSArray::from_retained_slice(&[NSString::from_str(NOTE_PATH_TYPE)]));
     *source.ivars().outline.borrow_mut() = Weak::new(&outline);
+    // Filled for the row clicked as it opens.
     let menu = NSMenu::new(mtm);
-    // SAFETY: the source outlives the outline (it is its data source) and implements the action.
-    let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(strings::RENAME_NOTE), Some(sel!(renameFolder:)), ns_string!("")) };
-    unsafe { item.setTarget(Some(source)) };
-    menu.addItem(&item);
+    menu.setDelegate(Some(ProtocolObject::from_ref(source)));
     // SAFETY: a menu built here, kept by the outline.
     unsafe { outline.setMenu(Some(&menu)) };
     let scroll = NSScrollView::new(mtm);

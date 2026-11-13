@@ -57,7 +57,9 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
         Some(item(mtm, s::NEW_NOTE, sel!(newNote:), "n", cmd(none))),
         Some(item(mtm, s::OPEN_VAULT, sel!(openVault:), "o", cmd(none))),
         Some(item(mtm, s::SAVE, sel!(saveDocument:), "s", cmd(none))),
-        Some(item(mtm, s::CLOSE_WINDOW, sel!(performClose:), "w", cmd(none))),
+        // Cmd+W closes the tab shown (the window when no tab is left, ADR 0024).
+        Some(item(mtm, s::CLOSE_TAB, sel!(closeTab:), "w", cmd(none))),
+        Some(item(mtm, s::CLOSE_WINDOW, sel!(performClose:), "w", cmd(NSEventModifierFlags::Shift))),
     ]);
     submenu(mtm, &bar, s::MENU_EDIT, &[
         Some(item(mtm, s::UNDO, sel!(undo:), "z", cmd(none))),

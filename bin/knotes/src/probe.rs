@@ -582,6 +582,8 @@ pub fn folder_rename_requested(sidebar: &crate::sidebar_view::SidebarSource, out
     }
     outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
     let Some(menu) = outline.menu() else { return };
+    // Filled for the folder's row, as it is when the menu opens there.
+    sidebar.fill_menu(&menu, Some(&knotes_app::SidebarItem::Folder(folder.to_owned())));
     let items = menu.itemArray();
     println!("sidebar-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
     let Some(item) = items.iter().next() else { return };
@@ -822,6 +824,43 @@ fn tabs_requested(window: &VaultWindow) {
         window.window.displayIfNeeded();
         tab_close_requested(&window.outline, &window.sidebar, &path);
         window.window.displayIfNeeded();
+    }
+    // `KNOTES_PROBE_TAB_MENU=a.md` (or `a.md:close`, `a.md:others`): that tab's context menu,
+    // its items printed (or one chosen).
+    if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_MENU") {
+        let (path, choice) = spec.split_once(':').map_or((spec.as_str(), None), |(p, c)| (p, Some(c)));
+        let menu = objc2_app_kit::NSMenu::new(window.window.mtm());
+        window.sidebar.fill_menu(&menu, Some(&knotes_app::SidebarItem::Tab(path.to_owned())));
+        let items = menu.itemArray();
+        println!("tab-menu: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
+        let chosen = match choice {
+            Some("close") => items.iter().next(),
+            Some("others") => items.iter().nth(1),
+            _ => None,
+        };
+        if let Some(item) = chosen {
+            // SAFETY: the item's own action and target, with it as the sender, as a click sends.
+            unsafe { NSApplication::sharedApplication(window.window.mtm()).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };
+        }
+    }
+    // `KNOTES_PROBE_MENU_KEY=w`: the main menu's item for Cmd and that key, chosen as the key
+    // does; then how File closes the window.
+    if let Ok(key) = std::env::var("KNOTES_PROBE_MENU_KEY") {
+        let mtm = window.window.mtm();
+        let items: Vec<objc2::rc::Retained<objc2_app_kit::NSMenuItem>> = NSApplication::sharedApplication(mtm)
+            .mainMenu()
+            .map(|bar| bar.itemArray().iter().filter_map(|i| i.submenu()).flat_map(|m| m.itemArray().iter().collect::<Vec<_>>()).collect())
+            .unwrap_or_default();
+        let only_cmd = |i: &objc2_app_kit::NSMenuItem| i.keyEquivalentModifierMask() == objc2_app_kit::NSEventModifierFlags::Command;
+        if let Some(item) = items.iter().find(|i| i.keyEquivalent().to_string() == key && only_cmd(i)) {
+            println!("menu-key: {}", item.title());
+            // SAFETY: the item's own action, up the responder chain as a key equivalent goes.
+            unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(item.action().expect("menu action"), None, Some(item)) };
+        }
+        if let Some(close) = items.iter().find(|i| i.action() == Some(objc2::sel!(performClose:))) {
+            let shift = close.keyEquivalentModifierMask().contains(objc2_app_kit::NSEventModifierFlags::Shift);
+            println!("window-menu: {} {}⌘{}", close.title(), if shift { "⇧" } else { "" }, close.keyEquivalent().to_string().to_uppercase());
+        }
     }
     if let Ok(other) = std::env::var("KNOTES_PROBE_TAB_TRIP") {
         window.window.displayIfNeeded();

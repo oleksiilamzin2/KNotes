@@ -448,6 +448,12 @@ impl VaultWindow {
                 window.close_tab(&path);
             }
         });
+        let weak_others: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_close_others(move |path| {
+            if let Some(window) = weak_others.upgrade() {
+                window.close_other_tabs(&path);
+            }
+        });
         this.sidebar.on_rename(move |folder, name| {
             if let Some(window) = weak.upgrade() {
                 window.rename_folder(&folder, &name);
@@ -992,6 +998,27 @@ impl VaultWindow {
             AfterClose::Show(next) => self.open_note(&next, true),
             AfterClose::Nothing => self.show_nothing(),
             AfterClose::Same => {}
+        }
+        self.save_tabs();
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+    }
+
+    /// Closes the tab shown (Cmd+W); false when there is none.
+    pub fn close_current_tab(&self) -> bool {
+        let Some(path) = self.tabs.borrow().current_path().map(str::to_owned) else { return false };
+        self.close_tab(&path);
+        true
+    }
+
+    /// Closes every tab but `path`'s, which shows.
+    pub fn close_other_tabs(&self, path: &str) {
+        let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return };
+        let after = self.tabs.borrow_mut().close_others(i);
+        if let AfterClose::Show(next) = after {
+            self.open_note(&next, true);
         }
         self.save_tabs();
         if self.state.borrow().sidebar_mode == SidebarMode::Tabs {

@@ -199,7 +199,7 @@ fn chat_column_has_title_and_question_field() {
 fn main_menu_has_the_standard_menus() {
     let out = probe();
     assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
-    assert!(out.contains("file-menu: Нова нотатка ⌘N | Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вікно ⌘W"), "{out}");
+    assert!(out.contains("file-menu: Нова нотатка ⌘N | Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
 }
 
 #[test]
@@ -2349,4 +2349,29 @@ fn a_link_s_context_menu_opens_its_document_in_a_new_tab() {
     assert!(menu("20").contains("link-menu: none\n"), "a web link: none");
     let out = menu("6:open");
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()), "{out}");
+}
+
+#[test]
+fn cmd_w_closes_the_tab_shown() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_MENU_KEY", "w")]);
+    assert!(out.contains("menu-key: Закрити вкладку\n"), "{out}");
+    assert_eq!(sidebar_tabs(&out), ("a".to_owned(), "a".to_owned()), "{out}");
+    assert!(out.contains("window-menu: Закрити вікно ⇧⌘W\n"), "the window closes with Shift: {out}");
+}
+
+#[test]
+fn a_tab_s_menu_closes_it_or_the_others() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let menu = |spec: &str| {
+        let mut env = vec![("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")];
+        env.push(("KNOTES_PROBE_TAB_MENU", spec));
+        probe_tabs(&vault, &home, &env)
+    };
+    let out = menu("a.md");
+    assert!(out.contains("tab-menu: Закрити вкладку | Закрити інші вкладки\n"), "{out}");
+    let out = menu("a.md:others");
+    assert_eq!(sidebar_tabs(&out), ("a".to_owned(), "a".to_owned()), "b's tab closed, a shown: {out}");
+    let out = menu("a.md:close");
+    assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()), "{out}");
 }

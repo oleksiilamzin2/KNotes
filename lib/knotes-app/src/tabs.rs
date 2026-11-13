@@ -96,6 +96,18 @@ impl Tabs {
         }
     }
 
+    /// Closes every tab but `i`, which shows.
+    pub fn close_others(&mut self, i: usize) -> AfterClose {
+        if i >= self.tabs.len() {
+            return AfterClose::Same;
+        }
+        let kept = self.tabs.swap_remove(i);
+        let shown = self.current == Some(i);
+        self.tabs = vec![kept];
+        self.current = Some(0);
+        if shown { AfterClose::Same } else { AfterClose::Show(self.tabs[0].clone()) }
+    }
+
     /// A document moved from `from` to `to`.
     pub fn rename(&mut self, from: &str, to: &str) {
         for tab in self.tabs.iter_mut().filter(|t| *t == from) {

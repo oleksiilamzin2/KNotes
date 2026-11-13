@@ -125,6 +125,17 @@ define_class!(
             }
         }
 
+        /// File → Close Tab (Cmd+W): the tab shown in the window in front; the window itself
+        /// when it has no tab.
+        #[unsafe(method(closeTab:))]
+        fn close_tab_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window()
+                && !window.close_current_tab()
+            {
+                window.window.performClose(None);
+            }
+        }
+
         /// Edit → Find…: the find bar over the open note, wherever the focus is (the text view
         /// takes it itself when focused).
         #[unsafe(method(performTextFinderAction:))]
