@@ -1672,3 +1672,27 @@ fn dragging_a_row_handle_moves_the_row() {
     let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &drag)]);
     assert!(note_text(&out).contains("| Bartholomew | 42 |⏎| Ann | 3 |⏎"), "{out}");
 }
+
+const WIDE_TABLE: &str = "| First column here | Second column heading text | Third column heading text | Fourth |\n|---|---|---|---|\n| a | b | c | d |\n\nAfter";
+
+#[test]
+fn a_wide_table_scrolls_sideways_by_columns_and_follows_the_cursor() {
+    let probe = |env: &[(&str, &str)]| {
+        let mut all = vec![("KNOTES_PROBE_OPEN", "a.md")];
+        all.extend_from_slice(env);
+        probe_notes(&[("a.md", WIDE_TABLE)], &all).1
+    };
+    // "First column here" at 2..19, "Second column heading text" at 22..48.
+    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_RANGE_X", "2,17;22,26")]);
+    let before = range_xs(&out);
+    let row = decorations(&out, "table-row")[0];
+    let over = format!("{},{}", row.0 + 40.0, row.1 + row.3 / 2.0);
+    let scroll = format!("{over};-60");
+    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &scroll), ("KNOTES_PROBE_RANGE_X", "2,17;22,26")]);
+    let after = range_xs(&out);
+    assert!(after[0].1 - after[0].0 < 2.0, "the first column scrolled away: {after:?}");
+    assert!((after[1].0 - before[0].0).abs() < 1.0, "the second column where the first was: {before:?} {after:?}");
+    // Back with the cursor put in the first column.
+    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &format!("{scroll};cursor=5")), ("KNOTES_PROBE_RANGE_X", "2,17")]);
+    assert!(range_xs(&out)[0].1 - range_xs(&out)[0].0 > 50.0, "the cursor's column shows again: {out}");
+}

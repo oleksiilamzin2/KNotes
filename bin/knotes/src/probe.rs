@@ -139,6 +139,20 @@ pub fn pointer_requested(view: &crate::note_view::NoteTextView) {
     }
 }
 
+/// `KNOTES_PROBE_TABLE_SCROLL=x,y;dx[;cursor=n]`: a sideways scroll of `dx` points with the
+/// pointer at x,y, then the cursor put at character n.
+pub fn table_scroll_requested(view: &crate::note_view::NoteTextView, spec: &str) {
+    let mut parts = spec.split(';');
+    let point = parts.next().and_then(|p| p.split_once(',')).and_then(|(x, y)| Some(objc2_foundation::NSPoint::new(x.parse().ok()?, y.parse().ok()?)));
+    let dx = parts.next().and_then(|d| d.parse::<f64>().ok());
+    if let (Some(point), Some(dx)) = (point, dx) {
+        view.scroll_sideways_at(point, dx);
+    }
+    if let Some(at) = parts.next().and_then(|c| c.strip_prefix("cursor=")).and_then(|c| c.parse().ok()) {
+        view.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
+    }
+}
+
 /// `KNOTES_PROBE_RESIZE=line:width`: the image on the line starting at character `line`
 /// dragged to `width` points and let go.
 pub fn resize_requested() -> Option<(usize, f64)> {

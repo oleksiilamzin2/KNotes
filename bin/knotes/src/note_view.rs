@@ -41,6 +41,9 @@ type OnPointer = Box<dyn Fn(&NSTextView, Option<NSPoint>)>;
 /// Gets the text view and where a mouse press is in it; true when it took the press (a table's
 /// control).
 type OnPress = Box<dyn Fn(&NSTextView, NSPoint) -> bool>;
+/// Gets the text view, where the pointer is in it and a sideways scroll (points); true when it
+/// took the scroll (a wide table).
+type OnScrollSideways = Box<dyn Fn(&NSTextView, NSPoint, f64) -> bool>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -62,6 +65,7 @@ pub struct Ivars {
     on_image_hover: RefCell<Option<OnImageHover>>,
     on_pointer: RefCell<Option<OnPointer>>,
     on_press: RefCell<Option<OnPress>>,
+    on_scroll_sideways: RefCell<Option<OnScrollSideways>>,
     /// The image the last click was on (where its line starts): a second click previews it,
     /// though the first one moved it below its source.
     image_clicked: Cell<Option<usize>>,
@@ -114,6 +118,19 @@ define_class!(
                 resize_cursor().set();
             } else if self.over_clickable(event.locationInWindow()) {
                 NSCursor::pointingHandCursor().set();
+            }
+        }
+
+        /// A sideways scroll over a wide table scrolls the table; the rest scrolls the note.
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            let dx = event.scrollingDeltaX();
+            let point = self.convertPoint_fromView(event.locationInWindow(), None);
+            let taken = dx.abs() > event.scrollingDeltaY().abs()
+                && self.ivars().on_scroll_sideways.borrow().as_ref().is_some_and(|scroll| scroll(self, point, dx));
+            if !taken {
+                // SAFETY: forwarding the same event to the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), scrollWheel: event] };
             }
         }
 
@@ -245,6 +262,15 @@ impl NoteTextView {
     /// and its rect in the view.
     fn image_edge(&self, in_window: NSPoint) -> Option<(usize, NSRect)> {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
+    }
+
+    pub fn on_scroll_sideways(&self, callback: impl Fn(&NSTextView, NSPoint, f64) -> bool + 'static) {
+        *self.ivars().on_scroll_sideways.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// A sideways scroll at a point in the view's coordinates (probe mode).
+    pub fn scroll_sideways_at(&self, point: NSPoint, dx: f64) -> bool {
+        self.ivars().on_scroll_sideways.borrow().as_ref().is_some_and(|scroll| scroll(self, point, dx))
     }
 
     pub fn on_press(&self, callback: impl Fn(&NSTextView, NSPoint) -> bool + 'static) {

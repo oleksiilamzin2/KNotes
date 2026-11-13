@@ -58,7 +58,9 @@ pub enum Mark {
     /// A table row's grid across the paragraph: borders at `columns` (x of each column's left
     /// edge from the line's start, and the table's right edge last), the header's background,
     /// the table's top border; with the pointer over the table, its controls (ADR 0021).
-    TableRow { columns: Rc<Vec<f64>>, header: bool, top: bool, controls: TableControls },
+    /// Columns scrolled away to the left (`scrolled`) collapse to its left edge; what runs past
+    /// the text column is cut off.
+    TableRow { columns: Rc<Vec<f64>>, header: bool, top: bool, scrolled: bool, controls: TableControls },
     /// An arrow after a link to a website, `shift` points from the location of character
     /// `offset` (in the room kerning keeps there).
     External { offset: usize, centre: f64, shift: f64 },
@@ -80,6 +82,8 @@ const CALLOUT_ICON: f64 = 14.0;
 /// Space between a table and its handles; the add bars' thickness.
 const TABLE_HANDLE_GAP: f64 = 6.0;
 const TABLE_ADD_BAR: f64 = 14.0;
+/// The shadow where a table's columns go on past what shows.
+const TABLE_SHADOW: f64 = 10.0;
 /// An image's resize handle: its width, tallest height and inset from the right edge.
 const IMAGE_HANDLE_WIDTH: f64 = 5.0;
 const IMAGE_HANDLE_HEIGHT: f64 = 36.0;
@@ -102,6 +106,12 @@ define_class!(
     impl PreviewFragment {
         #[unsafe(method(drawAtPoint:inContext:))]
         fn draw(&self, point: NSPoint, context: &CGContext) {
+            // A table row draws within the text column: a wide table's columns past it are cut.
+            let clip = self.table_clip().map(|r| NSRect::new(NSPoint::new(point.x + r.origin.x, point.y + r.origin.y), r.size));
+            if let Some(clip) = clip {
+                CGContext::save_g_state(Some(context));
+                CGContext::clip_to_rect(Some(context), clip);
+            }
             let graphics = NSGraphicsContext::graphicsContextWithCGContext_flipped(context, true);
             let previous = NSGraphicsContext::currentContext();
             NSGraphicsContext::setCurrentContext(Some(&graphics));
@@ -125,6 +135,19 @@ define_class!(
             NSGraphicsContext::setCurrentContext(previous.as_deref());
             // SAFETY: the superclass draws the text, as it would without this override.
             let _: () = unsafe { msg_send![super(self), drawAtPoint: point, inContext: context] };
+            if clip.is_some() {
+                // Shadows where columns go on past the cut, then the handles, outside it.
+                let previous = NSGraphicsContext::currentContext();
+                NSGraphicsContext::setCurrentContext(Some(&graphics));
+                for (mark, _) in &self.ivars().marks {
+                    if let (Mark::TableRow { columns, scrolled, .. }, Some(rect), Some(clip)) = (mark, self.mark_rect(mark), clip) {
+                        let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
+                        draw_table_shadows(rect, clip, *scrolled, columns);
+                    }
+                }
+                NSGraphicsContext::setCurrentContext(previous.as_deref());
+                CGContext::restore_g_state(Some(context));
+            }
             let previous = NSGraphicsContext::currentContext();
             NSGraphicsContext::setCurrentContext(Some(&graphics));
             for (mark, image) in &self.ivars().marks {
@@ -155,7 +178,13 @@ define_class!(
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
                     (Mark::TableRow { columns, controls, .. }, _) => {
-                        for (kind, control) in table_controls(rect, columns, controls) {
+                        // The add column bar only where the table's right edge shows; the add
+                        // row bar as wide as what shows.
+                        let right = clip.map_or(f64::MAX, |c| c.origin.x + c.size.width);
+                        let cut = rect.origin.x + rect.size.width > right + 0.5;
+                        let controls = TableControls { add_column: controls.add_column && !cut, ..*controls };
+                        let shown = NSRect::new(rect.origin, NSSize::new(rect.size.width.min(right - rect.origin.x), rect.size.height));
+                        for (kind, control) in table_controls(shown, columns, &controls) {
                             if kind == "table-add-column" {
                                 // One bar down the table: its parts meet square.
                                 draw_add_bar(control, (controls.first, controls.last), controls.add_column_plus);
@@ -212,6 +241,15 @@ impl PreviewFragment {
         let this = Self::alloc().set_ivars(Ivars { marks });
         // SAFETY: NSTextLayoutFragment's designated initializer.
         unsafe { msg_send![super(this), initWithTextElement: element, range: range] }
+    }
+
+    /// The text column, in this fragment's coordinates, when it draws a table row.
+    fn table_clip(&self) -> Option<NSRect> {
+        self.ivars().marks.iter().any(|(m, _)| matches!(m, Mark::TableRow { .. })).then(|| {
+            let frame = self.layoutFragmentFrame();
+            let width = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
+            NSRect::new(NSPoint::new(-frame.origin.x, -frame.origin.y - 1.0e4), NSSize::new(width, 2.0e4))
+        })
     }
 
     /// Where `mark` is drawn, in this fragment's coordinates, once it is laid out.
@@ -386,6 +424,23 @@ pub fn row_height(fragment: &NSTextLayoutFragment) -> f64 {
     let lines = fragment.textLineFragments();
     let extra = lines.iter().last().filter(|l| lines.count() > 1 && l.characterRange().length == 0);
     extra.map_or(frame.size.height, |l| l.typographicBounds().origin.y)
+}
+
+/// Faint shadows inside a table row's cut where columns go on: at the left when some are
+/// scrolled away, at the right when the table runs past the text column.
+fn draw_table_shadows(row: NSRect, clip: NSRect, scrolled: bool, columns: &[f64]) {
+    let _ = columns;
+    let (top, height) = (row.origin.y, row.size.height);
+    let shade = NSColor::shadowColor().colorWithAlphaComponent(0.12);
+    let clear = NSColor::shadowColor().colorWithAlphaComponent(0.0);
+    let Some(gradient) = objc2_app_kit::NSGradient::initWithStartingColor_endingColor(objc2_app_kit::NSGradient::alloc(), &shade, &clear) else { return };
+    if scrolled {
+        gradient.drawInRect_angle(NSRect::new(NSPoint::new(row.origin.x, top), NSSize::new(TABLE_SHADOW, height)), 0.0);
+    }
+    let right = clip.origin.x + clip.size.width;
+    if row.origin.x + row.size.width > right + 0.5 {
+        gradient.drawInRect_angle(NSRect::new(NSPoint::new(right - TABLE_SHADOW, top), NSSize::new(TABLE_SHADOW, height)), 180.0);
+    }
 }
 
 /// What a table row shows of the table's controls while the pointer is over the table.
