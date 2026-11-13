@@ -774,7 +774,7 @@ pub fn title_clicks_requested(window: &NSWindow) {
         NSEventType::LeftMouseDown, at, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, clicks, 1.0,
     );
     if let Some(down) = down {
-        NSResponder::mouseDown(&*field, &down);
+        NSResponder::mouseDown(&field, &down);
     }
     let state = match field.currentEditor() {
         None => "no".to_owned(),
