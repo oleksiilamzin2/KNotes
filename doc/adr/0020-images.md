@@ -15,6 +15,8 @@ owner answered a question round (2026-11-13).
   the cursor its markup is hidden; a click puts the cursor in it, as with display formulas
   (ADR 0017): the markup shows and the image stays below it.
 - Dragging the image's right edge resizes it and writes the width into the embed (`|300`).
+  With the pointer over the image, a handle (a light pill with a dark edge, to show on any
+  picture) marks that edge (owner's request).
 - A double click opens the image in Quick Look.
 - An image pasted (Cmd+V) or dropped from Finder into a note is copied to
   `.knotes/attachments` at the vault root as `Pasted image 20261113114500.png` (Obsidian's
