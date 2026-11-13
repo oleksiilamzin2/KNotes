@@ -42,8 +42,13 @@ owner answered a question round (2026-11-13).
   shows at (ImageIO thumbnails, EXIF rotation applied; SVG through `NSImage`) the first time
   its fragment draws: TextKit makes fragments for paragraphs out of view too. A note with ten
   12-megapixel photos (M5 Pro, release): 173 MB with each photo decoded whole, 67 MB this way
-  (54 MB without the photos); a decode takes 13 ms on the main thread as a photo comes into
-  view.
+  (54 MB without the photos). A decode (13 ms for such a photo) runs on a background queue;
+  meanwhile a faint box holds the image's place, and once decoded its line is restyled so
+  TextKit draws it.
+- Decoded images are let go when another note opens, when their file changes on disk (the
+  snapshot's changed paths), and when the note scrolls them more than a screen out of view
+  (checked every quarter screen; one still being decoded is dropped). Drawn again, they are
+  decoded again.
 - Paste reads image files first (copied in Finder or dropped), then image data alone (PNG,
   or TIFF converted to PNG); a pasteboard with text keeps the text view's paste. An image
   file already in the vault is embedded where it is, not copied.
