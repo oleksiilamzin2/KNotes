@@ -1,0 +1,12 @@
+[package]
+name = "knotes-pdf"
+description = "Text of PDF files for the Knotes index, through PDFKit (ADR 0022)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+objc2 = "0.6.5"
+objc2-foundation = "0.3.2"
+objc2-pdf-kit = { version = "0.3.2", default-features = false, features = ["std", "PDFDocument"] }
