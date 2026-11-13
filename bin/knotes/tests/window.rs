@@ -1145,3 +1145,13 @@ fn callouts_show_as_tinted_boxes_with_an_icon_and_a_title() {
     let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", &inside)]);
     assert!(editor_runs(&out).contains("[callout-marker][!warning] |[callout-title]Mind the gap"), "the marker shows on its line: {out}");
 }
+
+#[test]
+fn the_window_opens_where_and_as_big_as_it_was_left() {
+    let notes = tempfile::tempdir().unwrap();
+    std::fs::write(notes.path().join("a.md"), "a").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    probe_env(&[notes.path()], Some(home.path()), &[("KNOTES_PROBE_WIDTH", "1180"), ("KNOTES_PROBE_ACTION", "close")]);
+    let out = probe_env(&[notes.path()], Some(home.path()), &[]);
+    assert!(out.contains("size: 1180x"), "{out}");
+}

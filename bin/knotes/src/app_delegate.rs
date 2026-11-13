@@ -9,8 +9,8 @@ use knotes_session::{AppSettings, Event, VaultSession};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSModalResponseOK, NSOpenPanel, NSWindow, NSWindowDelegate};
-use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
+use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSModalResponseOK, NSOpenPanel, NSScreen, NSWindow, NSWindowDelegate};
+use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use crate::vault_window::VaultWindow;
 use crate::{main_menu, probe, strings};
@@ -83,6 +83,9 @@ define_class!(
             for vault in self.ivars().vaults.borrow().iter() {
                 vault.window.leave();
             }
+            if let Some(vault) = self.ivars().vaults.borrow().last() {
+                remember_frame(&vault.window.window);
+            }
         }
 
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
@@ -96,6 +99,9 @@ define_class!(
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, notification: &NSNotification) {
             let Some(closing) = notification.object() else { return };
+            if let Some(window) = closing.downcast_ref::<NSWindow>() {
+                remember_frame(window);
+            }
             let is_closing = |v: &OpenVault| std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject);
             if let Some(vault) = self.ivars().vaults.borrow().iter().find(|v| is_closing(v)) {
                 vault.window.leave();
@@ -197,6 +203,18 @@ impl AppDelegate {
         let window = VaultWindow::new(mtm);
         window.set_vault(path.clone(), session.index_dir().to_path_buf());
         window.window.setDelegate(Some(ProtocolObject::from_ref(self)));
+        if let Some([x, y, w, h]) = AppSettings::load(&app_data()).window_frame {
+            let frame = NSRect::new(NSPoint::new(x as f64, y as f64), NSSize::new(w as f64, h as f64));
+            // Only where a screen shows it (a display may be gone since).
+            let on_screen = NSScreen::screens(mtm).iter().any(|s| {
+                let v = s.visibleFrame();
+                frame.origin.x < v.origin.x + v.size.width && v.origin.x < frame.origin.x + frame.size.width
+                    && frame.origin.y < v.origin.y + v.size.height && v.origin.y < frame.origin.y + frame.size.height
+            });
+            if on_screen {
+                window.window.setFrame_display(frame, false);
+            }
+        }
         window.window.makeKeyAndOrderFront(None);
         if probe::enabled() {
             probe::watch(&window);
@@ -216,6 +234,16 @@ impl AppDelegate {
             eprintln!("knotes: cannot save settings: {e}");
         }
         self.ivars().vaults.borrow_mut().push(OpenVault { path, window, _session: session });
+    }
+}
+
+/// Keeps where the window is and how big, to open it there next time.
+fn remember_frame(window: &NSWindow) {
+    let f = window.frame();
+    let mut settings = AppSettings::load(&app_data());
+    settings.window_frame = Some([f.origin.x.round() as i64, f.origin.y.round() as i64, f.size.width.round() as i64, f.size.height.round() as i64]);
+    if let Err(e) = settings.save(&app_data()) {
+        eprintln!("knotes: cannot save settings: {e}");
     }
 }
 

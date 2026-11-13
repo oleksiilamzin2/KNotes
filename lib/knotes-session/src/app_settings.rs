@@ -16,6 +16,9 @@ pub struct AppSettings {
     pub last_vault: Option<PathBuf>,
     /// Folders or tags under "All notes" in the sidebar.
     pub sidebar_mode: SidebarMode,
+    /// Where the window was and how big (x, y, width, height in screen points), to open it
+    /// there again.
+    pub window_frame: Option<[i64; 4]>,
 }
 
 impl AppSettings {
@@ -26,6 +29,10 @@ impl AppSettings {
         Self {
             last_vault: value.get("lastVault").and_then(Value::as_str).map(PathBuf::from),
             sidebar_mode: value.get("sidebar").and_then(Value::as_str).and_then(SidebarMode::from_key).unwrap_or_default(),
+            window_frame: value.get("windowFrame").and_then(Value::as_array).and_then(|v| {
+                let n: Vec<i64> = v.iter().filter_map(Value::as_i64).collect();
+                <[i64; 4]>::try_from(n).ok()
+            }),
         }
     }
 
@@ -35,6 +42,7 @@ impl AppSettings {
         let value = json!({
             "lastVault": self.last_vault.as_ref().map(|p| p.to_string_lossy()),
             "sidebar": self.sidebar_mode.key(),
+            "windowFrame": self.window_frame,
         });
         let tmp = app_data.join(format!("{SETTINGS_FILE}.tmp"));
         fs::write(&tmp, serde_json::to_string_pretty(&value).map_err(io::Error::other)? + "\n")?;
