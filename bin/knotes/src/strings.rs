@@ -74,3 +74,12 @@ pub fn rename_question(links: usize, notes: usize) -> String {
 }
 /// The note list's context menu (ADR 0019).
 pub const RENAME_NOTE: &str = "Перейменувати";
+pub const MOVE_NOTE: &str = "Перемістити в…";
+pub const MOVE: &str = "Перемістити";
+/// The vault's root folder in the folder picker.
+pub const ROOT_FOLDER: &str = "/";
+
+/// "Перемістити «Note» в теку:"
+pub fn move_question(note: &str) -> String {
+    format!("Перемістити «{note}» в теку:")
+}

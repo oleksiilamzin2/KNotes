@@ -244,6 +244,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_move(move |path| {
+            if let Some(window) = weak.upgrade() {
+                window.move_note_to_chosen_folder(&path);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.list.on_select(move |path| {
             if let Some(window) = weak.upgrade()
                 && !window.highlighting.get()
@@ -435,7 +441,7 @@ impl VaultWindow {
             if let (Some(name), Some(open)) = (probe::rename_requested(), self.open_path()) {
                 self.rename_note(&open, &name);
             }
-            probe::list_rename_requested(&self.list, &self.table);
+            probe::list_menu_requested(&self.list, &self.table);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -758,6 +764,30 @@ impl VaultWindow {
         let same = |p: &str| p.to_lowercase() == old.to_lowercase();
         let new = unique_note_path(folder, &stem, |p| !same(p) && vault.join(p).exists());
         new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
+    }
+
+    /// Asks for a folder and moves the note at `path` there, with the links to it (ADR 0019).
+    pub fn move_note_to_chosen_folder(&self, path: &str) {
+        let folders = {
+            let state = self.state.borrow();
+            let mut list = Vec::new();
+            let mut stack = vec![&*state.folders];
+            while let Some(node) = stack.pop() {
+                list.push(node.path.clone());
+                stack.extend(node.children.iter().rev());
+            }
+            list
+        };
+        let name = knotes_app::title_of(path).to_owned();
+        let Some(folder) = rename_dialog::ask_folder(objc2::MainThreadOnly::mtm(&*self.window), &name, &folders) else { return };
+        let Some(vault) = self.vault() else { return };
+        let file = path.rsplit('/').next().unwrap_or(path);
+        let wanted = if folder.is_empty() { file.to_owned() } else { format!("{folder}/{file}") };
+        if wanted == path {
+            return;
+        }
+        let new = unique_note_path(&folder, knotes_app::title_of(file), |p| vault.join(p).exists());
+        self.move_notes(Moves::from([(path.to_owned(), new)]));
     }
 
     /// Moves notes (new path by old), asking first when links would change and rewriting them

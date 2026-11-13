@@ -252,22 +252,27 @@ pub fn rename_requested() -> Option<String> {
 }
 
 /// `KNOTES_PROBE_ACTION=list-rename=New name`: Rename from the note list's context menu on the
-/// selected note, the name typed in its row and the editing ended.
-pub fn list_rename_requested(list: &crate::note_list_view::NoteListSource, table: &objc2_app_kit::NSTableView) {
-    let Some(name) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("list-rename=").map(str::to_owned)) else { return };
-    if let Some(menu) = table.menu() {
-        let items: Vec<String> = menu.itemArray().iter().map(|i| i.title().to_string()).collect();
-        println!("list-menu-items: {}", items.join(" | "));
-        if let Some(item) = menu.itemArray().iter().next() {
-            let mtm = MainThreadMarker::new().expect("main thread");
-            // SAFETY: the menu item's own target and action, sent as a click would.
-            unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };
+/// selected note, the name typed in its row and the editing ended. `list-move=folder`: Move
+/// to… from that menu (the folder picker answers with the folder).
+pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: &objc2_app_kit::NSTableView) {
+    let Ok(action) = std::env::var("KNOTES_PROBE_ACTION") else { return };
+    let (index, name) = match (action.strip_prefix("list-rename="), action.starts_with("list-move=")) {
+        (Some(name), _) => (0, Some(name.to_owned())),
+        (None, true) => (1, None),
+        _ => return,
+    };
+    let Some(menu) = table.menu() else { return };
+    let items = menu.itemArray();
+    println!("list-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
+    let Some(item) = items.iter().nth(index) else { return };
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: the menu item's own target and action, sent as a click would.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };
+    if let (Some(name), Some(field)) = (name, list.renaming_field()) {
+        field.setStringValue(&NSString::from_str(&name));
+        if let Some(window) = table.window() {
+            window.makeFirstResponder(Some(table));
         }
-    }
-    let Some(field) = list.renaming_field() else { return };
-    field.setStringValue(&NSString::from_str(&name));
-    if let Some(window) = table.window() {
-        window.makeFirstResponder(Some(table));
     }
 }
 

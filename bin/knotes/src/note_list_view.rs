@@ -1,6 +1,6 @@
 //! Note list: a view-based `NSTableView` over `knotes_app::build_note_list` items. Only the
 //! visible rows are asked for, so 50k notes cost the same as 50. Its context menu renames a
-//! note in its row (ADR 0019).
+//! note in its row or moves it (ADR 0019).
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -64,6 +64,8 @@ pub struct Ivars {
     /// Called with a note's path and the name typed in its row.
     on_rename: RefCell<Option<OnRename>>,
     table: RefCell<Weak<NSTableView>>,
+    /// Called with the path of a note to move.
+    on_move: RefCell<Option<OnSelect>>,
     /// The note whose row title is being edited, and that title field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
     rows: RefCell<Arc<Vec<NoteRow>>>,
@@ -116,6 +118,14 @@ define_class!(
             }
         }
 
+        #[unsafe(method(moveNote:))]
+        fn move_note(&self, _sender: Option<&AnyObject>) {
+            let path = self.menu_row().and_then(|row| self.path_at(row));
+            if let (Some(path), Some(callback)) = (path, self.ivars().on_move.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
     }
 
     unsafe impl NSTableViewDelegate for NoteListSource {
@@ -155,6 +165,7 @@ impl NoteListSource {
         let ivars = Ivars {
             on_select: RefCell::new(None),
             on_rename: RefCell::new(None),
+            on_move: RefCell::new(None),
             table: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             rows: RefCell::new(Arc::new(Vec::new())),
@@ -178,6 +189,10 @@ impl NoteListSource {
 
     pub fn on_rename(&self, callback: impl Fn(String, String) + 'static) {
         *self.ivars().on_rename.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_move(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_move.borrow_mut() = Some(Box::new(callback));
     }
 
 
@@ -337,7 +352,7 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
     }
     *source.ivars().table.borrow_mut() = Weak::new(&table);
     let menu = NSMenu::new(mtm);
-    for (title, action) in [(strings::RENAME_NOTE, sel!(renameNote:))] {
+    for (title, action) in [(strings::RENAME_NOTE, sel!(renameNote:)), (strings::MOVE_NOTE, sel!(moveNote:))] {
         // SAFETY: the source outlives the table (it is its data source), and implements the action.
         let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), ns_string!("")) };
         unsafe { item.setTarget(Some(source)) };

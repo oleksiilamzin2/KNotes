@@ -968,3 +968,14 @@ fn a_note_is_renamed_in_its_list_row_from_the_context_menu() {
     assert!(vault.path().join("Renamed in list.md").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Renamed in list]] and [[Renamed in list#Part|p]]");
 }
+
+#[test]
+fn a_note_is_moved_to_a_folder_picked_from_the_context_menu() {
+    let notes = [("Old.md", "# Old"), ("a.md", "[x](Old.md) [[Old]]"), ("Archive/keep.md", "k")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "list-move=Archive")]);
+    assert!(out.contains("list-menu-items: Перейменувати | Перемістити в…"), "{out}");
+    assert!(out.contains("move-folders: / | Archive"), "{out}");
+    assert!(vault.path().join("Archive/Old.md").exists() && !vault.path().join("Old.md").exists(), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "[x](Archive/Old.md) [[Old]]");
+    assert!(out.contains("note: Archive/Old.md"), "{out}");
+}
