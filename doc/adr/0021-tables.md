@@ -39,3 +39,33 @@ TextKit 2 lays out no tables: `NSTextTable` blocks send a text view back to Text
 
 - Text in a cell does not wrap; a long cell widens its column.
 - Column widths are measured from the cells' shown text on every restyle of the table.
+
+## Built (2026-11-13)
+
+- `highlight` gives each table's rows, cells (without pipes and the spaces around them) and
+  delimiter row; `TableText` reads a table's cells and writes them back evenly (`| a | b |`,
+  `| :--- | ---: |`), and adds, removes, moves, aligns and sorts rows and columns (numbers as
+  numbers, text ignoring case, the header kept).
+- A row's hidden pipes and spaces keep, by kerning, the room that moves its cells' text to
+  their columns; a row runs on past the column instead of wrapping; padding is a taller line
+  above (spacing before the document's first paragraph is dropped) and spacing below. The
+  fragments draw borders and the header's background within the text column.
+- Edits that touch a hidden pipe or space are refused; a `|` or a line break typed in a cell is
+  written `\|` or a space, and text typed between cells goes into the nearest one, right
+  after the check (changing the text inside `shouldChangeText` would confuse the text view).
+  A cursor that lands between cells moves into the nearest one.
+- Handles and add bars show with the pointer over the table (or near it); a handle clicked
+  opens its menu, dragged moves its row or column. In probe mode the menu is listed or an
+  item chosen instead of shown.
+- A wide table scrolls by columns, not by points: kerning cannot move glyphs left of a line's
+  start (a glyph's advance does not go below nothing), and shifting only the drawing would
+  leave the cursor and clicks where the text is laid out. Columns scrolled away collapse to
+  the table's left edge; a sideways swipe (or Shift with the wheel) moves a column at a time;
+  the cursor in a hidden column scrolls it back; shadows mark the cut edges.
+- A table is laid out whole on every restyle (its columns come from all its rows), but its
+  other rows are set again only when its column widths change: setting a row lays it out
+  again. Typing in a cell of a 200-row table (M5 Pro, release): p50 1.9 ms, p95 2.5 ms; with
+  the cell widening its column on every key, p50 7.2 ms. Cell widths are measured once per
+  text and font.
+- The editor bench now drains an autorelease pool per step, as the run loop does per event:
+  without it the cell measurements' temporary strings piled up to 300 MB in the bench.
