@@ -56,6 +56,8 @@ pub struct Ivars {
     /// The open note's name field, once the toolbar has made it, and the name it shows.
     note_title: RefCell<Option<Retained<NSTextField>>>,
     note_title_state: RefCell<String>,
+    /// Whether the name shown can be edited (a note's).
+    note_title_renamable: Cell<bool>,
     /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
     sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     sidebar_mode_state: Cell<SidebarMode>,
@@ -206,6 +208,7 @@ impl ToolbarDelegate {
             on_note_title: RefCell::new(None),
             note_title: RefCell::new(None),
             note_title_state: RefCell::new(String::new()),
+            note_title_renamable: Cell::new(false),
             sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
             sidebar_shown: Cell::new(true),
@@ -284,15 +287,16 @@ impl ToolbarDelegate {
         *self.ivars().on_note_title.borrow_mut() = Some(Box::new(callback));
     }
 
-    /// Shows the open note's name (empty and not editable without a note), unless it is being
-    /// edited.
-    pub fn set_note_title(&self, name: &str) {
+    /// Shows the name of the document open, editable to rename it when `renamable` (a note),
+    /// unless it is being edited.
+    pub fn set_note_title(&self, name: &str, renamable: bool) {
         *self.ivars().note_title_state.borrow_mut() = name.to_owned();
+        self.ivars().note_title_renamable.set(renamable);
         if let Some(field) = self.ivars().note_title.borrow().as_ref()
             && field.currentEditor().is_none()
         {
             field.setStringValue(&NSString::from_str(name));
-            field.setEditable(!name.is_empty());
+            field.setEditable(renamable);
         }
     }
 
@@ -391,7 +395,7 @@ impl ToolbarDelegate {
                 }
                 let name = self.ivars().note_title_state.borrow().clone();
                 field.setStringValue(&NSString::from_str(&name));
-                field.setEditable(!name.is_empty());
+                field.setEditable(self.ivars().note_title_renamable.get());
                 field.setToolTip(Some(&NSString::from_str(strings::NOTE_TITLE)));
                 field.widthAnchor().constraintGreaterThanOrEqualToConstant(60.0).setActive(true);
                 field.widthAnchor().constraintLessThanOrEqualToConstant(360.0).setActive(true);

@@ -751,7 +751,7 @@ fn report_toolbar(window: &NSWindow) {
         .collect();
     println!("toolbar: {}", names.join(", "));
     if let Some(field) = note_title_field(window) {
-        println!("note-title: {}", field.stringValue());
+        println!("note-title: {}{}", field.stringValue(), if field.isEditable() || field.stringValue().length() == 0 { "" } else { " (fixed)" });
     }
 }
 

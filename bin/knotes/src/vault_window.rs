@@ -1667,9 +1667,12 @@ impl VaultWindow {
         let state = self.state.borrow();
         self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
         drop(state);
-        let pdf = self.pdf_path.borrow().clone();
-        let name = self.open_path().map(|p| knotes_app::title_of(&p).to_owned()).or(pdf).unwrap_or_default();
-        self.toolbar_delegate.set_note_title(&name);
+        // A note's name, renamed in place; a PDF's file name, without its folder.
+        match (self.open_path(), self.pdf_path.borrow().as_deref()) {
+            (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true),
+            (None, Some(pdf)) => self.toolbar_delegate.set_note_title(pdf.rsplit('/').next().unwrap_or(pdf), false),
+            (None, None) => self.toolbar_delegate.set_note_title("", false),
+        }
     }
 
     /// The open note and history availability, for probe mode.

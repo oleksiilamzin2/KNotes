@@ -2153,3 +2153,14 @@ fn a_pdf_viewer_made_narrower_keeps_the_page_at_the_top() {
     let (_vault, out) = probe_images(&[("a.md", "See [[long.pdf#page=15]] here\n\nend")], &[("long.pdf", &long)], &env);
     assert!(out.contains("pdf-top-now: 15\n"), "{out}");
 }
+
+#[test]
+fn the_toolbar_names_a_pdf_open_by_its_file_name_without_its_folder() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "See [[paper.pdf]] here\n\nend").unwrap();
+    std::fs::create_dir_all(vault.path().join(".knotes/attachments")).unwrap();
+    std::fs::write(vault.path().join(".knotes/attachments/paper.pdf"), PDF).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
+    assert!(out.contains("pdf-view: .knotes/attachments/paper.pdf 1/3"), "{out}");
+    assert!(out.contains("note-title: paper.pdf (fixed)\n"), "not renamed from the toolbar: {out}");
+}
