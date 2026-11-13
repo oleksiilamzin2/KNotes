@@ -246,6 +246,11 @@ pub fn new_note_requested() -> bool {
     true
 }
 
+/// `KNOTES_PROBE_ACTION=rename=New name`: the open note renamed to that name.
+pub fn rename_requested() -> Option<String> {
+    std::env::var("KNOTES_PROBE_ACTION").ok()?.strip_prefix("rename=").map(str::to_owned)
+}
+
 /// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
 pub fn save_requested() {
     if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {

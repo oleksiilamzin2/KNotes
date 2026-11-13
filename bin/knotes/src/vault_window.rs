@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{
+use knotes_app::{Moves, Relinks, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
-use knotes_core::{FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
@@ -33,6 +34,7 @@ use crate::collapse_observer::CollapseObserver;
 use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
+use crate::rename_dialog::{self, LinkUpdate};
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view::{self, NoteTextView};
 use crate::search_bar::SearchBar;
@@ -59,6 +61,8 @@ struct State {
     reader: Option<SqliteIndex>,
     /// Link resolution of the last snapshot (ADR 0013); `None` until the first one.
     links: Option<Arc<LinkTargets>>,
+    /// Every vault file of the last snapshot, to resolve links as they will be after a move.
+    catalog: Arc<Vec<CatalogEntry>>,
     /// Title search of the last snapshot, for link completion.
     titles: Option<Arc<TitleIndex>>,
     /// Folders or tags under "All notes".
@@ -163,6 +167,7 @@ impl VaultWindow {
             history: History::default(),
             reader: None,
             links: None,
+            catalog: Arc::new(Vec::new()),
             titles: None,
             sidebar_mode: SidebarMode::Folders,
             search: String::new(),
@@ -369,6 +374,7 @@ impl VaultWindow {
             state.folders = Arc::clone(&snapshot.folders);
             state.tags = Arc::clone(&snapshot.tags);
             state.untagged = snapshot.untagged;
+            state.catalog = Arc::clone(&snapshot.catalog);
         }
         let new_links = {
             let mut state = self.state.borrow_mut();
@@ -420,6 +426,9 @@ impl VaultWindow {
             }
             probe::save_requested();
             probe::write_requested(self);
+            if let (Some(name), Some(open)) = (probe::rename_requested(), self.open_path()) {
+                self.rename_note(&open, &name);
+            }
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -731,6 +740,89 @@ impl VaultWindow {
     pub fn save(&self) {
         self.write_edits();
         self.name_new_note(false);
+    }
+
+    /// Renames the note at `old` to `name` in its folder (a number added when the name is
+    /// taken), with the links to it (ADR 0019). False when nothing moved.
+    pub fn rename_note(&self, old: &str, name: &str) -> bool {
+        let (Some(stem), Some(vault)) = (note_file_stem(name), self.vault()) else { return false };
+        let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
+        // A change of case only is a rename of the same file.
+        let same = |p: &str| p.to_lowercase() == old.to_lowercase();
+        let new = unique_note_path(folder, &stem, |p| !same(p) && vault.join(p).exists());
+        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
+    }
+
+    /// Moves notes (new path by old), asking first when links would change and rewriting them
+    /// on yes (ADR 0019). The open note is saved first and follows its file. False when
+    /// nothing moved.
+    pub fn move_notes(&self, moves: Moves) -> bool {
+        let Some(vault_dir) = self.vault() else { return false };
+        self.write_edits();
+        let plan = self.relinks(&moves);
+        let update = plan.links == 0
+            || match rename_dialog::ask_link_update(objc2::MainThreadOnly::mtm(&*self.window), plan.links, plan.edits.len()) {
+                LinkUpdate::Update => true,
+                LinkUpdate::Keep => false,
+                LinkUpdate::Cancel => return false,
+            };
+        let vault = FsVault::new(&vault_dir);
+        let mut moved = Moves::new();
+        for (from, to) in &moves {
+            match vault.move_note(from, to) {
+                Ok(()) => {
+                    moved.insert(from.clone(), to.clone());
+                }
+                Err(e) => eprintln!("knotes: cannot move {from} to {to}: {e}"),
+            }
+        }
+        if moved.is_empty() {
+            return false;
+        }
+        let failed = |path: &str| moves.iter().any(|(from, to)| to == path && !moved.contains_key(from));
+        let edits: Vec<&(String, String)> = if update { plan.edits.iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
+        for (path, text) in &edits {
+            if let Err(e) = vault.write_note(path, text) {
+                eprintln!("knotes: cannot update links in {path}: {e}");
+            }
+        }
+        for (from, to) in &moved {
+            self.state.borrow_mut().history.rename(from, to);
+        }
+        if let Some(open) = self.open_path() {
+            let path = moved.get(&open).cloned().unwrap_or(open);
+            let edited = edits.iter().find(|(p, _)| *p == path).map(|(_, text)| text.clone());
+            if let Some(editing) = self.editing.borrow_mut().as_mut() {
+                editing.path = path.clone();
+                if let Some(text) = &edited {
+                    editing.document.saved(text);
+                }
+            }
+            self.live_preview.set_path(&path);
+            if let Some(text) = edited {
+                let cursor = self.note_text.selectedRange();
+                self.live_preview.show(&self.note_text, &path, &text);
+                let end = self.note_text.string().length();
+                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
+            }
+        }
+        self.update_navigation();
+        true
+    }
+
+    /// The link edits `moves` call for, worked out from the index and the files.
+    fn relinks(&self, moves: &Moves) -> Relinks {
+        let mut state = self.state.borrow_mut();
+        self.ensure_reader(&mut state);
+        let (Some(reader), Some(before), Some(vault)) = (state.reader.as_ref(), state.links.clone(), state.vault.clone()) else {
+            return Relinks::default();
+        };
+        let after = LinkTargets::new(state.catalog.iter().map(|e| moves.get(&e.path).map_or(e.path.as_str(), String::as_str)));
+        let files = FsVault::new(&vault);
+        plan_relinks(moves, reader, &|p| files.read_text(p).ok(), &MarkdownParser::new(), &*before, &after).unwrap_or_else(|e| {
+            eprintln!("knotes: cannot plan link updates: {e}");
+            Relinks::default()
+        })
     }
 
     /// Renames a new note's file after its first line, once (ADR 0011).

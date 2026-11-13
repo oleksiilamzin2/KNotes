@@ -929,3 +929,31 @@ fn a_task_circle_is_centred_on_capital_letters_higher_than_a_bullet_dot() {
     let (task_centre, dot_centre_a_line_up) = (task.1 + task.3 / 2.0, dot.1 + dot.3 / 2.0 - 18.0);
     assert!(dot_centre_a_line_up - task_centre > 1.0, "the circle sits higher in its line: {task:?} {dot:?}");
 }
+
+const RENAME_VAULT: [(&str, &str); 3] = [("Old.md", "# Old\n\ntext"), ("a.md", "see [[Old]] and [[Old#Part|p]]"), ("b.md", "[x](Old.md)")];
+
+fn renamed(answer: &str) -> (tempfile::TempDir, String) {
+    probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "rename=New"), ("KNOTES_PROBE_ANSWER", answer)])
+}
+
+#[test]
+fn renaming_a_note_asks_and_then_moves_it_and_updates_the_links_to_it() {
+    let (vault, out) = renamed("update");
+    assert!(out.contains("rename-question: 3 2"), "{out}");
+    let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
+    assert_eq!(read("Old.md"), None, "{out}");
+    assert_eq!(read("New.md").as_deref(), Some("# Old\n\ntext"));
+    assert_eq!(read("a.md").as_deref(), Some("see [[New]] and [[New#Part|p]]"));
+    assert_eq!(read("b.md").as_deref(), Some("[x](New.md)"));
+    assert!(out.contains("note: New.md"), "the open note follows its file: {out}");
+}
+
+#[test]
+fn a_rename_can_keep_the_links_or_be_cancelled() {
+    let (vault, out) = renamed("keep");
+    let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
+    assert!(read("New.md").is_some() && read("a.md").as_deref() == Some("see [[Old]] and [[Old#Part|p]]"), "{out}");
+    let (vault, out) = renamed("cancel");
+    let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
+    assert!(read("Old.md").is_some() && read("New.md").is_none(), "{out}");
+}

@@ -19,6 +19,7 @@ knotes-app.workspace = true
 knotes-core.workspace = true
 knotes-session.workspace = true
 knotes-index.workspace = true
+knotes-md.workspace = true
 knotes-editor.workspace = true
 knotes-vault.workspace = true
 knotes-search.workspace = true

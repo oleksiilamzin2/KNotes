@@ -278,6 +278,7 @@ dependencies = [
  "knotes-core",
  "knotes-editor",
  "knotes-index",
+ "knotes-md",
  "knotes-search",
  "knotes-session",
  "knotes-synth",

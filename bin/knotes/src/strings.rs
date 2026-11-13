@@ -59,3 +59,16 @@ pub const SEARCH: &str = "Пошук";
 /// Search modes over the note list (Obsidian's `file:` and `content:`).
 pub const SEARCH_FILES: &str = "Файли";
 pub const SEARCH_CONTENT: &str = "Вміст";
+/// Asked before a rename changes links in other notes (ADR 0019).
+pub const RENAME_UPDATE: &str = "Оновити";
+pub const RENAME_KEEP: &str = "Не оновлювати";
+pub const CANCEL: &str = "Скасувати";
+pub const RENAME_KEEP_EXPLAINED: &str = "Без оновлення ці посилання перестануть вести до нотатки.";
+
+/// "Оновити 3 посилання у 2 нотатках?"
+pub fn rename_question(links: usize, notes: usize) -> String {
+    let (l, n) = (links as u64, notes as u64);
+    let links_word = knotes_app::plural_uk(l, "посилання", "посилання", "посилань");
+    let notes_word = knotes_app::plural_uk(n, "нотатці", "нотатках", "нотатках");
+    format!("Оновити {links} {links_word} у {notes} {notes_word}?")
+}
