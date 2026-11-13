@@ -519,7 +519,7 @@ impl VaultWindow {
         if words.is_empty() || mode == SearchMode::Files {
             return;
         }
-        let found = knotes_app::found_words(text, &words);
+        let found = knotes_app::found_words(text, words);
         let bounds: Vec<usize> = found.iter().flat_map(|r| [r.start, r.end]).collect();
         let units = utf16_offsets(text, &bounds);
         let ranges: Vec<(usize, usize)> = units.chunks(2).map(|p| (p[0], p[1])).collect();
