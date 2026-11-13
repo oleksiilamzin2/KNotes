@@ -1446,3 +1446,15 @@ fn spelling_marks_stay_off_an_image_s_hidden_source() {
     );
     assert!(out.contains("spelling: kept dropped"), "{out}");
 }
+
+#[test]
+fn an_image_on_the_last_line_shows_right_below_its_source() {
+    let notes = [("a.md", "Before\n\n![[wide.png]]\n")];
+    let shown = |cursor: &str| {
+        let (_vault, out) = probe_images(&notes, &[("wide.png", WIDE)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", cursor)]);
+        images(&out)[0].clone()
+    };
+    let (away, near) = (shown("0"), shown("10"));
+    assert_eq!(near.4, "preview");
+    assert!(near.1 - away.1 < 30.0, "below the source's line, not the empty line after it: {away:?} {near:?}");
+}

@@ -203,8 +203,13 @@ impl PreviewFragment {
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } => return None,
         };
-        let line: Retained<NSTextLineFragment> =
-            if below { lines.iter().last()? } else { lines.iter().find(|l| contains(l, offset)).or_else(|| lines.iter().last())? };
+        // A preview goes below the line its source ends on: the note's last paragraph also
+        // holds the empty line after its final line break, below the room kept for the preview.
+        let line: Retained<NSTextLineFragment> = if below {
+            lines.iter().filter(|l| l.characterRange().location <= offset).last()?
+        } else {
+            lines.iter().find(|l| contains(l, offset)).or_else(|| lines.iter().last())?
+        };
         let bounds = line.typographicBounds();
         let x = bounds.origin.x + line.locationForCharacterAtIndex(offset as isize).x;
         let baseline = bounds.origin.y + line.glyphOrigin().y;
