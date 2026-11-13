@@ -1899,11 +1899,14 @@ fn pdf_selection(out: &str) -> String {
 /// (`KNOTES_PROBE_PDF_MOUSE`: `page:x,y>page:x,y` a drag, `page:x,y*2` a double click, `^` before
 /// a click with Shift; x and y as fractions of the page).
 fn pdf_mouse(gestures: &str) -> String {
-    let (_vault, out) = probe_images(
-        &[("a.md", "See [[doc.pdf]] here\n\nend")],
-        &[("doc.pdf", PDF)],
-        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_MOUSE", gestures)],
-    );
+    pdf_mouse_with(gestures, &[])
+}
+
+/// As `pdf_mouse`, with more probe settings.
+fn pdf_mouse_with(gestures: &str, more: &[(&str, &str)]) -> String {
+    let mut env = vec![("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_MOUSE", gestures)];
+    env.extend_from_slice(more);
+    let (_vault, out) = probe_images(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", PDF)], &env);
     out
 }
 
@@ -1930,4 +1933,14 @@ fn a_double_click_selects_a_word_and_a_triple_click_a_line_in_a_pdf() {
 fn a_click_in_a_pdf_clears_the_selection_and_shift_click_extends_it() {
     assert_eq!(pdf_selection(&pdf_mouse("1:0.1,0.5>1:0.9,0.5;1:0.3,0.5")), "");
     assert_eq!(pdf_selection(&pdf_mouse("1:0.1,0.5;^2:0.47,0.5")), "Page 1⏎Page");
+}
+
+#[test]
+fn the_selected_pdf_text_is_copied_from_the_edit_menu_or_the_context_menu() {
+    // Copied to a pasteboard of the probe's own, never the user's.
+    let out = pdf_mouse_with("1:0.1,0.5>2:0.47,0.5", &[("KNOTES_PROBE_PDF_COPY", "1")]);
+    assert!(out.contains("pdf-copied: Page 1⏎Page\n"), "{out}");
+    assert!(out.contains("copy-menu: on\n") && out.contains("pdf-menu: Копіювати\n"), "{out}");
+    let out = pdf_mouse_with("1:0.3,0.5", &[("KNOTES_PROBE_PDF_COPY", "1")]);
+    assert!(out.contains("copy-menu: off\n") && out.contains("pdf-menu: none\n"), "nothing selected: {out}");
 }

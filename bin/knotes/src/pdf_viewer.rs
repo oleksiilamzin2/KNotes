@@ -23,10 +23,12 @@ use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use knotes_pdf::PageText;
 use objc2_app_kit::{
-    NSAffineTransformNSAppKitAdditions, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSRectFillUsingOperation, NSResponder,
-    NSScrollView, NSScrollViewDidEndLiveMagnifyNotification, NSView, NSViewBoundsDidChangeNotification,
+    NSAffineTransformNSAppKitAdditions, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSMenu, NSMenuItem, NSPasteboard,
+    NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder, NSScrollView, NSScrollViewDidEndLiveMagnifyNotification, NSView, NSViewBoundsDidChangeNotification,
 };
-use objc2_foundation::{NSAffineTransform, NSNotification, NSNotificationCenter, NSObject, NSPoint, NSRect, NSSize, NSZeroRect};
+use objc2_foundation::{NSAffineTransform, NSNotification, NSNotificationCenter, NSObject, NSPoint, NSRect, NSSize, NSString, NSZeroRect};
+
+use crate::strings;
 
 use crate::image_loader::{self, DeferredImage};
 
@@ -107,6 +109,32 @@ define_class!(
             if let (Some((anchor, _)), Some(head)) = (ivars.selection.get(), self.spot_at(event)) {
                 ivars.selection.set(Some((anchor, head)));
                 self.selection_changed();
+            }
+        }
+
+        /// Edit > Copy (Cmd+C).
+        #[unsafe(method(copy:))]
+        fn copy(&self, _sender: Option<&AnyObject>) {
+            self.copy_to(&NSPasteboard::generalPasteboard());
+        }
+
+        /// Copy is on with text selected.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            item.action() != Some(sel!(copy:)) || self.ordered().is_some()
+        }
+
+        /// A right click with text selected offers to copy it.
+        #[unsafe(method_id(menuForEvent:))]
+        fn menu_for_event(&self, _event: &NSEvent) -> Option<Retained<NSMenu>> {
+            if self.ordered().is_none() {
+                None
+            } else {
+                let menu = NSMenu::new(self.mtm());
+                // SAFETY: an item sent up the responder chain; the title and key are strings.
+                let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(self.mtm()), &NSString::from_str(strings::COPY), Some(sel!(copy:)), &NSString::new()) };
+                menu.addItem(&item);
+                Some(menu)
             }
         }
 
@@ -328,6 +356,16 @@ impl PdfPages {
         (first..=last).filter_map(|page| Some(self.text_of(page)?.text(self.selected_on(page)?))).collect::<Vec<_>>().join("\n")
     }
 
+    /// Writes the selected text to `pasteboard`; nothing when none is.
+    fn copy_to(&self, pasteboard: &NSPasteboard) {
+        let text = self.selected_text();
+        if !text.is_empty() {
+            pasteboard.clearContents();
+            // SAFETY: AppKit's pasteboard type constant lives for the whole process.
+            pasteboard.setString_forType(&NSString::from_str(&text), unsafe { NSPasteboardTypeString });
+        }
+    }
+
     /// Page `page`'s text, read from the PDF the first time it is asked for.
     fn text_of(&self, page: usize) -> Option<Rc<PageText>> {
         if let Some(text) = self.ivars().texts.borrow().get(&page) {
@@ -424,6 +462,11 @@ impl PdfViewer {
     /// The selected text (probe mode).
     pub fn selected_text(&self) -> String {
         self.pages.selected_text()
+    }
+
+    /// Writes the selected text to `pasteboard` (probe mode: one of its own).
+    pub fn copy_to(&self, pasteboard: &NSPasteboard) {
+        self.pages.copy_to(pasteboard);
     }
 
     /// The view taking the mouse (probe mode).

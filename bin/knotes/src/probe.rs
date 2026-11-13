@@ -296,6 +296,38 @@ pub fn pdf_mouse_requested(viewer: &crate::pdf_viewer::PdfViewer) {
     }
 }
 
+/// `KNOTES_PROBE_PDF_COPY=1`: the PDF viewer's selection copied to a pasteboard of the probe's
+/// own, never the user's; then whether Edit > Copy is on and what a right click on the first
+/// page offers.
+pub fn pdf_copy_requested(viewer: &crate::pdf_viewer::PdfViewer) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSPasteboard, NSPasteboardTypeString};
+    if std::env::var("KNOTES_PROBE_PDF_COPY").is_err() {
+        return;
+    }
+    let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+    pasteboard.clearContents();
+    viewer.copy_to(&pasteboard);
+    // SAFETY: AppKit's pasteboard type constant lives for the whole process.
+    let copied = pasteboard.stringForType(unsafe { NSPasteboardTypeString }).map(|s| s.to_string()).unwrap_or_default();
+    println!("pdf-copied: {}", copied.replace('\n', "⏎"));
+    let view = viewer.view();
+    let (Some(window), Some(at)) = (view.window(), viewer.window_point(0, 0.5, 0.5)) else { return };
+    // As AppKit validates Edit > Copy for the key window (the probe's window is not key): the
+    // window's first responder takes `copy:` and turns the item on.
+    let edit = NSApplication::sharedApplication(view.mtm()).mainMenu().and_then(|bar| bar.itemArray().iter().nth(2)).and_then(|i| i.submenu());
+    if let (Some(copy), Some(responder)) = (edit.and_then(|m| m.itemArray().iter().find(|i| i.action() == Some(objc2::sel!(copy:)))), window.firstResponder()) {
+        let takes = objc2_foundation::NSObjectProtocol::respondsToSelector(&*responder, objc2::sel!(copy:)) && objc2_foundation::NSObjectProtocol::respondsToSelector(&*responder, objc2::sel!(validateMenuItem:));
+        // SAFETY: the responder implements `validateMenuItem:`, checked above.
+        let on = takes && unsafe { objc2::msg_send![&*responder, validateMenuItem: &*copy] };
+        println!("copy-menu: {}", if on { "on" } else { "off" });
+    }
+    let click = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::RightMouseDown, at, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 1, 1.0,
+    );
+    let titles: Vec<String> = click.and_then(|c| view.menuForEvent(&c)).map(|m| m.itemArray().iter().map(|i| i.title().to_string()).collect()).unwrap_or_default();
+    println!("pdf-menu: {}", if titles.is_empty() { "none".to_owned() } else { titles.join(", ") });
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };

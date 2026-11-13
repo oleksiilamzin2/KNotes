@@ -689,6 +689,7 @@ impl VaultWindow {
             probe::mouse_drag_requested(&self.note_text);
             if let Some(viewer) = self.pdf_view.borrow().as_ref() {
                 probe::pdf_mouse_requested(viewer);
+                probe::pdf_copy_requested(viewer);
             }
             if let Some(page) = std::env::var("KNOTES_PROBE_PDF_GO").ok().and_then(|p| p.parse().ok()) {
                 self.window.displayIfNeeded();
