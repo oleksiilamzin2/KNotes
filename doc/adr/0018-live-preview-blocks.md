@@ -25,7 +25,9 @@ the reference (ADR 0011), with one change the owner asked for.
 - Code blocks: one background across the column, rounded at the block's ends, the code
   inset in it; fence lines fold to padding unless the cursor is in the block.
 - Links to websites (owner's request, as Obsidian marks them): an arrow ↗ in the link colour
-  after the link's text while its `](url)` is hidden; links inside the vault have none.
+  after the link's text while its `](url)` is hidden; links inside the vault have none. Bare
+  web addresses (`https://…` in prose) are links to websites too, with the arrow; trailing
+  punctuation and an unmatched `)` are not part of them.
 - All of these are drawn by the paragraph's layout fragment, as formulas are, in the room
   the hidden source keeps (kerning, paragraph styles); attributes are composed in memory
   first (ADR 0012).

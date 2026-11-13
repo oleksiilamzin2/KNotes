@@ -217,3 +217,10 @@ fn an_unclosed_or_indented_code_block_has_no_closing_fence() {
     assert!(fences(src).is_empty());
     assert_eq!(highlight(src).code_blocks.into_iter().map(|r| &src[r]).collect::<Vec<_>>(), ["indented code"]);
 }
+
+#[test]
+fn bare_urls_are_styled_as_links_without_markup() {
+    let src = "T\n\nsee https://example.com/a now";
+    assert_eq!(styles(src), [(Style::Link, "https://example.com/a")]);
+    assert!(markup(src).is_empty());
+}

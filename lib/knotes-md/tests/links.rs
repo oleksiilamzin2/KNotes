@@ -128,3 +128,22 @@ fn image_inside_link_gives_two_links() {
     targets.sort();
     assert_eq!(targets, [("Home.md", false), ("logo.png", true)]);
 }
+
+fn external(source: &str) -> Vec<String> {
+    links(source).into_iter().filter(|l| l.kind == LinkKind::External).map(|l| l.target).collect()
+}
+
+#[test]
+fn bare_urls_in_prose_are_links_to_websites() {
+    assert_eq!(external("see https://example.com/a?b=1, and http://x.y."), ["https://example.com/a?b=1", "http://x.y"]);
+    assert_eq!(external("(see https://en.wikipedia.org/wiki/Rust_(language)) and more"), ["https://en.wikipedia.org/wiki/Rust_(language)"]);
+    let src = "go to https://example.com now";
+    let l = one(src);
+    assert_eq!((l.kind, src_of(src, l.span), l.display.as_deref()), (LinkKind::External, "https://example.com", None));
+}
+
+#[test]
+fn urls_in_code_or_in_links_are_not_bare_links() {
+    assert!(external("`https://in.code` and\n\n```\nhttps://in.block\n```").is_empty());
+    assert_eq!(external("[text](https://x.y) and <https://a.b>"), ["https://x.y", "https://a.b"], "each link once");
+}

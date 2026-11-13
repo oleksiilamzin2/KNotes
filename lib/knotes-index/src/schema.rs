@@ -1,7 +1,8 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
 /// 11: tags and links in a note's first line count again (version 10 left them out).
-pub(crate) const VERSION: i64 = 11;
+/// 12: bare web addresses are links to websites.
+pub(crate) const VERSION: i64 = 12;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;

@@ -339,8 +339,8 @@ impl LivePreview {
         // A link to a website keeps room after its text for the arrow the fragment draws, while
         // its `](url)` is hidden.
         let arrow = palette.kern(EXTERNAL_ROOM);
-        for close in external_link_ends(&styled, region, revealed) {
-            canvas.paint(close..close + 1, |p| p.kern = arrow);
+        for end in external_link_ends(&styled, region, revealed) {
+            canvas.paint(end.kern_at..end.kern_at + 1, |p| p.kern = arrow);
         }
         // A done task's text is muted, bold or italic inside it too (links keep their colour).
         for run in styled.runs.iter().filter(|r| r.style == Style::Done && meets(&r.range)) {
@@ -836,8 +836,20 @@ impl LivePreview {
             marks.push(Mark::Formula { offset: at - from, image, anchor });
         }
         let centre_x = self.ivars().look.body.xHeight() / 2.0;
-        for close in external_link_ends(&styled, (from, to), self.ivars().revealed.get()) {
-            marks.push(Mark::External { offset: close - from, centre: centre_x + 1.5 });
+        let text = storage.string();
+        for end in external_link_ends(&styled, (from, to), self.ivars().revealed.get()) {
+            // At the hidden `]`, whose own room follows it; or where a bare address ends, whose
+            // location sits halfway into the room kerned after the address's last character
+            // (where a caret would go) — unless the line ends there and the kerning is dropped.
+            let (offset, shift) = if end.bare {
+                let line_end = end.kern_at + 1 >= text.length() || matches!(text.characterAtIndex(end.kern_at + 1), 0x0a | 0x0d);
+                (end.kern_at + 1, if line_end { 3.0 } else { 3.0 - EXTERNAL_ROOM / 2.0 })
+            } else {
+                (end.kern_at, 3.0)
+            };
+            if offset >= from && offset <= to {
+                marks.push(Mark::External { offset: offset - from, centre: centre_x + 1.5, shift });
+            }
         }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
         if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
@@ -1128,9 +1140,16 @@ fn paragraph(storage: &NSTextStorage, selection: NSRange) -> (usize, usize) {
     (p.location, p.location + p.length)
 }
 
-/// Where the hidden `](url)` of each link to a website meeting `region` starts (outside the
-/// `revealed` paragraph, whose source shows).
-fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usize, usize)) -> Vec<usize> {
+/// Where the room for a website link's arrow is kept: the first character of its hidden
+/// `](url)`, or the last of a bare address (`bare`).
+struct ArrowRoom {
+    kern_at: usize,
+    bare: bool,
+}
+
+/// The arrow rooms of the links to websites meeting `region`, outside the `revealed`
+/// paragraph (whose source shows).
+fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usize, usize)) -> Vec<ArrowRoom> {
     let first = styled.links.partition_point(|l| l.range.end <= region.0);
     styled.links[first..]
         .iter()
@@ -1138,9 +1157,16 @@ fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usi
         .filter(|l| l.link.kind == LinkKind::External && !overlaps(&l.range, revealed))
         .filter_map(|l| {
             let after = styled.markup.partition_point(|m| m.start <= l.range.start);
-            styled.markup[after..].iter().take_while(|m| m.start < l.range.end).find(|m| m.end == l.range.end).map(|m| m.start)
+            let close = styled.markup[after..].iter().take_while(|m| m.start < l.range.end).find(|m| m.end == l.range.end);
+            let opened = styled.markup[..after].last().is_some_and(|m| m.start == l.range.start);
+            match close {
+                Some(m) => Some(ArrowRoom { kern_at: m.start, bare: false }),
+                // No markup at either end: a bare address.
+                None if !opened => Some(ArrowRoom { kern_at: l.range.end - 1, bare: true }),
+                None => None,
+            }
         })
-        .filter(|&close| close >= region.0 && close < region.1)
+        .filter(|room| room.kern_at >= region.0 && room.kern_at < region.1)
         .collect()
 }
 

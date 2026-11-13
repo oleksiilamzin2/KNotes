@@ -9,6 +9,7 @@ use crate::frontmatter::parse_frontmatter;
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
 use crate::snippet::snippet;
 use crate::tag_scan::scan_tags;
+use crate::url_scan::scan_urls;
 
 /// Obsidian-flavoured Markdown: wikilinks, math, YAML frontmatter, GFM tables, alerts.
 pub const OPTIONS: Options = Options::ENABLE_WIKILINKS
@@ -162,6 +163,7 @@ impl Collector<'_> {
     fn flush_run(&mut self) {
         if let Some(run) = self.run.take() {
             scan_tags(self.source, run.clone(), &mut self.note.tags);
+            scan_urls(self.source, run.clone(), &mut self.note.links);
             scan_anchors(self.source, run, &mut self.note.anchors);
         }
     }

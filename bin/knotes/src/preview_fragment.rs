@@ -41,8 +41,9 @@ pub enum Mark {
     /// A code block's background across the column behind the paragraph, its corners rounded
     /// at the block's top and bottom.
     CodeBackground { top: bool, bottom: bool },
-    /// An arrow after a link to a website, in the room of its hidden `](url)`.
-    External { offset: usize, centre: f64 },
+    /// An arrow after a link to a website, `shift` points from the location of character
+    /// `offset` (in the room kerning keeps there).
+    External { offset: usize, centre: f64, shift: f64 },
 }
 
 /// Space between a display formula's source and its preview.
@@ -183,9 +184,9 @@ impl PreviewFragment {
             Mark::Task { centre, .. } => {
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - TASK_BOX / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
             }
-            Mark::External { centre, .. } => {
+            Mark::External { centre, shift, .. } => {
                 let half = EXTERNAL_ARROW / 2.0;
-                NSRect::new(NSPoint::new(x + 3.0, baseline - centre - half), NSSize::new(EXTERNAL_ARROW, EXTERNAL_ARROW))
+                NSRect::new(NSPoint::new(x + shift, baseline - centre - half), NSSize::new(EXTERNAL_ARROW, EXTERNAL_ARROW))
             }
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
         };

@@ -1095,3 +1095,12 @@ fn links_to_websites_are_marked_with_an_arrow_and_links_inside_the_vault_are_not
     let (_vault, out) = probe_notes(&[("a.md", note), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "5")]);
     assert!(decorations(&out, "external").is_empty(), "the source shows in the cursor's line: {out}");
 }
+
+#[test]
+fn a_bare_web_address_is_a_link_with_an_arrow() {
+    let note = "T\n\nsee https://example.com here\n\nends with https://x.y";
+    let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_HOVER", "10")]);
+    assert!(editor_runs(&out).contains("[link]https://example.com|"), "{out}");
+    assert_eq!(decorations(&out, "external").len(), 2, "after the address, mid-line or at the end of one: {out}");
+    assert!(out.contains("hover: hand"), "{out}");
+}

@@ -7,6 +7,7 @@ mod link_target;
 mod markdown_parser;
 mod snippet;
 mod tag_scan;
+mod url_scan;
 
 pub use markdown_parser::{MarkdownParser, OPTIONS};
 pub use snippet::snippet;

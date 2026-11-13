@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use knotes_core::{Link, NoteParser};
+use knotes_core::{Link, LinkKind, NoteParser};
 use knotes_md::{MarkdownParser, OPTIONS};
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
@@ -224,6 +224,10 @@ pub fn highlight(source: &str) -> Highlight {
         h.runs.push(Run { range: tag.span.start as usize..tag.span.end as usize, style: Style::Tag });
     }
     h.links = parsed.links.into_iter().map(|link| LinkRun { range: link.span.start as usize..link.span.end as usize, link }).collect();
+    // A bare web address is a link with no markup: its text is the link.
+    for link in h.links.iter().filter(|l| l.link.kind == LinkKind::External && !source[l.range.clone()].starts_with(['[', '<', '!'])) {
+        h.runs.push(Run { range: link.range.clone(), style: Style::Link });
+    }
     h.links.sort_by_key(|l| l.range.start);
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
