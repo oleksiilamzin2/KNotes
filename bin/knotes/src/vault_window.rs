@@ -26,7 +26,7 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSView, NSViewController, NSWindow, NSWorkspace};
+use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextField, NSTextInputClient, NSView, NSViewController, NSWindow, NSWorkspace};
 use crate::pdf_viewer::PdfViewer;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSPoint, NSRange, NSString, NSURL};
 use objc2_app_kit::NSTextElementProvider;
@@ -112,6 +112,8 @@ pub struct VaultWindow {
     pub chat: ChatView,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
+    /// Said in the note column while no document is open.
+    no_document: Retained<NSTextField>,
     /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
     tabs: RefCell<Tabs>,
     tabs_restored: Cell<bool>,
@@ -218,6 +220,13 @@ impl VaultWindow {
         let note_vc = NSViewController::new(mtm);
         let find_bar = FindBar::new(mtm, note_scroll.clone());
         note_vc.setView(&find_bar.column);
+        let no_document = NSTextField::labelWithString(&NSString::from_str(strings::NO_DOCUMENT), mtm);
+        no_document.setFont(Some(&objc2_app_kit::NSFont::systemFontOfSize(15.0)));
+        no_document.setTextColor(Some(&objc2_app_kit::NSColor::tertiaryLabelColor()));
+        no_document.setTranslatesAutoresizingMaskIntoConstraints(false);
+        find_bar.column.addSubview(&no_document);
+        no_document.centerXAnchor().constraintEqualToAnchor(&find_bar.column.centerXAnchor()).setActive(true);
+        no_document.centerYAnchor().constraintEqualToAnchor(&find_bar.column.centerYAnchor()).setActive(true);
         let chat = chat_view::chat_view(mtm);
         let outline_panel = OutlinePanel::new(mtm);
         let panel = NSView::new(mtm);
@@ -276,6 +285,7 @@ impl VaultWindow {
             live_preview,
             chat,
             outline_panel,
+            no_document,
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
             new_tab_next: Cell::new(false),
@@ -333,6 +343,7 @@ impl VaultWindow {
         let toolbar = this.toolbar_delegate.clone();
         *this.panel_observer.borrow_mut() = Some(CollapseObserver::watch(mtm, &this.panel_item, move |collapsed| toolbar.set_panel_shown(!collapsed)));
         *this.this.borrow_mut() = Rc::downgrade(&this);
+        this.show_note_column();
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.outline_panel.on_choose(move |heading| {
             if let Some(window) = weak.upgrade() {
@@ -1031,6 +1042,28 @@ impl VaultWindow {
         }
     }
 
+    /// The note column as it should be: the note, the PDF (its viewer covers it), or, with no
+    /// document open, a word saying so and no text view to type into (typed text went nowhere).
+    fn show_note_column(&self) {
+        let empty = self.editing.borrow().is_none() && self.pdf_path.borrow().is_none();
+        self.no_document.setHidden(!empty);
+        self.note_text.setEditable(!empty);
+        if let Some(scroll) = self.note_text.enclosingScrollView() {
+            scroll.setHidden(empty || self.pdf_path.borrow().is_some());
+        }
+    }
+
+    /// `empty: …`, `note (editable)` or `pdf`: what the note column shows (probe mode).
+    pub fn describe_note_column(&self) -> String {
+        if !self.no_document.isHidden() {
+            return format!("empty: {}", self.no_document.stringValue());
+        }
+        if self.pdf_path.borrow().is_some() {
+            return "pdf".to_owned();
+        }
+        format!("note ({})", if self.note_text.isEditable() { "editable" } else { "read only" })
+    }
+
     /// The note column empty: no document open.
     fn show_nothing(&self) {
         self.leave();
@@ -1041,6 +1074,7 @@ impl VaultWindow {
         *self.editing.borrow_mut() = None;
         self.show_pdf(None);
         self.live_preview.show(&self.note_text, "", "");
+        self.show_note_column();
         self.refresh_outline();
         self.update_navigation();
     }
@@ -1141,6 +1175,7 @@ impl VaultWindow {
             state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(path).ok()).unwrap_or_default()
         };
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
+        self.show_note_column();
         self.live_preview.show(&self.note_text, path, &text);
         // Where it was when its tab was left; words found by a search, below, win.
         if let Some(place) = self.show_tab(path) {
@@ -1170,6 +1205,7 @@ impl VaultWindow {
         }
         *self.editing.borrow_mut() = None;
         self.show_pdf(Some(path));
+        self.show_note_column();
         if let Some(viewer) = self.pdf_view.borrow().as_ref() {
             // In its place in the window first, so the jump lands where it stays.
             self.window.layoutIfNeeded();

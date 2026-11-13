@@ -1211,6 +1211,7 @@ fn report_note(window: &VaultWindow) {
         println!("pdf-drawn: {}", window.pdf_drawn().join(" "));
     }
     println!("pdf-top: {}", window.pdf_top_page().map(|p| p.to_string()).unwrap_or_default());
+    println!("note-column: {}", window.describe_note_column());
     println!("pdf-view: {}", window.describe_pdf());
     println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-texts-kept: {}", window.pdf_texts_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));

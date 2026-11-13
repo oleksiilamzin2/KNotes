@@ -2451,3 +2451,19 @@ fn the_pointer_over_a_code_block_shows_a_copy_button_that_copies_its_code() {
     let out = probe(("KNOTES_PROBE_CODE_COPY", &inside));
     assert!(out.contains("code-copied: let a = 1;⏎let b = 2;\n"), "{out}");
 }
+
+/// What the note column shows (`note-column:` line).
+fn note_column(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("note-column: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn with_no_document_open_the_note_column_says_so_and_takes_no_typing() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    assert_eq!(note_column(&probe_tabs(&vault, &home, &[])), "empty: Немає відкритого документа");
+    assert_eq!(note_column(&probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md")])), "note (editable)");
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
+    assert_eq!(note_column(&out), "empty: Немає відкритого документа", "the last tab closed: {out}");
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
+    assert_eq!(note_column(&out), "pdf");
+}
