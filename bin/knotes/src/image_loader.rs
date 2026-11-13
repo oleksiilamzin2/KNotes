@@ -7,7 +7,10 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use dispatch2::{DispatchQoS, DispatchQueue, GlobalQueueIdentifier, MainThreadBound};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+
+use dispatch2::{DispatchQoS, DispatchQueue, DispatchQueueAttr, DispatchRetained, GlobalQueueIdentifier, MainThreadBound};
 use objc2::MainThreadMarker;
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo, CGPDFBox, CGPDFDocument, CGPDFPage, kCGColorSpaceSRGB};
@@ -40,6 +43,16 @@ fn pdf_page(file: &Path, page: Option<u32>) -> Option<CFRetained<CGPDFPage>> {
     let count = CGPDFDocument::number_of_pages(Some(&document));
     let number = page.map_or(1, |p| p as usize);
     CGPDFDocument::page(Some(&document), if (1..=count).contains(&number) { number } else { 1 })
+}
+
+/// Each page's size in points (rotation applied) of the PDF in `file`; `None` when it does not
+/// open.
+pub fn pdf_page_sizes(file: &Path) -> Option<Vec<NSSize>> {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
+    // SAFETY: NSURL and CFURL are toll-free bridged.
+    let document = CGPDFDocument::with_url(Some(unsafe { &*(Retained::as_ptr(&url).cast::<CFURL>()) }))?;
+    let count = CGPDFDocument::number_of_pages(Some(&document));
+    Some((1..=count).filter_map(|n| CGPDFDocument::page(Some(&document), n)).map(|p| page_size(&p)).collect())
 }
 
 /// How many pages the PDF in `file` has.
@@ -102,7 +115,9 @@ fn decode(file: &Path, size: NSSize, page: Option<u32>) -> Option<CFRetained<CGI
     unsafe { source.thumbnail_at_index(0, Some(&*(Retained::as_ptr(&options).cast::<CFDictionary>()))) }
 }
 
-/// Page `page` of the PDF in `file` drawn `size` points large on white.
+/// Page `page` of the PDF in `file` drawn `size` points large on white. (An image over
+/// pixels of our own was tried: CoreGraphics then kept a decoded copy of each, and memory grew
+/// as the pages went by.)
 fn draw_pdf_page(file: &Path, size: NSSize, page: Option<u32>) -> Option<CFRetained<CGImage>> {
     let page = pdf_page(file, page)?;
     let (width, height) = ((size.width * SCALE).round().max(1.0), (size.height * SCALE).round().max(1.0));
@@ -143,11 +158,13 @@ pub struct DeferredImage {
     pub drawn_at: Cell<Option<f64>>,
     /// Called on the main thread once it is decoded, to draw it.
     on_ready: Box<dyn Fn()>,
+    /// Set when it is let go before it is decoded: the decoding not started yet is skipped.
+    cancelled: RefCell<Arc<AtomicBool>>,
 }
 
 impl DeferredImage {
     pub fn new(file: PathBuf, size: NSSize, page: Option<u32>, on_ready: impl Fn() + 'static) -> Self {
-        Self { file, size, page, state: RefCell::new(State::Empty), drawn_at: Cell::new(None), on_ready: Box::new(on_ready) }
+        Self { file, size, page, state: RefCell::new(State::Empty), drawn_at: Cell::new(None), on_ready: Box::new(on_ready), cancelled: RefCell::new(Arc::new(AtomicBool::new(false))) }
     }
 
     /// The image once decoded; until then `None`, and decoding starts.
@@ -167,8 +184,19 @@ impl DeferredImage {
         let Some(mtm) = MainThreadMarker::new() else { return };
         let this = MainThreadBound::new(Rc::downgrade(self), mtm);
         let (file, size, page) = (self.file.clone(), self.size, self.page);
-        DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(DispatchQoS::UserInitiated)).exec_async(move || {
-            let decoded = decode(&file, size, page);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        *self.cancelled.borrow_mut() = Arc::clone(&cancelled);
+        // A PDF's pages one after another (scrolling past many would draw them all at once);
+        // images side by side.
+        let queue = if is_pdf(&file) { pdf_queue() } else { DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(DispatchQoS::UserInitiated)) };
+        queue.exec_async(move || {
+            // Let go before its turn: not drawn at all.
+            if cancelled.load(Ordering::Relaxed) {
+                return;
+            }
+            // Its own pool: the drawing's temporary objects go with it, not when the queue's
+            // thread gets round to draining its pool.
+            let decoded = objc2::rc::autoreleasepool(|_| decode(&file, size, page));
             DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
                 let Some(this) = this.get(mtm).upgrade() else { return };
@@ -193,12 +221,19 @@ impl DeferredImage {
         if matches!(*state, State::Ready(_) | State::Loading) {
             *state = State::Empty;
         }
+        self.cancelled.borrow().store(true, Ordering::Relaxed);
     }
 
     /// Whether it is decoded (probe mode).
     pub fn is_decoded(&self) -> bool {
         matches!(*self.state.borrow(), State::Ready(_))
     }
+}
+
+/// The queue PDF pages are drawn on, one at a time.
+fn pdf_queue() -> DispatchRetained<DispatchQueue> {
+    static QUEUE: OnceLock<DispatchRetained<DispatchQueue>> = OnceLock::new();
+    QUEUE.get_or_init(|| DispatchQueue::new("knotes.pdf-pages", DispatchQueueAttr::SERIAL)).clone()
 }
 
 fn source(file: &Path) -> Option<CFRetained<CGImageSource>> {

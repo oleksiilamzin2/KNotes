@@ -27,7 +27,7 @@ use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
 use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
-use objc2_pdf_kit::{PDFDocument, PDFView};
+use crate::pdf_viewer::PdfViewer;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
@@ -94,8 +94,9 @@ pub struct VaultWindow {
     pub search_bar: SearchBar,
     /// Find in the open note (Cmd+F), over the note.
     pub find_bar: FindBar,
-    /// A PDF opened in place of the note (ADR 0022), and its vault path.
-    pdf_view: Retained<PDFView>,
+    /// A PDF opened in place of the note (ADR 0022), and its vault path. The view is made for
+    /// each PDF and let go with it: PDFKit keeps every page it drew while the view lives.
+    pdf_view: RefCell<Option<PdfViewer>>,
     pdf_path: RefCell<Option<String>>,
     /// The occurrences found in the note (UTF-16) and the one selected.
     find_matches: RefCell<Vec<(usize, usize)>>,
@@ -183,14 +184,6 @@ impl VaultWindow {
         let note_vc = NSViewController::new(mtm);
         let find_bar = FindBar::new(mtm, note_scroll.clone());
         note_vc.setView(&find_bar.column);
-        // SAFETY: a new PDF view, on the main thread.
-        let pdf_view = unsafe { PDFView::new(mtm) };
-        pdf_view.setFrame(find_bar.column.bounds());
-        pdf_view.setAutoresizingMask(objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable);
-        pdf_view.setHidden(true);
-        // SAFETY: as above.
-        unsafe { pdf_view.setAutoScales(true) };
-        find_bar.column.addSubview(&pdf_view);
         let chat = chat_view::chat_view(mtm);
         let chat_vc = NSViewController::new(mtm);
         chat_vc.setView(&chat.view);
@@ -227,7 +220,7 @@ impl VaultWindow {
             note_text,
             search_bar,
             find_bar,
-            pdf_view,
+            pdf_view: RefCell::new(None),
             pdf_path: RefCell::new(None),
             find_matches: RefCell::new(Vec::new()),
             find_current: Cell::new(None),
@@ -694,6 +687,10 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            if let Some(page) = std::env::var("KNOTES_PROBE_PDF_GO").ok().and_then(|p| p.parse().ok()) {
+                self.window.displayIfNeeded();
+                self.pdf_go_to(page);
+            }
             if std::env::var("KNOTES_PROBE_AFTER_CLICK").as_deref() == Ok("back") {
                 // Shown first, as on screen.
                 self.window.displayIfNeeded();
@@ -750,29 +747,25 @@ impl VaultWindow {
         }
         *self.editing.borrow_mut() = None;
         self.show_pdf(Some(path));
-        if let Some(page) = page.filter(|&p| p > 1)
-            // SAFETY: the view's document, on the main thread.
-            && let Some(document) = unsafe { self.pdf_view.document() }
-            && let Some(page) = unsafe { document.pageAtIndex(page as usize - 1) }
-        {
-            // SAFETY: a page of the view's document.
-            unsafe { self.pdf_view.goToPage(&page) };
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            // In its place in the window first, so the jump lands where it stays.
+            self.window.layoutIfNeeded();
+            viewer.go_to(page.unwrap_or(1).max(1) as usize - 1);
         }
         self.update_navigation();
     }
 
-    /// Shows the PDF at `path` in the note column, or the note again (`None`).
+    /// Shows the PDF at `path` in the note column, or the note again (`None`). The last PDF's
+    /// viewer goes, with every page it drew.
     fn show_pdf(&self, path: Option<&str>) {
-        let document = path.and_then(|p| {
-            let file = self.vault()?.join(p);
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
-            // SAFETY: a PDF document read from a file URL.
-            unsafe { PDFDocument::initWithURL(<PDFDocument as objc2::AnyThread>::alloc(), &url) }
-        });
-        // SAFETY: the view's document, set on the main thread.
-        unsafe { self.pdf_view.setDocument(document.as_deref()) };
-        let shown = document.is_some();
-        self.pdf_view.setHidden(!shown);
+        self.pdf_view.borrow_mut().take();
+        let mtm = objc2::MainThreadOnly::mtm(&*self.window);
+        let viewer = path.and_then(|p| PdfViewer::new(mtm, &self.vault()?.join(p), self.find_bar.column.bounds()));
+        let shown = viewer.is_some();
+        if let Some(viewer) = viewer {
+            self.find_bar.column.addSubview(&viewer.scroll);
+            *self.pdf_view.borrow_mut() = Some(viewer);
+        }
         if let Some(scroll) = self.note_text.enclosingScrollView() {
             scroll.setHidden(shown);
         }
@@ -781,14 +774,20 @@ impl VaultWindow {
 
     /// `doc.pdf 2/3` for the PDF shown and its page, or `hidden` (probe mode).
     pub fn describe_pdf(&self) -> String {
-        let Some(path) = self.pdf_path.borrow().clone() else { return "hidden".to_owned() };
-        // SAFETY: the view's document and page, on the main thread.
-        let (page, pages) = unsafe {
-            let document = self.pdf_view.document();
-            let page = self.pdf_view.currentPage().zip(document.as_ref()).map_or(0, |(p, d)| d.indexForPage(&p) + 1);
-            (page, document.map_or(0, |d| d.pageCount()))
-        };
-        format!("{path} {page}/{pages}")
+        let (Some(path), Some(viewer)) = (self.pdf_path.borrow().clone(), self.pdf_view.borrow().as_ref().map(|v| v.page())) else { return "hidden".to_owned() };
+        format!("{path} {}/{}", viewer.0, viewer.1)
+    }
+
+    /// The pages the PDF viewer keeps drawn, from 1 (probe mode).
+    pub fn pdf_pages_kept(&self) -> Vec<usize> {
+        self.pdf_view.borrow().as_ref().map(PdfViewer::kept).unwrap_or_default()
+    }
+
+    /// Shows page `page` (from 1) of the PDF shown (probe mode).
+    pub fn pdf_go_to(&self, page: usize) {
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            viewer.go_to(page.max(1) - 1);
+        }
     }
 
     /// Opened from a search of the notes' text: the words it found, highlighted, the first in

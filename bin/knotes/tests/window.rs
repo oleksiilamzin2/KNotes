@@ -1837,3 +1837,55 @@ fn dragging_a_pdf_preview_s_right_edge_resizes_it_and_opens_nothing() {
     assert!(out.contains("pdf-view: hidden"), "no viewer: {out}");
     assert!(out.contains("note: a.md | Before⏎![[doc.pdf|296]]⏎After"), "{out}");
 }
+
+/// A PDF of `pages` A4 pages, "Page N" on each.
+fn pdf_of(pages: usize) -> Vec<u8> {
+    let mut objects: Vec<Vec<u8>> = vec![b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec()];
+    let parent = 1 + 2 * pages + 1;
+    let mut kids = Vec::new();
+    for n in 1..=pages {
+        let stream = format!("BT /F1 24 Tf 60 700 Td (Page {n}) Tj ET");
+        objects.push(format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).into_bytes());
+        let contents = objects.len();
+        objects.push(format!("<< /Type /Page /Parent {parent} 0 R /MediaBox [0 0 595 842] /Contents {contents} 0 R /Resources << /Font << /F1 1 0 R >> >> >>").into_bytes());
+        kids.push(format!("{} 0 R", objects.len()));
+    }
+    objects.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")).into_bytes());
+    objects.push(format!("<< /Type /Catalog /Pages {parent} 0 R >>").into_bytes());
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n", i + 1).bytes());
+        out.extend(body);
+        out.extend(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    out.extend(format!("trailer\n<< /Size {} /Root {} 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1, objects.len()).bytes());
+    out
+}
+
+/// The pages the PDF viewer keeps drawn (`pdf-pages-kept:` line).
+fn pages_kept(out: &str) -> Vec<usize> {
+    out.lines().find_map(|l| l.strip_prefix("pdf-pages-kept:")).unwrap_or_else(|| panic!("{out}")).split_whitespace().map(|p| p.parse().unwrap()).collect()
+}
+
+#[test]
+fn the_pdf_viewer_keeps_only_the_page_shown_and_two_either_side() {
+    let long = pdf_of(30);
+    let notes = [("a.md", "See [[long.pdf#page=15]] here\n\nend")];
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    let (_vault, out) = probe_images(&notes, &[("long.pdf", &long)], &env);
+    assert!(out.contains("pdf-view: long.pdf 15/30"), "{out}");
+    let kept = pages_kept(&out);
+    assert!(kept.contains(&15) && kept.iter().all(|p| (13..=17).contains(p)), "{kept:?}");
+    let (_vault, out) = probe_images(&notes, &[("long.pdf", &long)], &[env[0], env[1], env[2], ("KNOTES_PROBE_PDF_GO", "25")]);
+    let kept = pages_kept(&out);
+    assert!(out.contains("pdf-view: long.pdf 25/30") && kept.contains(&25) && kept.iter().all(|p| (23..=27).contains(p)), "{kept:?} {out}");
+    let (_vault, out) = probe_images(&notes, &[("long.pdf", &long)], &[env[0], env[1], env[2], ("KNOTES_PROBE_AFTER_CLICK", "back")]);
+    assert!(out.contains("pdf-view: hidden") && pages_kept(&out).is_empty(), "all let go: {out}");
+}
