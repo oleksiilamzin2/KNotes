@@ -13,7 +13,7 @@ use knotes_core::{DocumentText, FileKind};
 use objc2::AnyThread;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2_foundation::{NSRange, NSRect, NSString, NSURL};
-use objc2_pdf_kit::{PDFDisplayBox, PDFDocument};
+use objc2_pdf_kit::{PDFActionGoTo, PDFDisplayBox, PDFDocument, PDFOutline, kPDFDestinationUnspecifiedValue};
 
 /// The text of the PDF at `file`, its pages' in order; `None` when it does not open (not a PDF,
 /// or locked).
@@ -49,6 +49,59 @@ pub fn page_text(file: &Path, index: usize) -> Option<PageText> {
             .collect();
         Some(PageText::new(glyphs))
     })
+}
+
+/// An entry of a PDF's outline (its bookmarks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bookmark {
+    /// 1 for the top level.
+    pub level: u8,
+    pub title: String,
+    /// The page it goes to (index).
+    pub page: usize,
+    /// How far down the page as shown (a fraction; the top when the PDF says no height).
+    pub y: f64,
+}
+
+/// The outline the PDF at `file` carries, in order, nested entries after their parent; empty
+/// when it carries none, `None` when it does not open. Entries going nowhere are left out.
+pub fn pdf_outline(file: &Path) -> Option<Vec<Bookmark>> {
+    autoreleasepool(|_| {
+        let document = open(file)?;
+        let mut out = Vec::new();
+        // SAFETY: the document's own outline, read on this thread only.
+        if let Some(root) = unsafe { document.outlineRoot() } {
+            unsafe { collect_bookmarks(&document, &root, 1, &mut out) };
+        }
+        Some(out)
+    })
+}
+
+/// The children of `outline` at `level`, and theirs after each.
+///
+/// # Safety
+/// `outline` belongs to `document`, both used on this thread only.
+unsafe fn collect_bookmarks(document: &PDFDocument, outline: &PDFOutline, level: u8, out: &mut Vec<Bookmark>) {
+    for i in 0..unsafe { outline.numberOfChildren() } {
+        let Some(child) = (unsafe { outline.childAtIndex(i) }) else { continue };
+        // A GoTo action is the other way an entry says where it goes.
+        let destination = unsafe { child.destination() }
+            .or_else(|| unsafe { child.action() }.and_then(|a| a.downcast::<PDFActionGoTo>().ok()).map(|a| unsafe { a.destination() }));
+        if let Some((destination, page)) = destination.and_then(|d| Some((d.clone(), unsafe { d.page() }?))) {
+            let point = unsafe { destination.point() };
+            let crop = bounds(unsafe { page.boundsForBox(PDFDisplayBox::CropBox) });
+            // A height the PDF leaves unsaid is the page's top.
+            let y = if point.y >= unsafe { kPDFDestinationUnspecifiedValue } { crop.y + crop.height } else { point.y };
+            let at = Bounds { x: crop.x, y, width: 0.0, height: 0.0 }.shown(crop, unsafe { page.rotation() } as i64);
+            out.push(Bookmark {
+                level,
+                title: unsafe { child.label() }.map(|l| l.to_string()).unwrap_or_default(),
+                page: unsafe { document.indexForPage(&page) },
+                y: at.y.clamp(0.0, 1.0),
+            });
+        }
+        unsafe { collect_bookmarks(document, &child, level.saturating_add(1), out) };
+    }
 }
 
 /// The PDF at `file`, a document of its own.
