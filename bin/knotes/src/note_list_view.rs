@@ -1,18 +1,19 @@
 //! Note list: a view-based `NSTableView` over `knotes_app::build_note_list` items. Only the
-//! visible rows are asked for, so 50k notes cost the same as 50.
+//! visible rows are asked for, so 50k notes cost the same as 50. Its context menu renames a
+//! note in its row (ADR 0019).
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use knotes_app::{Clock, DateGroup, ListItem, TimeStyle, days_from_civil, time_style, title_of};
 use knotes_core::NoteRow;
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::rc::{Retained, Weak};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControlTextEditingDelegate, NSFont, NSLayoutConstraintOrientation, NSLineBreakMode, NSScrollView,
-    NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle,
-    NSTextField, NSUserInterfaceItemIdentification, NSView,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSFont, NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuItem,
+    NSScrollView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
+    NSTextFieldDelegate, NSTextView, NSUserInterfaceItemIdentification, NSView,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
@@ -55,10 +56,16 @@ impl Formatters {
 }
 
 type OnSelect = Box<dyn Fn(String)>;
+type OnRename = Box<dyn Fn(String, String)>;
 
 pub struct Ivars {
     /// Called with the path of a note the user selected.
     on_select: RefCell<Option<OnSelect>>,
+    /// Called with a note's path and the name typed in its row.
+    on_rename: RefCell<Option<OnRename>>,
+    table: RefCell<Weak<NSTableView>>,
+    /// The note whose row title is being edited, and that title field.
+    renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
     rows: RefCell<Arc<Vec<NoteRow>>>,
     items: RefCell<Vec<ListItem>>,
     clock: Cell<Clock>,
@@ -81,7 +88,35 @@ define_class!(
         }
     }
 
-    unsafe impl NSControlTextEditingDelegate for NoteListSource {}
+    unsafe impl NSControlTextEditingDelegate for NoteListSource {
+        /// Enter (or a click elsewhere) renames the note.
+        #[unsafe(method(controlTextDidEndEditing:))]
+        fn text_did_end_editing(&self, _notification: &NSNotification) {
+            self.finish_rename(true);
+        }
+
+        /// Escape leaves the name as it was.
+        #[unsafe(method(control:textView:doCommandBySelector:))]
+        fn do_command(&self, _control: &NSControl, _view: &NSTextView, command: Sel) -> bool {
+            let cancel = command == sel!(cancelOperation:);
+            if cancel {
+                self.finish_rename(false);
+            }
+            cancel
+        }
+    }
+
+    unsafe impl NSTextFieldDelegate for NoteListSource {}
+
+    impl NoteListSource {
+        #[unsafe(method(renameNote:))]
+        fn rename_note(&self, _sender: Option<&AnyObject>) {
+            if let Some(row) = self.menu_row() {
+                self.begin_rename(row);
+            }
+        }
+
+    }
 
     unsafe impl NSTableViewDelegate for NoteListSource {
         #[unsafe(method_id(tableView:viewForTableColumn:row:))]
@@ -119,6 +154,9 @@ impl NoteListSource {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let ivars = Ivars {
             on_select: RefCell::new(None),
+            on_rename: RefCell::new(None),
+            table: RefCell::new(Weak::default()),
+            renaming: RefCell::new(None),
             rows: RefCell::new(Arc::new(Vec::new())),
             items: RefCell::new(Vec::new()),
             clock: Cell::new(now()),
@@ -136,6 +174,60 @@ impl NoteListSource {
 
     pub fn on_select(&self, callback: impl Fn(String) + 'static) {
         *self.ivars().on_select.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_rename(&self, callback: impl Fn(String, String) + 'static) {
+        *self.ivars().on_rename.borrow_mut() = Some(Box::new(callback));
+    }
+
+
+    /// The note row the context menu was opened on, else the selected one.
+    fn menu_row(&self) -> Option<usize> {
+        let table = self.ivars().table.borrow().load()?;
+        let row = if table.clickedRow() >= 0 { table.clickedRow() } else { table.selectedRow() };
+        (row >= 0 && !self.is_header(row)).then_some(row as usize)
+    }
+
+    /// Lets the title of the note in `row` be edited in place, all of it selected.
+    pub fn begin_rename(&self, row: usize) {
+        let Some(table) = self.ivars().table.borrow().load() else { return };
+        let Some(path) = self.path_at(row) else { return };
+        let cell = table.viewAtColumn_row_makeIfNecessary(0, row as NSInteger, true).and_then(|v| v.downcast::<NSTableCellView>().ok());
+        let Some(title) = cell.and_then(|cell| field(&cell, TITLE_ID)) else { return };
+        title.setEditable(true);
+        title.setSelectable(true);
+        // SAFETY: the source outlives the table's cells (it is the table's data source).
+        unsafe { title.setDelegate(Some(ProtocolObject::from_ref(self))) };
+        *self.ivars().renaming.borrow_mut() = Some((path, title.clone()));
+        if let Some(window) = table.window() {
+            window.makeFirstResponder(Some(&title));
+        }
+    }
+
+    /// The title field being edited, for probe mode.
+    pub fn renaming_field(&self) -> Option<Retained<NSTextField>> {
+        self.ivars().renaming.borrow().as_ref().map(|(_, field)| field.clone())
+    }
+
+    /// Ends editing a row's title: renames the note when `commit` and the name changed,
+    /// otherwise shows its name again.
+    fn finish_rename(&self, commit: bool) {
+        let Some((path, title)) = self.ivars().renaming.borrow_mut().take() else { return };
+        let name = title.stringValue().to_string();
+        title.setEditable(false);
+        title.setSelectable(false);
+        let old = title_of(&path).to_owned();
+        let table = self.ivars().table.borrow().load();
+        if let Some(window) = table.as_ref().and_then(|t| t.window()) {
+            window.makeFirstResponder(table.as_deref().map(|t| t.as_ref()));
+        }
+        if !commit || name.trim().is_empty() || name == old {
+            title.setStringValue(&NSString::from_str(&old));
+            return;
+        }
+        if let Some(callback) = self.ivars().on_rename.borrow().as_ref() {
+            callback(path, name);
+        }
     }
 
     /// Path of the note shown in `row`; `None` for headers.
@@ -243,6 +335,16 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
         table.setDataSource(Some(ProtocolObject::from_ref(source)));
         table.setDelegate(Some(ProtocolObject::from_ref(source)));
     }
+    *source.ivars().table.borrow_mut() = Weak::new(&table);
+    let menu = NSMenu::new(mtm);
+    for (title, action) in [(strings::RENAME_NOTE, sel!(renameNote:))] {
+        // SAFETY: the source outlives the table (it is its data source), and implements the action.
+        let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), ns_string!("")) };
+        unsafe { item.setTarget(Some(source)) };
+        menu.addItem(&item);
+    }
+    // SAFETY: a menu built here, kept by the table.
+    unsafe { table.setMenu(Some(&menu)) };
     // Keeps the toolbar's glass without its separator line (ADR 0016).
     let scroll: Retained<NSScrollView> = Retained::into_super(QuietScrollView::new(mtm));
     scroll.setDocumentView(Some(&table));

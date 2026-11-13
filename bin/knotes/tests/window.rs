@@ -957,3 +957,14 @@ fn a_rename_can_keep_the_links_or_be_cancelled() {
     let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
     assert!(read("Old.md").is_some() && read("New.md").is_none(), "{out}");
 }
+
+#[test]
+fn a_note_is_renamed_in_its_list_row_from_the_context_menu() {
+    let (vault, out) = probe_notes(
+        &RENAME_VAULT,
+        &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "list-rename=Renamed in list"), ("KNOTES_PROBE_ANSWER", "update")],
+    );
+    assert!(out.contains("list-menu-items: Перейменувати"), "{out}");
+    assert!(vault.path().join("Renamed in list.md").exists(), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Renamed in list]] and [[Renamed in list#Part|p]]");
+}

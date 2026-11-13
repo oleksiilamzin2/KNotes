@@ -238,6 +238,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_rename(move |path, name| {
+            if let Some(window) = weak.upgrade() {
+                window.rename_note(&path, &name);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.list.on_select(move |path| {
             if let Some(window) = weak.upgrade()
                 && !window.highlighting.get()
@@ -429,6 +435,7 @@ impl VaultWindow {
             if let (Some(name), Some(open)) = (probe::rename_requested(), self.open_path()) {
                 self.rename_note(&open, &name);
             }
+            probe::list_rename_requested(&self.list, &self.table);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }

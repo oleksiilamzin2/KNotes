@@ -72,3 +72,5 @@ pub fn rename_question(links: usize, notes: usize) -> String {
     let notes_word = knotes_app::plural_uk(n, "нотатці", "нотатках", "нотатках");
     format!("Оновити {links} {links_word} у {notes} {notes_word}?")
 }
+/// The note list's context menu (ADR 0019).
+pub const RENAME_NOTE: &str = "Перейменувати";
