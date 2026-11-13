@@ -39,7 +39,8 @@ pub enum Mark {
     Formula { offset: usize, image: Arc<FormulaImage>, anchor: Anchor },
     /// An image embedded alone on its line, `size` points large (`Line` or `Below`), decoded
     /// when first drawn; with its resize handle while the pointer is over it.
-    Image { offset: usize, image: Rc<DeferredImage>, size: NSSize, anchor: Anchor, handle: bool },
+    /// A PDF's preview has its `caption` ("сторінка 3 з 12") under it.
+    Image { offset: usize, image: Rc<DeferredImage>, size: NSSize, anchor: Anchor, handle: bool, caption: Option<String> },
     /// A list bullet in the room of a hidden `- `, its centre `centre` above the baseline.
     Bullet { offset: usize, centre: f64 },
     /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
@@ -66,6 +67,8 @@ pub enum Mark {
     External { offset: usize, centre: f64, shift: f64 },
 }
 
+/// Room under a PDF's preview for its caption.
+pub const PDF_CAPTION: f64 = 18.0;
 /// Space between a display formula's source and its preview.
 pub const PREVIEW_GAP: f64 = 6.0;
 /// Room a hidden bullet marker keeps, and where in it the dot is centred.
@@ -158,7 +161,15 @@ define_class!(
                     (Mark::Formula { .. }, Some(image)) => unsafe {
                         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None)
                     },
-                    (Mark::Image { image, handle, .. }, _) => {
+                    (Mark::Image { image, handle, caption, .. }, _) => {
+                        if let Some(caption) = caption {
+                            draw_caption(caption_rect(rect), caption);
+                            // A page's edge: white on white would not show.
+                            let edge = NSBezierPath::bezierPathWithRect(NSRect::new(NSPoint::new(rect.origin.x - 0.5, rect.origin.y - 0.5), NSSize::new(rect.size.width + 1.0, rect.size.height + 1.0)));
+                            edge.setLineWidth(1.0);
+                            NSColor::separatorColor().setStroke();
+                            edge.stroke();
+                        }
                         image.drawn_at.set(Some(self.layoutFragmentFrame().origin.y + rect.origin.y - point.y));
                         if let Some(image) = image.get() {
                             // SAFETY: as above.
@@ -290,14 +301,15 @@ impl PreviewFragment {
         let baseline = bounds.origin.y + line.glyphOrigin().y;
         let rect = match mark {
             Mark::Formula { .. } | Mark::Image { .. } => {
-                let (size, anchor, above) = match mark {
-                    Mark::Formula { image, anchor, .. } => (NSSize::new(image.width_pt, image.height_pt), anchor, image.baseline_pt),
-                    Mark::Image { size, anchor, .. } => (*size, anchor, size.height),
+                let (size, anchor, above, below) = match mark {
+                    Mark::Formula { image, anchor, .. } => (NSSize::new(image.width_pt, image.height_pt), anchor, image.baseline_pt, 0.0),
+                    Mark::Image { size, anchor, caption, .. } => (*size, anchor, size.height, if caption.is_some() { PDF_CAPTION } else { 0.0 }),
                     _ => return None,
                 };
                 let origin = match anchor {
                     Anchor::Inline => NSPoint::new(x, baseline - above),
-                    Anchor::Line => NSPoint::new(x, bounds.origin.y + (bounds.size.height - size.height) / 2.0),
+                    // Centred in its line, with its caption under it.
+                    Anchor::Line => NSPoint::new(x, bounds.origin.y + (bounds.size.height - size.height - below) / 2.0),
                     Anchor::Below => {
                         let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(0.0, |c| c.size().width);
                         NSPoint::new((column - size.width) / 2.0 - self.layoutFragmentFrame().origin.x, bounds.origin.y + bounds.size.height + PREVIEW_GAP)
@@ -341,9 +353,13 @@ impl PreviewFragment {
                         let kind = if *anchor == Anchor::Below { "preview" } else { "typeset" };
                         format!("formula-image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}")
                     }
-                    Mark::Image { anchor, handle, .. } => {
+                    Mark::Image { anchor, handle, caption, .. } => {
                         let kind = if *anchor == Anchor::Below { "preview" } else { "shown" };
                         let mut line = format!("image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}");
+                        if let Some(caption) = caption {
+                            let c = caption_rect(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
+                            line += &format!("\ndecoration: pdf-caption {:.1} {:.1} {:.1} {:.1}\npdf-caption: {caption}", c.origin.x, c.origin.y, c.size.width, c.size.height);
+                        }
                         if *handle {
                             let r = image_handle(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
                             line += &format!("\ndecoration: image-handle {:.1} {:.1} {:.1} {:.1}", r.origin.x, r.origin.y, r.size.width, r.size.height);
@@ -561,6 +577,23 @@ fn draw_table_row(rect: NSRect, columns: &[f64], header: bool, top: bool) {
     lines.setLineWidth(1.0);
     NSColor::separatorColor().setStroke();
     lines.stroke();
+}
+
+/// Where a PDF preview's caption goes: under the preview, across its width and a little more.
+fn caption_rect(image: NSRect) -> NSRect {
+    NSRect::new(NSPoint::new(image.origin.x - 40.0, image.origin.y + image.size.height + 2.0), NSSize::new(image.size.width + 80.0, PDF_CAPTION - 2.0))
+}
+
+/// A caption, small, faint and centred in `rect`.
+fn draw_caption(rect: NSRect, caption: &str) {
+    let font = NSFont::systemFontOfSize(NSFont::smallSystemFontSize());
+    let attrs = label_attributes(&font, &NSColor::secondaryLabelColor());
+    let text = NSString::from_str(caption);
+    // SAFETY: font and colour values of their attributes.
+    let width = unsafe { text.sizeWithAttributes(Some(&attrs)) }.width;
+    let at = NSPoint::new(rect.origin.x + (rect.size.width - width) / 2.0, rect.origin.y);
+    // SAFETY: as above.
+    unsafe { text.drawAtPoint_withAttributes(at, Some(&attrs)) };
 }
 
 /// Where an image's resize handle is drawn: a pill inside its right edge, halfway down, in

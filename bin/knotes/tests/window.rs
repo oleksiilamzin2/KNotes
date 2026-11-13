@@ -1761,3 +1761,20 @@ fn rows_out_of_view_catch_up_with_a_sideways_scroll() {
     assert!(rows.len() > 5, "{out}");
     assert!(rows.iter().all(|r| (r.0 - (row.0 - 60.0)).abs() < 0.5), "every row in view at the end scrolled too: {rows:?} (from {})", row.0);
 }
+
+const PDF: &[u8] = include_bytes!("fixtures/three-pages.pdf");
+
+#[test]
+fn a_pdf_embed_shows_its_page_and_how_many_there_are() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "Before\n![[doc.pdf#page=2]]\n![[doc.pdf|120]]\nAfter")],
+        &[("doc.pdf", PDF)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")],
+    );
+    let shown = images(&out);
+    assert_eq!(shown.iter().map(|i| (i.2, i.3)).collect::<Vec<_>>(), [(200.0, 100.0), (120.0, 60.0)], "{out}");
+    assert!(out.contains("pdf-caption: сторінка 2 з 3") && out.contains("pdf-caption: сторінка 1 з 3"), "{out}");
+    let captions = decorations(&out, "pdf-caption");
+    assert!(captions[0].1 >= shown[0].1 + shown[0].3, "the caption under the page: {captions:?} {shown:?}");
+    assert!(shown[1].1 > captions[0].1 + captions[0].3, "the next preview below the caption: {shown:?} {captions:?}");
+}

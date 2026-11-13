@@ -122,3 +122,8 @@ pub const TABLE_ALIGN_CENTER: &str = "Вирівняти по центру";
 pub const TABLE_ALIGN_RIGHT: &str = "Вирівняти праворуч";
 pub const TABLE_SORT_UP: &str = "Сортувати за зростанням";
 pub const TABLE_SORT_DOWN: &str = "Сортувати за спаданням";
+
+/// Under a PDF's preview (ADR 0022): "сторінка 3 з 12".
+pub fn pdf_page(page: usize, pages: usize) -> String {
+    format!("сторінка {page} з {pages}")
+}

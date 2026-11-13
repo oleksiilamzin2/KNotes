@@ -15,7 +15,7 @@ use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width};
 
 use crate::image_loader::{self, DeferredImage};
-use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
+use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PDF_CAPTION, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
 use crate::strings;
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
@@ -152,6 +152,8 @@ pub struct Ivars {
     vault: RefCell<Option<PathBuf>>,
     /// Natural size of images by vault path, once read; `None` for one that does not load.
     images: RefCell<HashMap<String, Option<NSSize>>>,
+    /// Page counts of PDFs by vault path, once read; `None` for one that does not open.
+    pdf_pages: RefCell<HashMap<String, Option<usize>>>,
     /// Images decoded (when first drawn) for the size they show at, by vault path.
     bitmaps: RefCell<HashMap<String, Rc<DeferredImage>>>,
     /// Width of the text column, which images fit in.
@@ -380,6 +382,7 @@ impl LivePreview {
             vault: RefCell::new(None),
             images: RefCell::new(HashMap::new()),
             bitmaps: RefCell::new(HashMap::new()),
+            pdf_pages: RefCell::new(HashMap::new()),
             column: Cell::new(READABLE_WIDTH),
             resizing: Cell::new(None),
             table_columns: RefCell::new(HashMap::new()),
@@ -1742,6 +1745,7 @@ impl LivePreview {
     fn forget_images(&self) {
         self.ivars().images.borrow_mut().clear();
         self.ivars().bitmaps.borrow_mut().clear();
+        self.ivars().pdf_pages.borrow_mut().clear();
     }
 
     /// The size the image `run` embeds shows at: its own, or the one written after `|` (its
@@ -1751,7 +1755,8 @@ impl LivePreview {
     fn image_size(&self, run: &ImageRun) -> Option<(String, PathBuf, NSSize, bool)> {
         let path = self.ivars().links.borrow().as_ref()?.resolve(run.link.kind, &run.link.target, &self.ivars().path.borrow())?;
         let file = self.ivars().vault.borrow().as_ref()?.join(&path);
-        let natural = (*self.ivars().images.borrow_mut().entry(path.clone()).or_insert_with(|| image_loader::natural_size(&file)))?;
+        let key = image_key(&path, run);
+        let natural = (*self.ivars().images.borrow_mut().entry(key.clone()).or_insert_with(|| image_loader::natural_size(&file, run.page)))?;
         if natural.width <= 0.0 || natural.height <= 0.0 {
             return None;
         }
@@ -1766,7 +1771,19 @@ impl LivePreview {
         // A point narrower than the column: the hidden source's tiny glyphs beside the kept
         // width would otherwise wrap onto a second line as tall as the image.
         let width = width.min(self.ivars().column.get() - 1.0).max(1.0).round();
-        Some((path, file, NSSize::new(width, (width * ratio).round()), resized.is_some()))
+        Some((key, file, NSSize::new(width, (width * ratio).round()), resized.is_some()))
+    }
+
+    /// "сторінка 3 з 12" under a PDF's preview (ADR 0022); `None` for an image.
+    fn image_caption(&self, run: &ImageRun) -> Option<String> {
+        if !run.pdf {
+            return None;
+        }
+        let path = self.ivars().links.borrow().as_ref()?.resolve(run.link.kind, &run.link.target, &self.ivars().path.borrow())?;
+        let file = self.ivars().vault.borrow().as_ref()?.join(&path);
+        let pages = (*self.ivars().pdf_pages.borrow_mut().entry(path).or_insert_with(|| image_loader::pdf_pages(&file)))?;
+        let page = (run.page.unwrap_or(1) as usize).clamp(1, pages.max(1));
+        Some(strings::pdf_page(page, pages))
     }
 
     /// The image `run` embeds, to be decoded for the size it shows at when first drawn, and
@@ -1780,7 +1797,7 @@ impl LivePreview {
             _ => {
                 let this = objc2::rc::Weak::new(self);
                 let decoded = path.clone();
-                let image = Rc::new(DeferredImage::new(file, size, move || {
+                let image = Rc::new(DeferredImage::new(file, size, run.page, move || {
                     if let Some(this) = this.load() {
                         this.image_decoded(&decoded);
                     }
@@ -1792,18 +1809,20 @@ impl LivePreview {
         Some((image, size))
     }
 
-    /// Files changed on disk (vault paths): images among them are read again.
+    /// Files changed on disk (vault paths): images among them (and PDFs, every page kept) are
+    /// read again.
     pub fn files_changed(&self, view: &NSTextView, paths: &[String]) {
-        let stale: Vec<&String> = {
-            let images = self.ivars().images.borrow();
-            paths.iter().filter(|p| images.contains_key(*p)).collect()
-        };
+        let ours = |key: &String| paths.iter().any(|p| key == p || key.strip_prefix(p.as_str()).is_some_and(|rest| rest.starts_with('#')));
+        let stale: Vec<String> = self.ivars().images.borrow().keys().filter(|k| ours(k)).cloned().collect();
         if stale.is_empty() {
             return;
         }
-        for path in &stale {
-            self.ivars().images.borrow_mut().remove(*path);
-            self.ivars().bitmaps.borrow_mut().remove(*path);
+        for key in &stale {
+            self.ivars().images.borrow_mut().remove(key);
+            self.ivars().bitmaps.borrow_mut().remove(key);
+        }
+        for path in paths {
+            self.ivars().pdf_pages.borrow_mut().remove(path);
         }
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
         let links = self.ivars().links.borrow().clone();
@@ -1814,7 +1833,7 @@ impl LivePreview {
             .borrow()
             .images
             .iter()
-            .filter(|i| links.as_ref().and_then(|l| l.resolve(i.link.kind, &i.link.target, &source)).is_some_and(|p| stale.contains(&&p)))
+            .filter(|i| links.as_ref().and_then(|l| l.resolve(i.link.kind, &i.link.target, &source)).is_some_and(|p| paths.contains(&p)))
             .map(|i| paragraph(&storage, ns(&i.range)))
             .collect();
         for line in lines {
@@ -1853,8 +1872,9 @@ impl LivePreview {
         }
     }
 
-    /// The image at vault `path` is decoded: its lines are laid out again, to draw it.
-    fn image_decoded(&self, path: &str) {
+    /// The image `key` names (a vault path, a PDF's with its page) is decoded: its lines are
+    /// laid out again, to draw it.
+    fn image_decoded(&self, key: &str) {
         let Some(view) = self.ivars().view.borrow().load() else { return };
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
         let links = self.ivars().links.borrow().clone();
@@ -1865,7 +1885,7 @@ impl LivePreview {
             .borrow()
             .images
             .iter()
-            .filter(|i| links.as_ref().and_then(|l| l.resolve(i.link.kind, &i.link.target, &source)).as_deref() == Some(path))
+            .filter(|i| links.as_ref().and_then(|l| l.resolve(i.link.kind, &i.link.target, &source)).is_some_and(|p| image_key(&p, i) == key))
             .map(|i| paragraph(&storage, ns(&i.range)))
             .collect();
         for line in lines {
@@ -1897,7 +1917,8 @@ impl LivePreview {
     fn paint_image<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, run: &ImageRun, revealed: bool) {
         let Some((_, _, size, _)) = self.image_size(run) else { return };
         let line = paragraph(storage, ns(&run.range));
-        let reserved = size.height + 2.0 * PREVIEW_GAP;
+        let caption = if run.pdf { PDF_CAPTION } else { 0.0 };
+        let reserved = size.height + 2.0 * PREVIEW_GAP + caption;
         if revealed {
             let para = palette.para(Para { spacing_after: reserved, ..Para::default() });
             canvas.paint(line.0..line.1, |p| p.para = para);
@@ -2042,7 +2063,7 @@ impl LivePreview {
             };
             if (from..to).contains(&at) {
                 let handle = anchor == Anchor::Line && self.ivars().hovered_image.get() == Some(paragraph(&storage, ns(&run.range)).0);
-                marks.push(Mark::Image { offset: at - from, image, size, anchor, handle });
+                marks.push(Mark::Image { offset: at - from, image, size, anchor, handle, caption: self.image_caption(run) });
             }
         }
         let centre_x = self.ivars().look.body.xHeight() / 2.0;
@@ -2376,6 +2397,11 @@ fn viewport_range(view: &NSTextView) -> Option<(usize, usize)> {
     let from = content.offsetFromLocation_toLocation(&start, &range.location()).max(0) as usize;
     let to = content.offsetFromLocation_toLocation(&start, &range.endLocation()).max(0) as usize;
     Some((from, to))
+}
+
+/// What an image is kept by: its vault path, a PDF's with the page shown (`doc.pdf#page=3`).
+fn image_key(path: &str, run: &ImageRun) -> String {
+    if run.pdf { format!("{path}#page={}", run.page.unwrap_or(1)) } else { path.to_owned() }
 }
 
 /// The table a control belongs to.
