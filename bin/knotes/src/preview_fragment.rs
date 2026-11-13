@@ -262,9 +262,9 @@ impl PreviewFragment {
     }
 }
 
-/// The image shown on its own line under `point` (text view coordinates): the character
-/// where its line starts, and its rect in the view.
-pub fn image_at(view: &NSTextView, point: NSPoint) -> Option<(usize, NSRect)> {
+/// The image under `point` (text view coordinates), shown on its own line or below its source
+/// (`below`): the character where its line starts, and its rect in the view.
+pub fn image_at(view: &NSTextView, point: NSPoint) -> Option<(usize, NSRect, bool)> {
     let layout = view.textLayoutManager()?;
     let origin = view.textContainerOrigin();
     let fragment = layout.textLayoutFragmentForPosition(NSPoint::new(point.x - origin.x, point.y - origin.y))?;
@@ -272,10 +272,12 @@ pub fn image_at(view: &NSTextView, point: NSPoint) -> Option<(usize, NSRect)> {
     let content = layout.textContentManager()?;
     let start = content.offsetFromLocation_toLocation(&content.documentRange().location(), &fragment.rangeInElement().location()).max(0) as usize;
     let frame = fragment.layoutFragmentFrame();
+    // The image's paragraph is its line: the fragment starts where the line does.
     preview.ivars().marks.iter().find_map(|(mark, _)| {
-        let Mark::Image { offset, anchor: Anchor::Line, .. } = mark else { return None };
+        let Mark::Image { anchor, .. } = mark else { return None };
         let r = preview.mark_rect(mark)?;
-        Some((start + offset, NSRect::new(NSPoint::new(origin.x + frame.origin.x + r.origin.x, origin.y + frame.origin.y + r.origin.y), r.size)))
+        let rect = NSRect::new(NSPoint::new(origin.x + frame.origin.x + r.origin.x, origin.y + frame.origin.y + r.origin.y), r.size);
+        Some((start, rect, *anchor == Anchor::Below))
     })
 }
 

@@ -1344,3 +1344,14 @@ fn a_resized_image_writes_its_width_and_shows_at_it() {
     let shown = images(&out);
     assert_eq!((shown[0].2, shown[0].3, shown[0].4.as_str()), (200.0, 133.0, "shown"), "{out}");
 }
+
+#[test]
+fn a_double_click_on_an_image_previews_its_file() {
+    let (vault, out) = probe_images(
+        &[("a.md", "Before\n![[pic.png]]\nAfter")],
+        &[("att/pic.png", PIC)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_QUICK_LOOK", "7")],
+    );
+    let file = out.lines().find_map(|l| l.strip_prefix("quick-look: ")).unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(std::path::Path::new(file), vault.path().canonicalize().unwrap().join("att/pic.png"), "{out}");
+}

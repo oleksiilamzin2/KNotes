@@ -12,6 +12,7 @@ mod main_menu;
 mod note_list_view;
 mod note_view;
 mod probe;
+mod quick_look;
 mod quiet_scroll_view;
 mod rename_dialog;
 mod search_bar;

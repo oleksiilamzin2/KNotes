@@ -154,6 +154,8 @@ impl VaultWindow {
         note_text.on_hover(move |index| hovers.clickable(index));
         let resizes = live_preview.clone();
         note_text.on_resize(move |view, line, width, done| resizes.resize_image(view, line, width, done));
+        let files = live_preview.clone();
+        note_text.on_image_file(move |view, line| files.image_file(view, line));
         // Weak: the text view keeps its callbacks, and the text view is the live preview's.
         let preview = live_preview.clone();
         let text = objc2::rc::Weak::new(&*note_text);
@@ -610,6 +612,10 @@ impl VaultWindow {
             }
             probe::paste_requested(&self.note_text);
             probe::image_edge_requested(&self.note_text);
+            if let Some(line) = std::env::var("KNOTES_PROBE_QUICK_LOOK").ok().and_then(|l| l.parse().ok()) {
+                // The file the panel would show; the panel itself is not opened in probe mode.
+                println!("quick-look: {}", self.note_text.image_file(line).map(|f| f.display().to_string()).unwrap_or_default());
+            }
             if let Some((line, width)) = probe::resize_requested() {
                 self.live_preview.resize_image(&self.note_text, line, width, true);
             }

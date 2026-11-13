@@ -916,6 +916,15 @@ impl LivePreview {
         view.setSelectedRange(NSRange::new(keep(selection.location), selection.length));
     }
 
+    /// The file of the image on the line starting at `line`.
+    pub fn image_file(&self, view: &NSTextView, line: usize) -> Option<PathBuf> {
+        let storage = unsafe { view.textStorage() }?;
+        let styled = self.ivars().styled.borrow();
+        let run = styled.images.iter().find(|i| paragraph(&storage, ns(&i.range)).0 == line)?;
+        let path = self.ivars().links.borrow().as_ref()?.resolve(run.link.kind, &run.link.target, &self.ivars().path.borrow())?;
+        Some(self.ivars().vault.borrow().as_ref()?.join(path))
+    }
+
     /// The text column changed width: images wider than it, or that were, fit again.
     fn fit_images(&self, view: &NSTextView) {
         let column = text_column(view);

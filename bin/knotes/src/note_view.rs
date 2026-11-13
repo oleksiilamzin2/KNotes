@@ -3,7 +3,8 @@
 //! hand over what a click acts on, and that gives pasted or dropped images to the window
 //! (ADR 0020).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 
 use objc2::rc::Retained;
 
@@ -16,6 +17,7 @@ use objc2_app_kit::{
     NSControl, NSMenuItem, NSTextFinderAction, NSTrackingArea, NSTrackingAreaOptions, NSValidatedUserInterfaceItem, NSView,
 };
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
+use objc2_quick_look_ui::QLPreviewPanel;
 
 /// Gets the text view, the character index under a click and whether Cmd is held; returns
 /// true when it handled the click (the text view then ignores it).
@@ -30,6 +32,8 @@ type OnPaste = Box<dyn Fn(&NSPasteboard, Option<usize>) -> bool>;
 /// Gets the text view, the character where a resized image's line starts, the width it is
 /// dragged to and whether the drag is over.
 type OnResize = Box<dyn Fn(&NSTextView, usize, f64, bool)>;
+/// Gets the text view and the character where an image's line starts; gives its file.
+type OnImageFile = Box<dyn Fn(&NSTextView, usize) -> Option<PathBuf>>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -47,6 +51,12 @@ pub struct Ivars {
     on_find: RefCell<Option<OnFind>>,
     on_paste: RefCell<Option<OnPaste>>,
     on_resize: RefCell<Option<OnResize>>,
+    on_image_file: RefCell<Option<OnImageFile>>,
+    /// The image the last click was on (where its line starts): a second click previews it,
+    /// though the first one moved it below its source.
+    image_clicked: Cell<Option<usize>>,
+    /// The file the Quick Look panel shows while this view controls it.
+    quick_look: RefCell<Option<Retained<crate::quick_look::QuickLookSource>>>,
 }
 
 define_class!(
@@ -141,8 +151,41 @@ define_class!(
             self.offer_paste(&info.draggingPasteboard(), Some(index)) || unsafe { msg_send![super(self), performDragOperation: info] }
         }
 
+        /// The Quick Look panel looks for its controller along the responder chain.
+        #[unsafe(method(acceptsPreviewPanelControl:))]
+        fn accepts_preview_panel_control(&self, _panel: Option<&QLPreviewPanel>) -> bool {
+            self.ivars().quick_look.borrow().is_some()
+        }
+
+        #[unsafe(method(beginPreviewPanelControl:))]
+        fn begin_preview_panel_control(&self, panel: Option<&QLPreviewPanel>) {
+            if let (Some(panel), Some(source)) = (panel, self.ivars().quick_look.borrow().as_ref()) {
+                // SAFETY: the source lives while this view controls the panel.
+                unsafe {
+                    panel.setDataSource(Some(ProtocolObject::from_ref(&**source)));
+                    panel.reloadData();
+                }
+            }
+        }
+
+        #[unsafe(method(endPreviewPanelControl:))]
+        fn end_preview_panel_control(&self, panel: Option<&QLPreviewPanel>) {
+            if let Some(panel) = panel {
+                // SAFETY: clearing the source before it goes.
+                unsafe { panel.setDataSource(None) };
+            }
+            self.ivars().quick_look.replace(None);
+        }
+
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
+            let clicked = self.ivars().image_clicked.take();
+            if event.clickCount() >= 2 && let Some(line) = clicked {
+                self.quick_look(line);
+                return;
+            }
+            let point = self.convertPoint_fromView(event.locationInWindow(), None);
+            self.ivars().image_clicked.set(crate::preview_fragment::image_at(self, point).map(|(line, _, _)| line));
             if let Some((line, rect)) = self.image_edge(event.locationInWindow()) {
                 self.resize_image(line, rect);
             } else if !self.offer_click(event) {
@@ -180,12 +223,38 @@ impl NoteTextView {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
     }
 
+    pub fn on_image_file(&self, callback: impl Fn(&NSTextView, usize) -> Option<PathBuf> + 'static) {
+        *self.ivars().on_image_file.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The file of the image on the line starting at `line`.
+    pub fn image_file(&self, line: usize) -> Option<PathBuf> {
+        self.ivars().on_image_file.borrow().as_ref()?(self, line)
+    }
+
+    /// Shows the image on the line starting at `line` in the Quick Look panel.
+    fn quick_look(&self, line: usize) {
+        let Some(file) = self.image_file(line) else { return };
+        self.ivars().quick_look.replace(Some(crate::quick_look::QuickLookSource::new(self.mtm(), &file)));
+        // SAFETY: the shared panel of this app, on the main thread.
+        let Some(panel) = (unsafe { QLPreviewPanel::sharedPreviewPanel(self.mtm()) }) else { return };
+        if panel.isVisible() {
+            // SAFETY: as above.
+            unsafe {
+                panel.updateController();
+                panel.reloadData();
+            }
+        } else {
+            panel.makeKeyAndOrderFront(None);
+        }
+    }
+
     /// The same for a point in the view's coordinates.
     pub fn image_edge_at(&self, point: NSPoint) -> Option<(usize, NSRect)> {
-        let (line, rect) = crate::preview_fragment::image_at(self, point)?;
+        let (line, rect, below) = crate::preview_fragment::image_at(self, point)?;
         let right = rect.origin.x + rect.size.width;
         let inside = point.y >= rect.origin.y && point.y <= rect.origin.y + rect.size.height;
-        (inside && (point.x - right).abs() <= IMAGE_EDGE).then_some((line, rect))
+        (!below && inside && (point.x - right).abs() <= IMAGE_EDGE).then_some((line, rect))
     }
 
     /// Follows the mouse until it goes up: the centred image grows or shrinks on both sides,
