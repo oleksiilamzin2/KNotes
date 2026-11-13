@@ -64,6 +64,8 @@ struct Look {
     paint: PaintCache,
     /// Widths of a digit, `.`, `)` and a space in the digits font, once measured.
     number_widths: Cell<Option<[f64; 4]>>,
+    /// Widths of characters in the body font, once measured.
+    body_widths: RefCell<std::collections::HashMap<u16, f64>>,
 }
 
 
@@ -226,6 +228,7 @@ impl LivePreview {
             clear: NSColor::clearColor(),
             paint: PaintCache::new(STYLE_KEY),
             number_widths: Cell::new(None),
+            body_widths: RefCell::new(std::collections::HashMap::new()),
             body,
         };
         let ivars = Ivars {
@@ -337,8 +340,12 @@ impl LivePreview {
             if let Style::QuoteMarker { depth } = run.style {
                 // Shown with the cursor in its paragraph, as other markup; the paragraph indents
                 // past the bars the fragment draws.
-                let id = if overlaps(&run.range, revealed) { palette.look(&look.body, &look.muted, "quote-marker") } else { palette.look(&look.hidden, &look.clear, "quote") };
-                canvas.paint(run.range.clone(), |p| p.look = id);
+                if overlaps(&run.range, revealed) {
+                    let id = palette.look(&look.body, &look.muted, "quote-marker");
+                    canvas.paint(run.range.clone(), |p| p.look = id);
+                } else {
+                    self.paint_hidden(&mut canvas, &mut palette, storage, &run.range, "quote", 0.0);
+                }
                 let indent = f64::from(depth) * QUOTE_INDENT;
                 // An empty quote line (`>` alone) keeps a line's height: TextKit 2 took it from
                 // the hidden `>`.
@@ -527,12 +534,7 @@ impl LivePreview {
             canvas.paint(line_start..run.range.start, |p| p.look = id);
         }
         if hidden {
-            let id = palette.look(&look.hidden, &look.clear, if kind == ListKind::Bullet { "bullet" } else { "task" });
-            let kern = palette.kern(hidden_room / run.range.len() as f64);
-            canvas.paint(run.range.clone(), |p| {
-                p.look = id;
-                p.kern = kern;
-            });
+            self.paint_hidden(canvas, palette, storage, &run.range, if kind == ListKind::Bullet { "bullet" } else { "task" }, hidden_room);
         } else {
             let id = palette.look(font, &look.muted, "list-marker");
             canvas.paint(run.range.clone(), |p| p.look = id);
@@ -569,6 +571,42 @@ impl LivePreview {
                 canvas.paint(line.0..line.1, |p| p.para = folded);
             }
         }
+    }
+
+    /// Hides the source in `range`, keeping `room` points for what the fragment draws there.
+    /// The last character keeps the body font (clear): a line of tiny hidden glyphs alone sat
+    /// low, and the cursor after them was drawn askew until the first key. Its width is taken
+    /// back by kerning on the first character (kerning on a line's last character is dropped).
+    fn paint_hidden<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, range: &Range<usize>, name: &'static str, room: f64) {
+        let Some(last) = range.end.checked_sub(1).filter(|&l| l >= range.start) else { return };
+        let look = &self.ivars().look;
+        let width = self.body_width(storage.string().characterAtIndex(last));
+        let kern = palette.kern(room - width);
+        let hidden = palette.look(&look.hidden, &look.clear, name);
+        canvas.paint(range.start..last, |p| {
+            p.look = hidden;
+            p.kern = 0;
+        });
+        let body = palette.look(&look.body, &look.clear, name);
+        canvas.paint(last..range.end, |p| {
+            p.look = body;
+            p.kern = 0;
+        });
+        canvas.paint(range.start..range.start + 1, |p| p.kern = kern);
+    }
+
+    /// Width of a character in the body font, once measured; a tab's is next to nothing where
+    /// the source's indentation is hidden.
+    fn body_width(&self, unit: u16) -> f64 {
+        if unit == 0x09 {
+            return 0.0;
+        }
+        let look = &self.ivars().look;
+        // Between two letters: a lone space measures as nothing (trailing white space).
+        *look.body_widths.borrow_mut().entry(unit).or_insert_with(|| {
+            let between = format!("x{}x", String::from_utf16_lossy(&[unit]));
+            text_width(&NSString::from_str(&between), &look.body) - text_width(&NSString::from_str("xx"), &look.body)
+        })
     }
 
     /// Height of a line of body text: what a line of hidden source alone would not get.

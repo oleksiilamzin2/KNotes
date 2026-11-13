@@ -911,3 +911,13 @@ fn an_empty_list_item_keeps_a_line_of_its_own() {
     assert!(tasks[1].1 - tasks[0].1 >= 17.0, "the empty task a line below: {tasks:?}");
     assert!(bullet[0].1 - tasks[1].1 >= 17.0, "the empty bullet a line below that: {tasks:?} {bullet:?}");
 }
+
+#[test]
+fn an_empty_list_item_or_quote_line_sits_on_the_same_baseline_as_its_neighbours() {
+    let note = "- [ ] first\n- [ ] \n- [ ] third\n\n> a\n>\n> b\n\nend";
+    let (_vault, out) = probe_notes(&[("e.md", note)], &[("KNOTES_PROBE_OPEN", "e.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let tasks = decorations(&out, "task");
+    assert!(tasks.windows(2).all(|w| (w[1].1 - w[0].1 - 18.0).abs() < 0.5), "one line apart each: {tasks:?}");
+    let bars = decorations(&out, "quote");
+    assert!(bars.windows(2).all(|w| (w[1].1 - w[0].1 - 18.0).abs() < 0.5 && (w[0].3 - 18.0).abs() < 0.5), "{bars:?}");
+}
