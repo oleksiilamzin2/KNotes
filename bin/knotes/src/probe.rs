@@ -870,6 +870,7 @@ fn report_panel(window: &VaultWindow) {
     println!("panel: {}", if hidden { "hidden".to_owned() } else { window.describe_panel() });
     let (rows, empty) = window.outline_panel.describe();
     println!("outline: {rows}");
+    println!("outline-current: {}", window.outline_panel.current_title().unwrap_or_else(|| "none".to_owned()));
     if !empty.is_empty() {
         println!("outline-empty: {empty}");
     }

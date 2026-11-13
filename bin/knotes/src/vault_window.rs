@@ -116,6 +116,9 @@ pub struct VaultWindow {
     /// refresh of it is due.
     outline_of: RefCell<Option<String>>,
     outline_due: Cell<bool>,
+    /// The heading last clicked in the outline and how far the document was scrolled to it:
+    /// it stays highlighted until the document scrolls on, though it may not reach the top.
+    outline_jump: Cell<Option<(usize, f64)>>,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
     state: RefCell<State>,
@@ -263,6 +266,7 @@ impl VaultWindow {
             panel_mode: Cell::new(PanelMode::Ai),
             outline_of: RefCell::new(None),
             outline_due: Cell::new(false),
+            outline_jump: Cell::new(None),
             toolbar_delegate: toolbar,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
@@ -317,6 +321,12 @@ impl VaultWindow {
         this.outline_panel.on_choose(move |heading| {
             if let Some(window) = weak.upgrade() {
                 window.go_to_heading(heading);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.live_preview.on_scroll(move || {
+            if let Some(window) = weak.upgrade() {
+                window.outline_follow();
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -512,6 +522,7 @@ impl VaultWindow {
         let same = *self.outline_of.borrow() == document;
         *self.outline_of.borrow_mut() = document;
         self.outline_panel.show(outline, empty, same);
+        self.outline_follow();
     }
 
     /// Scrolls the document open to heading `heading` of the outline (a click on it).
@@ -522,6 +533,34 @@ impl VaultWindow {
         } else if self.editing.borrow().is_some() {
             self.scroll_note_to(entry.place.0);
         }
+        self.outline_jump.set(self.document_scroll().map(|(y, _)| (heading, y)));
+        self.outline_follow();
+    }
+
+    /// How far the document open is scrolled, and the place at the top of its view.
+    fn document_scroll(&self) -> Option<(f64, knotes_app::OutlinePlace)> {
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            return Some((viewer.scroll_y(), viewer.top_place()));
+        }
+        let y = self.note_text.enclosingScrollView()?.contentView().bounds().origin.y;
+        Some((y, (self.note_top()?, 0.0)))
+    }
+
+    /// Highlights in the outline the heading of the part of the document in view: the one
+    /// clicked last while the document stays where that put it.
+    fn outline_follow(&self) {
+        if self.panel_mode.get() != PanelMode::Outline {
+            return;
+        }
+        let Some((y, top)) = self.document_scroll() else { return self.outline_panel.set_current(None) };
+        let current = match self.outline_jump.get() {
+            Some((heading, at)) if (at - y).abs() < 0.5 => Some(heading),
+            _ => {
+                self.outline_jump.set(None);
+                self.outline_panel.current_at(top)
+            }
+        };
+        self.outline_panel.set_current(current);
     }
 
     /// Scrolls the note so the line at `offset` (UTF-16) is at the top, under the toolbar (as
@@ -932,6 +971,12 @@ impl VaultWindow {
         let viewer = path.and_then(|p| PdfViewer::new(mtm, &self.vault()?.join(p), self.find_bar.column.bounds()));
         let shown = viewer.is_some();
         if let Some(viewer) = viewer {
+            let weak = self.this.borrow().clone();
+            viewer.on_scroll(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.outline_follow();
+                }
+            });
             self.find_bar.column.addSubview(&viewer.scroll);
             *self.pdf_view.borrow_mut() = Some(viewer);
         }

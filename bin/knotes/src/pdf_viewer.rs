@@ -62,6 +62,8 @@ pub struct PagesIvars {
     texts: RefCell<HashMap<usize, Rc<PageText>>>,
     /// The selection: where it started and where it ends now.
     selection: Cell<Option<(Spot, Spot)>>,
+    /// Called after the pages scrolled.
+    on_scroll: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 define_class!(
@@ -258,6 +260,9 @@ impl PdfPages {
             canvas.setNeedsDisplay(true);
         }
         self.track();
+        if let Some(callback) = self.ivars().on_scroll.borrow().as_ref() {
+            callback();
+        }
     }
 
     /// Chooses the page shown (unless one was jumped to) and keeps drawn that page, two
@@ -429,6 +434,7 @@ impl PdfViewer {
             canvas: RefCell::new(None),
             texts: RefCell::new(HashMap::new()),
             selection: Cell::new(None),
+            on_scroll: RefCell::new(None),
         };
         let width = scroll.contentSize().width;
         let start = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 0.0));
@@ -472,6 +478,26 @@ impl PdfViewer {
         clip.scrollToPoint(NSPoint::new(0.0, top - self.scroll.contentInsets().top));
         self.scroll.reflectScrolledClipView(&clip);
         self.pages.follow();
+    }
+
+    /// Called after the pages scrolled.
+    pub fn on_scroll(&self, callback: impl Fn() + 'static) {
+        *self.pages.ivars().on_scroll.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// How far the pages are scrolled.
+    pub fn scroll_y(&self) -> f64 {
+        self.scroll.contentView().bounds().origin.y
+    }
+
+    /// The place at the top of the view, under the toolbar and the margin above a page: the
+    /// page there (index) and how far down it (a fraction).
+    pub fn top_place(&self) -> (usize, f64) {
+        let frames = self.pages.ivars().frames.borrow();
+        let y = self.scroll_y() + self.scroll.contentInsets().top + MARGIN + 1.0;
+        let page = frames.iter().position(|f| f.origin.y + f.size.height > y).unwrap_or(frames.len().saturating_sub(1));
+        let fraction = frames.get(page).map_or(0.0, |f| ((y - f.origin.y) / f.size.height).clamp(0.0, 1.0));
+        (page, fraction)
     }
 
     /// The page shown (from 1) and how many there are.

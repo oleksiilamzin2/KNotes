@@ -138,6 +138,8 @@ pub struct Ivars {
     on_link: RefCell<Option<OnLink>>,
     /// Called after the cursor moved.
     on_cursor: RefCell<Option<OnChange>>,
+    /// Called after the note scrolled.
+    on_scroll: RefCell<Option<OnChange>>,
     /// Offered key commands (`moveDown:`, `insertNewline:`…) first; true when it took one.
     on_command: RefCell<Option<OnCommand>>,
     /// Resolves the note's links, to dim those to missing notes.
@@ -258,6 +260,9 @@ define_class!(
                 // Rows coming into view must not show a sideways scroll they missed.
                 self.catch_up_table(&view);
             }
+            if let Some(callback) = self.ivars().on_scroll.borrow().as_ref() {
+                callback();
+            }
         }
 
         #[unsafe(method(frameDidChange:))]
@@ -374,6 +379,7 @@ impl LivePreview {
             on_change: RefCell::new(None),
             on_link: RefCell::new(None),
             on_cursor: RefCell::new(None),
+            on_scroll: RefCell::new(None),
             on_command: RefCell::new(None),
             links: RefCell::new(None),
             path: RefCell::new(String::new()),
@@ -416,6 +422,10 @@ impl LivePreview {
 
     pub fn on_change(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_change.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_scroll(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_scroll.borrow_mut() = Some(Box::new(callback));
     }
 
     /// Restyles after a user edit: only the paragraphs whose styles changed (ADR 0012), plus

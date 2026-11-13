@@ -224,6 +224,43 @@ impl OutlinePanel {
         *self.source.ivars().on_choose.borrow_mut() = Some(Box::new(callback));
     }
 
+    /// The heading of the part at `top` (the top of the view).
+    pub fn current_at(&self, top: knotes_app::OutlinePlace) -> Option<usize> {
+        self.source.ivars().model.borrow().current(top)
+    }
+
+    /// Highlights heading `heading`, or its nearest parent shown when it is folded away, and
+    /// scrolls its row into view; nothing with `None`.
+    pub fn set_current(&self, heading: Option<usize>) {
+        let outline = &self.outline;
+        let mut at = heading;
+        let row = loop {
+            let Some(i) = at else { break None };
+            // SAFETY: an item of this outline view.
+            let row = unsafe { outline.rowForItem(Some(&self.source.object(i))) };
+            if row >= 0 {
+                break Some(row);
+            }
+            at = self.source.ivars().model.borrow().parent(i);
+        };
+        match row {
+            Some(row) if outline.selectedRow() != row => {
+                outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
+                outline.scrollRowToVisible(row);
+            }
+            Some(_) => {}
+            // SAFETY: no sender.
+            None => unsafe { outline.deselectAll(None) },
+        }
+    }
+
+    /// The title of the heading highlighted (probe mode).
+    pub fn current_title(&self) -> Option<String> {
+        let row = self.outline.selectedRow();
+        let i = (row >= 0).then(|| self.outline.itemAtRow(row)).flatten().and_then(|item| index_of(&item))?;
+        self.entry(i).map(|e| e.title)
+    }
+
     /// Heading `i` of the outline shown.
     pub fn entry(&self, i: usize) -> Option<OutlineEntry> {
         self.source.ivars().model.borrow().entries().get(i).cloned()

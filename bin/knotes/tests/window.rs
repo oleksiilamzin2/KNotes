@@ -2069,3 +2069,35 @@ fn a_click_on_a_bookmark_in_the_outline_shows_its_page_of_the_pdf() {
     let out = probe_outline(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", outlined)], &env);
     assert!(out.contains("pdf-view: doc.pdf 3/3"), "{out}");
 }
+
+/// The heading highlighted in the outline (`outline-current:` line).
+fn outline_current(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("outline-current: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn the_outline_highlights_the_heading_of_the_part_in_view() {
+    let note = long_sections();
+    let open = ("KNOTES_PROBE_OPEN", "a.md");
+    assert_eq!(outline_current(&probe_outline(&[("a.md", &note)], &[], &[open])), "A");
+    assert_eq!(outline_current(&probe_outline(&[("a.md", &note)], &[], &[open, ("KNOTES_PROBE_NOTE_SCROLL", "end")])), "C");
+    assert_eq!(outline_current(&probe_outline(&[("a.md", &note)], &[], &[open, ("KNOTES_PROBE_OUTLINE_CLICK", "B")])), "B");
+}
+
+#[test]
+fn after_a_click_in_the_outline_scrolling_on_highlights_the_heading_in_view_again() {
+    let note = long_sections();
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_OUTLINE_CLICK", "A"), ("KNOTES_PROBE_NOTE_SCROLL", "end")];
+    assert_eq!(outline_current(&probe_outline(&[("a.md", &note)], &[], &env)), "C");
+}
+
+#[test]
+fn the_outline_of_a_pdf_highlights_the_bookmark_of_the_page_in_view() {
+    let outlined: &[u8] = include_bytes!("fixtures/outlined.pdf");
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    let notes = [("a.md", "See [[doc.pdf]] here\n\nend")];
+    assert_eq!(outline_current(&probe_outline(&notes, &[("doc.pdf", outlined)], &env)), "Вступ");
+    // The last page cannot reach the top; the bookmark clicked stays highlighted.
+    let out = probe_outline(&notes, &[("doc.pdf", outlined)], &[env[0], env[1], env[2], ("KNOTES_PROBE_OUTLINE_CLICK", "Detail")]);
+    assert_eq!(outline_current(&out), "Detail");
+}
