@@ -920,10 +920,9 @@ fn table_bench(view: &objc2_app_kit::NSTextView) {
     use objc2_foundation::NSRange;
     let text = view.string();
     let line = text.paragraphRangeForRange(NSRange::new(text.length() / 2, 0));
-    let mut at = line.location + 2;
     let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
     let mut times = Vec::new();
-    for c in "typing in a table cell ".chars().cycle().take(100) {
+    for (at, c) in (line.location + 2..).zip("typing in a table cell ".chars().cycle().take(100)) {
         objc2::rc::autoreleasepool(|_| {
             let t = std::time::Instant::now();
             view.setSelectedRange(NSRange::new(at, 0));
@@ -935,7 +934,6 @@ fn table_bench(view: &objc2_app_kit::NSTextView) {
             }
             times.push(t.elapsed());
         });
-        at += 1;
     }
     times.sort_unstable();
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
