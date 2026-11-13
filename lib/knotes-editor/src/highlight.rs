@@ -281,7 +281,7 @@ fn fences(h: &mut Highlight, source: &str, block: Range<usize>) {
 fn callout(source: &str, r: Range<usize>) -> Option<CalloutRun> {
     let text = &source[r.clone()];
     let line = &text[..text.find('\n').unwrap_or(text.len())];
-    let content = line.trim_start_matches(|c: char| c == '>' || c == ' ' || c == '\t');
+    let content = line.trim_start_matches(['>', ' ', '\t']);
     let at = r.start + (line.len() - content.len());
     let inner = content.strip_prefix("[!")?;
     let close = inner.find(']')?;
