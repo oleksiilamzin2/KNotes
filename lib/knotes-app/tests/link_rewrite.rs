@@ -55,3 +55,20 @@ fn other_links_and_text_stay_as_they_are() {
     let text = "[[Keep]] [[Old]] [site](https://x.y) Old";
     assert_eq!(moved(text, "a.md", "Old.md", "New.md", &paths), "[[Keep]] [[New]] [site](https://x.y) Old");
 }
+
+#[test]
+fn a_moved_note_keeps_its_relative_markdown_links_pointing_where_they_did() {
+    let paths = ["dir/a.md", "dir/b.md", "x/c.md"];
+    let before = LinkTargets::new(paths.iter().copied());
+    let text = "[b](b.md) [c](../x/c.md) [root](x/c.md) [self](a.md#h) [[b]] [gone](nowhere.md)";
+    let links: Vec<knotes_core::OutLink> = MarkdownParser::new()
+        .parse(text)
+        .links
+        .into_iter()
+        .map(|link| knotes_core::OutLink { resolved: before.resolve(link.kind, &link.target, "dir/a.md"), link })
+        .collect();
+    assert_eq!(
+        knotes_app::rebase_links(text, &links, "dir/a.md", "other/sub/a.md"),
+        "[b](../../dir/b.md) [c](../../x/c.md) [root](x/c.md) [self](a.md#h) [[b]] [gone](nowhere.md)"
+    );
+}

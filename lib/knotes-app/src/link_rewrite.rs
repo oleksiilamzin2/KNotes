@@ -1,6 +1,6 @@
 //! Links to a renamed or moved note, rewritten to its new path in the form each had (ADR 0019).
 
-use knotes_core::{Link, LinkKind, LinkResolver};
+use knotes_core::{Link, LinkKind, LinkResolver, OutLink};
 
 /// `text` of the note `source` with each of `links` (links to the note at `from`) pointing to
 /// `to` instead. `after` resolves links in the vault as it is after the move. A wikilink's
@@ -16,10 +16,29 @@ pub fn rewrite_links(text: &str, source: &str, links: &[Link], from: &str, to: &
         let Some(raw) = text.get(span.clone()) else { continue };
         let new = match link.kind {
             LinkKind::Wiki => wikilink(raw, source, from, to, after),
-            LinkKind::Markdown => markdown_link(raw, source, from, to),
+            LinkKind::Markdown => markdown_link(raw, (source, source), from, to),
             LinkKind::External => None,
         };
         if let Some(new) = new {
+            out.replace_range(span, &new);
+        }
+    }
+    out
+}
+
+/// `text` of a note moved from `from` to `to` with its relative Markdown links (`links`, as
+/// resolved before the move) pointing where they did; links from the vault's root and
+/// wikilinks need no change, links to itself follow it.
+pub fn rebase_links(text: &str, links: &[OutLink], from: &str, to: &str) -> String {
+    let mut out = text.to_owned();
+    let mut links: Vec<&OutLink> = links.iter().filter(|l| l.link.kind == LinkKind::Markdown && l.resolved.is_some()).collect();
+    links.sort_by_key(|l| std::cmp::Reverse(l.link.span.start));
+    for out_link in links {
+        let span = out_link.link.span.start as usize..out_link.link.span.end as usize;
+        let Some(raw) = text.get(span.clone()) else { continue };
+        let target = out_link.resolved.as_deref().unwrap_or_default();
+        let target_after = if target == from { to } else { target };
+        if let Some(new) = markdown_link(raw, (from, to), target, target_after).filter(|new| new != raw) {
             out.replace_range(span, &new);
         }
     }
@@ -47,8 +66,10 @@ fn wikilink(raw: &str, source: &str, from: &str, to: &str, after: &dyn LinkResol
     Some(format!("{}{target}{md}{}", &raw[..open], &raw[open + end..]))
 }
 
-/// `[text](dest#…)` or `![…](<dest> "title")` with the destination's path rewritten.
-fn markdown_link(raw: &str, source: &str, from: &str, to: &str) -> Option<String> {
+/// `[text](dest#…)` or `![…](<dest> "title")`, written in a note at `sources.0` and pointing
+/// to `from`, rewritten for a note at `sources.1` pointing to `to`. A destination from the
+/// vault's root changes only with its target.
+fn markdown_link(raw: &str, sources: (&str, &str), from: &str, to: &str) -> Option<String> {
     let open = raw.rfind("](")? + 2;
     let area = raw.get(open..raw.len().checked_sub(1)?)?;
     let angle = area.starts_with('<');
@@ -56,10 +77,13 @@ fn markdown_link(raw: &str, source: &str, from: &str, to: &str) -> Option<String
     let dest = if angle { &area[1..dest_end - 1] } else { &area[..dest_end] };
     let (path, fragment) = dest.split_once('#').map_or((dest, ""), |(p, f)| (p, f));
     let decoded = percent_decode(path);
-    let folder = source.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let relative = join(folder, &decoded).is_some_and(|p| p.eq_ignore_ascii_case(from));
+    let folder = |source: &str| source.rsplit_once('/').map_or("", |(dir, _)| dir).to_owned();
+    let relative = join(&folder(sources.0), &decoded).is_some_and(|p| p.eq_ignore_ascii_case(from));
+    if !relative && from == to {
+        return Some(raw.to_owned());
+    }
     let new_path = if relative {
-        relative_path(folder, to)
+        relative_path(&folder(sources.1), to)
     } else {
         let slash = if decoded.starts_with('/') { "/" } else { "" };
         format!("{slash}{to}")
