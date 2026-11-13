@@ -108,3 +108,17 @@ pub const FIND_NONE: &str = "Немає";
 pub fn find_count(current: usize, total: usize) -> String {
     format!("{current} з {total}")
 }
+
+/// A table row's menu (ADR 0021).
+pub const TABLE_ROW_ABOVE: &str = "Вставити рядок вище";
+pub const TABLE_ROW_BELOW: &str = "Вставити рядок нижче";
+pub const TABLE_ROW_DELETE: &str = "Видалити рядок";
+/// A table column's menu.
+pub const TABLE_COLUMN_LEFT: &str = "Вставити колонку ліворуч";
+pub const TABLE_COLUMN_RIGHT: &str = "Вставити колонку праворуч";
+pub const TABLE_COLUMN_DELETE: &str = "Видалити колонку";
+pub const TABLE_ALIGN_LEFT: &str = "Вирівняти ліворуч";
+pub const TABLE_ALIGN_CENTER: &str = "Вирівняти по центру";
+pub const TABLE_ALIGN_RIGHT: &str = "Вирівняти праворуч";
+pub const TABLE_SORT_UP: &str = "Сортувати за зростанням";
+pub const TABLE_SORT_DOWN: &str = "Сортувати за спаданням";

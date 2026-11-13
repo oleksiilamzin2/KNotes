@@ -15,7 +15,8 @@ use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width};
 
 use crate::image_loader::{self, DeferredImage};
-use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls};
+use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
+use crate::strings;
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -27,7 +28,7 @@ use objc2_app_kit::{
     NSBackgroundColorAttributeName, NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
-    NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSSize, NSString,
+    NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString,
     NSValue,
 };
 
@@ -90,6 +91,28 @@ struct Look {
 type OnChange = Box<dyn Fn()>;
 /// A table under the pointer: where it starts, and the row and column under the pointer.
 type TableHover = (usize, Option<usize>, Option<usize>);
+
+/// A table control (ADR 0021), with the table's index in the note.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TableControl {
+    RowHandle(usize, usize),
+    ColumnHandle(usize, usize),
+    AddRow(usize),
+    AddColumn(usize),
+}
+
+/// What a table control or its menu does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TableAction {
+    InsertRow(usize),
+    DeleteRow(usize),
+    InsertColumn(usize),
+    DeleteColumn(usize),
+    MoveRow(usize, usize),
+    MoveColumn(usize, usize),
+    Align(usize, Align),
+    Sort(usize, bool),
+}
 type OnLink = Box<dyn Fn(&Link)>;
 type OnCommand = Box<dyn Fn(Sel) -> bool>;
 
@@ -127,6 +150,8 @@ pub struct Ivars {
     hovered_image: Cell<Option<usize>>,
     /// The table the pointer is over (where it starts), and the row and column under it.
     hovered_table: Cell<Option<TableHover>>,
+    /// The actions of the table menu being shown, by item tag, with the table's index.
+    menu_actions: RefCell<Vec<(usize, TableAction)>>,
     /// A table edit of the live preview's own is under way: not checked against the table's
     /// structure.
     table_editing: Cell<bool>,
@@ -185,6 +210,15 @@ define_class!(
 
     impl LivePreview {
         /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
+        /// An item of a table's row or column menu.
+        #[unsafe(method(tableMenuItem:))]
+        fn table_menu_item(&self, item: &objc2_app_kit::NSMenuItem) {
+            let chosen = usize::try_from(item.tag()).ok().and_then(|i| self.ivars().menu_actions.borrow().get(i).copied());
+            if let (Some((t, action)), Some(view)) = (chosen, self.ivars().view.borrow().load()) {
+                self.act_on_table(&view, t, action);
+            }
+        }
+
         /// The note scrolled.
         #[unsafe(method(boundsDidChange:))]
         fn bounds_did_change(&self, _notification: &NSNotification) {
@@ -318,6 +352,7 @@ impl LivePreview {
             table_columns: RefCell::new(HashMap::new()),
             hovered_image: Cell::new(None),
             table_editing: Cell::new(false),
+            menu_actions: RefCell::new(Vec::new()),
             hovered_table: Cell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
@@ -1131,6 +1166,222 @@ impl LivePreview {
         })
     }
 
+    /// The control of the table under the pointer at `point` (text view coordinates).
+    pub fn table_control_at(&self, view: &NSTextView, point: NSPoint) -> Option<TableControl> {
+        let (start, row, column) = self.ivars().hovered_table.get()?;
+        let layout = view.textLayoutManager()?;
+        let content = layout.textContentManager()?;
+        let origin = view.textContainerOrigin();
+        let padding = layout.textContainer().map_or(0.0, |c| c.lineFragmentPadding());
+        let styled = self.ivars().styled.borrow();
+        let t = styled.tables.iter().position(|t| t.range.start == start)?;
+        let table = &styled.tables[t];
+        let edges = self.ivars().table_columns.borrow().get(&start).cloned()?;
+        let last = table.rows.len().saturating_sub(1);
+        let (left, width) = (origin.x + padding + edges.first()?, edges.last()? - edges.first()?);
+        for (i, r) in table.rows.iter().enumerate() {
+            let Some((top, bottom)) = row_band(&layout, &content, r.range.start) else { continue };
+            let rect = NSRect::new(NSPoint::new(left, origin.y + top), NSSize::new(width, bottom - top));
+            let controls = TableControls { handle: row == Some(i), column_handle: if i == 0 { column } else { None }, add_row: i == last, add_column: true, ..TableControls::default() };
+            for (kind, c) in table_controls(rect, &edges, &controls) {
+                let inside = point.x >= c.origin.x && point.x <= c.origin.x + c.size.width && point.y >= c.origin.y && point.y <= c.origin.y + c.size.height;
+                if inside {
+                    return Some(match kind {
+                        "table-row-handle" => TableControl::RowHandle(t, i),
+                        "table-column-handle" => TableControl::ColumnHandle(t, column?),
+                        "table-add-row" => TableControl::AddRow(t),
+                        _ => TableControl::AddColumn(t),
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// A mouse press at `point`: an add bar adds at once; a handle followed by the mouse is a
+    /// drag that moves its row or column, or else a click that opens its menu. False when no
+    /// control is there.
+    pub fn press_table(&self, view: &NSTextView, point: NSPoint) -> bool {
+        let Some(control) = self.table_control_at(view, point) else { return false };
+        if self.add_from(view, control) {
+            return true;
+        }
+        let Some(window) = view.window() else { return true };
+        let mut dragged = None;
+        while let Some(event) = window.nextEventMatchingMask(objc2_app_kit::NSEventMask::LeftMouseDragged | objc2_app_kit::NSEventMask::LeftMouseUp) {
+            let at = view.convertPoint_fromView(event.locationInWindow(), None);
+            if dragged.is_some() || (at.x - point.x).hypot(at.y - point.y) > 4.0 {
+                dragged = Some(at);
+            }
+            if event.r#type() == objc2_app_kit::NSEventType::LeftMouseUp {
+                break;
+            }
+        }
+        match dragged {
+            Some(to) => self.drop_handle(view, control, to),
+            None => self.show_table_menu(view, control, point),
+        }
+        true
+    }
+
+    /// `KNOTES_PROBE_TABLE_PRESS`: a press at `x,y` (a handle's menu printed, not shown),
+    /// `x,y:n` (its item n chosen) or `x,y>x,y` (a handle dragged there).
+    pub fn probe_table_press(&self, view: &NSTextView, spec: &str) {
+        let point = |p: &str| p.split_once(',').and_then(|(x, y)| Some(NSPoint::new(x.parse().ok()?, y.parse().ok()?)));
+        let (at, rest) = spec.split_once([':', '>']).map_or((spec, None), |(a, r)| (a, Some(r)));
+        let (Some(at), Some(control)) = (point(at), point(at).and_then(|p| self.table_control_at(view, p))) else {
+            println!("table-control: none");
+            return;
+        };
+        let _ = at;
+        if self.add_from(view, control) {
+            return;
+        }
+        if spec.contains('>') {
+            if let Some(to) = rest.and_then(point) {
+                self.drop_handle(view, control, to);
+            }
+        } else if let Some(n) = rest.and_then(|r| r.parse::<usize>().ok()) {
+            if let Some(&(_, action)) = self.table_menu(control).get(n) {
+                self.act_on_table(view, control_table(control), action);
+            }
+        } else {
+            let titles: Vec<&str> = self.table_menu(control).iter().map(|(title, _)| *title).collect();
+            println!("table-menu: {}", titles.join(" | "));
+        }
+    }
+
+    /// An add bar's row or column, added; false for a handle.
+    fn add_from(&self, view: &NSTextView, control: TableControl) -> bool {
+        let size = |t: usize| self.ivars().styled.borrow().tables.get(t).map(|t| (t.rows.len(), t.aligns.len()));
+        match control {
+            TableControl::AddRow(t) => {
+                if let Some((rows, _)) = size(t) {
+                    self.act_on_table(view, t, TableAction::InsertRow(rows));
+                }
+                true
+            }
+            TableControl::AddColumn(t) => {
+                if let Some((_, columns)) = size(t) {
+                    self.act_on_table(view, t, TableAction::InsertColumn(columns));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A handle's menu: its titles and actions.
+    fn table_menu(&self, control: TableControl) -> Vec<(&'static str, TableAction)> {
+        match control {
+            TableControl::RowHandle(_, row) => vec![
+                (strings::TABLE_ROW_ABOVE, TableAction::InsertRow(row)),
+                (strings::TABLE_ROW_BELOW, TableAction::InsertRow(row + 1)),
+                (strings::TABLE_ROW_DELETE, TableAction::DeleteRow(row)),
+            ],
+            TableControl::ColumnHandle(_, c) => vec![
+                (strings::TABLE_COLUMN_LEFT, TableAction::InsertColumn(c)),
+                (strings::TABLE_COLUMN_RIGHT, TableAction::InsertColumn(c + 1)),
+                (strings::TABLE_COLUMN_DELETE, TableAction::DeleteColumn(c)),
+                (strings::TABLE_ALIGN_LEFT, TableAction::Align(c, Align::Left)),
+                (strings::TABLE_ALIGN_CENTER, TableAction::Align(c, Align::Center)),
+                (strings::TABLE_ALIGN_RIGHT, TableAction::Align(c, Align::Right)),
+                (strings::TABLE_SORT_UP, TableAction::Sort(c, true)),
+                (strings::TABLE_SORT_DOWN, TableAction::Sort(c, false)),
+            ],
+            TableControl::AddRow(_) | TableControl::AddColumn(_) => Vec::new(),
+        }
+    }
+
+    /// Shows a handle's menu at `point`; the chosen item acts (`tableMenuItem:`).
+    fn show_table_menu(&self, view: &NSTextView, control: TableControl, point: NSPoint) {
+        let mtm = self.mtm();
+        let items = self.table_menu(control);
+        *self.ivars().menu_actions.borrow_mut() = items.iter().map(|(_, a)| (control_table(control), *a)).collect();
+        let menu = objc2_app_kit::NSMenu::new(mtm);
+        for (tag, (title, action)) in items.iter().enumerate() {
+            if matches!(action, TableAction::Align(..) | TableAction::Sort(..)) && matches!(items.get(tag.wrapping_sub(1)), Some((_, TableAction::DeleteColumn(_) | TableAction::Align(_, Align::Right)))) {
+                menu.addItem(&objc2_app_kit::NSMenuItem::separatorItem(mtm));
+            }
+            // SAFETY: the live preview is the target and lives as long as the view.
+            let item = unsafe { objc2_app_kit::NSMenuItem::initWithTitle_action_keyEquivalent(objc2_app_kit::NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(tableMenuItem:)), &NSString::new()) };
+            // SAFETY: as above.
+            unsafe { item.setTarget(Some(self)) };
+            item.setTag(tag as isize);
+            menu.addItem(&item);
+        }
+        menu.popUpMenuPositioningItem_atLocation_inView(None, point, Some(view));
+    }
+
+    /// A handle dropped at `point`: its row or column moves to the one there.
+    fn drop_handle(&self, view: &NSTextView, control: TableControl, point: NSPoint) {
+        let action = {
+            let Some(layout) = view.textLayoutManager() else { return };
+            let Some(content) = layout.textContentManager() else { return };
+            let origin = view.textContainerOrigin();
+            let styled = self.ivars().styled.borrow();
+            match control {
+                TableControl::RowHandle(t, from) => {
+                    let Some(table) = styled.tables.get(t) else { return };
+                    let bands: Vec<(f64, f64)> = table.rows.iter().filter_map(|r| row_band(&layout, &content, r.range.start)).collect();
+                    let y = point.y - origin.y;
+                    let to = bands.iter().position(|(top, bottom)| y >= *top && y < *bottom).unwrap_or(if bands.first().is_some_and(|b| y < b.0) { 0 } else { bands.len().saturating_sub(1) });
+                    TableAction::MoveRow(from, to)
+                }
+                TableControl::ColumnHandle(t, from) => {
+                    let Some(table) = styled.tables.get(t) else { return };
+                    let Some(edges) = self.ivars().table_columns.borrow().get(&table.range.start).cloned() else { return };
+                    let padding = layout.textContainer().map_or(0.0, |c| c.lineFragmentPadding());
+                    let x = point.x - origin.x - padding;
+                    let to = edges.windows(2).position(|w| x >= w[0] && x < w[1]).unwrap_or(if x < edges[0] { 0 } else { edges.len().saturating_sub(2) });
+                    TableAction::MoveColumn(from, to)
+                }
+                _ => return,
+            }
+        };
+        if !matches!(action, TableAction::MoveRow(a, b) | TableAction::MoveColumn(a, b) if a == b) {
+            self.act_on_table(view, control_table(control), action);
+        }
+    }
+
+    /// Does `action` to table `t`, as one edit, the cursor left in the cell it concerns.
+    fn act_on_table(&self, view: &NSTextView, t: usize, action: TableAction) {
+        self.rewrite_table(view, t, |table| match action {
+            TableAction::InsertRow(at) => {
+                table.insert_row(at);
+                (at.min(table.rows.len() - 1), 0)
+            }
+            TableAction::DeleteRow(row) => {
+                table.delete_row(row);
+                (row.min(table.rows.len() - 1), 0)
+            }
+            TableAction::InsertColumn(at) => {
+                table.insert_column(at);
+                (0, at.min(table.columns() - 1))
+            }
+            TableAction::DeleteColumn(column) => {
+                table.delete_column(column);
+                (0, column.min(table.columns() - 1))
+            }
+            TableAction::MoveRow(from, to) => {
+                table.move_row(from, to);
+                (to, 0)
+            }
+            TableAction::MoveColumn(from, to) => {
+                table.move_column(from, to);
+                (0, to)
+            }
+            TableAction::Align(column, align) => {
+                table.set_align(column, align);
+                (0, column)
+            }
+            TableAction::Sort(column, ascending) => {
+                table.sort_by(column, ascending);
+                (0, column)
+            }
+        });
+    }
+
     /// Rewrites table `t` (its index in the note) as `change` makes it, as one edit, and puts
     /// the cursor at the end of the cell (row, column) `change` gives.
     fn rewrite_table(&self, view: &NSTextView, t: usize, change: impl FnOnce(&mut TableText) -> (usize, usize)) {
@@ -1785,9 +2036,18 @@ fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
 }
 
+/// The table a control belongs to.
+fn control_table(control: TableControl) -> usize {
+    match control {
+        TableControl::RowHandle(t, _) | TableControl::ColumnHandle(t, _) | TableControl::AddRow(t) | TableControl::AddColumn(t) => t,
+    }
+}
+
 /// The top and bottom of the row starting at `offset` (text container coordinates), without
 /// the empty line after the note's final line break.
 fn row_band(layout: &NSTextLayoutManager, content: &objc2_app_kit::NSTextContentManager, offset: usize) -> Option<(f64, f64)> {
+    // A restyle (the pointer coming over the table restyles it) leaves the rows to lay out.
+    layout.textViewportLayoutController().layoutViewport();
     let location = content.locationFromLocation_withOffset(&content.documentRange().location(), offset as isize)?;
     let fragment = layout.textLayoutFragmentForLocation(&location)?;
     let top = fragment.layoutFragmentFrame().origin.y;

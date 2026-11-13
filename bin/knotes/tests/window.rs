@@ -1609,3 +1609,66 @@ fn the_pointer_over_a_table_shows_its_row_and_column_handles_and_add_bars() {
     let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &away)]);
     assert!(decorations(&out, "table-row-handle").is_empty(), "gone with the pointer: {out}");
 }
+
+/// Centre of a decoration's rect, as a probe point.
+fn centre(r: (f64, f64, f64, f64)) -> String {
+    format!("{},{}", r.0 + r.2 / 2.0, r.1 + r.3 / 2.0)
+}
+
+/// The table's controls with the pointer over row `row`, column `column` (from the grid's
+/// layout), and the hover point to give first.
+fn table_controls_over(row: usize, column_fraction: f64) -> (String, String) {
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0")]);
+    let rows = decorations(&out, "table-row");
+    let r = rows[row];
+    let over = format!("{},{}", r.0 + r.2 * column_fraction, r.1 + r.3 / 2.0);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over)]);
+    (over, out)
+}
+
+#[test]
+fn the_add_bars_add_a_row_and_a_column() {
+    let (over, out) = table_controls_over(1, 0.8);
+    let add_row = centre(decorations(&out, "table-add-row")[0]);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &add_row)]);
+    assert!(note_text(&out).contains("| Bartholomew | 42 |⏎|  |  |⏎"), "{out}");
+    let (over, out) = table_controls_over(1, 0.8);
+    let add_column = centre(decorations(&out, "table-add-column")[0]);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &add_column)]);
+    assert!(note_text(&out).contains("| Name | Age |  |⏎| :--- | ---: | --- |⏎| Ann | 3 |  |"), "{out}");
+}
+
+#[test]
+fn a_row_handle_opens_the_row_menu_and_its_items_act() {
+    let (over, out) = table_controls_over(1, 0.8);
+    let handle = centre(decorations(&out, "table-row-handle")[0]);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &handle)]);
+    assert!(out.contains("table-menu: Вставити рядок вище | Вставити рядок нижче | Видалити рядок"), "{out}");
+    let choose = format!("{handle}:2");
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &choose)]);
+    assert!(note_text(&out).contains("| :--- | ---: |⏎| Bartholomew | 42 |⏎⏎After"), "Ann's row gone: {out}");
+}
+
+#[test]
+fn a_column_handle_opens_the_column_menu_with_alignment_and_sorting() {
+    let (over, out) = table_controls_over(1, 0.8);
+    let handle = centre(decorations(&out, "table-column-handle")[0]);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &handle)]);
+    let menu = out.lines().find_map(|l| l.strip_prefix("table-menu: ")).unwrap_or_else(|| panic!("{out}"));
+    let items: Vec<&str> = menu.split(" | ").collect();
+    assert_eq!(items, ["Вставити колонку ліворуч", "Вставити колонку праворуч", "Видалити колонку", "Вирівняти ліворуч", "Вирівняти по центру", "Вирівняти праворуч", "Сортувати за зростанням", "Сортувати за спаданням"]);
+    let choose = format!("{handle}:7");
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &choose)]);
+    assert!(note_text(&out).contains("| Bartholomew | 42 |⏎| Ann | 3 |"), "sorted by Age, descending: {out}");
+}
+
+#[test]
+fn dragging_a_row_handle_moves_the_row() {
+    let (over, out) = table_controls_over(2, 0.3);
+    let handle = decorations(&out, "table-row-handle")[0];
+    let rows = decorations(&out, "table-row");
+    // From Bartholomew's handle up to the top of Ann's row.
+    let drag = format!("{}>{},{}", centre(handle), handle.0 + 5.0, rows[1].1 + 3.0);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_PRESS", &drag)]);
+    assert!(note_text(&out).contains("| Bartholomew | 42 |⏎| Ann | 3 |⏎"), "{out}");
+}

@@ -160,6 +160,8 @@ impl VaultWindow {
         note_text.on_image_hover(move |view, line| hovers.hover_image(view, line));
         let pointers = live_preview.clone();
         note_text.on_pointer(move |view, point| pointers.hover_table(view, point));
+        let presses = live_preview.clone();
+        note_text.on_press(move |view, point| presses.press_table(view, point));
         // Weak: the text view keeps its callbacks, and the text view is the live preview's.
         let preview = live_preview.clone();
         let text = objc2::rc::Weak::new(&*note_text);
@@ -623,6 +625,9 @@ impl VaultWindow {
             probe::image_edge_requested(&self.note_text);
             probe::image_hover_requested(&self.note_text);
             probe::pointer_requested(&self.note_text);
+            if let Ok(press) = std::env::var("KNOTES_PROBE_TABLE_PRESS") {
+                self.live_preview.probe_table_press(&self.note_text, &press);
+            }
             if let Ok(ranges) = std::env::var("KNOTES_PROBE_RANGE_X") {
                 probe::report_range_xs(&self.note_text, &ranges);
             }

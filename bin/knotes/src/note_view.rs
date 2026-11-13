@@ -38,6 +38,9 @@ type OnImageFile = Box<dyn Fn(&NSTextView, usize) -> Option<PathBuf>>;
 type OnImageHover = Box<dyn Fn(&NSTextView, Option<usize>)>;
 /// Gets the text view and where the pointer now is in it (`None`: it left the view).
 type OnPointer = Box<dyn Fn(&NSTextView, Option<NSPoint>)>;
+/// Gets the text view and where a mouse press is in it; true when it took the press (a table's
+/// control).
+type OnPress = Box<dyn Fn(&NSTextView, NSPoint) -> bool>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -58,6 +61,7 @@ pub struct Ivars {
     on_image_file: RefCell<Option<OnImageFile>>,
     on_image_hover: RefCell<Option<OnImageHover>>,
     on_pointer: RefCell<Option<OnPointer>>,
+    on_press: RefCell<Option<OnPress>>,
     /// The image the last click was on (where its line starts): a second click previews it,
     /// though the first one moved it below its source.
     image_clicked: Cell<Option<usize>>,
@@ -196,18 +200,21 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            let clicked = self.ivars().image_clicked.take();
-            if event.clickCount() >= 2 && let Some(line) = clicked {
-                self.quick_look(line);
-                return;
-            }
             let point = self.convertPoint_fromView(event.locationInWindow(), None);
-            self.ivars().image_clicked.set(crate::preview_fragment::image_at(self, point).map(|(line, _, _)| line));
-            if let Some((line, rect)) = self.image_edge(event.locationInWindow()) {
-                self.resize_image(line, rect);
-            } else if !self.offer_click(event) {
-                // SAFETY: forwarding the same event to the superclass implementation.
-                let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+            // A table's control takes the press first.
+            let pressed = self.ivars().on_press.borrow().as_ref().is_some_and(|press| press(self, point));
+            let clicked = self.ivars().image_clicked.take();
+            if pressed {
+            } else if event.clickCount() >= 2 && let Some(line) = clicked {
+                self.quick_look(line);
+            } else {
+                self.ivars().image_clicked.set(crate::preview_fragment::image_at(self, point).map(|(line, _, _)| line));
+                if let Some((line, rect)) = self.image_edge(event.locationInWindow()) {
+                    self.resize_image(line, rect);
+                } else if !self.offer_click(event) {
+                    // SAFETY: forwarding the same event to the superclass implementation.
+                    let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+                }
             }
         }
     }
@@ -238,6 +245,10 @@ impl NoteTextView {
     /// and its rect in the view.
     fn image_edge(&self, in_window: NSPoint) -> Option<(usize, NSRect)> {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
+    }
+
+    pub fn on_press(&self, callback: impl Fn(&NSTextView, NSPoint) -> bool + 'static) {
+        *self.ivars().on_press.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_pointer(&self, callback: impl Fn(&NSTextView, Option<NSPoint>) + 'static) {
