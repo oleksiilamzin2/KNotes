@@ -174,6 +174,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             SidebarItem::Folder(_) if model.inbox() == Some(&item) => (model.name(&item).to_owned(), Some("tray.and.arrow.down")),
             SidebarItem::Folder(_) => (model.name(&item).to_owned(), Some("folder")),
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
+            SidebarItem::Tab(path) => (model.name(&item).to_owned(), Some(if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" })),
         };
         let cell = cell(outline, self.mtm());
         // SAFETY: the cell views are built by `cell` with these outlets set.

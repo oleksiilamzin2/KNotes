@@ -363,6 +363,7 @@ pub fn sidebar_mode_requested(window: &NSWindow) {
     let index = match std::env::var("KNOTES_PROBE_ACTION").as_deref() {
         Ok("sidebar=folders") => 0,
         Ok("sidebar=tags") => 1,
+        Ok("sidebar=tabs") => 2,
         _ => return,
     };
     let Some(group) = sidebar_switch(window) else { return };
@@ -954,6 +955,7 @@ fn report_sidebar_mode(window: &NSWindow) {
         Some((true, _)) => "hidden",
         Some((false, 0)) => "folders",
         Some((false, 1)) => "tags",
+        Some((false, 2)) => "tabs",
         _ => "none",
     };
     let collapsed = window
@@ -976,6 +978,14 @@ fn report_sidebar(outline: &NSOutlineView) {
         })
         .collect();
     println!("sidebar: {}", rows.join(" | "));
+    let selected = outline.selectedRow();
+    let name = (selected >= 0)
+        .then(|| outline.viewAtColumn_row_makeIfNecessary(0, selected, true))
+        .flatten()
+        .and_then(|v| v.downcast::<NSTableCellView>().ok())
+        .and_then(|cell| unsafe { cell.textField() })
+        .map(|f| f.stringValue().to_string());
+    println!("sidebar-selected: {}", name.unwrap_or_else(|| "none".to_owned()));
 }
 
 /// Draws the window content into a PNG without the window server (no screen capture, no

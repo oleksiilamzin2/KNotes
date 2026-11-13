@@ -127,7 +127,11 @@ define_class!(
 
         #[unsafe(method(sidebarMode:))]
         fn sidebar_mode_chosen(&self, sender: &NSToolbarItemGroup) {
-            let mode = if sender.selectedIndex() == 1 { SidebarMode::Tags } else { SidebarMode::Folders };
+            let mode = match sender.selectedIndex() {
+                1 => SidebarMode::Tags,
+                2 => SidebarMode::Tabs,
+                _ => SidebarMode::Folders,
+            };
             self.ivars().sidebar_mode_state.set(mode);
             if let Some(callback) = self.ivars().on_sidebar_mode.borrow().as_ref() {
                 callback(mode);
@@ -314,8 +318,8 @@ impl ToolbarDelegate {
         let target: &AnyObject = self.as_ref();
         match id.to_string().as_str() {
             SIDEBAR_MODE => {
-                let images = NSArray::from_retained_slice(&[symbol("folder", strings::FOLDERS)?, symbol("tag", strings::TAGS)?]);
-                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::FOLDERS), NSString::from_str(strings::TAGS)]);
+                let images = NSArray::from_retained_slice(&[symbol("folder", strings::FOLDERS)?, symbol("tag", strings::TAGS)?, symbol("square.on.square", strings::TABS)?]);
+                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::FOLDERS), NSString::from_str(strings::TAGS), NSString::from_str(strings::TABS)]);
                 let group = unsafe {
                     NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
                         id,
@@ -327,7 +331,7 @@ impl ToolbarDelegate {
                         mtm,
                     )
                 };
-                for (item, tip) in group.subitems().iter().zip([strings::FOLDERS, strings::TAGS]) {
+                for (item, tip) in group.subitems().iter().zip([strings::FOLDERS, strings::TAGS, strings::TABS]) {
                     item.setToolTip(Some(&NSString::from_str(tip)));
                 }
                 group.setSelectedIndex(mode_index(self.ivars().sidebar_mode_state.get()));
@@ -559,6 +563,7 @@ fn mode_index(mode: SidebarMode) -> isize {
     match mode {
         SidebarMode::Folders => 0,
         SidebarMode::Tags => 1,
+        SidebarMode::Tabs => 2,
     }
 }
 

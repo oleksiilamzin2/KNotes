@@ -118,7 +118,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(2), panel"
+        "toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(2), panel"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -1046,7 +1046,7 @@ fn a_folder_is_renamed_from_the_sidebar_with_the_links_into_it() {
 fn the_toolbar_shows_the_open_notes_name_and_renames_it() {
     let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md")]);
     assert!(out.contains("note-title: Old"), "{out}");
-    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
+    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
     let (vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "toolbar-rename=From toolbar")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("From toolbar.md")).ok().as_deref(), Some("# Old\n\ntext"), "the first line is content, not the name: {out}");
     assert!(out.contains("note-title: From toolbar"), "{out}");
@@ -2190,4 +2190,46 @@ fn a_pdf_is_renamed_from_the_toolbar_and_links_to_it_follow() {
     assert!(vault.path().join("Report.pdf").exists() && !vault.path().join("paper.pdf").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "See [[Report.pdf]] here\n\nend");
     assert!(out.contains("pdf-view: Report.pdf 1/3") && out.contains("note-title: Report\n"), "{out}");
+}
+
+/// A HOME whose settings show the tabs in the sidebar.
+fn tabs_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"sidebar": "tabs"}"#).unwrap();
+    home
+}
+
+/// A vault with two notes and a PDF the first links to.
+fn tabs_vault() -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "See [[doc.pdf]] here\n\nend").unwrap();
+    std::fs::write(vault.path().join("b.md"), "b").unwrap();
+    std::fs::write(vault.path().join("doc.pdf"), PDF).unwrap();
+    vault
+}
+
+/// The sidebar's rows and the one selected (`sidebar:` and `sidebar-selected:` lines).
+fn sidebar_tabs(out: &str) -> (String, String) {
+    let line = |name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{out}")).to_owned();
+    (line("sidebar: "), line("sidebar-selected: "))
+}
+
+#[test]
+fn the_tabs_segment_lists_every_document_opened_the_one_shown_selected() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md,a.md")]);
+    assert!(out.contains("sidebar-mode: tabs"), "{out}");
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()), "a.md opened again: no second tab");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
+    assert_eq!(sidebar_tabs(&out).1, "doc", "a PDF is a tab too: {out}");
+}
+
+#[test]
+fn a_click_on_a_tab_shows_its_document() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
+    assert!(out.contains("note: a.md"), "{out}");
+    assert_eq!(sidebar_tabs(&out).1, "a");
 }

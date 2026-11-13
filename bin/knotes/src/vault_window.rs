@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
@@ -110,6 +110,8 @@ pub struct VaultWindow {
     pub chat: ChatView,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
+    /// The documents open as tabs (ADR 0024).
+    tabs: RefCell<Tabs>,
     /// What the right panel shows.
     panel_mode: Cell<PanelMode>,
     /// The document the outline shows (a note's or a PDF's path), and whether an edit's
@@ -263,6 +265,7 @@ impl VaultWindow {
             live_preview,
             chat,
             outline_panel,
+            tabs: RefCell::new(Tabs::default()),
             panel_mode: Cell::new(PanelMode::Ai),
             outline_of: RefCell::new(None),
             outline_due: Cell::new(false),
@@ -642,6 +645,13 @@ impl VaultWindow {
     fn rebuild_sidebar(&self) {
         let model = {
             let state = self.state.borrow();
+            if state.sidebar_mode == SidebarMode::Tabs {
+                let tabs: Vec<(String, String)> = self.tabs.borrow().paths().map(|p| (p.to_owned(), document_name(p).to_owned())).collect();
+                drop(state);
+                self.sidebar.set_model(Sidebar::tabs(&tabs));
+                self.outline.reloadData();
+                return;
+            }
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
             Sidebar::new(&state.folders, &state.tags, state.sidebar_mode, Some(&inbox), state.untagged, &|path| {
                 resolve_list_settings(path, &state.rules).include_subfolders
@@ -888,6 +898,12 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            // `KNOTES_PROBE_TAB_CLICK=a.md`: a click on that document's tab, after the opening.
+            if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLICK") {
+                let item = SidebarItem::Tab(path);
+                self.highlight(&item);
+                self.select(item);
+            }
             // After the click: it may open a PDF to rename.
             probe::toolbar_rename_requested(&self.window);
             probe::title_clicks_requested(&self.window);
@@ -927,6 +943,15 @@ impl VaultWindow {
         }
     }
 
+    /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow.
+    fn show_tab(&self, path: &str) {
+        self.tabs.borrow_mut().open(path);
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+    }
+
     /// Shows a note in the note column; `record` adds it to the back/forward history.
     pub fn open_note(&self, path: &str, record: bool) {
         if FileKind::from_path(path) == FileKind::Pdf {
@@ -951,6 +976,7 @@ impl VaultWindow {
             self.find_text(&self.find_bar.text(), true);
         }
         self.refresh_outline();
+        self.show_tab(path);
         self.update_navigation();
     }
 
@@ -972,6 +998,7 @@ impl VaultWindow {
             viewer.go_to(page.unwrap_or(1).max(1) as usize - 1);
         }
         self.refresh_outline();
+        self.show_tab(path);
         self.update_navigation();
     }
 
@@ -1730,6 +1757,11 @@ impl VaultWindow {
         if self.highlighting.get() {
             return;
         }
+        // A tab: its document shown; the list keeps what it shows.
+        if let SidebarItem::Tab(path) = &item {
+            self.open_note(path, true);
+            return;
+        }
         self.state.borrow_mut().selection = item;
         *self.search_results.borrow_mut() = None;
         self.refresh_list();
@@ -1980,6 +2012,13 @@ impl VaultWindow {
 
     /// Selects the row of `item` in the sidebar without notifying (the list follows `state`).
     fn highlight(&self, item: &SidebarItem) {
+        // The tabs show the document shown, whatever the list shows.
+        let tab = (self.state.borrow().sidebar_mode == SidebarMode::Tabs).then(|| self.tabs.borrow().current_path().map(|p| SidebarItem::Tab(p.to_owned())));
+        let item = match &tab {
+            Some(Some(tab)) => tab,
+            Some(None) => &SidebarItem::Gap,
+            None => item,
+        };
         // SAFETY: the item object comes from this outline view's data source.
         let row = unsafe { self.outline.rowForItem(Some(&self.sidebar.object_for(item))) };
         self.highlighting.set(true);
@@ -1992,6 +2031,13 @@ impl VaultWindow {
         }
         self.highlighting.set(false);
     }
+}
+
+/// The name a document shows: a note's without `.md`, a PDF's without `.pdf`, neither with its
+/// folder.
+fn document_name(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    [".md", ".pdf"].iter().find_map(|ext| name.len().checked_sub(ext.len()).filter(|&at| name[at..].eq_ignore_ascii_case(ext)).map(|at| &name[..at])).unwrap_or(name)
 }
 
 /// Paths of the `n` most recently modified notes, newest first.

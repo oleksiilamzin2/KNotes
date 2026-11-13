@@ -83,3 +83,14 @@ fn a_folder_counts_the_notes_its_list_shows() {
     let mixed = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|path| path == "Projects");
     assert_eq!(mixed.count(&SidebarItem::Folder("Projects".into())), Some(2), "a folder that shows its subfolders counts them");
 }
+
+#[test]
+fn the_tabs_mode_lists_a_row_per_tab_with_its_name() {
+    use knotes_app::{Sidebar, SidebarItem, SidebarMode};
+    let sidebar = Sidebar::tabs(&[("a.md".into(), "a".into()), ("Docs/doc.pdf".into(), "doc".into())]);
+    let rows = sidebar.children(None);
+    assert_eq!(rows, [SidebarItem::Tab("a.md".into()), SidebarItem::Tab("Docs/doc.pdf".into())]);
+    assert_eq!((sidebar.name(&rows[1]), sidebar.count(&rows[1])), ("doc", None));
+    assert_eq!(SidebarItem::from_key(&rows[1].key()), Some(rows[1].clone()));
+    assert_eq!(SidebarMode::from_key(SidebarMode::Tabs.key()), Some(SidebarMode::Tabs));
+}
