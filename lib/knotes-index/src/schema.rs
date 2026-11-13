@@ -1,6 +1,7 @@
 //! Schema of the index. The index is a cache: on a version change it is rebuilt, not migrated.
 
-pub(crate) const VERSION: i64 = 9;
+/// 10: tags and links in a note's title are no longer the note's (ADR 0019).
+pub(crate) const VERSION: i64 = 10;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
