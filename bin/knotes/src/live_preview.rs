@@ -342,8 +342,7 @@ impl LivePreview {
                 let indent = f64::from(depth) * QUOTE_INDENT;
                 // An empty quote line (`>` alone) keeps a line's height: TextKit 2 took it from
                 // the hidden `>`.
-                let line = look.body.ascender() - look.body.descender() + look.body.leading();
-                let para = palette.para(Para { first_indent: indent, head_indent: indent, min_line: line, ..Para::default() });
+                let para = palette.para(Para { first_indent: indent, head_indent: indent, min_line: self.line_height(), ..Para::default() });
                 let paragraph = paragraph(storage, NSRange::new(run.range.start, 0));
                 canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
             }
@@ -519,7 +518,9 @@ impl LivePreview {
         // A quote's indentation stays.
         let base = palette.para_of(canvas.get(paragraph.0).map_or(0, |p| p.para));
         let start = base.first_indent + if blank { f64::from(depth) * LIST_INDENT } else { 0.0 };
-        let para = palette.para(Para { first_indent: start, head_indent: start + room, hidden_tabs: blank, ..base });
+        // An empty item (its marker alone) keeps a line's height, as an empty quote line does.
+        let min_line = base.min_line.max(self.line_height());
+        let para = palette.para(Para { first_indent: start, head_indent: start + room, hidden_tabs: blank, min_line, ..base });
         canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
         if blank {
             let id = palette.look(&look.hidden, &look.clear, "indent");
@@ -568,6 +569,12 @@ impl LivePreview {
                 canvas.paint(line.0..line.1, |p| p.para = folded);
             }
         }
+    }
+
+    /// Height of a line of body text: what a line of hidden source alone would not get.
+    fn line_height(&self) -> f64 {
+        let body = &self.ivars().look.body;
+        body.ascender() - body.descender() + body.leading()
     }
 
     /// Width of a list number (`12. `) in the digits font, without measuring the text.

@@ -900,3 +900,14 @@ fn typing_a_space_after_empty_brackets_in_a_list_item_makes_a_task() {
     let (_vault, out) = probe_notes(&[("t.md", "")], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_TYPE", "- [] pasted")]);
     assert!(out.contains("note: t.md | - [] pasted"), "a paste stays as it is: {out}");
 }
+
+#[test]
+fn an_empty_list_item_keeps_a_line_of_its_own() {
+    let note = "- [ ] first\n\t- [ ] \n- \n\nend";
+    let (_vault, out) = probe_notes(&[("e.md", note)], &[("KNOTES_PROBE_OPEN", "e.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let tasks = decorations(&out, "task");
+    let bullet = decorations(&out, "bullet");
+    assert_eq!((tasks.len(), bullet.len()), (2, 1), "{out}");
+    assert!(tasks[1].1 - tasks[0].1 >= 17.0, "the empty task a line below: {tasks:?}");
+    assert!(bullet[0].1 - tasks[1].1 >= 17.0, "the empty bullet a line below that: {tasks:?} {bullet:?}");
+}
