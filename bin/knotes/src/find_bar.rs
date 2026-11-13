@@ -200,6 +200,14 @@ impl FindBar {
         !self.bar.isHidden()
     }
 
+    /// Shows the bar with `text`, the focus left where it is (arrows through a search's results
+    /// keep moving in the list).
+    pub fn show_with(&self, text: &str) {
+        self.bar.setHidden(false);
+        self.inset();
+        self.set_text(text);
+    }
+
     /// Shows the bar with the focus in its field (its text selected), or hides it. The note gets
     /// the bar's height as extra top inset, so no text hides behind it.
     pub fn show(&self, shown: bool) {

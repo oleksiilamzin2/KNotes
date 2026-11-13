@@ -1210,6 +1210,7 @@ impl VaultWindow {
         if self.find_bar.is_shown() {
             self.find_text(&self.find_bar.text(), true);
         }
+        self.find_search_word();
         self.refresh_outline();
         self.update_navigation();
     }
@@ -1238,9 +1239,10 @@ impl VaultWindow {
         if let (None, Some(place), Some(viewer)) = (page, place, self.pdf_view.borrow().as_ref()) {
             viewer.show_place(place.top);
         }
-        // Opened from a content search: where its words are (once found, on another thread).
+        // Opened from a content search: Cmd+F's bar with its word, at its first place (once
+        // found, on another thread); a link naming a page keeps it.
         if page.is_none() {
-            self.show_found_in_pdf();
+            self.find_search_word();
         }
         self.refresh_outline();
         self.update_navigation();
@@ -2159,30 +2161,29 @@ impl VaultWindow {
     /// with `jump`, the first place from the page shown on comes into view.
     fn find_in_pdf(&self, query: &str, jump: bool) {
         if query.is_empty() {
-            self.search_pdf(Vec::new(), jump, true);
+            self.search_pdf(Vec::new(), jump);
             self.find_bar.show_count(None, 0, false);
             return;
         }
         self.find_bar.show_searching();
-        self.search_pdf(vec![query.to_owned()], jump, true);
+        self.search_pdf(vec![query.to_owned()], jump);
     }
 
-    /// A PDF opened from a content search: the search's words found in it, the first place
-    /// brought into view, as a note opened so shows its matches.
-    fn show_found_in_pdf(&self) {
+    /// A document opened from a content search: Cmd+F's bar shows with the search's first
+    /// word, every place found highlighted and the first in view (owner's request); the focus
+    /// stays where it was.
+    fn find_search_word(&self) {
         let query = self.state.borrow().search.clone();
         let (mode, words) = parse_search(&query);
-        if words.is_empty() || mode == SearchMode::Files {
-            return;
-        }
-        // Matched as in a note: by each word's start.
-        self.search_pdf(knotes_app::search_prefixes(words), true, false);
+        let Some(word) = words.split_whitespace().next().filter(|_| mode != SearchMode::Files).map(str::to_owned) else { return };
+        self.find_bar.show_with(&word);
+        self.find_text(&word, true);
     }
 
     /// Finds `words` in the PDF shown, its pages read one after another on another thread;
-    /// with `jump`, the first place from the page shown on comes into view; with `counted`, the
-    /// find bar counts them.
-    fn search_pdf(&self, words: Vec<String>, jump: bool, counted: bool) {
+    /// with `jump`, the first place from the page shown on comes into view; the find bar counts
+    /// them.
+    fn search_pdf(&self, words: Vec<String>, jump: bool) {
         self.pdf_find.borrow().store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(viewer) = self.pdf_view.borrow().as_ref() {
             viewer.set_found(Vec::new(), None);
@@ -2213,7 +2214,7 @@ impl VaultWindow {
                     return;
                 }
                 if let (Some(window), Some(found)) = (target.get(mtm).upgrade(), found) {
-                    window.pdf_found(&path, found, jump, counted);
+                    window.pdf_found(&path, found, jump);
                 }
             });
         });
@@ -2221,7 +2222,7 @@ impl VaultWindow {
 
     /// The places a search found in the PDF at `path`, shown if it is still the one open: the
     /// first from the page shown on is the current one.
-    fn pdf_found(&self, path: &str, found: Vec<(usize, std::ops::Range<usize>)>, jump: bool, counted: bool) {
+    fn pdf_found(&self, path: &str, found: Vec<(usize, std::ops::Range<usize>)>, jump: bool) {
         if self.pdf_path.borrow().as_deref() != Some(path) {
             return;
         }
@@ -2238,9 +2239,7 @@ impl VaultWindow {
         if jump && let (Some(i), Some(viewer)) = (current, self.pdf_view.borrow().as_ref()) {
             viewer.show_found(i);
         }
-        if counted {
-            self.find_bar.show_count(current, total, true);
-        }
+        self.find_bar.show_count(current, total, true);
     }
 
     /// The next (or previous) occurrence, round the note.

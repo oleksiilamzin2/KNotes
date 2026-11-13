@@ -1197,6 +1197,7 @@ fn report_note(window: &VaultWindow) {
     {
         println!("find-bar: {}", if window.find_bar.is_shown() { "shown" } else { "hidden" });
         println!("find: {}", window.find_bar.count_text());
+        println!("find-field: {}", window.find_bar.text());
         // The menu validates its items against the focused note, as before a key press.
         window.window.makeFirstResponder(Some(&window.note_text));
         let mtm = window.window.mtm();

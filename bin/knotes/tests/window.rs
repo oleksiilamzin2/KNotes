@@ -1083,6 +1083,7 @@ fn a_note_opened_from_a_content_search_shows_its_matches_scrolled_into_view() {
     let notes = [("a.md", long.as_str()), ("b.md", "інше")];
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "content: радар"), ("KNOTES_PROBE_OPEN", "a.md")]);
     assert!(out.contains("found-in-note: 2"), "{out}");
+    assert!(out.contains("find-bar: shown") && out.contains("find-field: радар\n") && out.contains("find: 1 з 2\n"), "Cmd+F's bar with the word: {out}");
     let visible = out.lines().find_map(|l| l.strip_prefix("note-visible: ")).unwrap();
     assert!(visible.split(' ').next().unwrap().parse::<f64>().unwrap() > 1000.0, "scrolled to the first match: {visible}");
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md")]);
@@ -2494,4 +2495,6 @@ fn a_pdf_opened_from_a_search_shows_the_page_its_words_are_on() {
     let (_vault, out) = probe_images(&[("a.md", "a note")], &[("long.pdf", &long)], &env);
     assert!(out.contains("pdf-view: long.pdf 25/30"), "{out}");
     assert_eq!(pdf_found(&out), "1, the current on page 25", "the word highlighted");
+    assert!(out.contains("find-bar: shown") && out.contains("find-field: 25\n") && out.contains("find: 1 з 1\n"), "Cmd+F's bar with the word: {out}");
+    assert!(!out.contains("focus: find"), "the focus stays where it was (arrows through the results): {out}");
 }
