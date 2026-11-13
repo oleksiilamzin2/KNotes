@@ -2486,3 +2486,12 @@ fn cmd_f_finds_words_in_a_pdf_and_steps_through_them() {
     let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &[open[0], open[1], open[2], ("KNOTES_PROBE_FIND", "nothing")]);
     assert!(out.contains("find: Немає\n"), "{out}");
 }
+
+#[test]
+fn a_pdf_opened_from_a_search_shows_the_page_its_words_are_on() {
+    let long = pdf_of(30);
+    let env = [("KNOTES_PROBE_SEARCH", "content: 25"), ("KNOTES_PROBE_OPEN", "long.pdf")];
+    let (_vault, out) = probe_images(&[("a.md", "a note")], &[("long.pdf", &long)], &env);
+    assert!(out.contains("pdf-view: long.pdf 25/30"), "{out}");
+    assert_eq!(pdf_found(&out), "1, the current on page 25", "the word highlighted");
+}

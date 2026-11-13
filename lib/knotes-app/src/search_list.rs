@@ -77,10 +77,10 @@ pub fn found_snippet(text: &str, query: &str, max_chars: usize) -> String {
     out
 }
 
-/// Byte ranges of the words of `text` that start like a query word (the rule of
-/// `found_snippet`), whole words, in order: what a note opened from the search shows found.
-pub fn found_words(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
-    let prefixes: Vec<String> = query
+/// What a search's words are matched by in a text: each word's start, lowercased (two thirds
+/// of a longer word, so its other endings match too).
+pub fn search_prefixes(query: &str) -> Vec<String> {
+    query
         .split_whitespace()
         .map(|w| {
             let w: Vec<char> = w.to_lowercase().chars().collect();
@@ -88,7 +88,13 @@ pub fn found_words(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
             w[..keep].iter().collect::<String>()
         })
         .filter(|p| !p.is_empty())
-        .collect();
+        .collect()
+}
+
+/// Byte ranges of the words of `text` that start like a query word (the rule of
+/// `found_snippet`), whole words, in order: what a note opened from the search shows found.
+pub fn found_words(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let prefixes = search_prefixes(query);
     if prefixes.is_empty() {
         return Vec::new();
     }

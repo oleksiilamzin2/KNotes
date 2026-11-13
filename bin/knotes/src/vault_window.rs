@@ -872,6 +872,11 @@ impl VaultWindow {
                     self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
                     // Shown before the next one opens, as on screen.
                     self.window.displayIfNeeded();
+                } else if FileKind::from_path(path) == FileKind::Pdf {
+                    // A PDF is listed only among a search's results, which come later: opened
+                    // as a click on its result opens it.
+                    self.open_note(path, true);
+                    self.window.displayIfNeeded();
                 }
                 if i == 0 {
                     probe::type_requested(&self.note_text);
@@ -1232,6 +1237,10 @@ impl VaultWindow {
         let place = self.show_tab(path);
         if let (None, Some(place), Some(viewer)) = (page, place, self.pdf_view.borrow().as_ref()) {
             viewer.show_place(place.top);
+        }
+        // Opened from a content search: where its words are (once found, on another thread).
+        if page.is_none() {
+            self.show_found_in_pdf();
         }
         self.refresh_outline();
         self.update_navigation();
@@ -2149,23 +2158,54 @@ impl VaultWindow {
     /// Finds `query` in the PDF shown, its pages read one after another on another thread;
     /// with `jump`, the first place from the page shown on comes into view.
     fn find_in_pdf(&self, query: &str, jump: bool) {
+        if query.is_empty() {
+            self.search_pdf(Vec::new(), jump, true);
+            self.find_bar.show_count(None, 0, false);
+            return;
+        }
+        self.find_bar.show_searching();
+        self.search_pdf(vec![query.to_owned()], jump, true);
+    }
+
+    /// A PDF opened from a content search: the search's words found in it, the first place
+    /// brought into view, as a note opened so shows its matches.
+    fn show_found_in_pdf(&self) {
+        let query = self.state.borrow().search.clone();
+        let (mode, words) = parse_search(&query);
+        if words.is_empty() || mode == SearchMode::Files {
+            return;
+        }
+        // Matched as in a note: by each word's start.
+        self.search_pdf(knotes_app::search_prefixes(words), true, false);
+    }
+
+    /// Finds `words` in the PDF shown, its pages read one after another on another thread;
+    /// with `jump`, the first place from the page shown on comes into view; with `counted`, the
+    /// find bar counts them.
+    fn search_pdf(&self, words: Vec<String>, jump: bool, counted: bool) {
         self.pdf_find.borrow().store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(viewer) = self.pdf_view.borrow().as_ref() {
             viewer.set_found(Vec::new(), None);
         }
         self.find_current.set(None);
         let (Some(path), Some(vault), Some(mtm)) = (self.pdf_path.borrow().clone(), self.vault(), MainThreadMarker::new()) else { return };
-        if query.is_empty() {
-            self.find_bar.show_count(None, 0, false);
+        if words.is_empty() {
             return;
         }
-        self.find_bar.show_searching();
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         *self.pdf_find.borrow_mut() = std::sync::Arc::clone(&cancelled);
         let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
-        let query = query.to_owned();
         std::thread::spawn(move || {
-            let found = knotes_pdf::find_in_pdf(&vault.join(&path), &query, &cancelled);
+            let file = vault.join(&path);
+            let found = words.iter().try_fold(Vec::new(), |mut all, word| {
+                all.extend(knotes_pdf::find_in_pdf(&file, word, &cancelled)?);
+                Some(all)
+            });
+            let found = found.map(|mut all| {
+                all.sort_by_key(|(page, range)| (*page, range.start));
+                all.dedup_by(|b, a| a.0 == b.0 && b.1.start < a.1.end);
+                all
+            });
             DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
                 // A newer search, or the bar closed: this one is stale.
@@ -2173,7 +2213,7 @@ impl VaultWindow {
                     return;
                 }
                 if let (Some(window), Some(found)) = (target.get(mtm).upgrade(), found) {
-                    window.pdf_found(&path, found, jump);
+                    window.pdf_found(&path, found, jump, counted);
                 }
             });
         });
@@ -2181,7 +2221,7 @@ impl VaultWindow {
 
     /// The places a search found in the PDF at `path`, shown if it is still the one open: the
     /// first from the page shown on is the current one.
-    fn pdf_found(&self, path: &str, found: Vec<(usize, std::ops::Range<usize>)>, jump: bool) {
+    fn pdf_found(&self, path: &str, found: Vec<(usize, std::ops::Range<usize>)>, jump: bool, counted: bool) {
         if self.pdf_path.borrow().as_deref() != Some(path) {
             return;
         }
@@ -2198,7 +2238,9 @@ impl VaultWindow {
         if jump && let (Some(i), Some(viewer)) = (current, self.pdf_view.borrow().as_ref()) {
             viewer.show_found(i);
         }
-        self.find_bar.show_count(current, total, true);
+        if counted {
+            self.find_bar.show_count(current, total, true);
+        }
     }
 
     /// The next (or previous) occurrence, round the note.
