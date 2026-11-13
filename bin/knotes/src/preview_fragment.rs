@@ -50,6 +50,8 @@ pub enum Mark {
     /// A code block's background across the column behind the paragraph, its corners rounded
     /// at the block's top and bottom.
     CodeBackground { top: bool, bottom: bool },
+    /// A code line's number (ADR 0025), dim, in the gutter left of its first character.
+    CodeNumber { number: String, font: Retained<NSFont> },
     /// A callout's tinted box across the column behind the paragraph, rounded at the callout's
     /// top and bottom.
     CalloutBox { colour: Retained<NSColor>, top: bool, bottom: bool },
@@ -80,6 +82,8 @@ pub const TASK_ROOM: f64 = 22.0;
 const TASK_BOX: f64 = 14.0;
 const QUOTE_BAR: f64 = 3.0;
 const CODE_CORNER: f64 = 5.0;
+/// Space between a code line's number and its code.
+pub const CODE_NUMBER_GAP: f64 = 10.0;
 /// A callout's icon.
 const CALLOUT_ICON: f64 = 14.0;
 /// Space between a table and its handles; the add bars' thickness.
@@ -188,6 +192,11 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
+                    (Mark::CodeNumber { number, font }, _) => {
+                        let attrs = label_attributes(font, &NSColor::tertiaryLabelColor());
+                        // SAFETY: font and colour values of their attributes.
+                        unsafe { NSString::from_str(number).drawAtPoint_withAttributes(rect.origin, Some(&attrs)) };
+                    }
                     (Mark::TableRow { columns, controls, .. }, _) => {
                         // The add column bar only where the table's right edge shows; the row's
                         // handle and the add row bar along what shows.
@@ -287,6 +296,7 @@ impl PreviewFragment {
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } | Mark::Image { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
+            Mark::CodeNumber { .. } => (0, false),
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } => return None,
         };
         // A preview goes below the line its source ends on: the note's last paragraph also
@@ -327,6 +337,10 @@ impl PreviewFragment {
             Mark::External { centre, shift, .. } => {
                 let half = EXTERNAL_ARROW / 2.0;
                 NSRect::new(NSPoint::new(x + shift, baseline - centre - half), NSSize::new(EXTERNAL_ARROW, EXTERNAL_ARROW))
+            }
+            Mark::CodeNumber { number, font } => {
+                let width = label_width(number, font);
+                NSRect::new(NSPoint::new(x - CODE_NUMBER_GAP - width, baseline - font.ascender()), NSSize::new(width, font.ascender() - font.descender()))
             }
             Mark::CalloutIcon { centre, label, font, .. } => {
                 let width = CALLOUT_ICON + label.as_deref().map_or(0.0, |l| 4.0 + label_width(l, font));
@@ -373,6 +387,7 @@ impl PreviewFragment {
                     }
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::CodeNumber { number, .. } => format!("decoration: code-number {number} {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CalloutBox { .. } => format!("decoration: callout-box {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::TableRow { header, columns, controls, .. } => {
                         let mut lines = format!("decoration: table-row {x:.1} {y:.1} {w:.1} {h:.1} {}", if *header { "header" } else { "body" });

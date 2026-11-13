@@ -70,6 +70,8 @@ struct Look {
     mono: Retained<NSFont>,
     /// Keywords in highlighted code, as Xcode sets them.
     mono_bold: Retained<NSFont>,
+    /// A digit's width in the code font, once measured (code line numbers).
+    mono_digit: Cell<Option<f64>>,
     /// Highlighted code's colours (ADR 0025), by `CodeToken`'s `code_look` index: Xcode's,
     /// light and dark.
     code_colors: Vec<Retained<NSColor>>,
@@ -197,6 +199,8 @@ pub struct Ivars {
     /// Each code block's highlighter (by its place among the note's blocks), kept between
     /// edits so typing parses again only the lines it changes.
     code_highlighters: RefCell<HashMap<usize, CodeHighlighter>>,
+    /// Where each code line of a block starts (UTF-16), by the block's range.
+    code_lines: RefCell<HashMap<(usize, usize), CodeLines>>,
     tables_changed: Cell<bool>,
     /// The actions of the table menu being shown, by item tag, with the table's index.
     menu_actions: RefCell<Vec<(usize, TableAction)>>,
@@ -372,6 +376,7 @@ impl LivePreview {
             italic: fonts.convertFont_toHaveTrait(&body, NSFontTraitMask::ItalicFontMask),
             mono: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.0),
             mono_bold: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.4),
+            mono_digit: Cell::new(None),
             code_colors: CODE_COLORS.iter().map(|&(light, dark)| appearance_color(light, dark)).collect(),
             digits: NSFont::monospacedDigitSystemFontOfSize_weight(BODY_SIZE, 0.0),
             headings: HEADING_SIZES.iter().map(|&s| NSFont::boldSystemFontOfSize(s)).collect(),
@@ -425,6 +430,7 @@ impl LivePreview {
             table_layouts: RefCell::new(HashMap::new()),
             code_tokens: RefCell::new(HashMap::new()),
             code_highlighters: RefCell::new(HashMap::new()),
+            code_lines: RefCell::new(HashMap::new()),
             apply_within: Cell::new(None),
             stale_table: Cell::new(None),
             catch_up: Cell::new(0),
@@ -725,6 +731,7 @@ impl LivePreview {
         self.ivars().table_layouts.borrow_mut().clear();
         self.ivars().code_tokens.borrow_mut().clear();
         self.ivars().code_highlighters.borrow_mut().clear();
+        self.ivars().code_lines.borrow_mut().clear();
         *self.ivars().path.borrow_mut() = path.to_owned();
         // setString moves the selection, which reveals markup: the old note's ranges must not
         // be applied to the new text.
@@ -887,7 +894,9 @@ impl LivePreview {
         let look = &self.ivars().look;
         let paragraphs = paragraph(storage, ns(block));
         let base = palette.para_of(canvas.get(paragraphs.0).map_or(0, |p| p.para));
-        let inset = base.first_indent + CODE_INSET;
+        // Room for the line numbers left of the code (ADR 0025).
+        let lines = self.code_lines(storage, styled, block);
+        let inset = base.first_indent + CODE_INSET + self.code_gutter(lines.len());
         let code = palette.para(Para { first_indent: inset, head_indent: inset, ..base });
         canvas.paint(paragraphs.0..paragraphs.1, |p| p.para = code);
         let first = styled.runs.partition_point(|r| r.range.start < block.start);
@@ -914,6 +923,58 @@ impl LivePreview {
                 canvas.paint(run.code.start + range.start..run.code.start + range.end, |p| p.look = id);
             }
         }
+    }
+
+    /// Where each code line of `block` starts (UTF-16): the lines between its fences.
+    fn code_lines(&self, storage: &NSTextStorage, styled: &Highlight, block: &Range<usize>) -> CodeLines {
+        let key = (block.start, block.end);
+        if let Some(lines) = self.ivars().code_lines.borrow().get(&key) {
+            return Rc::clone(lines);
+        }
+        let first = styled.runs.partition_point(|r| r.range.start < block.start);
+        let fences: Vec<&Range<usize>> = styled.runs[first..].iter().take_while(|r| r.range.start < block.end).filter(|r| r.style == Style::Fence).map(|r| &r.range).collect();
+        let start = fences.iter().find(|f| f.start == block.start).map_or(block.start, |f| (f.end + 1).min(block.end));
+        let end = fences.iter().find(|f| f.start > block.start && f.end == block.end).map_or(block.end, |f| f.start);
+        let mut lines = Vec::new();
+        if start < end {
+            lines.push(start);
+            let text = storage.string().substringWithRange(NSRange::new(start, end - start)).to_string();
+            let mut at = start;
+            for unit in text.encode_utf16() {
+                at += 1;
+                if unit == u16::from(b'\n') && at < end {
+                    lines.push(at);
+                }
+            }
+        }
+        let lines = Rc::new(lines);
+        let mut cache = self.ivars().code_lines.borrow_mut();
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(key, Rc::clone(&lines));
+        lines
+    }
+
+    /// The width of the line numbers' gutter for `lines` lines.
+    fn code_gutter(&self, lines: usize) -> f64 {
+        let digits = lines.max(1).to_string().len() as f64;
+        digits * self.mono_digit_width() + crate::preview_fragment::CODE_NUMBER_GAP
+    }
+
+    /// A digit's width in the code font, once measured.
+    fn mono_digit_width(&self) -> f64 {
+        let look = &self.ivars().look;
+        if let Some(width) = look.mono_digit.get() {
+            return width;
+        }
+        // SAFETY: a font value of its attribute.
+        let width = unsafe {
+            let attrs = NSDictionary::from_retained_objects(&[objc2_app_kit::NSFontAttributeName], &[Retained::into_super(Retained::into_super(look.mono.clone()))]);
+            objc2_app_kit::NSStringDrawing::sizeWithAttributes(&*NSString::from_str("0"), Some(&attrs)).width
+        };
+        look.mono_digit.set(Some(width));
+        width
     }
 
     /// The tokens of the `nth` code block's code, from the cache or highlighted now (only its
@@ -2294,6 +2355,11 @@ impl LivePreview {
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
         if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
             marks.push(Mark::CodeBackground { top: from <= c.start, bottom: to >= c.end });
+            // A code line's number (ADR 0025); the fences have none.
+            let lines = self.code_lines(&storage, &styled, c);
+            if let Ok(n) = lines.binary_search(&from) {
+                marks.push(Mark::CodeNumber { number: (n + 1).to_string(), font: self.ivars().look.mono.clone() });
+            }
         }
         let selection = self.ivars().selection.get();
         // A dot on the middle of small letters; a circle, as tall as capitals, on theirs.
@@ -2519,6 +2585,9 @@ impl LivePreview {
         parts.iter().map(|(name, piece)| format!("[{name}]{piece}")).collect::<Vec<_>>().join("|")
     }
 }
+
+/// Where each of a code block's lines starts (UTF-16).
+type CodeLines = Rc<Vec<usize>>;
 
 /// A code block's tokens: UTF-16 ranges from the code's start, and their kinds.
 type CodeTokens = Rc<Vec<(Range<usize>, CodeToken)>>;

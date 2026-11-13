@@ -2403,3 +2403,24 @@ fn code_in_a_block_with_a_language_is_coloured_by_kind() {
     }
     assert!(!editor.contains("[code-keyword]fn plain") && !editor.contains("[code-function]plain"), "no language, no colours: {editor}");
 }
+
+/// `decoration: code-number N x y w h` lines: each number and its x and width.
+fn code_numbers(out: &str) -> Vec<(usize, f64, f64)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("decoration: code-number "))
+        .map(|l| {
+            let p: Vec<&str> = l.split(' ').collect();
+            (p[0].parse().unwrap(), p[1].parse().unwrap(), p[3].parse().unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn code_lines_are_numbered_in_a_gutter_left_of_the_code() {
+    let note = "text\n\n```rust\nlet a = 1;\nlet b = 2;\nlet c = 3;\n```\n\nend";
+    let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let numbers = code_numbers(&out);
+    assert_eq!(numbers.iter().map(|n| n.0).collect::<Vec<_>>(), [1, 2, 3], "the fences have none: {out}");
+    let back = decorations(&out, "code");
+    assert!(numbers.iter().all(|&(_, x, w)| x > back[0].0 && x + w < back[0].0 + 50.0), "in the block's gutter: {numbers:?} {back:?}");
+}
