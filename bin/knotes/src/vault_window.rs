@@ -484,6 +484,7 @@ impl VaultWindow {
             }
             probe::menu_requested();
             probe::click_requested(&self.note_text);
+            println!("found-in-note: {}", self.live_preview.found_count());
             if let Some(at) = std::env::var("KNOTES_PROBE_HOVER").ok().and_then(|a| a.parse().ok()) {
                 println!("hover: {}", if self.live_preview.clickable(at) { "hand" } else { "text" });
             }
@@ -506,7 +507,23 @@ impl VaultWindow {
         };
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
         self.live_preview.show(&self.note_text, path, &text);
+        self.show_found_words(&text);
         self.update_navigation();
+    }
+
+    /// Opened from a search of the notes' text: the words it found, highlighted, the first in
+    /// view.
+    fn show_found_words(&self, text: &str) {
+        let query = self.state.borrow().search.clone();
+        let (mode, words) = parse_search(&query);
+        if words.is_empty() || mode == SearchMode::Files {
+            return;
+        }
+        let found = knotes_app::found_words(text, &words);
+        let bounds: Vec<usize> = found.iter().flat_map(|r| [r.start, r.end]).collect();
+        let units = utf16_offsets(text, &bounds);
+        let ranges: Vec<(usize, usize)> = units.chunks(2).map(|p| (p[0], p[1])).collect();
+        self.live_preview.show_found(&self.note_text, &ranges);
     }
 
     /// Follows a clicked link: opens the note it resolves to (creating a missing one), then

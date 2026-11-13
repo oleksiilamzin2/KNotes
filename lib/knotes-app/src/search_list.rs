@@ -77,6 +77,45 @@ pub fn found_snippet(text: &str, query: &str, max_chars: usize) -> String {
     out
 }
 
+/// Byte ranges of the words of `text` that start like a query word (the rule of
+/// `found_snippet`), whole words, in order: what a note opened from the search shows found.
+pub fn found_words(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let prefixes: Vec<String> = query
+        .split_whitespace()
+        .map(|w| {
+            let w: Vec<char> = w.to_lowercase().chars().collect();
+            let keep = if w.len() > 3 { (w.len() * 2 / 3).max(3) } else { w.len() };
+            w[..keep].iter().collect::<String>()
+        })
+        .filter(|p| !p.is_empty())
+        .collect();
+    if prefixes.is_empty() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let mut word: Option<usize> = None;
+    let mut check = |start: usize, end: usize| {
+        let lower = text[start..end].to_lowercase();
+        if prefixes.iter().any(|p| lower.starts_with(p.as_str())) {
+            found.push(start..end);
+        }
+    };
+    for (i, c) in text.char_indices() {
+        match (c.is_alphanumeric(), word) {
+            (true, None) => word = Some(i),
+            (false, Some(start)) => {
+                check(start, i);
+                word = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = word {
+        check(start, text.len());
+    }
+    found
+}
+
 /// The text on one line, without emphasis, code, link brackets and heading or quote markers.
 fn flatten(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

@@ -35,3 +35,13 @@ fn title_matches_come_first_then_text_matches_within_the_list() {
     let only_title = search_list(&rows, &ListFilter::All, &ListSettings::default(), &["a.md".to_owned()], &[]);
     assert_eq!(only_title, [ListItem::Note(2)], "a title match without a text match keeps the usual snippet");
 }
+
+#[test]
+fn found_words_are_the_whole_words_that_start_like_a_query_word() {
+    let text = "Радар і радари, **радарний** модуль; не арадар.";
+    let words: Vec<&str> = knotes_app::found_words(text, "радар").into_iter().map(|r| &text[r]).collect();
+    assert_eq!(words, ["Радар", "радари", "радарний"]);
+    let words: Vec<&str> = knotes_app::found_words("fast cars and Cats", "cat fast").into_iter().map(|r| &"fast cars and Cats"[r]).collect();
+    assert_eq!(words, ["fast", "Cats"]);
+    assert!(knotes_app::found_words("text", "").is_empty());
+}

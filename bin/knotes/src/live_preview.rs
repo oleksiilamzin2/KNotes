@@ -18,7 +18,7 @@ use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
     NSAttributedStringNSStringDrawing, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
-    NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
+    NSBackgroundColorAttributeName, NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
@@ -107,6 +107,8 @@ pub struct Ivars {
     revealed: Cell<(usize, usize)>,
     /// The selection (UTF-16 start and end): a list marker it touches shows its source.
     selection: Cell<(usize, usize)>,
+    /// How many words the search the note was opened from found in it (highlighted).
+    found: Cell<usize>,
     look: Look,
 }
 
@@ -248,6 +250,7 @@ impl LivePreview {
             markup_fonts: RefCell::new(Vec::new()),
             revealed: Cell::new((0, 0)),
             selection: Cell::new((0, 0)),
+            found: Cell::new(0),
             look,
         };
         let this = Self::alloc(mtm).set_ivars(ivars);
@@ -261,6 +264,8 @@ impl LivePreview {
     /// Restyles after a user edit: only the paragraphs whose styles changed (ADR 0012), plus
     /// the old and new cursor paragraphs, whose markup visibility changes.
     fn restyle_after_edit(&self, view: &NSTextView) {
+        // The found words' ranges no longer hold after an edit.
+        self.clear_found(view);
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
         let total = storage.length();
         let mut edit = self.ivars().pending.take();
@@ -408,8 +413,50 @@ impl LivePreview {
         }
     }
 
+    /// Highlights `ranges` (UTF-16), the words the search found in the note, until the next
+    /// edit or note; the first is scrolled into view with the find indicator.
+    pub fn show_found(&self, view: &NSTextView, ranges: &[(usize, usize)]) {
+        self.clear_found(view);
+        let (Some(layout), Some(&first)) = (view.textLayoutManager(), ranges.first()) else { return };
+        let Some(content) = layout.textContentManager() else { return };
+        let start = content.documentRange().location();
+        let color = NSColor::findHighlightColor();
+        for &(from, to) in ranges {
+            let (Some(a), Some(b)) =
+                (content.locationFromLocation_withOffset(&start, from as isize), content.locationFromLocation_withOffset(&start, to as isize))
+            else {
+                continue;
+            };
+            if let Some(range) = NSTextRange::initWithLocation_endLocation(NSTextRange::alloc(), &a, Some(&b)) {
+                // SAFETY: a colour is the background attribute's value type.
+                unsafe { layout.addRenderingAttribute_value_forTextRange(NSBackgroundColorAttributeName, Some(&color), &range) };
+            }
+        }
+        self.ivars().found.set(ranges.len());
+        let first = NSRange::new(first.0, first.1 - first.0);
+        view.scrollRangeToVisible(first);
+        view.showFindIndicatorForRange(first);
+    }
+
+    /// Drops the highlights of found words.
+    fn clear_found(&self, view: &NSTextView) {
+        if self.ivars().found.replace(0) == 0 {
+            return;
+        }
+        if let (Some(layout), Some(content)) = (view.textLayoutManager(), view.textLayoutManager().and_then(|l| l.textContentManager())) {
+            // SAFETY: AppKit's attribute name constant lives for the whole process.
+            layout.removeRenderingAttribute_forTextRange(unsafe { NSBackgroundColorAttributeName }, &content.documentRange());
+        }
+    }
+
+    /// How many found words the note shows highlighted (probe mode).
+    pub fn found_count(&self) -> usize {
+        self.ivars().found.get()
+    }
+
     /// Shows `source` in `view` with live preview styles.
     pub fn show(&self, view: &NSTextView, path: &str, source: &str) {
+        self.clear_found(view);
         *self.ivars().path.borrow_mut() = path.to_owned();
         // setString moves the selection, which reveals markup: the old note's ranges must not
         // be applied to the new text.

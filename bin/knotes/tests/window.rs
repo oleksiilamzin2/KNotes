@@ -1041,3 +1041,15 @@ fn cmd_f_finds_in_the_note_and_cmd_shift_f_searches_the_notes() {
     let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Пошук у нотатках")]);
     assert!(out.contains("search-row: shown") && out.contains("focus: search"), "{out}");
 }
+
+#[test]
+fn a_note_opened_from_a_content_search_shows_its_matches_scrolled_into_view() {
+    let long: String = (0..200).map(|i| format!("Рядок {i} звичайного тексту.\n\n")).collect::<String>() + "Тут шуканий радар нарешті.\n\nІ ще радари тут.";
+    let notes = [("a.md", long.as_str()), ("b.md", "інше")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "content: радар"), ("KNOTES_PROBE_OPEN", "a.md")]);
+    assert!(out.contains("found-in-note: 2"), "{out}");
+    let visible = out.lines().find_map(|l| l.strip_prefix("note-visible: ")).unwrap();
+    assert!(visible.split(' ').next().unwrap().parse::<f64>().unwrap() > 1000.0, "scrolled to the first match: {visible}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md")]);
+    assert!(out.contains("found-in-note: 0"), "nothing found without a search: {out}");
+}

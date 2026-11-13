@@ -20,7 +20,7 @@ pub use history::{HISTORY_DEPTH, History};
 pub use labels::{TimeStyle, plural_uk, time_style};
 pub use link_rewrite::{Moves, relink};
 pub use natural_order::{natural_cmp, natural_key};
-pub use search_list::{ContentMatch, found_snippet, search_list};
+pub use search_list::{ContentMatch, found_snippet, found_words, search_list};
 pub use search_query::{SearchMode, parse_search, with_search_mode};
 pub use new_note::{note_file_stem, unique_note_path};
 pub use relink_plan::{Relinks, plan_relinks};
