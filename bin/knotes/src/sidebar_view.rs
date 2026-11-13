@@ -2,7 +2,7 @@
 //! note dragged from the list onto a folder moves there, and a folder is renamed in its row
 //! from the context menu (ADR 0019).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use knotes_app::{Sidebar, SidebarItem};
@@ -10,11 +10,11 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
+    NSButton, NSColor, NSControl, NSEvent, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
     NSOutlineViewDelegate, NSPasteboard, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification,
     NSView,
 };
-use objc2_foundation::{NSArray, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
+use objc2_foundation::{NSArray, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, NSZeroRect, ns_string};
 
 use crate::note_list_view::NOTE_PATH_TYPE;
 use crate::strings;
@@ -235,7 +235,11 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             count.setStringValue(&NSString::from_str(&text));
         }
         if let Some(close) = close_button(&cell) {
-            close.setHidden(!matches!(item, SidebarItem::Tab(_)));
+            // A tab's cross shows with the pointer over its row (as Safari's).
+            if let Some(hover) = cell.downcast_ref::<SidebarCell>() {
+                hover.ivars().closable.set(matches!(item, SidebarItem::Tab(_)));
+                hover.show_cross_if_pointed();
+            }
             // SAFETY: the source outlives the outline's cells (it is the outline's data source).
             unsafe {
                 close.setTarget(Some(self));
@@ -425,7 +429,7 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     if let Some(cell) = reused.and_then(|v| v.downcast::<NSTableCellView>().ok()) {
         return cell;
     }
-    let cell = NSTableCellView::new(mtm);
+    let cell = SidebarCell::new(mtm);
     cell.setIdentifier(Some(&id));
     let image = NSImageView::new(mtm);
     let name = NSTextField::labelWithString(ns_string!(""), mtm);
@@ -466,7 +470,80 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         cell.setImageView(Some(&image));
         cell.setTextField(Some(&name));
     }
-    cell
+    Retained::into_super(cell)
+}
+
+pub struct CellIvars {
+    /// A tab's row: its cross shows with the pointer over it.
+    closable: Cell<bool>,
+    /// The tracking area the cell made, replaced as the cell moves.
+    tracking: RefCell<Option<Retained<NSTrackingArea>>>,
+}
+
+define_class!(
+    /// A sidebar row that knows when the pointer is over it.
+    #[unsafe(super(NSTableCellView, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesSidebarCell"]
+    #[ivars = CellIvars]
+    pub struct SidebarCell;
+
+    impl SidebarCell {
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            if let Some(old) = self.ivars().tracking.borrow_mut().take() {
+                self.removeTrackingArea(&old);
+            }
+            let options = NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveInActiveApp | NSTrackingAreaOptions::InVisibleRect;
+            // SAFETY: the cell owns the area and removes it before making another.
+            let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(<NSTrackingArea as objc2::AnyThread>::alloc(), NSZeroRect, options, Some(self), None) };
+            self.addTrackingArea(&area);
+            *self.ivars().tracking.borrow_mut() = Some(area);
+            // SAFETY: the superclass's own handling.
+            let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
+            // Rows move under a still pointer as tabs close.
+            self.show_cross_if_pointed();
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            self.show_cross(true);
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.show_cross(false);
+        }
+    }
+);
+
+impl SidebarCell {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(CellIvars { closable: Cell::new(false), tracking: RefCell::new(None) });
+        // SAFETY: NSView's initializer.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    /// Whether the row is a tab's (probe mode).
+    pub fn is_closable(&self) -> bool {
+        self.ivars().closable.get()
+    }
+
+    fn show_cross(&self, pointed: bool) {
+        if let Some(close) = close_button(self) {
+            close.setHidden(!(pointed && self.ivars().closable.get()));
+        }
+    }
+
+    /// Shows the cross when the pointer is over the row now.
+    fn show_cross_if_pointed(&self) {
+        let inside = self.window().is_some_and(|w| {
+            let at = self.convertPoint_fromView(w.mouseLocationOutsideOfEventStream(), None);
+            let b = self.bounds();
+            at.x >= b.origin.x && at.x < b.origin.x + b.size.width && at.y >= b.origin.y && at.y < b.origin.y + b.size.height
+        });
+        self.show_cross(inside);
+    }
 }
 
 /// A cell's cross for closing a tab.

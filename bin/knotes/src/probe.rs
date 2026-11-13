@@ -348,10 +348,41 @@ pub fn tab_close_requested(outline: &NSOutlineView, sidebar: &crate::sidebar_vie
     // SAFETY: the item object comes from the outline view's data source.
     let row = unsafe { outline.rowForItem(Some(&sidebar.object_for(&knotes_app::SidebarItem::Tab(path.to_owned())))) };
     let cell = (row >= 0).then(|| outline.viewAtColumn_row_makeIfNecessary(0, row, true)).flatten().and_then(|v| v.downcast::<NSTableCellView>().ok());
+    // The pointer over the row first: the cross shows only then.
+    if let Some(cell) = cell.as_deref() {
+        pointer_over(cell, true);
+    }
     if let Some(button) = cell.as_deref().and_then(crate::sidebar_view::close_button) {
         // SAFETY: a click with no sender, as the button's own.
         unsafe { button.performClick(None) };
     }
+}
+
+/// The pointer coming over `view` (or leaving it), the event AppKit's tracking area sends.
+fn pointer_over(view: &objc2_app_kit::NSView, entering: bool) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
+    let Some(window) = view.window() else { return };
+    let kind = if entering { NSEventType::MouseEntered } else { NSEventType::MouseExited };
+    // SAFETY: no user data.
+    let event = unsafe {
+        NSEvent::enterExitEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_trackingNumber_userData(
+            kind, objc2_foundation::NSPoint::new(0.0, 0.0), NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 0, std::ptr::null_mut(),
+        )
+    };
+    if let Some(event) = event {
+        if entering { NSResponder::mouseEntered(view, &event) } else { NSResponder::mouseExited(view, &event) }
+    }
+}
+
+/// Whether each tab's cross shows, in the sidebar's order.
+fn report_tab_crosses(outline: &NSOutlineView) {
+    let shown: Vec<&str> = (0..outline.numberOfRows())
+        .filter_map(|row| outline.viewAtColumn_row_makeIfNecessary(0, row, true)?.downcast::<NSTableCellView>().ok())
+        .filter_map(|cell| crate::sidebar_view::close_button(&cell).map(|b| (cell, b)))
+        .filter(|(cell, _)| cell.downcast_ref::<crate::sidebar_view::SidebarCell>().is_some_and(|c| c.is_closable()))
+        .map(|(_, b)| if b.isHidden() { "hidden" } else { "shown" })
+        .collect();
+    println!("tab-crosses: {}", shown.join(" "));
 }
 
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
@@ -825,6 +856,19 @@ fn tabs_requested(window: &VaultWindow) {
         tab_close_requested(&window.outline, &window.sidebar, &path);
         window.window.displayIfNeeded();
     }
+    // `KNOTES_PROBE_TAB_HOVER=a.md` (or `a.md:out`): the pointer comes over that tab's row
+    // (or comes and leaves).
+    if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_HOVER") {
+        let (path, out) = spec.split_once(':').map_or((spec.as_str(), false), |(p, o)| (p, o == "out"));
+        // SAFETY: the item object comes from the outline view's data source.
+        let row = unsafe { window.outline.rowForItem(Some(&window.sidebar.object_for(&knotes_app::SidebarItem::Tab(path.to_owned())))) };
+        if let Some(cell) = (row >= 0).then(|| window.outline.viewAtColumn_row_makeIfNecessary(0, row, true)).flatten() {
+            pointer_over(&cell, true);
+            if out {
+                pointer_over(&cell, false);
+            }
+        }
+    }
     // `KNOTES_PROBE_TAB_MENU=a.md` (or `a.md:close`, `a.md:others`): that tab's context menu,
     // its items printed (or one chosen).
     if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_MENU") {
@@ -1058,6 +1102,7 @@ fn report_sidebar(outline: &NSOutlineView) {
         })
         .collect();
     println!("sidebar: {}", rows.join(" | "));
+    report_tab_crosses(outline);
     let selected = outline.selectedRow();
     let name = (selected >= 0)
         .then(|| outline.viewAtColumn_row_makeIfNecessary(0, selected, true))

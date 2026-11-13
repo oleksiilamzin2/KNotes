@@ -2375,3 +2375,19 @@ fn a_tab_s_menu_closes_it_or_the_others() {
     let out = menu("a.md:close");
     assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()), "{out}");
 }
+
+/// Whether each tab's cross shows, in order (`tab-crosses:` line).
+fn tab_crosses(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("tab-crosses: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn a_tab_s_cross_shows_only_with_the_pointer_over_its_row() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let two = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")];
+    assert_eq!(tab_crosses(&probe_tabs(&vault, &home, &two)), "hidden hidden");
+    let out = probe_tabs(&vault, &home, &[two[0], two[1], ("KNOTES_PROBE_TAB_HOVER", "a.md")]);
+    assert_eq!(tab_crosses(&out), "shown hidden");
+    let out = probe_tabs(&vault, &home, &[two[0], two[1], ("KNOTES_PROBE_TAB_HOVER", "a.md:out")]);
+    assert_eq!(tab_crosses(&out), "hidden hidden", "the pointer left");
+}
