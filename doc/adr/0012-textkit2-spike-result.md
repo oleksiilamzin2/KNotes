@@ -51,3 +51,19 @@ each edit, because copying a 300 KB `NSString` alone took about 1 ms.
 Of the keystroke, about 1 ms is own work (highlight 0.6 ms, UTF-16 offsets 0.35 ms); the
 rest is layout and display. A fence typed near the top restyles everything below it, like
 a full restyle (~4.5 ms): rare, at most a dropped frame on an M1.
+
+## Composed attributes, 2026-11-13
+
+Styling in layers (runs, then markup, then list markers) changed ranges inside already
+styled text, and AppKit's text storage keeps attribute runs in an array: each such change
+shifted every run after it. A list-heavy note (981 KB, 6000 items) took 56 ms to restyle
+fully, 12000 short markup ranges alone 29 ms against 2.5 ms for the 12000 runs set before
+them. Now the layers are painted on a `knotes_editor::Canvas` (one value per UTF-16 unit) and
+the final runs are set front to back, each once, with shared attribute sets
+(`bin/knotes/src/text_paint.rs`). The cursor's paragraph and list markers restyle through the
+same path.
+
+| M5 Pro, release | Before | Composed |
+|---|---|---|
+| Lists, 981 KB: full restyle / open | 56 / 88 ms (21.6 / 45 ms before lists) | 18.8 / 43 ms |
+| Formulas, 611 KB: full restyle / open | 6.3 / 19 ms | 4.6 / 19 ms |

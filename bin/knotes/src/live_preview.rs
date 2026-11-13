@@ -3,25 +3,25 @@
 //! Every styled range also carries a `knotes.style` attribute, so tests can read what is shown.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
+use knotes_editor::{Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
 use crate::preview_fragment::{Anchor, BULLET_ROOM, Mark, PREVIEW_GAP, PreviewFragment};
+use crate::text_paint::{Paint, PaintCache, Palette, Para, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSKernAttributeName,
-    NSAttributedStringNSStringDrawing, NSMutableParagraphStyle, NSParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextContentStorage, NSTextDelegate, NSTextElement,
+    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
+    NSAttributedStringNSStringDrawing, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
-    NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSUnderlineStyle, NSViewFrameDidChangeNotification,
+    NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
-    NSArray, NSAttributedString, NSDictionary, NSInteger, NSMutableCopying, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
+    NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
     NSValue,
 };
 
@@ -55,17 +55,12 @@ struct Look {
     /// Formulas that do not typeset (ADR 0017).
     error: Retained<NSColor>,
     clear: Retained<NSColor>,
-    style_key: Retained<NSString>,
-    /// Attribute sets by font, colour and test name: made once, not for every styled range.
-    attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
-    /// List items' paragraph styles by indentation, marker room and hidden indentation.
-    list_styles: RefCell<HashMap<(u64, u64, bool), Retained<NSParagraphStyle>>>,
+    /// Attribute sets and paragraph styles, made once and shared.
+    paint: PaintCache,
     /// Widths of a digit, `.`, `)` and a space in the digits font, once measured.
     number_widths: Cell<Option<[f64; 4]>>,
 }
 
-/// Font, colour, test name, kerning and paragraph style of an attribute set.
-type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle);
 
 type OnChange = Box<dyn Fn()>;
 type OnLink = Box<dyn Fn(&Link)>;
@@ -219,9 +214,7 @@ impl LivePreview {
             missing: NSColor::linkColor().colorWithAlphaComponent(0.45),
             error: NSColor::systemRedColor(),
             clear: NSColor::clearColor(),
-            style_key: NSString::from_str(STYLE_KEY),
-            attributes: RefCell::new(HashMap::new()),
-            list_styles: RefCell::new(HashMap::new()),
+            paint: PaintCache::new(STYLE_KEY),
             number_widths: Cell::new(None),
             body,
         };
@@ -284,11 +277,8 @@ impl LivePreview {
         *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&new, &self.ivars().look);
         *self.ivars().styled.borrow_mut() = new;
         self.ivars().revealed.set(revealed);
-        match region {
-            Some(region) => self.apply_region(&storage, region, revealed),
-            // An edit not announced through shouldChangeText: restyle everything.
-            None => self.apply_all(&storage, revealed),
-        }
+        // An edit not announced through shouldChangeText restyles everything.
+        self.restyle(&storage, region.unwrap_or((0, total)));
     }
 
     fn resync(&self, storage: &NSTextStorage) {
@@ -296,33 +286,63 @@ impl LivePreview {
         self.ivars().source_units.set(storage.length());
     }
 
-    fn apply_region(&self, storage: &NSTextStorage, region: (usize, usize), revealed: (usize, usize)) {
+    /// Restyles `region` (UTF-16), grown to whole paragraphs and to the whole of every formula
+    /// meeting it. The styles are composed in memory, layer over layer, and set front to back,
+    /// each run once (`text_paint`).
+    fn restyle(&self, storage: &NSTextStorage, region: (usize, usize)) {
+        let region = self.whole(storage, region);
+        if region.0 >= region.1 {
+            return;
+        }
         let look = &self.ivars().look;
         let styled = self.ivars().styled.borrow();
         let fonts = self.ivars().markup_fonts.borrow();
-        let clip = |r: &Range<usize>| r.start.max(region.0)..r.end.min(region.1);
-        storage.beginEditing();
-        set(storage, NSRange::new(region.0, region.1 - region.0), &look.body, &look.text, "plain", look);
-        clear_layout(storage, NSRange::new(region.0, region.1 - region.0));
-        for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
+        let revealed = self.ivars().revealed.get();
+        let mut palette = Palette::new();
+        let plain = palette.look(&look.body, &look.text, "plain");
+        let mut canvas = Canvas::new(region.0..region.1, Paint { look: plain, para: 0, kern: 0 });
+        let meets = |r: &Range<usize>| r.start < region.1 && r.end > region.0;
+        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. })) {
             let (font, color, name) = self.run_look(run, &styled);
-            set(storage, ns(&clip(&run.range)), font, color, name, look);
+            let id = palette.look(font, color, name);
+            canvas.paint(run.range.clone(), |p| p.look = id);
         }
-        for run in styled.runs.iter().filter(|r| r.style == Style::Strike && r.range.start < region.1 && r.range.end > region.0) {
-            strike(storage, ns(&clip(&run.range)));
+        // After all runs (one inside would replace it), before the markup (which drops it).
+        for run in styled.runs.iter().filter(|r| r.style == Style::Strike && meets(&r.range)) {
+            canvas.paint(run.range.clone(), |p| p.look |= STRUCK);
         }
-        for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| m.start < region.1 && m.end > region.0) {
-            self.style_markup(storage, m, font, overlaps(m, revealed));
+        for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
+            let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
+            canvas.paint(m.clone(), |p| p.look = id);
         }
-        for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
-            self.style_list_marker(storage, run);
+        for run in styled.runs.iter().filter(|r| meets(&r.range)) {
+            self.paint_list_marker(&mut canvas, &mut palette, storage, run);
         }
-        for f in styled.formulas.iter().filter(|f| f.range.start < region.1 && f.range.end > region.0) {
-            self.style_formula(storage, f, overlaps(&f.range, revealed));
+        for f in styled.formulas.iter().filter(|f| meets(&f.range)) {
+            self.paint_formula(&mut canvas, &mut palette, storage, f, overlaps(&f.range, revealed));
         }
-        drop((styled, fonts));
-        self.fit_formula_lines_in(storage, region, revealed);
-        storage.endEditing();
+        self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region, revealed);
+        look.paint.apply(storage, &canvas, &palette);
+    }
+
+    /// `region` grown to whole paragraphs and to the whole of every formula meeting it (a
+    /// display formula styles all its paragraphs).
+    fn whole(&self, storage: &NSTextStorage, region: (usize, usize)) -> (usize, usize) {
+        let total = storage.length();
+        let styled = self.ivars().styled.borrow();
+        let mut r = (region.0.min(total), region.1.min(total));
+        loop {
+            let para = paragraph(storage, NSRange::new(r.0, r.1 - r.0));
+            let grown = styled
+                .formulas
+                .iter()
+                .filter(|f| f.range.start < para.1 && f.range.end > para.0)
+                .fold(para, |g, f| (g.0.min(f.range.start), g.1.max(f.range.end.min(total))));
+            if grown == r {
+                return r;
+            }
+            r = grown;
+        }
     }
 
     /// Makes `view` keep its text at the readable width as it resizes, and draw formulas.
@@ -372,79 +392,48 @@ impl LivePreview {
         self.ivars().revealed.set(para);
         self.ivars().selection.set(span(view.selectedRange()));
         self.ivars().dark.set(is_dark(view));
-        self.apply_all(&storage, para);
+        self.restyle(&storage, (0, storage.length()));
     }
 
-    fn apply_all(&self, storage: &NSTextStorage, revealed: (usize, usize)) {
-        let look = &self.ivars().look;
-        let styled = self.ivars().styled.borrow();
-        storage.beginEditing();
-        let full = NSRange::new(0, storage.length());
-        set(storage, full, &look.body, &look.text, "plain", look);
-        clear_layout(storage, full);
-        for run in &styled.runs {
-            let (font, color, name) = self.run_look(run, &styled);
-            set(storage, ns(&run.range), font, color, name, look);
-        }
-        // After all runs (one inside would replace it), before the markup (which drops it).
-        for run in styled.runs.iter().filter(|r| r.style == Style::Strike) {
-            strike(storage, ns(&run.range));
-        }
-        let fonts = self.ivars().markup_fonts.borrow();
-        for (m, font) in styled.markup.iter().zip(fonts.iter()) {
-            self.style_markup(storage, m, font, overlaps(m, revealed));
-        }
-        for run in &styled.runs {
-            self.style_list_marker(storage, run);
-        }
-        for f in &styled.formulas {
-            self.style_formula(storage, f, overlaps(&f.range, revealed));
-        }
-        drop((styled, fonts));
-        self.fit_formula_lines_in(storage, (0, storage.length()), revealed);
-        storage.endEditing();
-    }
-
-    /// Hides the markup of the previously revealed paragraph and shows that of the cursor's.
+    /// Restyles what changes when the cursor moves: the markup of the paragraph it left and of
+    /// the one it entered, and the list markers it now touches or left.
     fn reveal_cursor_paragraph(&self, view: &NSTextView) {
         if self.ivars().pending.get().is_some() {
             // Mid-edit: the highlight still has the old offsets; the edit restyles this itself.
             return;
         }
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
-        self.reveal_touched_markers(&storage, span(view.selectedRange()));
+        let mut regions = self.markers_touched_anew(span(view.selectedRange()));
         let new = paragraph(&storage, view.selectedRange());
         let old = self.ivars().revealed.replace(new);
-        if old == new {
-            return;
+        if old != new {
+            regions.extend([old, new].into_iter().filter(|&p| self.reveals_something(p)));
         }
-        let styled = self.ivars().styled.borrow();
-        let fonts = self.ivars().markup_fonts.borrow();
-        storage.beginEditing();
-        for para in [old, new] {
-            let first = styled.markup.partition_point(|m| m.end <= para.0);
-            for (m, font) in styled.markup[first..].iter().zip(&fonts[first..]).take_while(|(m, _)| m.start < para.1) {
-                self.style_markup(&storage, m, font, overlaps(m, new));
+        regions.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for r in regions {
+            match merged.last_mut() {
+                Some(last) if r.0 <= last.1 => last.1 = last.1.max(r.1),
+                _ => merged.push(r),
             }
         }
-        let mut touched = false;
-        for f in styled.formulas.iter().filter(|f| overlaps(&f.range, old) || overlaps(&f.range, new)) {
-            self.style_formula(&storage, f, overlaps(&f.range, new));
-            touched = true;
+        for region in merged {
+            self.restyle(&storage, region);
         }
-        drop((fonts, styled));
-        if touched {
-            self.fit_formula_lines_in(&storage, (old.0.min(new.0), old.1.max(new.1)), new);
-        }
-        storage.endEditing();
     }
 
-    /// Shows the source of the list markers the selection now touches and hides that of those
-    /// it left.
-    fn reveal_touched_markers(&self, storage: &NSTextStorage, new: (usize, usize)) {
+    /// Whether a paragraph shows differently with the cursor in it: it has markup or formulas.
+    fn reveals_something(&self, para: (usize, usize)) -> bool {
+        let styled = self.ivars().styled.borrow();
+        let first = styled.markup.partition_point(|m| m.end <= para.0);
+        styled.markup.get(first).is_some_and(|m| m.start < para.1) || styled.formulas.iter().any(|f| overlaps(&f.range, para))
+    }
+
+    /// Records the new selection; the ranges of the list markers it now touches or left.
+    fn markers_touched_anew(&self, new: (usize, usize)) -> Vec<(usize, usize)> {
         let old = self.ivars().selection.replace(new);
         if old == new {
-            return;
+            return Vec::new();
         }
         let styled = self.ivars().styled.borrow();
         // Markers are short: those touching a selection start a little before it.
@@ -452,31 +441,18 @@ impl LivePreview {
             let first = styled.runs.partition_point(|r| r.range.start + MARKER_REACH < sel.0);
             styled.runs[first..].iter().take_while(move |r| r.range.start <= sel.1)
         };
-        let changed: Vec<&Run> = near(old)
+        near(old)
             .chain(near(new))
             .filter(|r| matches!(r.style, Style::ListMarker { .. }) && touches(&r.range, old) != touches(&r.range, new))
-            .collect();
-        if changed.is_empty() {
-            return;
-        }
-        let region = changed.iter().fold((usize::MAX, 0), |r, run| (r.0.min(run.range.start), r.1.max(run.range.end)));
-        storage.beginEditing();
-        for run in changed {
-            self.style_list_marker(storage, run);
-        }
-        drop(styled);
-        // The new paragraph style dropped a formula's line height there.
-        self.fit_formula_lines_in(storage, paragraph(storage, NSRange::new(region.0, region.1 - region.0)), self.ivars().revealed.get());
-        storage.endEditing();
+            .map(|r| (r.range.start, r.range.end))
+            .collect()
     }
 
     /// A list item's marker and its paragraph's indentation. A bullet's `- ` is hidden, its room
     /// kept (by kerning) for the dot the fragment draws, unless the selection touches it;
     /// numbers show. The source's indentation is hidden: each level indents by `LIST_INDENT`,
-    /// and wrapped lines line up with the item's text. One attribute change per range: the
-    /// paragraph style goes on the paragraph's first character, and the text storage gives it
-    /// to the whole paragraph (it fixes paragraph styles so).
-    fn style_list_marker(&self, storage: &NSTextStorage, run: &Run) {
+    /// and wrapped lines line up with the item's text.
+    fn paint_list_marker<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, run: &Run) {
         let Style::ListMarker { kind, depth } = run.style else { return };
         let look = &self.ivars().look;
         let text = storage.string();
@@ -485,7 +461,6 @@ impl LivePreview {
             line_start -= 1;
         }
         let blank = line_start == 0 || matches!(text.characterAtIndex(line_start - 1), 0x0a | 0x0d);
-        let range = ns(&run.range);
         let hidden = kind == ListKind::Bullet && !touches(&run.range, self.ivars().selection.get());
         let font = if kind == ListKind::Ordered { &look.digits } else { &look.body };
         let room = if hidden {
@@ -493,21 +468,26 @@ impl LivePreview {
         } else if kind == ListKind::Ordered {
             self.number_width(&text, &run.range)
         } else {
-            let attrs = attributes(font, &look.muted, "list-marker", 0.0, None, look);
-            text_width(&text.substringWithRange(range), &attrs)
+            text_width(&text.substringWithRange(ns(&run.range)), font)
         };
         let start = if blank { f64::from(depth) * LIST_INDENT } else { 0.0 };
-        let style = self.list_style(start, room, blank);
-        let indent = line_start..run.range.start;
-        let on_marker = (!blank || indent.is_empty()).then_some(&*style);
-        if hidden {
-            let kern = BULLET_ROOM / run.range.len() as f64;
-            set_with(storage, range, &look.hidden, &look.clear, "bullet", kern, on_marker, look);
-        } else {
-            set_with(storage, range, font, &look.muted, "list-marker", 0.0, on_marker, look);
+        let para = palette.para(Para { first_indent: start, head_indent: start + room, hidden_tabs: blank, ..Para::default() });
+        let paragraph = paragraph(storage, NSRange::new(run.range.start, 0));
+        canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
+        if blank {
+            let id = palette.look(&look.hidden, &look.clear, "indent");
+            canvas.paint(line_start..run.range.start, |p| p.look = id);
         }
-        if blank && !indent.is_empty() {
-            set_with(storage, ns(&indent), &look.hidden, &look.clear, "indent", 0.0, Some(&style), look);
+        if hidden {
+            let id = palette.look(&look.hidden, &look.clear, "bullet");
+            let kern = palette.kern(BULLET_ROOM / run.range.len() as f64);
+            canvas.paint(run.range.clone(), |p| {
+                p.look = id;
+                p.kern = kern;
+            });
+        } else {
+            let id = palette.look(font, &look.muted, "list-marker");
+            canvas.paint(run.range.clone(), |p| p.look = id);
         }
     }
 
@@ -515,10 +495,7 @@ impl LivePreview {
     fn number_width(&self, text: &NSString, range: &Range<usize>) -> f64 {
         let look = &self.ivars().look;
         let widths = look.number_widths.get().unwrap_or_else(|| {
-            let width = |s: &str| {
-                let attrs = attributes(&look.digits, &look.muted, "list-marker", 0.0, None, look);
-                text_width(&NSString::from_str(s), &attrs)
-            };
+            let width = |s: &str| text_width(&NSString::from_str(s), &look.digits);
             let w = [width("0"), width("."), width(")"), width(" ")];
             look.number_widths.set(Some(w));
             w
@@ -535,26 +512,6 @@ impl LivePreview {
             .sum()
     }
 
-    /// The paragraph style of list items starting at `start` with `room` for their marker
-    /// (made once for each).
-    fn list_style(&self, start: f64, room: f64, hidden_indent: bool) -> Retained<NSParagraphStyle> {
-        let mut styles = self.ivars().look.list_styles.borrow_mut();
-        styles
-            .entry((start.to_bits(), room.to_bits(), hidden_indent))
-            .or_insert_with(|| {
-                let style = NSMutableParagraphStyle::new();
-                style.setFirstLineHeadIndent(start);
-                style.setHeadIndent(start + room);
-                if hidden_indent {
-                    // Hidden tabs must not jump to tab stops.
-                    style.setTabStops(Some(&NSArray::new()));
-                    style.setDefaultTabInterval(0.01);
-                }
-                Retained::into_super(style)
-            })
-            .clone()
-    }
-
     /// Text colour for typeset formulas, and the typeset image of `f` (cached).
     fn formula_image(&self, f: &FormulaRun) -> Result<Arc<FormulaImage>, String> {
         let rgb = if self.ivars().dark.get() { [235, 235, 235] } else { [29, 29, 31] };
@@ -566,99 +523,87 @@ impl LivePreview {
     /// (width by kerning, height by the line height) for the typeset image. With the cursor
     /// in it: its source, and room below for a display formula's preview. A formula that
     /// does not typeset shows its source marked as an error.
-    fn style_formula(&self, storage: &NSTextStorage, f: &FormulaRun, revealed: bool) {
+    fn paint_formula<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, f: &FormulaRun, revealed: bool) {
         let look = &self.ivars().look;
-        let range = ns(&f.range);
-        let paragraphs = paragraph(storage, range);
-        // SAFETY: AppKit's attribute name constant lives for the whole process.
-        unsafe { storage.removeAttribute_range(NSKernAttributeName, range) };
+        let paragraphs = paragraph(storage, ns(&f.range));
         let block = f.display && is_block(storage, f);
         if block {
             // A display formula owns its lines: their paragraph styles are its own.
-            // SAFETY: as above.
-            unsafe { storage.removeAttribute_range(NSParagraphStyleAttributeName, NSRange::new(paragraphs.0, paragraphs.1 - paragraphs.0)) };
+            canvas.paint(paragraphs.0..paragraphs.1, |p| p.para = 0);
         }
+        let source = |canvas: &mut Canvas<Paint>, id: u16| {
+            canvas.paint(f.range.clone(), |p| {
+                p.look = id;
+                p.kern = 0;
+            })
+        };
         let image = match self.formula_image(f) {
             Ok(image) => image,
-            Err(_) => {
-                set(storage, range, &look.mono, &look.error, "math-error", look);
-                return;
-            }
+            Err(_) => return source(canvas, palette.look(&look.mono, &look.error, "math-error")),
         };
+        let reserved = image.height_pt + 2.0 * PREVIEW_GAP;
         if revealed {
-            set(storage, range, &look.mono, &look.text, "math", look);
+            source(canvas, palette.look(&look.mono, &look.text, "math"));
             if block {
                 // Room for the preview under the source's last line.
                 let last = paragraph(storage, NSRange::new(f.range.end.saturating_sub(1), 0));
-                let style = NSMutableParagraphStyle::new();
-                style.setParagraphSpacing(image.height_pt + 2.0 * PREVIEW_GAP);
-                add_paragraph_style(storage, last, &style);
+                let para = palette.para(Para { spacing_after: reserved, ..Para::default() });
+                canvas.paint(last.0..last.1, |p| p.para = para);
             }
             return;
         }
-        set(storage, range, &look.hidden, &look.clear, "formula", look);
+        source(canvas, palette.look(&look.hidden, &look.clear, "formula"));
         if block {
             // One centred line as tall as the image; the source's other lines fold away.
             let first = paragraph(storage, NSRange::new(f.range.start, 0));
-            let line = NSMutableParagraphStyle::new();
-            line.setAlignment(NSTextAlignment::Center);
-            line.setMinimumLineHeight(image.height_pt + 2.0 * PREVIEW_GAP);
-            line.setMaximumLineHeight(image.height_pt + 2.0 * PREVIEW_GAP);
-            add_paragraph_style(storage, first, &line);
-            if first.1 < paragraphs.1 {
-                let folded = NSMutableParagraphStyle::new();
-                folded.setMinimumLineHeight(0.0);
-                folded.setMaximumLineHeight(0.01);
-                add_paragraph_style(storage, (first.1, paragraphs.1), &folded);
-            }
-            add_kern(storage, f.range.start, image.width_pt);
-        } else {
-            // On the first character: the source has spaces where lines may break, and the
-            // reserved width must stay with the image (on the last character a break inside
-            // the source carried it to the next line). A formula too wide for the rest of a
-            // line now moves to the next one whole.
-            add_kern(storage, f.range.start, image.width_pt);
+            let line = palette.para(Para { centred: true, min_line: reserved, max_line: reserved, ..Para::default() });
+            canvas.paint(first.0..first.1, |p| p.para = line);
+            let folded = palette.para(Para { max_line: 0.01, ..Para::default() });
+            canvas.paint(first.1..paragraphs.1, |p| p.para = folded);
         }
+        // On the first character: the source has spaces where lines may break, and the reserved
+        // width must stay with the image (on the last character a break inside the source
+        // carried it to the next line). A formula too wide for the rest of a line now moves to
+        // the next one whole.
+        let kern = palette.kern(image.width_pt);
+        canvas.paint(f.range.start..f.range.start + 1, |p| p.kern = kern);
     }
 
-    /// Line height of a paragraph with inline formulas: enough for the tallest typeset one
-    /// above and below the baseline. Paragraphs of display formulas are left to them.
-    fn fit_formula_lines(&self, storage: &NSTextStorage, paragraph_range: (usize, usize), revealed: (usize, usize)) {
-        let styled = self.ivars().styled.borrow();
-        let in_paragraph = |f: &&FormulaRun| f.range.start < paragraph_range.1 && f.range.end > paragraph_range.0;
-        if styled.formulas.iter().filter(in_paragraph).any(|f| f.display && is_block(storage, f)) {
-            return;
-        }
+    /// Line height of each paragraph in `region` with inline formulas: enough for the tallest
+    /// typeset one above and below the baseline. Paragraphs of display formulas are left to
+    /// them; the paragraph's other settings (a list item's indentation) stay.
+    fn paint_formula_lines(
+        &self,
+        canvas: &mut Canvas<Paint>,
+        palette: &mut Palette,
+        storage: &NSTextStorage,
+        styled: &Highlight,
+        region: (usize, usize),
+        revealed: (usize, usize),
+    ) {
         let font = &self.ivars().look.body;
         let (ascent, descent) = (font.ascender(), -font.descender());
-        let (mut above, mut below) = (ascent, descent);
-        for f in styled.formulas.iter().filter(in_paragraph).filter(|f| !overlaps(&f.range, revealed)) {
-            if let Ok(image) = self.formula_image(f) {
-                above = above.max(image.baseline_pt);
-                below = below.max(image.height_pt - image.baseline_pt);
+        let mut paragraphs: Vec<(usize, usize)> =
+            styled.formulas.iter().filter(|f| f.range.start < region.1 && f.range.end > region.0).map(|f| paragraph(storage, ns(&f.range))).collect();
+        paragraphs.dedup();
+        for para in paragraphs {
+            let in_paragraph = |f: &&FormulaRun| f.range.start < para.1 && f.range.end > para.0;
+            if styled.formulas.iter().filter(in_paragraph).any(|f| f.display && is_block(storage, f)) {
+                continue;
             }
-        }
-        // The paragraph's other settings (a list item's indentation) stay.
-        let line = paragraph_style_at(storage, paragraph_range.0);
-        line.setMinimumLineHeight(if above > ascent || below > descent { above + below + 2.0 } else { 0.0 });
-        add_paragraph_style(storage, paragraph_range, &line);
-    }
-
-    /// Fits the lines of every paragraph holding an inline formula that meets `region`.
-    fn fit_formula_lines_in(&self, storage: &NSTextStorage, region: (usize, usize), revealed: (usize, usize)) {
-        let paragraphs: Vec<(usize, usize)> = {
-            let styled = self.ivars().styled.borrow();
-            let mut list: Vec<(usize, usize)> = styled
-                .formulas
-                .iter()
-                .filter(|f| f.range.start < region.1 && f.range.end > region.0)
-                .map(|f| paragraph(storage, ns(&f.range)))
-                .collect();
-            list.dedup();
-            list
-        };
-        for p in paragraphs {
-            self.fit_formula_lines(storage, p, revealed);
+            let (mut above, mut below) = (ascent, descent);
+            for f in styled.formulas.iter().filter(in_paragraph).filter(|f| !overlaps(&f.range, revealed)) {
+                if let Ok(image) = self.formula_image(f) {
+                    above = above.max(image.baseline_pt);
+                    below = below.max(image.height_pt - image.baseline_pt);
+                }
+            }
+            let base = palette.para_of(canvas.get(para.0).map_or(0, |p| p.para));
+            let min_line = if above > ascent || below > descent { above + below + 2.0 } else { 0.0 };
+            if min_line != base.min_line {
+                let id = palette.para(Para { min_line, ..base });
+                canvas.paint(para.0..para.1, |p| p.para = id);
+            }
         }
     }
 
@@ -707,15 +652,6 @@ impl LivePreview {
         crate::preview_fragment::describe_visible(view)
     }
 
-    fn style_markup(&self, storage: &NSTextStorage, m: &Range<usize>, font: &NSFont, visible: bool) {
-        let look = &self.ivars().look;
-        if visible {
-            set(storage, ns(m), font, &look.muted, "markup", look);
-        } else {
-            set(storage, ns(m), &look.hidden, &look.clear, "hidden", look);
-        }
-    }
-
     /// Restyles everything from `source` (the edit path's worst case), for the editor bench.
     /// The shown note was renamed or moved.
     pub fn set_path(&self, path: &str) {
@@ -738,7 +674,7 @@ impl LivePreview {
     pub fn set_links(&self, view: &NSTextView, links: Arc<dyn LinkResolver>) {
         *self.ivars().links.borrow_mut() = Some(links);
         if let Some(storage) = unsafe { view.textStorage() } {
-            self.apply_all(&storage, self.ivars().revealed.get());
+            self.restyle(&storage, (0, storage.length()));
         }
     }
 
@@ -779,7 +715,7 @@ impl LivePreview {
         *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&styled, &self.ivars().look);
         *self.ivars().styled.borrow_mut() = styled;
         if let Some(storage) = unsafe { view.textStorage() } {
-            self.apply_all(&storage, self.ivars().revealed.get());
+            self.restyle(&storage, (0, storage.length()));
         }
     }
 
@@ -870,104 +806,12 @@ fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
 }
 
-fn set(storage: &NSTextStorage, range: NSRange, font: &NSFont, color: &NSColor, name: &'static str, look: &Look) {
-    set_with(storage, range, font, color, name, 0.0, None, look);
-}
-
-/// Replaces the attributes of `range`; `kern` and `paragraph` only when given.
-#[allow(clippy::too_many_arguments)]
-fn set_with(
-    storage: &NSTextStorage,
-    range: NSRange,
-    font: &NSFont,
-    color: &NSColor,
-    name: &'static str,
-    kern: f64,
-    paragraph: Option<&NSParagraphStyle>,
-    look: &Look,
-) {
-    let attrs = attributes(font, color, name, kern, paragraph, look);
-    // SAFETY: values of their attributes' types.
-    unsafe { storage.setAttributes_range(Some(&attrs), range) };
-}
-
-/// An attribute set, made once and then shared.
-fn attributes(
-    font: &NSFont,
-    color: &NSColor,
-    name: &'static str,
-    kern: f64,
-    paragraph: Option<&NSParagraphStyle>,
-    look: &Look,
-) -> Retained<NSDictionary<NSString, AnyObject>> {
-    let key: AttributesKey = (font, color, name, kern.to_bits(), paragraph.map_or(std::ptr::null(), |p| p as *const _));
-    let mut cache = look.attributes.borrow_mut();
-    cache
-        .entry(key)
-        .or_insert_with(|| {
-            let style = NSString::from_str(name);
-            let kern = NSNumber::numberWithDouble(kern);
-            // SAFETY: AppKit's attribute name constants live for the whole process.
-            let mut keys = unsafe { vec![NSFontAttributeName, NSForegroundColorAttributeName, &*look.style_key] };
-            let mut values: Vec<&AnyObject> = vec![font.as_ref(), color.as_ref(), style.as_ref()];
-            if key.3 != 0 {
-                // SAFETY: as above.
-                keys.push(unsafe { NSKernAttributeName });
-                values.push(kern.as_ref());
-            }
-            if let Some(paragraph) = paragraph {
-                // SAFETY: as above.
-                keys.push(unsafe { NSParagraphStyleAttributeName });
-                values.push(paragraph.as_ref());
-            }
-            NSDictionary::from_slices(&keys, &values)
-        })
-        .clone()
-}
-
-/// Drops kerning and paragraph styles (set only for formulas) from `range`.
-fn clear_layout(storage: &NSTextStorage, range: NSRange) {
-    // SAFETY: AppKit's attribute name constants live for the whole process.
-    unsafe {
-        storage.removeAttribute_range(NSKernAttributeName, range);
-        storage.removeAttribute_range(NSParagraphStyleAttributeName, range);
-    }
-}
-
-/// A line through the text of `range`.
-fn strike(storage: &NSTextStorage, range: NSRange) {
-    let single = NSNumber::numberWithInteger(NSUnderlineStyle::Single.0);
-    // SAFETY: an NSNumber of an underline style is the attribute's value type.
-    unsafe { storage.addAttribute_value_range(NSStrikethroughStyleAttributeName, &single, range) };
-}
-
-fn add_kern(storage: &NSTextStorage, index: usize, points: f64) {
-    let value = NSNumber::numberWithDouble(points);
-    // SAFETY: an NSNumber is the kerning attribute's value type.
-    unsafe { storage.addAttribute_value_range(NSKernAttributeName, &value, NSRange::new(index, 1)) };
-}
-
-/// Width of `text` laid out on one line with `attrs`.
-fn text_width(text: &NSString, attrs: &NSDictionary<NSString, AnyObject>) -> f64 {
-    // SAFETY: an attribute set of valid values.
-    unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), text, Some(attrs)) }.size().width
-}
-
-/// A copy of the paragraph style at `index` to change, or a new one.
-fn paragraph_style_at(storage: &NSTextStorage, index: usize) -> Retained<NSMutableParagraphStyle> {
-    if index < storage.length() {
-        // SAFETY: AppKit's attribute name constant lives for the whole process.
-        let value = unsafe { storage.attribute_atIndex_effectiveRange(NSParagraphStyleAttributeName, index, std::ptr::null_mut()) };
-        if let Some(style) = value.and_then(|v| v.downcast::<NSParagraphStyle>().ok()) {
-            return style.mutableCopy();
-        }
-    }
-    NSMutableParagraphStyle::new()
-}
-
-fn add_paragraph_style(storage: &NSTextStorage, paragraphs: (usize, usize), style: &NSParagraphStyle) {
-    // SAFETY: a paragraph style is the attribute's value type.
-    unsafe { storage.addAttribute_value_range(NSParagraphStyleAttributeName, style, NSRange::new(paragraphs.0, paragraphs.1 - paragraphs.0)) };
+/// Width of `text` laid out on one line in `font`.
+fn text_width(text: &NSString, font: &NSFont) -> f64 {
+    // SAFETY: AppKit's attribute name constant lives for the whole process.
+    let attrs = NSDictionary::from_slices(&[unsafe { NSFontAttributeName }], &[font.as_ref() as &AnyObject]);
+    // SAFETY: a font is the font attribute's value type.
+    unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), text, Some(&attrs)) }.size().width
 }
 
 /// Whether a display formula fills its paragraphs (its own lines) rather than sitting in text.

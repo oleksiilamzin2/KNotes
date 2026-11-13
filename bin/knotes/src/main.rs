@@ -16,6 +16,7 @@ mod search_bar;
 mod search_worker;
 mod sidebar_view;
 mod strings;
+mod text_paint;
 mod toolbar;
 mod vault_window;
 mod window;
