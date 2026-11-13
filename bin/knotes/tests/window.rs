@@ -1105,3 +1105,14 @@ fn a_bare_web_address_is_a_link_with_an_arrow() {
     assert_eq!(decorations(&out, "external").len(), 2, "after the address, mid-line or at the end of one: {out}");
     assert!(out.contains("hover: hand"), "{out}");
 }
+
+#[test]
+fn find_is_enabled_in_the_menu_while_the_note_has_the_focus() {
+    let (_vault, out) = probe_notes(&[("a.md", "text")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(out.contains("find-menu: Знайти…=on Знайти далі=on Знайти попереднє=on"), "Cmd+F must work from the text: {out}");
+    for focus in ["note", "list"] {
+        let (_vault, out) =
+            probe_notes(&[("a.md", "text")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_SHORTCUT", "f"), ("KNOTES_PROBE_SHORTCUT_FOCUS", focus)]);
+        assert!(out.contains("shortcut-handled: true") && out.contains("find-bar: shown"), "Cmd+F from the {focus}: {out}");
+    }
+}

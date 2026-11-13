@@ -321,6 +321,23 @@ pub fn folder_rename_requested(sidebar: &crate::sidebar_view::SidebarSource, out
     }
 }
 
+/// `KNOTES_PROBE_SHORTCUT=f` (or `shift+f`): Cmd with that key pressed while the note has the
+/// focus, through the window and the menu bar as AppKit sends a key equivalent.
+pub fn shortcut_requested(window: &NSWindow, focus: &objc2_app_kit::NSView) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+    let Ok(spec) = std::env::var("KNOTES_PROBE_SHORTCUT") else { return };
+    let (shift, key) = spec.strip_prefix("shift+").map_or((false, spec.as_str()), |k| (true, k));
+    window.makeFirstResponder(Some(focus));
+    let flags = if shift { NSEventModifierFlags::Command | NSEventModifierFlags::Shift } else { NSEventModifierFlags::Command };
+    let chars = NSString::from_str(key);
+    let Some(event) = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        NSEventType::KeyDown, objc2_foundation::NSPoint::new(0.0, 0.0), flags, 0.0, window.windowNumber(), None, &chars, &chars, false, 3,
+    ) else { return };
+    let handled = window.performKeyEquivalent(&event)
+        || NSApplication::sharedApplication(window.mtm()).mainMenu().is_some_and(|menu| menu.performKeyEquivalent(&event));
+    println!("shortcut-handled: {handled}");
+}
+
 /// `KNOTES_PROBE_MENU=Item title`: that menu bar item chosen, as a click on it would.
 pub fn menu_requested() {
     let Ok(title) = std::env::var("KNOTES_PROBE_MENU") else { return };
@@ -685,6 +702,19 @@ fn report_note(window: &VaultWindow) {
     if let Some(scroll) = window.note_text.enclosingScrollView() {
         println!("find-bar: {}", if objc2_app_kit::NSTextFinderBarContainer::isFindBarVisible(&*scroll) { "shown" } else { "hidden" });
         println!("find-dims-note: {}", if window.note_text.finder_dims() { "yes" } else { "no" });
+        // The menu validates its items against the focused note, as before a key press.
+        window.window.makeFirstResponder(Some(&window.note_text));
+        let mtm = window.window.mtm();
+        if let Some(edit) = NSApplication::sharedApplication(mtm).mainMenu().and_then(|bar| bar.itemArray().iter().nth(2)).and_then(|i| i.submenu()) {
+            edit.update();
+            let finds: Vec<String> = edit
+                .itemArray()
+                .iter()
+                .filter(|i| i.action() == Some(objc2::sel!(performTextFinderAction:)))
+                .map(|i| format!("{}={}", i.title(), if i.isEnabled() { "on" } else { "off" }))
+                .collect();
+            println!("find-menu: {}", finds.join(" "));
+        }
     }
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);

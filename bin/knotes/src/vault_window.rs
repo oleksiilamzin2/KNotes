@@ -501,6 +501,11 @@ impl VaultWindow {
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
             probe::menu_requested();
+            if std::env::var("KNOTES_PROBE_SHORTCUT_FOCUS").as_deref() == Ok("list") {
+                probe::shortcut_requested(&self.window, &self.table);
+            } else {
+                probe::shortcut_requested(&self.window, &self.note_text);
+            }
             if let Ok(word) = std::env::var("KNOTES_PROBE_FIND") {
                 self.note_text.find_word(&word);
             }
