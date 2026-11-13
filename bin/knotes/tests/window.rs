@@ -2221,6 +2221,7 @@ fn the_tabs_segment_lists_every_document_opened_the_one_shown_selected() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md,a.md")]);
     assert!(out.contains("sidebar-mode: tabs"), "{out}");
+    assert!(out.contains("sidebar-segments: Вкладки, Теки, Теги\n"), "tabs first (owner's order): {out}");
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()), "a.md opened again: no second tab");
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
     assert_eq!(sidebar_tabs(&out).1, "doc", "a PDF is a tab too: {out}");

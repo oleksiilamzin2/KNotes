@@ -372,9 +372,9 @@ pub fn rewrite_image_requested(window: &VaultWindow) {
 /// toolbar switch, sent to its target as AppKit does.
 pub fn sidebar_mode_requested(window: &NSWindow) {
     let index = match std::env::var("KNOTES_PROBE_ACTION").as_deref() {
-        Ok("sidebar=folders") => 0,
-        Ok("sidebar=tags") => 1,
-        Ok("sidebar=tabs") => 2,
+        Ok("sidebar=folders") => 1,
+        Ok("sidebar=tags") => 2,
+        Ok("sidebar=tabs") => 0,
         _ => return,
     };
     let Some(group) = sidebar_switch(window) else { return };
@@ -986,11 +986,15 @@ pub fn panel_requested(window: &NSWindow) {
 }
 
 fn report_sidebar_mode(window: &NSWindow) {
+    if let Some(group) = sidebar_switch(window) {
+        let labels: Vec<String> = group.subitems().iter().map(|i| i.label().to_string()).collect();
+        println!("sidebar-segments: {}", labels.join(", "));
+    }
     let mode = match sidebar_switch(window).map(|g| (g.isHidden(), g.selectedIndex())) {
         Some((true, _)) => "hidden",
-        Some((false, 0)) => "folders",
-        Some((false, 1)) => "tags",
-        Some((false, 2)) => "tabs",
+        Some((false, 0)) => "tabs",
+        Some((false, 1)) => "folders",
+        Some((false, 2)) => "tags",
         _ => "none",
     };
     let collapsed = window
