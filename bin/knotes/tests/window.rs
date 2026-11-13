@@ -873,3 +873,19 @@ fn a_list_in_a_quote_keeps_the_quote_indentation() {
     let (bar, dot) = (decorations(&out, "quote"), decorations(&out, "bullet"));
     assert!(bar.len() == 1 && dot.len() == 1 && dot[0].0 > bar[0].0 + 10.0, "the bullet right of the bar: {bar:?} {dot:?}");
 }
+
+#[test]
+fn code_blocks_get_a_background_and_fold_their_fences_away_from_the_cursor() {
+    let note = "text\n\n```rust\nlet x = 1;\nlet y = 2;\n```\n\nend";
+    let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[fence]```rust|[codeblock]⏎let x = 1;⏎let y = 2;⏎|[fence]```|"), "{runs}");
+    let back = decorations(&out, "code");
+    assert_eq!(back.len(), 4, "fence, two lines, fence: {out}");
+    assert!(back.windows(2).all(|w| (w[0].1 + w[0].3 - w[1].1).abs() < 0.5 && w[0].0 == w[1].0), "one block: {back:?}");
+    assert!(back[0].3 < 12.0 && back[3].3 < 12.0 && back[1].3 >= 17.0, "fences fold to padding: {back:?}");
+    let inside = note.find("let y").unwrap().to_string();
+    let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", &inside)]);
+    assert!(editor_runs(&out).contains("[code-fence]```rust|[codeblock]⏎let x = 1;⏎let y = 2;⏎|[code-fence]```|"), "{out}");
+    assert!(decorations(&out, "code").iter().all(|b| b.3 >= 17.0), "fences show as lines: {out}");
+}

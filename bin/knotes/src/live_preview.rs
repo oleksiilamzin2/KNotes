@@ -38,6 +38,9 @@ const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4"
 const LIST_INDENT: f64 = 20.0;
 /// Indentation of each quote level, past its bar.
 const QUOTE_INDENT: f64 = 18.0;
+/// Code's inset in its background, and the height a hidden fence line keeps as padding.
+const CODE_INSET: f64 = 12.0;
+const FENCE_PADDING: f64 = 8.0;
 
 struct Look {
     body: Retained<NSFont>,
@@ -304,7 +307,7 @@ impl LivePreview {
         let plain = palette.look(&look.body, &look.text, "plain");
         let mut canvas = Canvas::new(region.0..region.1, Paint { look: plain, para: 0, kern: 0 });
         let meets = |r: &Range<usize>| r.start < region.1 && r.end > region.0;
-        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. } | Style::QuoteMarker { .. })) {
+        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. } | Style::QuoteMarker { .. } | Style::Fence)) {
             let (font, color, name) = self.run_look(run, &styled);
             let id = palette.look(font, color, name);
             canvas.paint(run.range.clone(), |p| p.look = id);
@@ -339,6 +342,9 @@ impl LivePreview {
                 let paragraph = paragraph(storage, NSRange::new(run.range.start, 0));
                 canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
             }
+        }
+        for block in styled.code_blocks.iter().filter(|c| meets(c)) {
+            self.paint_code_block(&mut canvas, &mut palette, storage, &styled, block, overlaps(block, revealed));
         }
         for run in styled.runs.iter().filter(|r| meets(&r.range)) {
             self.paint_list_marker(&mut canvas, &mut palette, storage, run);
@@ -432,7 +438,11 @@ impl LivePreview {
         let new = paragraph(&storage, view.selectedRange());
         let old = self.ivars().revealed.replace(new);
         if old != new {
-            regions.extend([old, new].into_iter().filter(|&p| self.reveals_something(p)));
+            regions.extend([old, new].into_iter().filter(|&p| self.reveals_in_paragraph(p)));
+            // Formulas and code blocks show their source while the cursor is anywhere in them.
+            let styled = self.ivars().styled.borrow();
+            let blocks = styled.formulas.iter().map(|f| &f.range).chain(&styled.code_blocks);
+            regions.extend(blocks.filter(|b| overlaps(b, old) != overlaps(b, new)).map(|b| (b.start, b.end)));
         }
         regions.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::new();
@@ -447,15 +457,14 @@ impl LivePreview {
         }
     }
 
-    /// Whether a paragraph shows differently with the cursor in it: it has markup, a quote's
-    /// prefix or formulas.
-    fn reveals_something(&self, para: (usize, usize)) -> bool {
+    /// Whether a paragraph shows differently with the cursor in it: it has markup or a quote's
+    /// prefix.
+    fn reveals_in_paragraph(&self, para: (usize, usize)) -> bool {
         let styled = self.ivars().styled.borrow();
         let first = styled.markup.partition_point(|m| m.end <= para.0);
         let runs = styled.runs.partition_point(|r| r.range.start < para.0);
         styled.markup.get(first).is_some_and(|m| m.start < para.1)
             || styled.runs[runs..].iter().take_while(|r| r.range.start < para.1).any(|r| matches!(r.style, Style::QuoteMarker { .. }))
-            || styled.formulas.iter().any(|f| overlaps(&f.range, para))
     }
 
     /// Records the new selection; the ranges of the list markers it now touches or left.
@@ -521,6 +530,38 @@ impl LivePreview {
         } else {
             let id = palette.look(font, &look.muted, "list-marker");
             canvas.paint(run.range.clone(), |p| p.look = id);
+        }
+    }
+
+    /// A code block's paragraphs inset in the background the fragments draw; its fences fold
+    /// to padding unless the cursor is in the block, then they show.
+    fn paint_code_block<'a>(
+        &'a self,
+        canvas: &mut Canvas<Paint>,
+        palette: &mut Palette<'a>,
+        storage: &NSTextStorage,
+        styled: &Highlight,
+        block: &Range<usize>,
+        revealed: bool,
+    ) {
+        let look = &self.ivars().look;
+        let paragraphs = paragraph(storage, ns(block));
+        let base = palette.para_of(canvas.get(paragraphs.0).map_or(0, |p| p.para));
+        let inset = base.first_indent + CODE_INSET;
+        let code = palette.para(Para { first_indent: inset, head_indent: inset, ..base });
+        canvas.paint(paragraphs.0..paragraphs.1, |p| p.para = code);
+        let first = styled.runs.partition_point(|r| r.range.start < block.start);
+        for fence in styled.runs[first..].iter().take_while(|r| r.range.start < block.end).filter(|r| r.style == Style::Fence) {
+            if revealed {
+                let id = palette.look(&look.mono, &look.muted, "code-fence");
+                canvas.paint(fence.range.clone(), |p| p.look = id);
+            } else {
+                let id = palette.look(&look.hidden, &look.clear, "fence");
+                canvas.paint(fence.range.clone(), |p| p.look = id);
+                let folded = palette.para(Para { min_line: FENCE_PADDING, max_line: FENCE_PADDING, first_indent: inset, head_indent: inset, ..base });
+                let line = paragraph(storage, NSRange::new(fence.range.start, 0));
+                canvas.paint(line.0..line.1, |p| p.para = folded);
+            }
         }
     }
 
@@ -642,11 +683,13 @@ impl LivePreview {
 
     /// What the paragraph at `range` draws: each typeset formula starting in it (inline, or a
     /// display formula on its own line), the preview of a display formula with the cursor in
-    /// it below its last paragraph, the dot or circle of a hidden bullet or task marker, and a
-    /// quote's bars.
+    /// it below its last paragraph, the dot or circle of a hidden bullet or task marker, a
+    /// quote's bars and a code block's background.
     fn preview_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
         let styled = self.ivars().styled.borrow();
-        let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty()) else { return Vec::new() };
+        let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty() && styled.code_blocks.is_empty()) else {
+            return Vec::new();
+        };
         let Some(content) = layout.textContentManager() else { return Vec::new() };
         let storage = content.downcast_ref::<NSTextContentStorage>().and_then(|c| c.textStorage());
         let Some(storage) = storage else { return Vec::new() };
@@ -669,6 +712,10 @@ impl LivePreview {
             }
             let Ok(image) = self.formula_image(f) else { continue };
             marks.push(Mark::Formula { offset: at - from, image, anchor });
+        }
+        let block = styled.code_blocks.partition_point(|c| c.end <= from);
+        if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
+            marks.push(Mark::CodeBackground { top: from <= c.start, bottom: to >= c.end });
         }
         let selection = self.ivars().selection.get();
         let centre = self.ivars().look.body.xHeight() / 2.0;
@@ -869,6 +916,7 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'static str) {
         Style::ListMarker { .. } => (&look.body, &look.muted, "list-marker"),
         Style::Done => (&look.body, &look.muted, "done"),
         Style::QuoteMarker { .. } => (&look.body, &look.muted, "quote-marker"),
+        Style::Fence => (&look.mono, &look.muted, "code-fence"),
     }
 }
 

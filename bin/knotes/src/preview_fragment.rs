@@ -1,5 +1,5 @@
 //! What the live preview draws in place of hidden source, inside TextKit 2 layout fragments
-//! (ADR 0017): typeset formulas, list bullets, task circles and quote bars. The text keeps the source (hidden, its room
+//! (ADR 0017): typeset formulas, list bullets, task circles, quote bars and code backgrounds. The text keeps the source (hidden, its room
 //! reserved by the live preview) and the paragraph's layout fragment draws at that place, so
 //! the drawing moves with its text however TextKit lays out, scrolls or resizes (layers over
 //! the view lagged a run loop behind and jumped while scrolling). Clicks reach the text.
@@ -37,6 +37,9 @@ pub enum Mark {
     Task { offset: usize, centre: f64, checked: bool },
     /// A quote level's bar down the whole paragraph, `x` from the text column's start.
     QuoteBar { x: f64 },
+    /// A code block's background across the column behind the paragraph, its corners rounded
+    /// at the block's top and bottom.
+    CodeBackground { top: bool, bottom: bool },
 }
 
 /// Space between a display formula's source and its preview.
@@ -49,6 +52,7 @@ const BULLET_SIZE: f64 = 5.0;
 pub const TASK_ROOM: f64 = 22.0;
 const TASK_BOX: f64 = 14.0;
 const QUOTE_BAR: f64 = 3.0;
+const CODE_CORNER: f64 = 5.0;
 
 pub struct Ivars {
     /// Each mark with its image, for formulas.
@@ -64,9 +68,20 @@ define_class!(
     impl PreviewFragment {
         #[unsafe(method(drawAtPoint:inContext:))]
         fn draw(&self, point: NSPoint, context: &CGContext) {
+            let graphics = NSGraphicsContext::graphicsContextWithCGContext_flipped(context, true);
+            let previous = NSGraphicsContext::currentContext();
+            NSGraphicsContext::setCurrentContext(Some(&graphics));
+            // Backgrounds under the text.
+            for (mark, _) in &self.ivars().marks {
+                if let (Mark::CodeBackground { top, bottom }, Some(rect)) = (mark, self.mark_rect(mark)) {
+                    let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
+                    NSColor::quaternarySystemFillColor().setFill();
+                    rounded(rect, CODE_CORNER, *top, *bottom).fill();
+                }
+            }
+            NSGraphicsContext::setCurrentContext(previous.as_deref());
             // SAFETY: the superclass draws the text, as it would without this override.
             let _: () = unsafe { msg_send![super(self), drawAtPoint: point, inContext: context] };
-            let graphics = NSGraphicsContext::graphicsContextWithCGContext_flipped(context, true);
             let previous = NSGraphicsContext::currentContext();
             NSGraphicsContext::setCurrentContext(Some(&graphics));
             for (mark, image) in &self.ivars().marks {
@@ -82,6 +97,7 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
+                    (Mark::CodeBackground { .. }, _) => {}
                     (Mark::QuoteBar { .. }, _) => {
                         NSColor::controlAccentColor().setFill();
                         // Square ends: the bars of consecutive lines join into one.
@@ -110,7 +126,7 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
-                Mark::Bullet { .. } | Mark::Task { .. } | Mark::QuoteBar { .. } => Some((m, None)),
+                Mark::Bullet { .. } | Mark::Task { .. } | Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => Some((m, None)),
             })
             .collect();
         let this = Self::alloc().set_ivars(Ivars { marks });
@@ -124,11 +140,16 @@ impl PreviewFragment {
             let frame = self.layoutFragmentFrame();
             return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, 0.0), NSSize::new(QUOTE_BAR, frame.size.height)));
         }
+        if let Mark::CodeBackground { .. } = mark {
+            let frame = self.layoutFragmentFrame();
+            let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
+            return Some(NSRect::new(NSPoint::new(-frame.origin.x, 0.0), NSSize::new(column, frame.size.height)));
+        }
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } => (*offset, false),
-            Mark::QuoteBar { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
         };
         let line: Retained<NSTextLineFragment> =
             if below { lines.iter().last()? } else { lines.iter().find(|l| contains(l, offset)).or_else(|| lines.iter().last())? };
@@ -155,7 +176,7 @@ impl PreviewFragment {
             Mark::Task { centre, .. } => {
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - TASK_BOX / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
             }
-            Mark::QuoteBar { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
         };
         Some(rect)
     }
@@ -182,6 +203,7 @@ impl PreviewFragment {
                         format!("decoration: {kind} {x:.1} {y:.1} {w:.1} {h:.1}")
                     }
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
                 })
             })
             .collect()
@@ -209,6 +231,22 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// `rect` with its top and/or bottom corners rounded.
+fn rounded(rect: NSRect, radius: f64, top: bool, bottom: bool) -> Retained<NSBezierPath> {
+    let (x0, y0) = (rect.origin.x, rect.origin.y);
+    let (x1, y1) = (x0 + rect.size.width, y0 + rect.size.height);
+    let (rt, rb) = (if top { radius } else { 0.0 }, if bottom { radius } else { 0.0 });
+    let path = NSBezierPath::bezierPath();
+    // Flipped: y0 is the top.
+    path.moveToPoint(NSPoint::new(x0 + rt, y0));
+    path.appendBezierPathWithArcFromPoint_toPoint_radius(NSPoint::new(x1, y0), NSPoint::new(x1, y1), rt);
+    path.appendBezierPathWithArcFromPoint_toPoint_radius(NSPoint::new(x1, y1), NSPoint::new(x0, y1), rb);
+    path.appendBezierPathWithArcFromPoint_toPoint_radius(NSPoint::new(x0, y1), NSPoint::new(x0, y0), rb);
+    path.appendBezierPathWithArcFromPoint_toPoint_radius(NSPoint::new(x0, y0), NSPoint::new(x1, y0), rt);
+    path.closePath();
+    path
 }
 
 /// A circle, outlined, or filled in the accent colour with a tick for a done task (the

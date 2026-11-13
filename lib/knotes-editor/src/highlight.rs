@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use knotes_core::{Link, NoteParser};
 use knotes_md::{MarkdownParser, OPTIONS};
-use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Style {
@@ -27,6 +27,8 @@ pub enum Style {
     /// A quote line's prefix (`> `, `> > `), with the indentation before it; `depth` counts
     /// its `>`.
     QuoteMarker { depth: u8 },
+    /// A fenced code block's opening (with its language) or closing fence line.
+    Fence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,6 +71,8 @@ pub struct Highlight {
     pub links: Vec<LinkRun>,
     /// Formulas, sorted by start.
     pub formulas: Vec<FormulaRun>,
+    /// Code blocks, fences included, sorted by start.
+    pub code_blocks: Vec<Range<usize>>,
 }
 
 impl Highlight {
@@ -100,6 +104,7 @@ impl Highlight {
             .chain(self.markup.iter().flat_map(|m| [m.start, m.end]))
             .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
             .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
+            .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -114,6 +119,7 @@ impl Highlight {
                 .iter()
                 .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
                 .collect(),
+            code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
         }
     }
 }
@@ -182,7 +188,14 @@ pub fn highlight(source: &str) -> Highlight {
                 let n = text.bytes().take_while(|&b| b == b'`').count();
                 delimited(&mut h, r, Style::Code, n);
             }
-            Event::Start(Tag::CodeBlock(_)) => h.runs.push(Run { range: r.start..r.start + text.trim_end().len(), style: Style::CodeBlock }),
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let block = r.start..r.start + text.trim_end().len();
+                h.runs.push(Run { range: block.clone(), style: Style::CodeBlock });
+                if let CodeBlockKind::Fenced(_) = kind {
+                    fences(&mut h, source, block.clone());
+                }
+                h.code_blocks.push(block);
+            }
             Event::InlineMath(tex) => formula(&mut h, r, &tex, false),
             Event::DisplayMath(tex) => formula(&mut h, r, &tex, true),
             Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole }, .. }) => {
@@ -215,6 +228,22 @@ pub fn highlight(source: &str) -> Highlight {
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
+}
+
+/// Marks the opening fence line of a fenced code block at `block`, and its closing one: its
+/// last line, when that is a fence of the same character.
+fn fences(h: &mut Highlight, source: &str, block: Range<usize>) {
+    let text = &source[block.clone()];
+    let open_end = text.find('\n').unwrap_or(text.len());
+    h.runs.push(Run { range: block.start..block.start + open_end, style: Style::Fence });
+    let fence = text.trim_start().as_bytes().first().copied().unwrap_or(b'`');
+    if let Some(n) = text.rfind('\n') {
+        let last = &text[n + 1..];
+        let mark = last.trim_start();
+        if mark.len() >= 3 && mark.bytes().all(|b| b == fence) {
+            h.runs.push(Run { range: block.start + n + 1..block.end, style: Style::Fence });
+        }
+    }
 }
 
 /// Marks the prefix of each line of a quote at `r`: the first from the quote's start (it may

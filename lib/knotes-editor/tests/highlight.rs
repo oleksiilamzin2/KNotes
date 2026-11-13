@@ -47,7 +47,7 @@ fn tags_are_styled_but_not_hidden() {
 #[test]
 fn code_blocks_are_one_run_without_inline_styles() {
     let src = "```\n**not bold** [[no]]\n```\n";
-    assert_eq!(styles(src).into_iter().map(|s| s.0).collect::<Vec<_>>(), [Style::CodeBlock]);
+    assert_eq!(styles(src).into_iter().map(|s| s.0).collect::<Vec<_>>(), [Style::CodeBlock, Style::Fence, Style::Fence]);
     assert!(markup(src).is_empty());
 }
 
@@ -195,4 +195,25 @@ fn a_lazy_quote_line_has_no_prefix_and_a_quote_in_a_list_starts_at_its_marker() 
     let src = "- > in list";
     assert_eq!(quote_marks(src), [(1, "> ")]);
     assert_eq!(highlight(src).runs.iter().find(|r| matches!(r.style, Style::QuoteMarker { .. })).unwrap().range.start, 2);
+}
+
+fn fences(src: &str) -> Vec<&str> {
+    highlight(src).runs.into_iter().filter(|r| r.style == Style::Fence).map(|r| &src[r.range]).collect()
+}
+
+#[test]
+fn fenced_code_blocks_mark_their_fence_lines_and_their_whole_range() {
+    let src = "text\n\n```rust\nlet x = 1;\n```\n\nend";
+    assert_eq!(fences(src), ["```rust", "```"]);
+    let blocks: Vec<&str> = highlight(src).code_blocks.into_iter().map(|r| &src[r]).collect();
+    assert_eq!(blocks, ["```rust\nlet x = 1;\n```"]);
+    assert_eq!(fences("~~~\ncode\n~~~"), ["~~~", "~~~"]);
+}
+
+#[test]
+fn an_unclosed_or_indented_code_block_has_no_closing_fence() {
+    assert_eq!(fences("```\ncode\nmore"), ["```"]);
+    let src = "para\n\n    indented code\n";
+    assert!(fences(src).is_empty());
+    assert_eq!(highlight(src).code_blocks.into_iter().map(|r| &src[r]).collect::<Vec<_>>(), ["indented code"]);
 }
