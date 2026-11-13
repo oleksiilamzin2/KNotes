@@ -10,12 +10,14 @@ use std::sync::Arc;
 use knotes_editor::FormulaImage;
 use objc2::rc::Retained;
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSCompositingOperation, NSGraphicsContext, NSImage, NSTextElement, NSTextLayoutFragment, NSTextLineFragment,
+    NSBezierPath, NSColor, NSCompositingOperation, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSGraphicsContext, NSImage,
+    NSImageSymbolConfiguration, NSStringDrawing, NSTextElement, NSTextLayoutFragment, NSTextLineFragment,
     NSTextLocation, NSTextRange, NSTextView,
 };
 use objc2_core_graphics::CGContext;
-use objc2_foundation::{NSData, NSObject, NSPoint, NSRect, NSSize, NSZeroRect};
+use objc2_foundation::{NSData, NSDictionary, NSObject, NSPoint, NSRect, NSSize, NSString, NSZeroRect};
 
 /// Where a formula's image goes in its paragraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,12 @@ pub enum Mark {
     /// A code block's background across the column behind the paragraph, its corners rounded
     /// at the block's top and bottom.
     CodeBackground { top: bool, bottom: bool },
+    /// A callout's tinted box across the column behind the paragraph, rounded at the callout's
+    /// top and bottom.
+    CalloutBox { colour: Retained<NSColor>, top: bool, bottom: bool },
+    /// A callout's icon in the room of its hidden `[!kind]`, and its kind's name after it when
+    /// no title is written.
+    CalloutIcon { offset: usize, centre: f64, colour: Retained<NSColor>, symbol: &'static str, label: Option<String>, font: Retained<NSFont> },
     /// An arrow after a link to a website, `shift` points from the location of character
     /// `offset` (in the room kerning keeps there).
     External { offset: usize, centre: f64, shift: f64 },
@@ -57,6 +65,8 @@ pub const TASK_ROOM: f64 = 22.0;
 const TASK_BOX: f64 = 14.0;
 const QUOTE_BAR: f64 = 3.0;
 const CODE_CORNER: f64 = 5.0;
+/// A callout's icon.
+const CALLOUT_ICON: f64 = 14.0;
 /// Room after a link to a website for its arrow, and the arrow's size.
 pub const EXTERNAL_ROOM: f64 = 13.0;
 const EXTERNAL_ARROW: f64 = 7.0;
@@ -80,10 +90,18 @@ define_class!(
             NSGraphicsContext::setCurrentContext(Some(&graphics));
             // Backgrounds under the text.
             for (mark, _) in &self.ivars().marks {
-                if let (Mark::CodeBackground { top, bottom }, Some(rect)) = (mark, self.mark_rect(mark)) {
-                    let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
-                    NSColor::quaternarySystemFillColor().setFill();
-                    rounded(rect, CODE_CORNER, *top, *bottom).fill();
+                let Some(rect) = self.mark_rect(mark) else { continue };
+                let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
+                match mark {
+                    Mark::CodeBackground { top, bottom } => {
+                        NSColor::quaternarySystemFillColor().setFill();
+                        rounded(rect, CODE_CORNER, *top, *bottom).fill();
+                    }
+                    Mark::CalloutBox { colour, top, bottom } => {
+                        colour.colorWithAlphaComponent(0.1).setFill();
+                        rounded(rect, CODE_CORNER, *top, *bottom).fill();
+                    }
+                    _ => {}
                 }
             }
             NSGraphicsContext::setCurrentContext(previous.as_deref());
@@ -104,7 +122,8 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
-                    (Mark::CodeBackground { .. }, _) => {}
+                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. }, _) => {}
+                    (Mark::CalloutIcon { colour, symbol, label, font, .. }, _) => draw_callout_icon(rect, colour, symbol, label.as_deref(), font),
                     (Mark::External { .. }, _) => draw_external_arrow(rect),
                     (Mark::QuoteBar { .. }, _) => {
                         NSColor::controlAccentColor().setFill();
@@ -134,7 +153,7 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
-                Mark::Bullet { .. } | Mark::Task { .. } | Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::External { .. } => Some((m, None)),
+                _ => Some((m, None)),
             })
             .collect();
         let this = Self::alloc().set_ivars(Ivars { marks });
@@ -148,7 +167,7 @@ impl PreviewFragment {
             let frame = self.layoutFragmentFrame();
             return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, 0.0), NSSize::new(QUOTE_BAR, frame.size.height)));
         }
-        if let Mark::CodeBackground { .. } = mark {
+        if let Mark::CodeBackground { .. } | Mark::CalloutBox { .. } = mark {
             let frame = self.layoutFragmentFrame();
             let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
             return Some(NSRect::new(NSPoint::new(-frame.origin.x, 0.0), NSSize::new(column, frame.size.height)));
@@ -156,8 +175,8 @@ impl PreviewFragment {
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
-            Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } => (*offset, false),
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
+            Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } => return None,
         };
         let line: Retained<NSTextLineFragment> =
             if below { lines.iter().last()? } else { lines.iter().find(|l| contains(l, offset)).or_else(|| lines.iter().last())? };
@@ -188,7 +207,11 @@ impl PreviewFragment {
                 let half = EXTERNAL_ARROW / 2.0;
                 NSRect::new(NSPoint::new(x + shift, baseline - centre - half), NSSize::new(EXTERNAL_ARROW, EXTERNAL_ARROW))
             }
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
+            Mark::CalloutIcon { centre, label, font, .. } => {
+                let width = CALLOUT_ICON + label.as_deref().map_or(0.0, |l| 4.0 + label_width(l, font));
+                NSRect::new(NSPoint::new(x + 1.0, baseline - centre - CALLOUT_ICON / 2.0), NSSize::new(width, CALLOUT_ICON))
+            }
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } => return None,
         };
         Some(rect)
     }
@@ -216,6 +239,8 @@ impl PreviewFragment {
                     }
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::CalloutBox { .. } => format!("decoration: callout-box {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::CalloutIcon { .. } => format!("decoration: callout-icon {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::External { .. } => format!("decoration: external {x:.1} {y:.1} {w:.1} {h:.1}"),
                 })
             })
@@ -244,6 +269,39 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// A callout's icon in its colour, with the kind's name after it in its colour (bold) when no
+/// title is written.
+fn draw_callout_icon(rect: NSRect, colour: &NSColor, symbol: &str, label: Option<&str>, font: &NSFont) {
+    let icon = NSRect::new(rect.origin, NSSize::new(CALLOUT_ICON, CALLOUT_ICON));
+    let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(12.0, 0.3)
+        .configurationByApplyingConfiguration(&NSImageSymbolConfiguration::configurationWithHierarchicalColor(colour));
+    if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(symbol), None).and_then(|i| i.imageWithSymbolConfiguration(&config)) {
+        let size = image.size();
+        let scale = (CALLOUT_ICON / size.width.max(size.height)).min(1.0);
+        let (w, h) = (size.width * scale, size.height * scale);
+        let at = NSRect::new(NSPoint::new(icon.origin.x + (CALLOUT_ICON - w) / 2.0, icon.origin.y + (CALLOUT_ICON - h) / 2.0), NSSize::new(w, h));
+        // SAFETY: a valid image drawn into the current context.
+        unsafe { image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(at, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None) };
+    }
+    if let Some(label) = label {
+        let attrs = label_attributes(font, colour);
+        let top = rect.origin.y + (CALLOUT_ICON - (font.ascender() - font.descender())) / 2.0;
+        // SAFETY: font and colour values of their attributes.
+        unsafe { NSString::from_str(label).drawAtPoint_withAttributes(NSPoint::new(rect.origin.x + CALLOUT_ICON + 4.0, top), Some(&attrs)) };
+    }
+}
+
+fn label_attributes(font: &NSFont, colour: &NSColor) -> Retained<NSDictionary<NSString, AnyObject>> {
+    // SAFETY: AppKit's attribute name constants live for the whole process.
+    let keys = unsafe { [NSFontAttributeName, NSForegroundColorAttributeName] };
+    NSDictionary::from_slices(&keys, &[font.as_ref() as &AnyObject, colour.as_ref()])
+}
+
+fn label_width(label: &str, font: &NSFont) -> f64 {
+    // SAFETY: font and colour values of their attributes.
+    unsafe { NSString::from_str(label).sizeWithAttributes(Some(&label_attributes(font, &NSColor::labelColor()))) }.width
 }
 
 /// An arrow up and to the right in the link colour: the link leads out of the vault.

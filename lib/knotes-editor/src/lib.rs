@@ -14,7 +14,7 @@ pub use canvas::Canvas;
 pub use completion::{LinkCompletion, link_completion};
 pub use formula::{FormulaCache, FormulaImage, FormulaStyle, render_formula};
 pub use document::{DiskChange, Document, conflict_path};
-pub use highlight::{FormulaRun, Highlight, LinkRun, ListKind, Run, Style, highlight};
+pub use highlight::{CalloutRun, FormulaRun, Highlight, LinkRun, ListKind, Run, Style, highlight};
 pub use restyle::{Edit, changed_region};
 pub use subpath::{note_headings, subpath_offset};
 pub use task_box::task_box_typed;

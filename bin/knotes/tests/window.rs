@@ -1127,3 +1127,17 @@ fn find_highlights_every_occurrence_selects_one_and_steps_through_them() {
     let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_FIND", "немає такого")]);
     assert!(out.contains("find: Немає") && out.contains("found-in-note: 0"), "{out}");
 }
+
+#[test]
+fn callouts_show_as_tinted_boxes_with_an_icon_and_a_title() {
+    let note = "T\n\n> [!warning] Mind the gap\n> Text inside.\n\n> [!tip]\n> No title.\n\nend";
+    let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[quote]> |[callout][!warning] |[callout-title]Mind the gap|"), "{runs}");
+    assert_eq!(decorations(&out, "callout-box").len(), 4, "two lines in each box: {out}");
+    assert_eq!(decorations(&out, "callout-icon").len(), 2, "{out}");
+    assert!(decorations(&out, "quote").is_empty(), "no quote bars in a callout: {out}");
+    let inside = (note.find("Mind").unwrap()).to_string();
+    let (_vault, out) = probe_notes(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", &inside)]);
+    assert!(editor_runs(&out).contains("[callout-marker][!warning] |[callout-title]Mind the gap"), "the marker shows on its line: {out}");
+}

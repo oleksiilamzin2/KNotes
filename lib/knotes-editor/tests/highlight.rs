@@ -224,3 +224,23 @@ fn bare_urls_are_styled_as_links_without_markup() {
     assert_eq!(styles(src), [(Style::Link, "https://example.com/a")]);
     assert!(markup(src).is_empty());
 }
+
+#[test]
+fn callouts_know_their_kind_marker_and_title() {
+    let src = "T\n\n> [!Warning] Mind the gap\n> Text inside.\n\nafter";
+    let h = highlight(src);
+    assert_eq!(h.callouts.len(), 1);
+    let c = &h.callouts[0];
+    assert_eq!(c.kind, "warning");
+    assert_eq!(&src[c.marker.clone()], "[!Warning] ");
+    assert_eq!(&src[c.title.clone()], "Mind the gap");
+    assert_eq!(&src[c.range.clone()], "> [!Warning] Mind the gap\n> Text inside.");
+}
+
+#[test]
+fn a_callout_without_title_or_with_a_fold_sign_and_a_plain_quote() {
+    let src = "T\n\n> [!tip]-\n> folded\n\n> plain quote";
+    let h = highlight(src);
+    assert_eq!(h.callouts.len(), 1, "a plain quote is no callout");
+    assert_eq!((h.callouts[0].kind.as_str(), &src[h.callouts[0].marker.clone()], h.callouts[0].title.is_empty()), ("tip", "[!tip]-", true));
+}

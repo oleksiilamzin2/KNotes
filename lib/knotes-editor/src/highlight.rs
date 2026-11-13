@@ -73,6 +73,21 @@ pub struct Highlight {
     pub formulas: Vec<FormulaRun>,
     /// Code blocks, fences included, sorted by start.
     pub code_blocks: Vec<Range<usize>>,
+    /// Obsidian callouts, sorted by start.
+    pub callouts: Vec<CalloutRun>,
+}
+
+/// An Obsidian callout: a quote whose first line starts with `[!kind]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalloutRun {
+    /// The whole quote.
+    pub range: Range<usize>,
+    /// Lowercase, as written (`note`, `warning`, `tip`…).
+    pub kind: String,
+    /// `[!kind]` with its fold sign or the space after it.
+    pub marker: Range<usize>,
+    /// The title written after the marker; empty for the kind's own name.
+    pub title: Range<usize>,
 }
 
 impl Highlight {
@@ -105,6 +120,7 @@ impl Highlight {
             .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
             .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
+            .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -120,6 +136,16 @@ impl Highlight {
                 .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
                 .collect(),
             code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
+            callouts: self
+                .callouts
+                .iter()
+                .map(|c| CalloutRun {
+                    range: map(c.range.start)..map(c.range.end),
+                    kind: c.kind.clone(),
+                    marker: map(c.marker.start)..map(c.marker.end),
+                    title: map(c.title.start)..map(c.title.end),
+                })
+                .collect(),
         }
     }
 }
@@ -138,6 +164,7 @@ pub fn highlight(source: &str) -> Highlight {
             Event::Start(Tag::BlockQuote(_)) => {
                 if quotes == 0 {
                     quote_prefixes(&mut h, source, r.clone());
+                    h.callouts.extend(callout(source, r.clone()));
                 }
                 quotes += 1;
             }
@@ -248,6 +275,28 @@ fn fences(h: &mut Highlight, source: &str, block: Range<usize>) {
             h.runs.push(Run { range: block.start + n + 1..block.end, style: Style::Fence });
         }
     }
+}
+
+/// The callout a quote at `r` is, when its first line starts with `[!kind]` after its `>`.
+fn callout(source: &str, r: Range<usize>) -> Option<CalloutRun> {
+    let text = &source[r.clone()];
+    let line = &text[..text.find('\n').unwrap_or(text.len())];
+    let content = line.trim_start_matches(|c: char| c == '>' || c == ' ' || c == '\t');
+    let at = r.start + (line.len() - content.len());
+    let inner = content.strip_prefix("[!")?;
+    let close = inner.find(']')?;
+    let kind = &inner[..close];
+    if kind.is_empty() || kind.contains(char::is_whitespace) {
+        return None;
+    }
+    let mut end = at + 2 + close + 1;
+    if matches!(source.as_bytes().get(end), Some(b'+' | b'-')) {
+        end += 1;
+    }
+    let line_end = at + content.len();
+    end += blanks(&source[end..line_end]);
+    let title = end..end + source[end..line_end].trim_end().len();
+    Some(CalloutRun { range: r.start..r.start + text.trim_end().len(), kind: kind.to_lowercase(), marker: at..end, title })
 }
 
 /// Marks the prefix of each line of a quote at `r`: the first from the quote's start (it may

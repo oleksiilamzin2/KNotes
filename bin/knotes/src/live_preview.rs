@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
@@ -59,6 +59,8 @@ struct Look {
     missing: Retained<NSColor>,
     /// Formulas that do not typeset (ADR 0017).
     error: Retained<NSColor>,
+    /// Callout colours (ADR 0018), by `callout_look`'s index.
+    callouts: Vec<Retained<NSColor>>,
     clear: Retained<NSColor>,
     /// Attribute sets and paragraph styles, made once and shared.
     paint: PaintCache,
@@ -227,6 +229,15 @@ impl LivePreview {
             accent: NSColor::linkColor(),
             missing: NSColor::linkColor().colorWithAlphaComponent(0.45),
             error: NSColor::systemRedColor(),
+            callouts: vec![
+                NSColor::systemBlueColor(),
+                NSColor::systemTealColor(),
+                NSColor::systemGreenColor(),
+                NSColor::systemOrangeColor(),
+                NSColor::systemRedColor(),
+                NSColor::systemPurpleColor(),
+                NSColor::systemGrayColor(),
+            ],
             clear: NSColor::clearColor(),
             paint: PaintCache::new(STYLE_KEY),
             number_widths: Cell::new(None),
@@ -370,6 +381,9 @@ impl LivePreview {
         }
         for block in styled.code_blocks.iter().filter(|c| meets(c)) {
             self.paint_code_block(&mut canvas, &mut palette, storage, &styled, block, overlaps(block, revealed));
+        }
+        for callout in styled.callouts.iter().filter(|c| meets(&c.range)) {
+            self.paint_callout(&mut canvas, &mut palette, storage, callout, overlaps(&callout.marker, revealed));
         }
         for run in styled.runs.iter().filter(|r| meets(&r.range)) {
             self.paint_list_marker(&mut canvas, &mut palette, storage, run);
@@ -620,6 +634,23 @@ impl LivePreview {
         }
     }
 
+    /// A callout's `[!kind]`, hidden (its room kept for the icon, and the kind's name when no
+    /// title is written) unless the cursor is on its line; its title bold in its colour.
+    fn paint_callout<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, callout: &CalloutRun, revealed: bool) {
+        let look = &self.ivars().look;
+        let (colour, _) = callout_look(&callout.kind);
+        let colour = &look.callouts[colour];
+        if revealed {
+            let id = palette.look(&look.body, &look.muted, "callout-marker");
+            canvas.paint(callout.marker.clone(), |p| p.look = id);
+        } else {
+            let label = if callout.title.is_empty() { text_width(&NSString::from_str(&callout_name(&callout.kind)), &look.bold) + 4.0 } else { 0.0 };
+            self.paint_hidden(canvas, palette, storage, &callout.marker, "callout", CALLOUT_ICON_ROOM + label);
+        }
+        let title = palette.look(&look.bold, colour, "callout-title");
+        canvas.paint(callout.title.clone(), |p| p.look = title);
+    }
+
     /// A code block's paragraphs inset in the background the fragments draw; its fences fold
     /// to padding unless the cursor is in the block, then they show.
     fn paint_code_block<'a>(
@@ -655,7 +686,8 @@ impl LivePreview {
     /// Hides the source in `range`, keeping `room` points for what the fragment draws there.
     /// The last character keeps the body font (clear): a line of tiny hidden glyphs alone sat
     /// low, and the cursor after them was drawn askew until the first key. Its width is taken
-    /// back by kerning on the first character (kerning on a line's last character is dropped).
+    /// back by kerning on the first character (kerning on a line's last character is dropped),
+    /// or on itself when there is no room to keep.
     fn paint_hidden<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, range: &Range<usize>, name: &'static str, room: f64) {
         let Some(last) = range.end.checked_sub(1).filter(|&l| l >= range.start) else { return };
         let look = &self.ivars().look;
@@ -671,7 +703,10 @@ impl LivePreview {
             p.look = body;
             p.kern = 0;
         });
-        canvas.paint(range.start..range.start + 1, |p| p.kern = kern);
+        // Taking width back (no room, a quote's `> `) works on the last character only: a tiny
+        // glyph cannot go below no advance at all.
+        let at = if room < width { last } else { range.start };
+        canvas.paint(at..at + 1, |p| p.kern = kern);
     }
 
     /// Width of a character in the body font, once measured; a tab's is next to nothing where
@@ -858,6 +893,17 @@ impl LivePreview {
                 marks.push(Mark::External { offset: offset - from, centre: centre_x + 1.5, shift });
             }
         }
+        let revealed = self.ivars().revealed.get();
+        let look = &self.ivars().look;
+        for callout in styled.callouts.iter().filter(|c| c.range.start < to && c.range.end > from) {
+            let (colour, symbol) = callout_look(&callout.kind);
+            let colour = look.callouts[colour].clone();
+            marks.push(Mark::CalloutBox { colour: colour.clone(), top: from <= callout.range.start, bottom: to >= callout.range.end });
+            if callout.marker.start >= from && callout.marker.start < to && !overlaps(&callout.marker, revealed) {
+                let label = callout.title.is_empty().then(|| callout_name(&callout.kind));
+                marks.push(Mark::CalloutIcon { offset: callout.marker.start - from, centre: look.body.capHeight() / 2.0, colour, symbol, label, font: look.bold.clone() });
+            }
+        }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
         if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
             marks.push(Mark::CodeBackground { top: from <= c.start, bottom: to >= c.end });
@@ -869,7 +915,10 @@ impl LivePreview {
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
             if let Style::QuoteMarker { depth } = run.style {
-                marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT }));
+                // A callout's lines show its box instead of bars.
+                if !styled.callouts.iter().any(|c| run.range.start >= c.range.start && run.range.start < c.range.end) {
+                    marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT }));
+                }
                 continue;
             }
             let Style::ListMarker { kind, .. } = run.style else { continue };
@@ -1175,6 +1224,34 @@ fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usi
         })
         .filter(|room| room.kern_at >= region.0 && room.kern_at < region.1)
         .collect()
+}
+
+/// Room a hidden callout marker keeps for its icon.
+const CALLOUT_ICON_ROOM: f64 = 20.0;
+
+/// A callout kind's colour (index into the look's callout colours) and icon, as Obsidian's.
+fn callout_look(kind: &str) -> (usize, &'static str) {
+    match kind {
+        "abstract" | "summary" | "tldr" => (1, "list.bullet.clipboard"),
+        "info" => (0, "info.circle"),
+        "todo" => (0, "checkmark.circle"),
+        "tip" | "hint" | "important" => (1, "flame"),
+        "success" | "check" | "done" => (2, "checkmark"),
+        "question" | "help" | "faq" => (3, "questionmark.circle"),
+        "warning" | "caution" | "attention" => (3, "exclamationmark.triangle"),
+        "failure" | "fail" | "missing" => (4, "xmark"),
+        "danger" | "error" => (4, "bolt"),
+        "bug" => (4, "ladybug"),
+        "example" => (5, "list.bullet"),
+        "quote" | "cite" => (6, "quote.opening"),
+        _ => (0, "pencil"),
+    }
+}
+
+/// A callout's name when no title is written: its kind, capitalised (as Obsidian shows it).
+fn callout_name(kind: &str) -> String {
+    let mut chars = kind.chars();
+    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
 /// How far before a selection a list marker touching it may start.

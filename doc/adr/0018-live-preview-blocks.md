@@ -22,6 +22,11 @@ the reference (ADR 0011), with one change the owner asked for.
   Markdown or Obsidian, but it is what one types for one. A paste stays as it is.
 - Quotes: a bar per level down the paragraph instead of `>`, the text indented past them;
   `>` shows with the cursor on the line, like other markup.
+- Obsidian callouts (`> [!kind] Title`): a box tinted with the kind's colour across the
+  column instead of quote bars, an icon and the title bold in that colour (the kind's name
+  when no title is written); `[!kind]` shows with the cursor on its line. Colours and icons
+  follow Obsidian's (note blue, tip teal, success green, warning and question orange,
+  danger, failure and bug red, example purple, quote grey); folding (`-`/`+`) is not done.
 - Code blocks: one background across the column, rounded at the block's ends, the code
   inset in it; fence lines fold to padding unless the cursor is in the block.
 - Links to websites (owner's request, as Obsidian marks them): an arrow ↗ in the link colour
@@ -36,8 +41,7 @@ the reference (ADR 0011), with one change the owner asked for.
 
 - A hidden source line has no height of its own in TextKit 2 (it takes it from the hidden
   glyphs): empty quote lines get a minimum line height, folded fences a fixed one.
-- Not done yet: inline code background, Obsidian callouts (`> [!note]`), code language
-  label and copy button, task text muting for links.
+- Not done yet: code language label and copy button, folding callouts.
 
 ## Measured 2026-11-13 (M5 Pro, release)
 
