@@ -36,3 +36,14 @@ fn a_canvas_covers_part_of_the_text_and_clips_paint_to_it() {
 fn an_empty_canvas_has_no_runs() {
     assert!(Canvas::new(3..3, 0u8).runs().next().is_none());
 }
+
+#[test]
+fn runs_within_a_range_are_cut_to_it() {
+    let mut canvas = Canvas::new(10..20, 0);
+    canvas.paint(12..15, |u| *u = 1);
+    canvas.paint(15..18, |u| *u = 2);
+    let runs: Vec<_> = canvas.runs_in(13..17).collect();
+    assert_eq!(runs, [(13..15, 1), (15..17, 2)]);
+    assert_eq!(canvas.runs_in(5..11).collect::<Vec<_>>(), [(10..11, 0)], "cut to the canvas too");
+    assert!(canvas.runs_in(25..30).next().is_none());
+}

@@ -33,10 +33,16 @@ impl<T: Copy + PartialEq> Canvas<T> {
 
     /// Runs of equal units, in order, in text positions.
     pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, T)> + '_ {
-        let mut at = 0;
+        self.runs_in(self.start..self.start + self.units.len())
+    }
+
+    /// The runs within `range` (and the canvas), cut to it.
+    pub fn runs_in(&self, range: Range<usize>) -> impl Iterator<Item = (Range<usize>, T)> + '_ {
+        let end = self.start + self.units.len();
+        let (mut at, to) = (range.start.clamp(self.start, end) - self.start, range.end.clamp(self.start, end) - self.start);
         std::iter::from_fn(move || {
-            let value = *self.units.get(at)?;
-            let len = self.units[at..].iter().take_while(|&&u| u == value).count();
+            let value = *self.units[..to].get(at)?;
+            let len = self.units[at..to].iter().take_while(|&&u| u == value).count();
             let run = (self.start + at..self.start + at + len, value);
             at += len;
             Some(run)
