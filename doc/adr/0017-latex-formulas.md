@@ -36,7 +36,8 @@ live preview (ADR 0005, 0011) should show them typeset. A spike rendered eight f
   Modern; macros such as `\newcommand` untested).
 - Images follow layout by construction: TextKit asks for a new fragment whenever a paragraph's
   attributes change, and every change of what a formula shows (cursor in or out, an edit)
-  restyles it. A change of colour scheme without a restyle would keep old images.
+  restyles it. A change of colour scheme (light/dark) typesets the formulas again in the new
+  ink.
 
 ## Built (2026-11-12)
 
