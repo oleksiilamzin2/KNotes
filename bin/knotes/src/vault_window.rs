@@ -17,7 +17,7 @@ use knotes_app::{Moves, Relinks, plan_relinks,
 use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
-use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
+use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, replace_title, subpath_offset, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
@@ -777,7 +777,7 @@ impl VaultWindow {
         // A change of case only is a rename of the same file.
         let same = |p: &str| p.to_lowercase() == old.to_lowercase();
         let new = unique_note_path(folder, &stem, |p| !same(p) && vault.join(p).exists());
-        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
+        new != old && self.relocate(Moves::from([(old.to_owned(), new)]), None, Some((knotes_app::title_of(old), name.trim())))
     }
 
     /// Asks for a folder and moves the note at `path` there, with the links to it (ADR 0019).
@@ -829,7 +829,7 @@ impl VaultWindow {
             .iter()
             .filter_map(|e| e.path.strip_prefix(&prefix).map(|rest| (e.path.clone(), format!("{new}/{rest}"))))
             .collect();
-        if !self.relocate(moves, Some((folder, &new))) {
+        if !self.relocate(moves, Some((folder, &new)), None) {
             return false;
         }
         // The sidebar keeps showing the folder (or the folder inside it) under its new name.
@@ -848,11 +848,13 @@ impl VaultWindow {
     /// on yes (ADR 0019). The open note is saved first and follows its file. False when
     /// nothing moved.
     pub fn move_notes(&self, moves: Moves) -> bool {
-        self.relocate(moves, None)
+        self.relocate(moves, None, None)
     }
 
     /// `move_notes`, the files moved one by one, or all at once by moving `folder` (from, to).
-    fn relocate(&self, moves: Moves, folder: Option<(&str, &str)>) -> bool {
+    /// `retitle` (old name, new name): a note renamed alone gets the new name on its first line
+    /// when that line was the old name, whatever the answer about links.
+    fn relocate(&self, moves: Moves, folder: Option<(&str, &str)>, retitle: Option<(&str, &str)>) -> bool {
         let Some(vault_dir) = self.vault() else { return false };
         self.write_edits();
         let plan = self.relinks(&moves);
@@ -885,7 +887,15 @@ impl VaultWindow {
             return false;
         }
         let failed = |path: &str| moves.iter().any(|(from, to)| to == path && !moved.contains_key(from));
-        let edits: Vec<&(String, String)> = if update { plan.edits.iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
+        let mut edits: Vec<(String, String)> = if update { plan.edits.into_iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
+        if let (Some((old_name, name)), Some(to)) = (retitle, moved.values().next()) {
+            let base = edits.iter().find(|(p, _)| p == to).map(|(_, text)| text.clone()).or_else(|| vault.read_text(to).ok());
+            let was_name = |words: &str| note_file_stem(words).as_deref() == Some(old_name);
+            if let Some(text) = base.and_then(|base| replace_title(&base, name, was_name)) {
+                edits.retain(|(p, _)| p != to);
+                edits.push((to.clone(), text));
+            }
+        }
         for (path, text) in &edits {
             if let Err(e) = vault.write_note(path, text) {
                 eprintln!("knotes: cannot update links in {path}: {e}");

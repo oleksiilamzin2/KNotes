@@ -943,7 +943,7 @@ fn renaming_a_note_asks_and_then_moves_it_and_updates_the_links_to_it() {
     assert!(out.contains("rename-question: 3 2"), "{out}");
     let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
     assert_eq!(read("Old.md"), None, "{out}");
-    assert_eq!(read("New.md").as_deref(), Some("# Old\n\ntext"));
+    assert_eq!(read("New.md").as_deref(), Some("# New\n\ntext"), "the title line is the name");
     assert_eq!(read("a.md").as_deref(), Some("see [[New]] and [[New#Part|p]]"));
     assert_eq!(read("b.md").as_deref(), Some("[x](New.md)"));
     assert!(out.contains("note: New.md"), "the open note follows its file: {out}");
@@ -1014,4 +1014,10 @@ fn the_first_line_shows_as_the_title_without_its_hashes_even_with_the_cursor_on_
     assert!(editor_runs(&out).starts_with("[hidden]## |[title]My note|"), "{out}");
     let (_vault, out) = probe_notes(&[("p.md", "Plain first line\nsame paragraph\n\nmore")], &[("KNOTES_PROBE_OPEN", "p.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert!(editor_runs(&out).starts_with("[title]Plain first line|[plain]⏎same paragraph"), "{out}");
+}
+
+#[test]
+fn a_rename_leaves_a_first_line_that_was_not_the_name() {
+    let (vault, out) = probe_notes(&[("Zed.md", "Something else entirely\n\nbody")], &[("KNOTES_PROBE_OPEN", "Zed.md"), ("KNOTES_PROBE_ACTION", "rename=Named")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("Named.md")).ok().as_deref(), Some("Something else entirely\n\nbody"), "{out}");
 }
