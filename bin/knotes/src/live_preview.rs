@@ -193,7 +193,7 @@ pub struct Ivars {
     table_layouts: RefCell<HashMap<usize, TableLayout>>,
     /// Code blocks' tokens (UTF-16, from the code's start), by the hash of their language and
     /// code: highlighted again only when they change.
-    code_tokens: RefCell<HashMap<u64, Rc<Vec<(Range<usize>, CodeToken)>>>>,
+    code_tokens: RefCell<HashMap<u64, CodeTokens>>,
     tables_changed: Cell<bool>,
     /// The actions of the table menu being shown, by item tag, with the table's index.
     menu_actions: RefCell<Vec<(usize, TableAction)>>,
@@ -912,7 +912,7 @@ impl LivePreview {
     }
 
     /// The tokens of a code block's code, from the cache or highlighted now.
-    fn code_tokens(&self, storage: &NSTextStorage, run: &CodeRun) -> Rc<Vec<(Range<usize>, CodeToken)>> {
+    fn code_tokens(&self, storage: &NSTextStorage, run: &CodeRun) -> CodeTokens {
         let code = storage.string().substringWithRange(ns(&run.code)).to_string();
         let key = {
             use std::hash::{Hash, Hasher};
@@ -2500,6 +2500,9 @@ impl LivePreview {
         parts.iter().map(|(name, piece)| format!("[{name}]{piece}")).collect::<Vec<_>>().join("|")
     }
 }
+
+/// A code block's tokens: UTF-16 ranges from the code's start, and their kinds.
+type CodeTokens = Rc<Vec<(Range<usize>, CodeToken)>>;
 
 /// Xcode's default colours (light, dark) for each kind of code, by `code_look`.
 const CODE_COLORS: [(u32, u32); 9] = [
