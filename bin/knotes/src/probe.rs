@@ -295,6 +295,32 @@ pub fn drag_requested(list: &crate::note_list_view::NoteListSource, table: &objc
     sidebar.accept_note_drop(&pasteboard, &SidebarItem::Folder(folder));
 }
 
+/// `KNOTES_PROBE_ACTION=folder-rename=Folder=New name`: Rename from the sidebar's context menu
+/// on that folder's row, the name typed in it and the editing ended.
+pub fn folder_rename_requested(sidebar: &crate::sidebar_view::SidebarSource, outline: &objc2_app_kit::NSOutlineView) {
+    let Some(spec) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("folder-rename=").map(str::to_owned)) else { return };
+    let Some((folder, name)) = spec.split_once('=') else { return };
+    let object = sidebar.object_for(&knotes_app::SidebarItem::Folder(folder.to_owned()));
+    // SAFETY: an item object of this outline view.
+    let row = unsafe { outline.rowForItem(Some(&object)) };
+    if row < 0 {
+        return;
+    }
+    outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
+    let Some(menu) = outline.menu() else { return };
+    let items = menu.itemArray();
+    println!("sidebar-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
+    let Some(item) = items.iter().next() else { return };
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: the menu item's own target and action, sent as a click would.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };
+    let Some(field) = sidebar.renaming_field() else { return };
+    field.setStringValue(&NSString::from_str(name));
+    if let Some(window) = outline.window() {
+        window.makeFirstResponder(Some(outline));
+    }
+}
+
 /// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
 pub fn save_requested() {
     if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {

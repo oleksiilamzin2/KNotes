@@ -250,6 +250,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_rename(move |folder, name| {
+            if let Some(window) = weak.upgrade() {
+                window.rename_folder(&folder, &name);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.sidebar.on_drop(move |path, folder| {
             if let Some(window) = weak.upgrade() {
                 window.move_note_to(&path, &folder);
@@ -449,6 +455,7 @@ impl VaultWindow {
             }
             probe::list_menu_requested(&self.list, &self.table);
             probe::drag_requested(&self.list, &self.table, &self.sidebar);
+            probe::folder_rename_requested(&self.sidebar, &self.outline);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -802,10 +809,50 @@ impl VaultWindow {
         self.move_notes(Moves::from([(path.to_owned(), new)]));
     }
 
+    /// Renames the folder at `folder` to `name` (a `/` in it becomes `-`), with the links into
+    /// it (ADR 0019): the folder itself moves, attachments and all. False when nothing moved.
+    pub fn rename_folder(&self, folder: &str, name: &str) -> bool {
+        let name = name.trim().replace('/', "-");
+        let Some(vault) = self.vault().filter(|_| !name.is_empty()) else { return false };
+        let new = match folder.rsplit_once('/') {
+            Some((parent, _)) => format!("{parent}/{name}"),
+            None => name,
+        };
+        if new == folder || (new.to_lowercase() != folder.to_lowercase() && vault.join(&new).exists()) {
+            return false;
+        }
+        let prefix = format!("{folder}/");
+        let moves: Moves = self
+            .state
+            .borrow()
+            .catalog
+            .iter()
+            .filter_map(|e| e.path.strip_prefix(&prefix).map(|rest| (e.path.clone(), format!("{new}/{rest}"))))
+            .collect();
+        if !self.relocate(moves, Some((folder, &new))) {
+            return false;
+        }
+        // The sidebar keeps showing the folder (or the folder inside it) under its new name.
+        let selected = match &self.state.borrow().selection {
+            SidebarItem::Folder(path) if path == folder => Some(new.clone()),
+            SidebarItem::Folder(path) => path.strip_prefix(&prefix).map(|rest| format!("{new}/{rest}")),
+            _ => None,
+        };
+        if let Some(path) = selected {
+            self.state.borrow_mut().selection = SidebarItem::Folder(path);
+        }
+        true
+    }
+
     /// Moves notes (new path by old), asking first when links would change and rewriting them
     /// on yes (ADR 0019). The open note is saved first and follows its file. False when
     /// nothing moved.
     pub fn move_notes(&self, moves: Moves) -> bool {
+        self.relocate(moves, None)
+    }
+
+    /// `move_notes`, the files moved one by one, or all at once by moving `folder` (from, to).
+    fn relocate(&self, moves: Moves, folder: Option<(&str, &str)>) -> bool {
         let Some(vault_dir) = self.vault() else { return false };
         self.write_edits();
         let plan = self.relinks(&moves);
@@ -817,7 +864,16 @@ impl VaultWindow {
             };
         let vault = FsVault::new(&vault_dir);
         let mut moved = Moves::new();
-        for (from, to) in &moves {
+        if let Some((from, to)) = folder {
+            match vault.move_note(from, to) {
+                Ok(()) => moved = moves.clone(),
+                Err(e) => {
+                    eprintln!("knotes: cannot move {from} to {to}: {e}");
+                    return false;
+                }
+            }
+        }
+        for (from, to) in moves.iter().filter(|_| folder.is_none()) {
             match vault.move_note(from, to) {
                 Ok(()) => {
                     moved.insert(from.clone(), to.clone());
@@ -825,7 +881,7 @@ impl VaultWindow {
                 Err(e) => eprintln!("knotes: cannot move {from} to {to}: {e}"),
             }
         }
-        if moved.is_empty() {
+        if moved.is_empty() && folder.is_none() {
             return false;
         }
         let failed = |path: &str| moves.iter().any(|(from, to)| to == path && !moved.contains_key(from));

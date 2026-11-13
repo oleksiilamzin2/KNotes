@@ -988,3 +988,21 @@ fn a_note_dragged_onto_a_sidebar_folder_moves_there() {
     assert!(vault.path().join("Archive/Old.md").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "[x](Archive/Old.md)");
 }
+
+#[test]
+fn a_folder_is_renamed_from_the_sidebar_with_the_links_into_it() {
+    let notes = [
+        ("Archive/a.md", "[b](b.md) [[Archive/b]]"),
+        ("Archive/b.md", "x"),
+        ("Archive/img.png", "png"),
+        ("c.md", "[[Archive/a]] [a](Archive/a.md) [[b]] ![[Archive/img.png]]"),
+    ];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Archive/a.md"), ("KNOTES_PROBE_ACTION", "folder-rename=Archive=Old stuff")]);
+    assert!(out.contains("sidebar-menu-items: Перейменувати"), "{out}");
+    assert!(out.contains("rename-question: 4 2"), "{out}");
+    let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
+    assert!(read("Archive/a.md").is_none() && read("Old stuff/img.png").as_deref() == Some("png"), "{out}");
+    assert_eq!(read("c.md").as_deref(), Some("[[Old stuff/a]] [a](Old%20stuff/a.md) [[b]] ![[Old stuff/img.png]]"));
+    assert_eq!(read("Old stuff/a.md").as_deref(), Some("[b](b.md) [[Old stuff/b]]"));
+    assert!(out.contains("note: Old stuff/a.md"), "the open note follows: {out}");
+}
