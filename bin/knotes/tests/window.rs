@@ -1355,3 +1355,13 @@ fn a_double_click_on_an_image_previews_its_file() {
     let file = out.lines().find_map(|l| l.strip_prefix("quick-look: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(std::path::Path::new(file), vault.path().canonicalize().unwrap().join("att/pic.png"), "{out}");
 }
+
+#[test]
+fn only_images_in_view_are_decoded() {
+    let text: String = (0..30).map(|i| format!("Line {i}\n![[wide{i}.png]]\n")).collect();
+    let names: Vec<String> = (0..30).map(|i| format!("wide{i}.png")).collect();
+    let files: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), WIDE)).collect();
+    let (_vault, out) = probe_images(&[("a.md", &text)], &files, &[("KNOTES_PROBE_OPEN", "a.md")]);
+    let decoded: usize = out.lines().find_map(|l| l.strip_prefix("images-decoded: ")).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("{out}"));
+    assert!(decoded > 0 && decoded < 15, "{decoded} of 30 decoded: {out}");
+}

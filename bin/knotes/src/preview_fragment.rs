@@ -5,9 +5,12 @@
 //! the drawing moves with its text however TextKit lays out, scrolls or resizes (layers over
 //! the view lagged a run loop behind and jumped while scrolling). Clicks reach the text.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use knotes_editor::FormulaImage;
+
+use crate::image_loader::DeferredImage;
 use objc2::rc::Retained;
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2::runtime::AnyObject;
@@ -34,8 +37,9 @@ pub enum Anchor {
 /// Something to draw in a paragraph, at UTF-16 `offset` from the paragraph's start.
 pub enum Mark {
     Formula { offset: usize, image: Arc<FormulaImage>, anchor: Anchor },
-    /// An image embedded alone on its line, `size` points large (`Line` or `Below`).
-    Image { offset: usize, image: Retained<NSImage>, size: NSSize, anchor: Anchor },
+    /// An image embedded alone on its line, `size` points large (`Line` or `Below`), decoded
+    /// when first drawn.
+    Image { offset: usize, image: Rc<DeferredImage>, size: NSSize, anchor: Anchor },
     /// A list bullet in the room of a hidden `- `, its centre `centre` above the baseline.
     Bullet { offset: usize, centre: f64 },
     /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
@@ -116,9 +120,15 @@ define_class!(
                 let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
                 match (mark, image) {
                     // SAFETY: a valid image drawn into the current context.
-                    (Mark::Formula { .. } | Mark::Image { .. }, Some(image)) => unsafe {
+                    (Mark::Formula { .. }, Some(image)) => unsafe {
                         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None)
                     },
+                    (Mark::Image { image, .. }, _) => {
+                        if let Some(image) = image.get() {
+                            // SAFETY: as above.
+                            unsafe { image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None) };
+                        }
+                    }
                     (Mark::Bullet { .. }, _) => {
                         NSColor::secondaryLabelColor().setFill();
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
@@ -155,10 +165,7 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
-                Mark::Image { image, .. } => {
-                    let image = image.clone();
-                    Some((m, Some(image)))
-                }
+
                 _ => Some((m, None)),
             })
             .collect();

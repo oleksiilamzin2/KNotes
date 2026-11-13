@@ -808,6 +808,9 @@ fn report_note(window: &VaultWindow) {
         let state: Vec<&str> = group.subitems().iter().map(|i| if i.isEnabled() { "on" } else { "off" }).collect();
         println!("nav: back={} forward={}", state.first().unwrap_or(&"?"), state.get(1).unwrap_or(&"?"));
     }
+    // What a look at the window decodes: the images drawn in view.
+    window.window.displayIfNeeded();
+    println!("images-decoded: {}", window.decoded_images());
     let row = window.table.selectedRow();
     if row >= 0
         && let Some(cell) = window.table.viewAtColumn_row_makeIfNecessary(0, row, true).and_then(|v| v.downcast::<NSTableCellView>().ok())
@@ -889,6 +892,8 @@ fn editor_bench(window: &VaultWindow) {
             y += 40.0;
         }
     }
+    // Images and formulas drawn all the way down stay decoded.
+    println!("editor-bench: footprint after scrolling {:.1} MB", footprint_mb());
     // Worst case of an edit: highlight and restyle the whole note.
     let mut restyles = Vec::new();
     for _ in 0..10 {

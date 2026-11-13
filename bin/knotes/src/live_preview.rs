@@ -6,18 +6,20 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, changed_region, highlight, set_image_width};
 
+use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSImage,
+    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
     NSAttributedStringNSStringDrawing, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
     NSBackgroundColorAttributeName, NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
@@ -98,8 +100,10 @@ pub struct Ivars {
     dark: Cell<bool>,
     /// The vault's folder: images are read from it (ADR 0020).
     vault: RefCell<Option<PathBuf>>,
-    /// Images by vault path, once read; `None` for one that does not load.
-    images: RefCell<HashMap<String, Option<Retained<NSImage>>>>,
+    /// Natural size of images by vault path, once read; `None` for one that does not load.
+    images: RefCell<HashMap<String, Option<NSSize>>>,
+    /// Images decoded (when first drawn) for the size they show at, by vault path.
+    bitmaps: RefCell<HashMap<String, Rc<DeferredImage>>>,
     /// Width of the text column, which images fit in.
     column: Cell<f64>,
     /// The image being resized (where its source starts) and the width it shows at meanwhile.
@@ -268,6 +272,7 @@ impl LivePreview {
             dark: Cell::new(false),
             vault: RefCell::new(None),
             images: RefCell::new(HashMap::new()),
+            bitmaps: RefCell::new(HashMap::new()),
             column: Cell::new(READABLE_WIDTH),
             resizing: Cell::new(None),
             pending: Cell::new(None),
@@ -831,24 +836,22 @@ impl LivePreview {
     /// The vault the shown notes are in: images are read from it.
     pub fn set_vault(&self, root: PathBuf) {
         *self.ivars().vault.borrow_mut() = Some(root);
-        self.ivars().images.borrow_mut().clear();
+        self.forget_images();
     }
 
-    /// The image `run` embeds and the size it shows at: its own, or the one written after `|`
-    /// (its proportions kept), no wider than the text column. `None` when it does not load.
-    fn image(&self, run: &ImageRun) -> Option<(Retained<NSImage>, NSSize)> {
+    fn forget_images(&self) {
+        self.ivars().images.borrow_mut().clear();
+        self.ivars().bitmaps.borrow_mut().clear();
+    }
+
+    /// The size the image `run` embeds shows at: its own, or the one written after `|` (its
+    /// proportions kept), no wider than the text column; read from the file's header, not
+    /// decoded. With its vault path and file, and whether it is being resized. `None` when it
+    /// does not load.
+    fn image_size(&self, run: &ImageRun) -> Option<(String, PathBuf, NSSize, bool)> {
         let path = self.ivars().links.borrow().as_ref()?.resolve(run.link.kind, &run.link.target, &self.ivars().path.borrow())?;
-        let image = self
-            .ivars()
-            .images
-            .borrow_mut()
-            .entry(path)
-            .or_insert_with_key(|path| {
-                let file = self.ivars().vault.borrow().as_ref()?.join(path);
-                NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&file.to_string_lossy()))
-            })
-            .clone()?;
-        let natural = image.size();
+        let file = self.ivars().vault.borrow().as_ref()?.join(&path);
+        let natural = (*self.ivars().images.borrow_mut().entry(path.clone()).or_insert_with(|| image_loader::natural_size(&file)))?;
         if natural.width <= 0.0 || natural.height <= 0.0 {
             return None;
         }
@@ -863,14 +866,36 @@ impl LivePreview {
         // A point narrower than the column: the hidden source's tiny glyphs beside the kept
         // width would otherwise wrap onto a second line as tall as the image.
         let width = width.min(self.ivars().column.get() - 1.0).max(1.0).round();
-        Some((image, NSSize::new(width, (width * ratio).round())))
+        Some((path, file, NSSize::new(width, (width * ratio).round()), resized.is_some()))
+    }
+
+    /// The image `run` embeds, to be decoded for the size it shows at when first drawn, and
+    /// that size.
+    fn image(&self, run: &ImageRun) -> Option<(Rc<DeferredImage>, NSSize)> {
+        let (path, file, size, resizing) = self.image_size(run)?;
+        // Decoded again only to show larger; while it is being resized it is stretched.
+        let mut bitmaps = self.ivars().bitmaps.borrow_mut();
+        let image = match bitmaps.get(&path) {
+            Some(image) if image.size.width >= size.width || resizing => Rc::clone(image),
+            _ => {
+                let image = Rc::new(DeferredImage::new(file, size));
+                bitmaps.insert(path, Rc::clone(&image));
+                image
+            }
+        };
+        Some((image, size))
+    }
+
+    /// How many of the note's images have been decoded (probe mode).
+    pub fn decoded_images(&self) -> usize {
+        self.ivars().bitmaps.borrow().values().filter(|i| i.is_decoded()).count()
     }
 
     /// An image away from the cursor: its line's source hidden, the line centred and as tall
     /// as the image, the image's width kept by kerning (ADR 0020). With the cursor on its line:
     /// the source, and room below it for the image.
     fn paint_image<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, run: &ImageRun, revealed: bool) {
-        let Some((_, size)) = self.image(run) else { return };
+        let Some((_, _, size, _)) = self.image_size(run) else { return };
         let line = paragraph(storage, ns(&run.range));
         let reserved = size.height + 2.0 * PREVIEW_GAP;
         if revealed {
@@ -1104,7 +1129,7 @@ impl LivePreview {
     pub fn set_links(&self, view: &NSTextView, links: Arc<dyn LinkResolver>) {
         *self.ivars().links.borrow_mut() = Some(links);
         // An image may have come, gone or changed.
-        self.ivars().images.borrow_mut().clear();
+        self.forget_images();
         if let Some(storage) = unsafe { view.textStorage() } {
             self.restyle(&storage, (0, storage.length()));
         }

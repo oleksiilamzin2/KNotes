@@ -887,6 +887,11 @@ impl VaultWindow {
         self.accepting.set(false);
     }
 
+    /// How many of the open note's images have been decoded (probe mode).
+    pub fn decoded_images(&self) -> usize {
+        self.live_preview.decoded_images()
+    }
+
     /// `light` or `dark`: the colour formulas are typeset in (probe mode).
     pub fn formula_ink(&self) -> &'static str {
         self.live_preview.formula_ink()

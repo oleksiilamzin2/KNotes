@@ -4,6 +4,7 @@ mod app_delegate;
 mod chat_view;
 mod collapse_observer;
 mod find_bar;
+mod image_loader;
 mod completion_panel;
 mod preview_fragment;
 mod list_menu;
