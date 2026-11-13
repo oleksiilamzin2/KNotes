@@ -2,6 +2,12 @@
 
 use crate::highlight;
 
+/// The words of the note's title (its first line, after any `#` markers).
+pub fn title_words(text: &str) -> Option<&str> {
+    let title = highlight(text).title?;
+    Some(text[title].trim_start_matches('#').trim_start())
+}
+
 /// `text` with its title's words (after any `#` markers) replaced by `name`, when `was_name`
 /// says they were the note's old name; `None` when the note has no title or another one.
 pub fn replace_title(text: &str, name: &str, was_name: impl Fn(&str) -> bool) -> Option<String> {

@@ -798,6 +798,11 @@ impl LivePreview {
         marks
     }
 
+    /// Where the title line ends (UTF-16), if the note has one.
+    pub fn title_end(&self) -> Option<usize> {
+        self.ivars().styled.borrow().title.as_ref().map(|t| t.end)
+    }
+
     /// Probe lines of what is drawn in place of hidden source in view.
     pub fn describe_drawn(view: &NSTextView) -> Vec<String> {
         crate::preview_fragment::describe_visible(view)

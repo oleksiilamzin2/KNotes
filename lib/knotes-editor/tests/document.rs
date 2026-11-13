@@ -44,7 +44,24 @@ fn a_new_note_takes_its_name_once_the_first_line_is_finished_or_left() {
     assert!(doc.wants_name("Ідея\nтекст", false), "Return finished the first line");
     assert!(doc.wants_name("Ідея", true), "leaving the note finishes it too");
     assert!(!doc.wants_name("", true), "nothing to name it after");
-    doc.named();
-    assert!(!doc.wants_name("Інша назва\n", true), "only once");
-    assert!(!Document::open("Existing\n").wants_name("Existing\n", true), "existing notes keep their names");
+    doc.named("Ідея\nтекст");
+    assert!(!doc.wants_name("Ідея\nтекст ще", true), "the title did not change");
+    assert!(!doc.wants_name("Інша назва\nтекст", false), "a renamed title waits until it is finished");
+    assert!(doc.wants_name("Інша назва\nтекст", true), "the first line is the name: changing it renames the file (ADR 0019)");
+}
+
+#[test]
+fn an_existing_note_is_renamed_only_when_its_title_changed_and_was_finished() {
+    let doc = Document::open("# Existing\n\nbody");
+    assert!(!doc.wants_name("# Existing\n\nbody edited", true), "opening or editing the body never renames");
+    assert!(!doc.wants_name("# Renamed\n\nbody", false), "not mid-edit (autosave)");
+    assert!(doc.wants_name("# Renamed\n\nbody", true));
+    assert!(!doc.wants_name("\n\n", true), "no title to name it after");
+}
+
+#[test]
+fn a_title_changed_elsewhere_is_the_name_not_a_rename_to_make() {
+    let mut doc = Document::open("# Old\n\nbody");
+    assert_eq!(doc.on_disk("# Edited elsewhere\n\nbody", "# Old\n\nbody"), knotes_editor::DiskChange::Reload);
+    assert!(!doc.wants_name("# Edited elsewhere\n\nbody", true));
 }

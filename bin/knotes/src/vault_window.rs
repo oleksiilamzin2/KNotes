@@ -17,7 +17,7 @@ use knotes_app::{Moves, Relinks, plan_relinks,
 use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
-use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, replace_title, subpath_offset, utf16_offsets};
+use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, replace_title, subpath_offset, title_words, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
@@ -636,6 +636,10 @@ impl VaultWindow {
     /// Keys while the list is open: Up/Down choose, Return/Tab insert, Esc closes.
     fn completion_command(&self, command: Sel) -> bool {
         if !self.completion.is_visible() {
+            let cursor = self.note_text.selectedRange();
+            if command == sel!(insertNewline:) && cursor.length == 0 && self.live_preview.title_end() == Some(cursor.location) {
+                self.name_after_title_soon();
+            }
             return false;
         }
         if command == sel!(moveDown:) {
@@ -760,13 +764,13 @@ impl VaultWindow {
     /// note opens, the window closes, the app quits).
     pub fn leave(&self) {
         self.write_edits();
-        self.name_new_note(true);
+        self.name_after_title(true);
     }
 
     /// Autosave and File → Save; names a new note whose first line is finished.
     pub fn save(&self) {
         self.write_edits();
-        self.name_new_note(false);
+        self.name_after_title(false);
     }
 
     /// Renames the note at `old` to `name` in its folder (a number added when the name is
@@ -911,6 +915,7 @@ impl VaultWindow {
                 editing.path = path.clone();
                 if let Some(text) = &edited {
                     editing.document.saved(text);
+                    editing.document.named(text);
                 }
             }
             self.live_preview.set_path(&path);
@@ -940,29 +945,38 @@ impl VaultWindow {
         })
     }
 
-    /// Renames a new note's file after its first line, once (ADR 0011).
-    fn name_new_note(&self, leaving: bool) {
+    /// Renames the open note's file after its title once the title changed and is `finished`
+    /// (the note left, or Return ended the title), with the links to it (ADR 0011, 0019). A
+    /// declined rename is not asked again until the title changes again.
+    fn name_after_title(&self, finished: bool) {
         let text = self.note_text.string().to_string();
-        let old = match self.editing.borrow().as_ref() {
-            Some(editing) if editing.document.wants_name(&text, leaving) => editing.path.clone(),
+        let old = match self.editing.borrow_mut().as_mut() {
+            Some(editing) if editing.document.wants_name(&text, finished) => {
+                editing.document.named(&text);
+                editing.path.clone()
+            }
             _ => return,
         };
-        let Some(stem) = note_file_stem(text.lines().next().unwrap_or("")) else { return };
-        let Some(vault) = self.vault() else { return };
+        let (Some(stem), Some(vault)) = (title_words(&text).and_then(note_file_stem), self.vault()) else { return };
         let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let path = unique_note_path(folder, &stem, |p| p != old && vault.join(p).exists());
-        if path != old
-            && let Err(e) = FsVault::new(&vault).move_note(&old, &path)
-        {
-            eprintln!("knotes: cannot rename {old} to {path}: {e}");
-            return;
+        // A change of case only is a rename of the same file.
+        let same = |p: &str| p.to_lowercase() == old.to_lowercase();
+        let path = unique_note_path(folder, &stem, |p| !same(p) && vault.join(p).exists());
+        if path != old {
+            self.relocate(Moves::from([(old, path)]), None, None);
         }
-        if let Some(editing) = self.editing.borrow_mut().as_mut() {
-            editing.path = path.clone();
-            editing.document.named();
-        }
-        self.state.borrow_mut().history.rename(&old, &path);
-        self.live_preview.set_path(&path);
+    }
+
+    /// Return at the end of the title: names the note after it once the line break is in.
+    fn name_after_title_soon(&self) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(window) = target.get(mtm).upgrade() {
+                window.name_after_title(true);
+            }
+        });
     }
 
     /// Writes the editor's text if it has unsaved edits. A change on disk the window has not

@@ -273,25 +273,26 @@ fn read(vault: &std::path::Path, name: &str) -> String {
 #[test]
 fn typing_is_saved_two_seconds_later_without_moving_the_cursor() {
     let vault = tempfile::tempdir().unwrap();
-    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    // Typed below the title (editing the first line would rename the note, ADR 0019).
+    std::fs::write(vault.path().join("n.md"), "n\n\nhello").unwrap();
     let out = probe_env(
         &[vault.path()],
         None,
         &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", " world"), ("KNOTES_PROBE_DELAY_MS", "3500")],
     );
-    assert_eq!(read(vault.path(), "n.md"), "hello world");
+    assert_eq!(read(vault.path(), "n.md"), "n\n\nhello world");
     assert!(out.contains("document: clean"), "{out}");
-    assert!(out.contains("cursor: 11"), "own save and the snapshot after it must not reload: {out}");
+    assert!(out.contains("cursor: 14"), "own save and the snapshot after it must not reload: {out}");
 }
 
 #[test]
 fn nothing_is_saved_before_two_seconds_but_quitting_saves() {
     let vault = tempfile::tempdir().unwrap();
-    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    std::fs::write(vault.path().join("n.md"), "n\n\nhello").unwrap();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", "!")]);
     assert!(out.contains("document: dirty"), "{out}");
-    assert!(out.contains("disk: \"hello\""), "{out}");
-    assert_eq!(read(vault.path(), "n.md"), "hello!", "quitting must write unsaved edits");
+    assert!(out.contains("disk: \"n\\n\\nhello\""), "{out}");
+    assert_eq!(read(vault.path(), "n.md"), "n\n\nhello!", "quitting must write unsaved edits");
 }
 
 #[test]
@@ -306,10 +307,10 @@ fn cmd_s_saves_at_once() {
 #[test]
 fn opening_another_note_saves_the_previous_one() {
     let vault = tempfile::tempdir().unwrap();
-    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    std::fs::write(vault.path().join("a.md"), "a\n\ntext").unwrap();
     std::fs::write(vault.path().join("b.md"), "b").unwrap();
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TYPE", "+")]);
-    assert_eq!(read(vault.path(), "a.md"), "a+");
+    assert_eq!(read(vault.path(), "a.md"), "a\n\ntext+");
 }
 
 /// The editor line after typing `typed` at the end of `start` equals the one after opening the
@@ -383,25 +384,25 @@ fn an_outside_change_to_a_clean_note_reloads_it() {
 #[test]
 fn an_outside_change_to_an_edited_note_keeps_both_versions() {
     let vault = tempfile::tempdir().unwrap();
-    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    std::fs::write(vault.path().join("n.md"), "n\n\nhello").unwrap();
     let out = probe_env(
         &[vault.path()],
         None,
         &[
             ("KNOTES_PROBE_OPEN", "n.md"),
             ("KNOTES_PROBE_TYPE", "!"),
-            ("KNOTES_PROBE_WRITE", "changed outside"),
+            ("KNOTES_PROBE_WRITE", "n\n\nchanged outside"),
             ("KNOTES_PROBE_DELAY_MS", "1500"),
         ],
     );
-    assert_eq!(read(vault.path(), "n.md"), "hello!", "the editor's text keeps the name: {out}");
+    assert_eq!(read(vault.path(), "n.md"), "n\n\nhello!", "the editor's text keeps the name: {out}");
     let copies: Vec<String> = std::fs::read_dir(vault.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| n.starts_with("n (конфлікт ") && n.ends_with(").md"))
         .collect();
     assert_eq!(copies.len(), 1, "{copies:?}");
-    assert_eq!(read(vault.path(), &copies[0]), "changed outside");
+    assert_eq!(read(vault.path(), &copies[0]), "n\n\nchanged outside");
     assert!(out.contains("document: clean"), "{out}");
 }
 
@@ -1020,4 +1021,25 @@ fn the_first_line_shows_as_the_title_without_its_hashes_even_with_the_cursor_on_
 fn a_rename_leaves_a_first_line_that_was_not_the_name() {
     let (vault, out) = probe_notes(&[("Zed.md", "Something else entirely\n\nbody")], &[("KNOTES_PROBE_OPEN", "Zed.md"), ("KNOTES_PROBE_ACTION", "rename=Named")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("Named.md")).ok().as_deref(), Some("Something else entirely\n\nbody"), "{out}");
+}
+
+#[test]
+fn editing_the_title_renames_the_note_when_it_is_left() {
+    let notes = [("Old.md", "# Old\n\ntext"), ("a.md", "see [[Old]]")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Old.md,a.md"), ("KNOTES_PROBE_RANGE", "2,3"), ("KNOTES_PROBE_TYPE", "Fresh")]);
+    assert!(out.contains("rename-question: 1 1"), "{out}");
+    let read = |p: &str| std::fs::read_to_string(vault.path().join(p)).ok();
+    assert_eq!(read("Fresh.md").as_deref(), Some("# Fresh\n\ntext"), "{out}");
+    assert_eq!(read("a.md").as_deref(), Some("see [[Fresh]]"));
+    assert!(read("Old.md").is_none());
+}
+
+#[test]
+fn return_at_the_end_of_the_title_renames_the_note() {
+    let (vault, out) = probe_notes(
+        &[("Old.md", "Old\n\ntext")],
+        &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_RANGE", "0,3"), ("KNOTES_PROBE_TYPE", "Typed title"), ("KNOTES_PROBE_KEYS", "return")],
+    );
+    assert!(vault.path().join("Typed title.md").exists(), "{out}");
+    assert!(out.contains("note: Typed title.md"), "{out}");
 }
