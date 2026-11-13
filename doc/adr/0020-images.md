@@ -30,3 +30,25 @@ owner answered a question round (2026-11-13).
 
 - Inline images inside a line of text stay links for now.
 - Images pasted in Knotes are broken links in Obsidian.
+
+## Built (2026-11-13)
+
+- An image's line is a display formula's (ADR 0017): its source hidden, the line centred
+  and as tall as the image plus gaps, the width kept by kerning on the first character; the
+  paragraph's layout fragment draws the image. Images are kept a point narrower than the
+  column: beside the kept width, the hidden source's tiny glyphs wrapped onto a second line
+  as tall as the image.
+- Sizes come from the file's header (ImageIO, 0.1 ms); the image is decoded for the size it
+  shows at (ImageIO thumbnails, EXIF rotation applied; SVG through `NSImage`) the first time
+  its fragment draws: TextKit makes fragments for paragraphs out of view too. A note with ten
+  12-megapixel photos (M5 Pro, release): 173 MB with each photo decoded whole, 67 MB this way
+  (54 MB without the photos); a decode takes 13 ms on the main thread as a photo comes into
+  view.
+- Paste reads image files first (copied in Finder or dropped), then image data alone (PNG,
+  or TIFF converted to PNG); a pasteboard with text keeps the text view's paste. An image
+  file already in the vault is embedded where it is, not copied.
+- A double click opens Quick Look (the note's text view is the panel's controller); the first
+  click moves the image below its source, so the second one previews the image the first was
+  on.
+- Not checked by tests (probe mode cannot drive them): the drag of the right edge, the Quick
+  Look panel itself, a real drop from Finder.
