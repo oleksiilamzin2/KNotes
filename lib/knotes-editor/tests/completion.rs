@@ -17,10 +17,15 @@ fn after_a_hash_it_completes_a_heading_of_the_target() {
 }
 
 #[test]
-fn closed_links_aliases_blocks_and_plain_text_complete_nothing() {
+fn closed_links_aliases_and_plain_text_complete_nothing() {
     assert_eq!(link_completion("see [[Note]] and"), None);
     assert_eq!(link_completion("[[Note|ali"), None);
-    assert_eq!(link_completion("[[Note#^blo"), None);
     assert_eq!(link_completion("plain [text"), None);
     assert_eq!(link_completion("[[a]] then [[b"), Some(LinkCompletion::Title { from: 13, query: "b".into() }));
+}
+
+#[test]
+fn after_hash_caret_the_blocks_of_the_target_are_completed() {
+    assert_eq!(link_completion("see [[Note#^ab"), Some(LinkCompletion::Block { from: 11, target: "Note".into(), query: "ab".into() }));
+    assert_eq!(link_completion("[[#^"), Some(LinkCompletion::Block { from: 3, target: String::new(), query: String::new() }));
 }

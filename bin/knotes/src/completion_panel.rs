@@ -1,15 +1,57 @@
 //! The floating list of link completions under the cursor (ADR 0013). It never takes the
-//! focus: the text view keeps typing and forwards Up/Down/Return/Tab/Esc to it.
+//! focus: the text view keeps typing and forwards Up/Down/Return/Tab/Esc to it; a click on a
+//! row chooses it.
 
 use std::cell::{Cell, RefCell};
 
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSFont, NSLineBreakMode, NSPanel, NSTextAlignment, NSTextField, NSView,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSEvent, NSEventModifierFlags, NSEventType, NSFont, NSLineBreakMode, NSPanel,
+    NSResponder, NSTextAlignment, NSTextField, NSView, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSWindowOrderingMode, NSWindowStyleMask,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+
+type OnRowClick = Box<dyn Fn(usize)>;
+
+#[derive(Default)]
+pub struct ListIvars {
+    on_click: RefCell<Option<OnRowClick>>,
+    rows: Cell<usize>,
+}
+
+define_class!(
+    /// The rows, laid out by hand (top row first); a click reports the row under it.
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesCompletionList"]
+    #[ivars = ListIvars]
+    struct CompletionList;
+
+    unsafe impl NSObjectProtocol for CompletionList {}
+
+    impl CompletionList {
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let point = self.convertPoint_fromView(event.locationInWindow(), None);
+            let rows = self.ivars().rows.get();
+            // Not flipped: the first row is the highest.
+            let from_bottom = ((point.y - PADDING) / ROW_HEIGHT).floor();
+            if from_bottom >= 0.0 && (from_bottom as usize) < rows
+                && let Some(callback) = self.ivars().on_click.borrow().as_ref()
+            {
+                callback(rows - 1 - from_bottom as usize);
+            }
+        }
+
+        /// The panel never becomes key: the first click already chooses.
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+    }
+);
 
 const WIDTH: f64 = 360.0;
 const ROW_HEIGHT: f64 = 26.0;
@@ -30,7 +72,7 @@ pub struct CompletionItem {
 pub struct CompletionPanel {
     panel: Retained<NSPanel>,
     /// Holds one view per row, laid out by hand (top row first).
-    list: Retained<NSView>,
+    list: Retained<CompletionList>,
     items: RefCell<Vec<CompletionItem>>,
     selected: Cell<usize>,
 }
@@ -53,8 +95,8 @@ impl CompletionPanel {
             layer.setCornerRadius(8.0);
             layer.setMasksToBounds(true);
         }
-        let list = NSView::new(mtm);
-        list.setFrame(frame);
+        // SAFETY: NSView's designated initializer.
+        let list: Retained<CompletionList> = unsafe { msg_send![super(CompletionList::alloc(mtm).set_ivars(ListIvars::default())), initWithFrame: frame] };
         list.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
         background.addSubview(&list);
         panel.setContentView(Some(&background));
@@ -104,6 +146,43 @@ impl CompletionPanel {
         self.items.borrow().get(self.selected.get()).cloned()
     }
 
+    /// `callback` gets the index of a clicked row.
+    pub fn on_click(&self, callback: impl Fn(usize) + 'static) {
+        *self.list.ivars().on_click.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Chooses row `index`.
+    pub fn select(&self, index: usize) {
+        if index < self.items.borrow().len() {
+            self.selected.set(index);
+            self.rebuild();
+        }
+    }
+
+    /// A mouse click in the middle of row `index`, delivered to the list (probe mode).
+    pub fn click_row(&self, index: usize) {
+        let n = self.items.borrow().len();
+        if index >= n {
+            return;
+        }
+        let in_list = NSPoint::new(WIDTH / 2.0, PADDING + (n - 1 - index) as f64 * ROW_HEIGHT + ROW_HEIGHT / 2.0);
+        let at = self.list.convertPoint_toView(in_list, None);
+        let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            NSEventType::LeftMouseDown,
+            at,
+            NSEventModifierFlags::empty(),
+            0.0,
+            self.panel.windowNumber(),
+            None,
+            0,
+            1,
+            1.0,
+        );
+        if let Some(event) = event {
+            NSResponder::mouseDown(&self.list, &event);
+        }
+    }
+
     /// `▸Title — Folder | Title…` or `none`, for probe mode.
     pub fn describe(&self) -> String {
         let items = self.items.borrow();
@@ -128,6 +207,7 @@ impl CompletionPanel {
         }
         let items = self.items.borrow();
         let n = items.len();
+        self.list.ivars().rows.set(n);
         for (i, item) in items.iter().enumerate() {
             // Not flipped: the first row is the highest.
             let y = PADDING + (n - 1 - i) as f64 * ROW_HEIGHT;

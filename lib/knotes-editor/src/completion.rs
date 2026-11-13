@@ -8,10 +8,12 @@ pub enum LinkCompletion {
     Title { from: usize, query: String },
     /// `[[target#query`: a heading of `target` (`""`: the note itself).
     Heading { from: usize, target: String, query: String },
+    /// `[[target#^query`: a block anchor of `target`; `from` is after the `#`.
+    Block { from: usize, target: String, query: String },
 }
 
 /// `before`: the cursor's line up to the cursor. Completes inside the last `[[` that is not
-/// closed yet, unless an alias (`|`) or block (`#^`) is being typed.
+/// closed yet, unless an alias (`|`) is being typed.
 pub fn link_completion(before: &str) -> Option<LinkCompletion> {
     let open = before.rfind("[[")? + 2;
     let inside = &before[open..];
@@ -20,7 +22,9 @@ pub fn link_completion(before: &str) -> Option<LinkCompletion> {
     }
     match inside.split_once('#') {
         None => Some(LinkCompletion::Title { from: open, query: inside.to_owned() }),
-        Some((_, heading)) if heading.starts_with('^') => None,
+        Some((target, block)) if block.starts_with('^') => {
+            Some(LinkCompletion::Block { from: open + target.len() + 1, target: target.to_owned(), query: block[1..].to_owned() })
+        }
         Some((target, heading)) => {
             Some(LinkCompletion::Heading { from: open + target.len() + 1, target: target.to_owned(), query: heading.to_owned() })
         }

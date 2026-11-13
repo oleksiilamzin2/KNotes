@@ -14,7 +14,7 @@ use knotes_app::{Moves, Relinks, plan_relinks,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
-use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
@@ -240,6 +240,13 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.completion.on_click(move |row| {
+            if let Some(window) = weak.upgrade() {
+                window.completion.select(row);
+                window.accept_completion();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.list.on_rename(move |path, name| {
             if let Some(window) = weak.upgrade() {
                 window.rename_note(&path, &name);
@@ -458,6 +465,9 @@ impl VaultWindow {
                 if i == 0 {
                     probe::type_requested(&self.note_text);
                     probe::keys_requested(&self.note_text);
+                    if let Some(row) = std::env::var("KNOTES_PROBE_COMPLETION_CLICK").ok().and_then(|r| r.parse().ok()) {
+                        self.completion.click_row(row);
+                    }
                 }
             }
             probe::save_requested();
@@ -610,7 +620,7 @@ impl VaultWindow {
             return;
         }
         let from = match &completion {
-            LinkCompletion::Title { from, .. } | LinkCompletion::Heading { from, .. } => units(*from),
+            LinkCompletion::Title { from, .. } | LinkCompletion::Heading { from, .. } | LinkCompletion::Block { from, .. } => units(*from),
         };
         let items = self.completion_items(&completion);
         if items.is_empty() {
@@ -649,7 +659,7 @@ impl VaultWindow {
                     })
                     .collect()
             }
-            LinkCompletion::Heading { target, query, .. } => {
+            LinkCompletion::Heading { target, query, .. } | LinkCompletion::Block { target, query, .. } => {
                 let Some(path) = links.resolve(LinkKind::Wiki, target, &source) else { return Vec::new() };
                 let text = if path == source {
                     self.note_text.string().to_string()
@@ -657,6 +667,21 @@ impl VaultWindow {
                     state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(&path).ok()).unwrap_or_default()
                 };
                 let query = query.to_lowercase();
+                if matches!(completion, LinkCompletion::Block { .. }) {
+                    // The block anchors of the target, each with the start of its line.
+                    return MarkdownParser::new()
+                        .parse(&text)
+                        .anchors
+                        .into_iter()
+                        .filter(|a| a.name.to_lowercase().contains(&query))
+                        .take(MAX_ROWS)
+                        .map(|a| {
+                            let start = text[..a.span.start as usize].rfind('\n').map_or(0, |n| n + 1);
+                            let line: String = text[start..a.span.start as usize].trim().chars().take(60).collect();
+                            CompletionItem { title: format!("^{}", a.name), detail: line, insert: format!("^{}", a.name) }
+                        })
+                        .collect();
+                }
                 note_headings(&text)
                     .into_iter()
                     .filter(|h| h.text.to_lowercase().contains(&query))

@@ -1059,3 +1059,20 @@ fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");
 }
+
+#[test]
+fn a_click_on_a_completion_row_inserts_that_note() {
+    let notes = [("Note.md", "n"), ("A/Note.md", "n"), ("a.md", "")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[Note"), ("KNOTES_PROBE_COMPLETION_CLICK", "1")]);
+    assert!(out.contains("note: a.md | [[A/Note]]"), "{out}");
+    assert_eq!(completion(&out), "none");
+}
+
+#[test]
+fn after_hash_caret_the_list_offers_the_targets_block_anchors() {
+    let notes = [("b.md", "First paragraph ^p1\n\nSecond one ^two"), ("a.md", "")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[b#^")]);
+    assert_eq!(completion(&out), "▸^p1 — First paragraph | ^two — Second one", "{out}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[b#^t"), ("KNOTES_PROBE_KEYS", "return")]);
+    assert!(out.contains("note: a.md | [[b#^two]]"), "{out}");
+}
