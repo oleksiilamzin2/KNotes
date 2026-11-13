@@ -1,5 +1,5 @@
 //! What the live preview draws in place of hidden source, inside TextKit 2 layout fragments
-//! (ADR 0017): typeset formulas, list bullets and task boxes. The text keeps the source (hidden, its room
+//! (ADR 0017): typeset formulas, list bullets, task circles and quote bars. The text keeps the source (hidden, its room
 //! reserved by the live preview) and the paragraph's layout fragment draws at that place, so
 //! the drawing moves with its text however TextKit lays out, scrolls or resizes (layers over
 //! the view lagged a run loop behind and jumped while scrolling). Clicks reach the text.
@@ -35,6 +35,8 @@ pub enum Mark {
     Bullet { offset: usize, centre: f64 },
     /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
     Task { offset: usize, centre: f64, checked: bool },
+    /// A quote level's bar down the whole paragraph, `x` from the text column's start.
+    QuoteBar { x: f64 },
 }
 
 /// Space between a display formula's source and its preview.
@@ -46,6 +48,7 @@ const BULLET_SIZE: f64 = 5.0;
 /// Room a hidden task marker keeps, and the circle drawn at its start.
 pub const TASK_ROOM: f64 = 22.0;
 const TASK_BOX: f64 = 14.0;
+const QUOTE_BAR: f64 = 3.0;
 
 pub struct Ivars {
     /// Each mark with its image, for formulas.
@@ -79,6 +82,11 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
+                    (Mark::QuoteBar { .. }, _) => {
+                        NSColor::controlAccentColor().setFill();
+                        // Square ends: the bars of consecutive lines join into one.
+                        NSBezierPath::bezierPathWithRect(rect).fill();
+                    }
                     _ => {}
                 }
             }
@@ -102,7 +110,7 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
-                Mark::Bullet { .. } | Mark::Task { .. } => Some((m, None)),
+                Mark::Bullet { .. } | Mark::Task { .. } | Mark::QuoteBar { .. } => Some((m, None)),
             })
             .collect();
         let this = Self::alloc().set_ivars(Ivars { marks });
@@ -112,10 +120,15 @@ impl PreviewFragment {
 
     /// Where `mark` is drawn, in this fragment's coordinates, once it is laid out.
     fn mark_rect(&self, mark: &Mark) -> Option<NSRect> {
+        if let Mark::QuoteBar { x } = mark {
+            let frame = self.layoutFragmentFrame();
+            return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, 0.0), NSSize::new(QUOTE_BAR, frame.size.height)));
+        }
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } => (*offset, false),
+            Mark::QuoteBar { .. } => return None,
         };
         let line: Retained<NSTextLineFragment> =
             if below { lines.iter().last()? } else { lines.iter().find(|l| contains(l, offset)).or_else(|| lines.iter().last())? };
@@ -142,6 +155,7 @@ impl PreviewFragment {
             Mark::Task { centre, .. } => {
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - TASK_BOX / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
             }
+            Mark::QuoteBar { .. } => return None,
         };
         Some(rect)
     }
@@ -167,6 +181,7 @@ impl PreviewFragment {
                         let kind = if *checked { "task-done" } else { "task" };
                         format!("decoration: {kind} {x:.1} {y:.1} {w:.1} {h:.1}")
                     }
+                    Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                 })
             })
             .collect()

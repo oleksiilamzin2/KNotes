@@ -36,6 +36,8 @@ const HEADING_SIZES: [f64; 6] = [26.0, 22.0, 19.0, 17.0, 15.0, 15.0];
 const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"];
 /// Indentation of each list level (the source's own indentation is hidden).
 const LIST_INDENT: f64 = 20.0;
+/// Indentation of each quote level, past its bar.
+const QUOTE_INDENT: f64 = 18.0;
 
 struct Look {
     body: Retained<NSFont>,
@@ -302,7 +304,7 @@ impl LivePreview {
         let plain = palette.look(&look.body, &look.text, "plain");
         let mut canvas = Canvas::new(region.0..region.1, Paint { look: plain, para: 0, kern: 0 });
         let meets = |r: &Range<usize>| r.start < region.1 && r.end > region.0;
-        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. })) {
+        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. } | Style::QuoteMarker { .. })) {
             let (font, color, name) = self.run_look(run, &styled);
             let id = palette.look(font, color, name);
             canvas.paint(run.range.clone(), |p| p.look = id);
@@ -322,6 +324,21 @@ impl LivePreview {
             looks.dedup();
             let muted: Vec<(u16, u16)> = looks.into_iter().map(|id| (id, palette.recolor(id, &look.text, &look.muted))).collect();
             canvas.paint(run.range.clone(), |p| p.look = muted.iter().find(|m| m.0 == p.look).map_or(p.look, |m| m.1));
+        }
+        for run in styled.runs.iter().filter(|r| meets(&r.range)) {
+            if let Style::QuoteMarker { depth } = run.style {
+                // Shown with the cursor in its paragraph, as other markup; the paragraph indents
+                // past the bars the fragment draws.
+                let id = if overlaps(&run.range, revealed) { palette.look(&look.body, &look.muted, "quote-marker") } else { palette.look(&look.hidden, &look.clear, "quote") };
+                canvas.paint(run.range.clone(), |p| p.look = id);
+                let indent = f64::from(depth) * QUOTE_INDENT;
+                // An empty quote line (`>` alone) keeps a line's height: TextKit 2 took it from
+                // the hidden `>`.
+                let line = look.body.ascender() - look.body.descender() + look.body.leading();
+                let para = palette.para(Para { first_indent: indent, head_indent: indent, min_line: line, ..Para::default() });
+                let paragraph = paragraph(storage, NSRange::new(run.range.start, 0));
+                canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
+            }
         }
         for run in styled.runs.iter().filter(|r| meets(&r.range)) {
             self.paint_list_marker(&mut canvas, &mut palette, storage, run);
@@ -430,11 +447,15 @@ impl LivePreview {
         }
     }
 
-    /// Whether a paragraph shows differently with the cursor in it: it has markup or formulas.
+    /// Whether a paragraph shows differently with the cursor in it: it has markup, a quote's
+    /// prefix or formulas.
     fn reveals_something(&self, para: (usize, usize)) -> bool {
         let styled = self.ivars().styled.borrow();
         let first = styled.markup.partition_point(|m| m.end <= para.0);
-        styled.markup.get(first).is_some_and(|m| m.start < para.1) || styled.formulas.iter().any(|f| overlaps(&f.range, para))
+        let runs = styled.runs.partition_point(|r| r.range.start < para.0);
+        styled.markup.get(first).is_some_and(|m| m.start < para.1)
+            || styled.runs[runs..].iter().take_while(|r| r.range.start < para.1).any(|r| matches!(r.style, Style::QuoteMarker { .. }))
+            || styled.formulas.iter().any(|f| overlaps(&f.range, para))
     }
 
     /// Records the new selection; the ranges of the list markers it now touches or left.
@@ -468,7 +489,8 @@ impl LivePreview {
         while line_start > 0 && matches!(text.characterAtIndex(line_start - 1), 0x20 | 0x09) {
             line_start -= 1;
         }
-        let blank = line_start == 0 || matches!(text.characterAtIndex(line_start - 1), 0x0a | 0x0d);
+        // At a line's start, or right after a quote's `>`.
+        let blank = line_start == 0 || matches!(text.characterAtIndex(line_start - 1), 0x0a | 0x0d | 0x3e);
         let hidden = kind != ListKind::Ordered && !touches(&run.range, self.ivars().selection.get());
         let font = if kind == ListKind::Ordered { &look.digits } else { &look.body };
         let hidden_room = if kind == ListKind::Bullet { BULLET_ROOM } else { TASK_ROOM };
@@ -479,9 +501,11 @@ impl LivePreview {
         } else {
             text_width(&text.substringWithRange(ns(&run.range)), font)
         };
-        let start = if blank { f64::from(depth) * LIST_INDENT } else { 0.0 };
-        let para = palette.para(Para { first_indent: start, head_indent: start + room, hidden_tabs: blank, ..Para::default() });
         let paragraph = paragraph(storage, NSRange::new(run.range.start, 0));
+        // A quote's indentation stays.
+        let base = palette.para_of(canvas.get(paragraph.0).map_or(0, |p| p.para));
+        let start = base.first_indent + if blank { f64::from(depth) * LIST_INDENT } else { 0.0 };
+        let para = palette.para(Para { first_indent: start, head_indent: start + room, hidden_tabs: blank, ..base });
         canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
         if blank {
             let id = palette.look(&look.hidden, &look.clear, "indent");
@@ -608,8 +632,8 @@ impl LivePreview {
                 }
             }
             let base = palette.para_of(canvas.get(para.0).map_or(0, |p| p.para));
-            let min_line = if above > ascent || below > descent { above + below + 2.0 } else { 0.0 };
-            if min_line != base.min_line {
+            let min_line = above + below + 2.0;
+            if (above > ascent || below > descent) && min_line > base.min_line {
                 let id = palette.para(Para { min_line, ..base });
                 canvas.paint(para.0..para.1, |p| p.para = id);
             }
@@ -618,7 +642,8 @@ impl LivePreview {
 
     /// What the paragraph at `range` draws: each typeset formula starting in it (inline, or a
     /// display formula on its own line), the preview of a display formula with the cursor in
-    /// it below its last paragraph, and the dot or box of a hidden bullet or task marker.
+    /// it below its last paragraph, the dot or circle of a hidden bullet or task marker, and a
+    /// quote's bars.
     fn preview_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
         let styled = self.ivars().styled.borrow();
         let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty()) else { return Vec::new() };
@@ -649,6 +674,10 @@ impl LivePreview {
         let centre = self.ivars().look.body.xHeight() / 2.0;
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
+            if let Style::QuoteMarker { depth } = run.style {
+                marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT }));
+                continue;
+            }
             let Style::ListMarker { kind, .. } = run.style else { continue };
             if touches(&run.range, selection) {
                 continue;
@@ -839,6 +868,7 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'static str) {
         Style::Math => (&look.body, &look.text, "math"),
         Style::ListMarker { .. } => (&look.body, &look.muted, "list-marker"),
         Style::Done => (&look.body, &look.muted, "done"),
+        Style::QuoteMarker { .. } => (&look.body, &look.muted, "quote-marker"),
     }
 }
 

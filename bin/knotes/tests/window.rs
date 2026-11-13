@@ -849,3 +849,27 @@ fn tasks_show_as_boxes_done_ones_struck_and_a_click_on_a_box_ticks_it() {
     let (_vault, out) = probe_notes(&[("t.md", note)], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "18")]);
     assert!(out.contains("note: t.md | - [ ] buy milk⏎- [ ] call mom"), "{out}");
 }
+
+#[test]
+fn quotes_hide_their_markers_and_show_a_bar_per_level() {
+    let note = "> said once\n> > and again\n\nend";
+    let (_vault, out) = probe_notes(&[("q.md", note)], &[("KNOTES_PROBE_OPEN", "q.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.starts_with("[quote]> |[plain]said once⏎|[quote]> > |[plain]and again⏎"), "{runs}");
+    let bars = decorations(&out, "quote");
+    assert_eq!(bars.len(), 3, "one bar on the first line, two on the second: {out}");
+    assert!(bars[2].0 > bars[1].0 + 10.0 && (bars[1].0 - bars[0].0).abs() < 0.5, "{bars:?}");
+    assert!(bars[0].3 >= 17.0 && bars[0].1 + bars[0].3 >= bars[1].1 - 0.5, "bars span their lines and join: {bars:?}");
+    let (_vault, out) = probe_notes(&[("q.md", "> a\n>\n> b\n\nend")], &[("KNOTES_PROBE_OPEN", "q.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(decorations(&out, "quote").iter().all(|b| b.3 >= 17.0), "an empty quote line keeps its height: {out}");
+    let (_vault, out) = probe_notes(&[("q.md", note)], &[("KNOTES_PROBE_OPEN", "q.md"), ("KNOTES_PROBE_CURSOR", "3")]);
+    assert!(editor_runs(&out).starts_with("[quote-marker]> |[plain]said once⏎|[quote]> > "), "{out}");
+}
+
+#[test]
+fn a_list_in_a_quote_keeps_the_quote_indentation() {
+    let note = "> - item\n\nend";
+    let (_vault, out) = probe_notes(&[("q.md", note)], &[("KNOTES_PROBE_OPEN", "q.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let (bar, dot) = (decorations(&out, "quote"), decorations(&out, "bullet"));
+    assert!(bar.len() == 1 && dot.len() == 1 && dot[0].0 > bar[0].0 + 10.0, "the bullet right of the bar: {bar:?} {dot:?}");
+}

@@ -170,3 +170,29 @@ fn tasks_mark_their_box_and_done_ones_their_text() {
 fn list_items_in_a_quote_are_marked_too() {
     assert_eq!(list_marks("> - a"), [(ListKind::Bullet, 0, "- ")]);
 }
+
+fn quote_marks(src: &str) -> Vec<(u8, &str)> {
+    highlight(src)
+        .runs
+        .into_iter()
+        .filter_map(|r| match r.style {
+            Style::QuoteMarker { depth } => Some((depth, &src[r.range])),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn quote_lines_mark_their_prefix_with_its_depth() {
+    assert_eq!(quote_marks("> said\n> twice\n"), [(1, "> "), (1, "> ")]);
+    assert_eq!(quote_marks("> one\n> > two\n>three"), [(1, "> "), (2, "> > "), (1, ">")]);
+    assert_eq!(quote_marks("  > indented"), [(1, "  > ")]);
+}
+
+#[test]
+fn a_lazy_quote_line_has_no_prefix_and_a_quote_in_a_list_starts_at_its_marker() {
+    assert_eq!(quote_marks("> a\nlazy\n"), [(1, "> ")]);
+    let src = "- > in list";
+    assert_eq!(quote_marks(src), [(1, "> ")]);
+    assert_eq!(highlight(src).runs.iter().find(|r| matches!(r.style, Style::QuoteMarker { .. })).unwrap().range.start, 2);
+}

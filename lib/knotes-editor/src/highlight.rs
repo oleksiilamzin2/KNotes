@@ -24,6 +24,9 @@ pub enum Style {
     ListMarker { kind: ListKind, depth: u8 },
     /// The text of a done task, on its marker's line.
     Done,
+    /// A quote line's prefix (`> `, `> > `), with the indentation before it; `depth` counts
+    /// its `>`.
+    QuoteMarker { depth: u8 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,9 +124,18 @@ pub fn highlight(source: &str) -> Highlight {
     // follows it).
     let mut lists: Vec<bool> = Vec::new();
     let mut item: Option<usize> = None;
+    // Quotes open: only the outermost marks the prefixes of all its lines.
+    let mut quotes = 0;
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
         match event {
+            Event::Start(Tag::BlockQuote(_)) => {
+                if quotes == 0 {
+                    quote_prefixes(&mut h, source, r.clone());
+                }
+                quotes += 1;
+            }
+            Event::End(TagEnd::BlockQuote(_)) => quotes -= 1,
             Event::Start(Tag::List(start)) => lists.push(start.is_some()),
             Event::End(TagEnd::List(_)) => {
                 lists.pop();
@@ -203,6 +215,35 @@ pub fn highlight(source: &str) -> Highlight {
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
+}
+
+/// Marks the prefix of each line of a quote at `r`: the first from the quote's start (it may
+/// follow a list marker), the others from their line's start. Lazy lines have none.
+fn quote_prefixes(h: &mut Highlight, source: &str, r: Range<usize>) {
+    let mut start = r.start;
+    let first_line = source[..start].rfind('\n').map_or(0, |n| n + 1);
+    if source[first_line..start].bytes().all(|b| b == b' ' || b == b'\t') {
+        start = first_line;
+    }
+    while start < r.end {
+        let line_end = source[start..].find('\n').map_or(source.len(), |n| start + n);
+        let (mut end, mut depth) = (start, 0u8);
+        loop {
+            let spaces = blanks(&source[end..line_end]);
+            if source.as_bytes().get(end + spaces) != Some(&b'>') || end + spaces >= line_end {
+                break;
+            }
+            end += spaces + 1;
+            depth += 1;
+            if matches!(source.as_bytes().get(end), Some(b' ' | b'\t')) && end < line_end {
+                end += 1;
+            }
+        }
+        if depth > 0 {
+            h.runs.push(Run { range: start..end, style: Style::QuoteMarker { depth } });
+        }
+        start = line_end + 1;
+    }
 }
 
 /// Length of the spaces and tabs `text` starts with.
