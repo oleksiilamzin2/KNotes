@@ -1,5 +1,10 @@
-//! The text of PDF files, for the index and the search of the notes (ADR 0022), through
-//! PDFKit: on any thread, each call with its own document.
+//! The text of PDF files, for the index and the search of the notes, and a page's with where
+//! its characters are, for selecting it in the viewer (ADR 0022), through PDFKit: on any
+//! thread, each call with its own document.
+
+mod page_text;
+
+pub use page_text::{Bounds, PageText};
 
 use std::path::{Path, PathBuf};
 
