@@ -94,6 +94,18 @@ pub fn image_edge_requested(view: &crate::note_view::NoteTextView) {
     println!("image-edge: {}", answers.join(" "));
 }
 
+/// `KNOTES_PROBE_IMAGE_HOVER=x,y;x,y`: the pointer moved to each point in turn (text view
+/// coordinates).
+pub fn image_hover_requested(view: &crate::note_view::NoteTextView) {
+    let Ok(points) = std::env::var("KNOTES_PROBE_IMAGE_HOVER") else { return };
+    for point in points.split(';') {
+        let Some((x, y)) = point.split_once(',') else { continue };
+        if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
+            view.hover_at(objc2_foundation::NSPoint::new(x, y));
+        }
+    }
+}
+
 /// `KNOTES_PROBE_RESIZE=line:width`: the image on the line starting at character `line`
 /// dragged to `width` points and let go.
 pub fn resize_requested() -> Option<(usize, f64)> {

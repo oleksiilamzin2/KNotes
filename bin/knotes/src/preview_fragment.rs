@@ -38,8 +38,8 @@ pub enum Anchor {
 pub enum Mark {
     Formula { offset: usize, image: Arc<FormulaImage>, anchor: Anchor },
     /// An image embedded alone on its line, `size` points large (`Line` or `Below`), decoded
-    /// when first drawn.
-    Image { offset: usize, image: Rc<DeferredImage>, size: NSSize, anchor: Anchor },
+    /// when first drawn; with its resize handle while the pointer is over it.
+    Image { offset: usize, image: Rc<DeferredImage>, size: NSSize, anchor: Anchor, handle: bool },
     /// A list bullet in the room of a hidden `- `, its centre `centre` above the baseline.
     Bullet { offset: usize, centre: f64 },
     /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
@@ -73,6 +73,10 @@ const QUOTE_BAR: f64 = 3.0;
 const CODE_CORNER: f64 = 5.0;
 /// A callout's icon.
 const CALLOUT_ICON: f64 = 14.0;
+/// An image's resize handle: its width, tallest height and inset from the right edge.
+const IMAGE_HANDLE_WIDTH: f64 = 5.0;
+const IMAGE_HANDLE_HEIGHT: f64 = 36.0;
+const IMAGE_HANDLE_INSET: f64 = 3.0;
 /// Room after a link to a website for its arrow, and the arrow's size.
 pub const EXTERNAL_ROOM: f64 = 13.0;
 const EXTERNAL_ARROW: f64 = 7.0;
@@ -123,7 +127,7 @@ define_class!(
                     (Mark::Formula { .. }, Some(image)) => unsafe {
                         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None)
                     },
-                    (Mark::Image { image, .. }, _) => {
+                    (Mark::Image { image, handle, .. }, _) => {
                         image.drawn_at.set(Some(self.layoutFragmentFrame().origin.y + rect.origin.y - point.y));
                         if let Some(image) = image.get() {
                             // SAFETY: as above.
@@ -132,6 +136,9 @@ define_class!(
                             // Being decoded: its place, faintly.
                             NSColor::quaternarySystemFillColor().setFill();
                             rounded(rect, CODE_CORNER, true, true).fill();
+                        }
+                        if *handle {
+                            draw_image_handle(image_handle(rect));
                         }
                     }
                     (Mark::Bullet { .. }, _) => {
@@ -254,9 +261,14 @@ impl PreviewFragment {
                         let kind = if *anchor == Anchor::Below { "preview" } else { "typeset" };
                         format!("formula-image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}")
                     }
-                    Mark::Image { anchor, .. } => {
+                    Mark::Image { anchor, handle, .. } => {
                         let kind = if *anchor == Anchor::Below { "preview" } else { "shown" };
-                        format!("image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}")
+                        let mut line = format!("image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}");
+                        if *handle {
+                            let r = image_handle(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
+                            line += &format!("\ndecoration: image-handle {:.1} {:.1} {:.1} {:.1}", r.origin.x, r.origin.y, r.size.width, r.size.height);
+                        }
+                        line
                     }
                     Mark::Bullet { .. } => format!("decoration: bullet {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::Task { checked, .. } => {
@@ -314,6 +326,24 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// Where an image's resize handle is drawn: a pill inside its right edge, halfway down, in
+/// the band where the pointer resizes it.
+fn image_handle(image: NSRect) -> NSRect {
+    let height = (image.size.height * 0.4).clamp(12.0, IMAGE_HANDLE_HEIGHT);
+    let x = image.origin.x + image.size.width - IMAGE_HANDLE_INSET - IMAGE_HANDLE_WIDTH;
+    NSRect::new(NSPoint::new(x, image.origin.y + (image.size.height - height) / 2.0), NSSize::new(IMAGE_HANDLE_WIDTH, height))
+}
+
+/// Light with a dark edge, to show on any picture.
+fn draw_image_handle(rect: NSRect) {
+    let pill = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, rect.size.width / 2.0, rect.size.width / 2.0);
+    NSColor::whiteColor().colorWithAlphaComponent(0.95).setFill();
+    pill.fill();
+    NSColor::blackColor().colorWithAlphaComponent(0.45).setStroke();
+    pill.setLineWidth(1.0);
+    pill.stroke();
 }
 
 /// A callout's icon in its colour, with the kind's name after it in its colour (bold) when no

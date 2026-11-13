@@ -156,6 +156,8 @@ impl VaultWindow {
         note_text.on_resize(move |view, line, width, done| resizes.resize_image(view, line, width, done));
         let files = live_preview.clone();
         note_text.on_image_file(move |view, line| files.image_file(view, line));
+        let hovers = live_preview.clone();
+        note_text.on_image_hover(move |view, line| hovers.hover_image(view, line));
         // Weak: the text view keeps its callbacks, and the text view is the live preview's.
         let preview = live_preview.clone();
         let text = objc2::rc::Weak::new(&*note_text);
@@ -617,6 +619,16 @@ impl VaultWindow {
             }
             probe::paste_requested(&self.note_text);
             probe::image_edge_requested(&self.note_text);
+            probe::image_hover_requested(&self.note_text);
+            if let Ok(ranges) = std::env::var("KNOTES_PROBE_SPELLING") {
+                let answers: Vec<&str> = ranges
+                    .split(';')
+                    .filter_map(|r| r.split_once(','))
+                    .filter_map(|(a, b)| Some(NSRange::new(a.parse().ok()?, b.parse().ok()?)))
+                    .map(|range| if self.live_preview.spelling_hidden(range) { "dropped" } else { "kept" })
+                    .collect();
+                println!("spelling: {}", answers.join(" "));
+            }
             if let Some(line) = std::env::var("KNOTES_PROBE_QUICK_LOOK").ok().and_then(|l| l.parse().ok()) {
                 // The file the panel would show; the panel itself is not opened in probe mode.
                 println!("quick-look: {}", self.note_text.image_file(line).map(|f| f.display().to_string()).unwrap_or_default());

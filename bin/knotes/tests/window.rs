@@ -1406,3 +1406,43 @@ fn images_far_out_of_view_are_let_go() {
     assert!(ready.contains(&"wide29.png"), "the images in view are decoded: {ready:?}");
     assert!(!ready.contains(&"wide0.png") && !ready.contains(&"wide1.png"), "those at the top are let go: {ready:?}");
 }
+
+/// `decoration: image-handle x y w h` lines.
+fn image_handles(out: &str) -> Vec<(f64, f64, f64, f64)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("decoration: image-handle "))
+        .map(|l| {
+            let p: Vec<f64> = l.split(' ').map(|v| v.parse().unwrap()).collect();
+            (p[0], p[1], p[2], p[3])
+        })
+        .collect()
+}
+
+#[test]
+fn the_pointer_over_an_image_shows_its_resize_handle_on_the_right_edge() {
+    let notes = [("a.md", "Before\n![[pic.png]]\nAfter")];
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")];
+    let (_vault, out) = probe_images(&notes, &[("pic.png", PIC)], &env);
+    assert!(image_handles(&out).is_empty(), "no handle without the pointer: {out}");
+    let (x, y, w, h, _) = images(&out)[0].clone();
+    let over = format!("{},{}", x + w / 2.0, y + h / 2.0);
+    let (_vault, out) = probe_images(&notes, &[("pic.png", PIC)], &[env[0], env[1], ("KNOTES_PROBE_IMAGE_HOVER", &over)]);
+    let handles = image_handles(&out);
+    assert_eq!(handles.len(), 1, "{out}");
+    let (hx, hy, hw, hh) = handles[0];
+    assert!(hx > x + w - 12.0 && hx + hw <= x + w, "at the image's right edge, inside it: {handles:?} {x} {w}");
+    assert!((hy + hh / 2.0 - (y + h / 2.0)).abs() < 1.0, "halfway down: {handles:?}");
+    let away = format!("{},{}", x + w / 2.0, y + h + 40.0);
+    let (_vault, out) = probe_images(&notes, &[("pic.png", PIC)], &[env[0], env[1], ("KNOTES_PROBE_IMAGE_HOVER", &format!("{over};{away}"))]);
+    assert!(image_handles(&out).is_empty(), "gone with the pointer: {out}");
+}
+
+#[test]
+fn spelling_marks_stay_off_an_image_s_hidden_source() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "Wrods\n![[Sonoma pic.png]]\nend")],
+        &[("Sonoma pic.png", PIC)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_SPELLING", "0,5;9,6")],
+    );
+    assert!(out.contains("spelling: kept dropped"), "{out}");
+}

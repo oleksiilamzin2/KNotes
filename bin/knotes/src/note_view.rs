@@ -34,6 +34,8 @@ type OnPaste = Box<dyn Fn(&NSPasteboard, Option<usize>) -> bool>;
 type OnResize = Box<dyn Fn(&NSTextView, usize, f64, bool)>;
 /// Gets the text view and the character where an image's line starts; gives its file.
 type OnImageFile = Box<dyn Fn(&NSTextView, usize) -> Option<PathBuf>>;
+/// Gets the text view and the image the pointer is now over (where its line starts), if any.
+type OnImageHover = Box<dyn Fn(&NSTextView, Option<usize>)>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -52,6 +54,7 @@ pub struct Ivars {
     on_paste: RefCell<Option<OnPaste>>,
     on_resize: RefCell<Option<OnResize>>,
     on_image_file: RefCell<Option<OnImageFile>>,
+    on_image_hover: RefCell<Option<OnImageHover>>,
     /// The image the last click was on (where its line starts): a second click previews it,
     /// though the first one moved it below its source.
     image_clicked: Cell<Option<usize>>,
@@ -75,7 +78,10 @@ define_class!(
             // SAFETY: the superclass keeps its own areas up to date.
             let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
             if self.ivars().moves.borrow().is_none() {
-                let options = NSTrackingAreaOptions::MouseMoved | NSTrackingAreaOptions::ActiveInKeyWindow | NSTrackingAreaOptions::InVisibleRect;
+                let options = NSTrackingAreaOptions::MouseMoved
+                    | NSTrackingAreaOptions::MouseEnteredAndExited
+                    | NSTrackingAreaOptions::ActiveInKeyWindow
+                    | NSTrackingAreaOptions::InVisibleRect;
                 // SAFETY: the view owns the area and outlives it.
                 let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, options, Some(self), None) };
                 self.addTrackingArea(&area);
@@ -96,11 +102,19 @@ define_class!(
         fn mouse_moved(&self, event: &NSEvent) {
             // SAFETY: forwarding the same event to the superclass implementation.
             let _: () = unsafe { msg_send![super(self), mouseMoved: event] };
+            self.hover_at(self.convertPoint_fromView(event.locationInWindow(), None));
             if self.image_edge(event.locationInWindow()).is_some() {
                 resize_cursor().set();
             } else if self.over_clickable(event.locationInWindow()) {
                 NSCursor::pointingHandCursor().set();
             }
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, event: &NSEvent) {
+            // SAFETY: forwarding the same event to the superclass implementation.
+            let _: () = unsafe { msg_send![super(self), mouseExited: event] };
+            self.hover_image(None);
         }
 
         /// The text view would set the I-beam over a link too.
@@ -221,6 +235,25 @@ impl NoteTextView {
     /// and its rect in the view.
     fn image_edge(&self, in_window: NSPoint) -> Option<(usize, NSRect)> {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
+    }
+
+    pub fn on_image_hover(&self, callback: impl Fn(&NSTextView, Option<usize>) + 'static) {
+        *self.ivars().on_image_hover.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The pointer at a point in the view's coordinates: the image under it (not one shown
+    /// below its source) shows its resize handle.
+    pub fn hover_at(&self, point: NSPoint) {
+        // The image and the band past its right edge where the pointer still resizes it.
+        let over = |rect: NSRect| contains(NSRect::new(rect.origin, NSSize::new(rect.size.width + IMAGE_EDGE, rect.size.height)), point);
+        let image = crate::preview_fragment::image_at(self, point).filter(|(_, rect, below)| !below && over(*rect)).map(|(line, _, _)| line);
+        self.hover_image(image);
+    }
+
+    fn hover_image(&self, line: Option<usize>) {
+        if let Some(callback) = self.ivars().on_image_hover.borrow().as_ref() {
+            callback(self, line);
+        }
     }
 
     pub fn on_image_file(&self, callback: impl Fn(&NSTextView, usize) -> Option<PathBuf> + 'static) {

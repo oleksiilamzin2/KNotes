@@ -108,6 +108,8 @@ pub struct Ivars {
     column: Cell<f64>,
     /// The image being resized (where its source starts) and the width it shows at meanwhile.
     resizing: Cell<Option<(usize, f64)>>,
+    /// The image the pointer is over (where its line starts): it shows its resize handle.
+    hovered_image: Cell<Option<usize>>,
     /// The note's text view, to draw an image once it is decoded.
     view: RefCell<objc2::rc::Weak<NSTextView>>,
     /// Where the view's top was when far images were last let go (text container
@@ -231,9 +233,7 @@ define_class!(
         /// still show the marks as dots).
         #[unsafe(method(textView:shouldSetSpellingState:range:))]
         fn should_set_spelling_state(&self, _view: &NSTextView, state: NSInteger, range: NSRange) -> NSInteger {
-            let styled = self.ivars().styled.borrow();
-            let end = range.location + range.length;
-            if styled.formulas.iter().any(|f| f.range.start < end && f.range.end > range.location) { 0 } else { state }
+            if self.spelling_hidden(range) { 0 } else { state }
         }
 
         #[unsafe(method(textView:doCommandBySelector:))]
@@ -288,6 +288,7 @@ impl LivePreview {
             bitmaps: RefCell::new(HashMap::new()),
             column: Cell::new(READABLE_WIDTH),
             resizing: Cell::new(None),
+            hovered_image: Cell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
             pending: Cell::new(None),
@@ -558,6 +559,7 @@ impl LivePreview {
     /// Shows `source` in `view` with live preview styles.
     pub fn show(&self, view: &NSTextView, path: &str, source: &str) {
         self.clear_found(view);
+        self.ivars().hovered_image.set(None);
         // The last note's images go with it.
         self.forget_images();
         *self.ivars().path.borrow_mut() = path.to_owned();
@@ -961,6 +963,29 @@ impl LivePreview {
         (ready, bitmaps.len())
     }
 
+    /// Whether spelling marks stay off `range`: formulas and image embeds are no words, and
+    /// on their hidden glyphs the marks showed as stray dots.
+    pub fn spelling_hidden(&self, range: NSRange) -> bool {
+        let styled = self.ivars().styled.borrow();
+        let end = range.location + range.length;
+        let meets = |r: &Range<usize>| r.start < end && r.end > range.location;
+        styled.formulas.iter().any(|f| meets(&f.range)) || styled.images.iter().any(|i| meets(&i.range))
+    }
+
+    /// The pointer moved over the image on the line starting at `line`, or off images: the
+    /// handle shows on the image it is over.
+    pub fn hover_image(&self, view: &NSTextView, line: Option<usize>) {
+        let old = self.ivars().hovered_image.replace(line);
+        if old == line {
+            return;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let length = storage.length();
+        for at in [old, line].into_iter().flatten().filter(|&at| at < length) {
+            self.restyle(&storage, paragraph(&storage, NSRange::new(at, 0)));
+        }
+    }
+
     /// The image at vault `path` is decoded: its lines are laid out again, to draw it.
     fn image_decoded(&self, path: &str) {
         let Some(view) = self.ivars().view.borrow().load() else { return };
@@ -1149,7 +1174,8 @@ impl LivePreview {
                 (Anchor::Line, paragraph(&storage, ns(&run.range)).0)
             };
             if (from..to).contains(&at) {
-                marks.push(Mark::Image { offset: at - from, image, size, anchor });
+                let handle = anchor == Anchor::Line && self.ivars().hovered_image.get() == Some(paragraph(&storage, ns(&run.range)).0);
+                marks.push(Mark::Image { offset: at - from, image, size, anchor, handle });
             }
         }
         let centre_x = self.ivars().look.body.xHeight() / 2.0;
