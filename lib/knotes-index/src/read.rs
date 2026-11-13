@@ -144,8 +144,9 @@ impl NoteCatalog for SqliteIndex {
 impl NoteRows for SqliteIndex {
     fn note_rows(&self) -> Result<Vec<NoteRow>, BoxError> {
         let mut st = self.conn.prepare_cached(&format!(
-            "SELECT path, mtime_ns, COALESCE(snippet, '') FROM files WHERE kind = {} ORDER BY path",
-            file_kind_code(FileKind::Markdown)
+            "SELECT path, mtime_ns, COALESCE(snippet, '') FROM files WHERE kind IN ({}, {}) ORDER BY path",
+            file_kind_code(FileKind::Markdown),
+            file_kind_code(FileKind::Pdf)
         ))?;
         let rows = st.query_map([], |r| Ok(NoteRow { path: r.get(0)?, mtime_ns: r.get(1)?, snippet: r.get(2)? }))?;
         Ok(rows.collect::<Result<_, _>>()?)

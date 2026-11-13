@@ -84,7 +84,8 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
     send(&index, Vec::new())?;
     // Watch before syncing, so changes made during the sync are picked up afterwards.
     let _watcher = FsWatcher::with_callback(vault, DEBOUNCE, move |batch| changes.send(Control::Changed(batch)).is_ok())?;
-    let indexer = Indexer::new(FsVault::new(vault), MarkdownParser::new());
+    // PDFs' text is indexed too (ADR 0022).
+    let indexer = Indexer::with_documents(FsVault::new(vault), MarkdownParser::new(), knotes_pdf::PdfTexts::new(vault));
     let first = indexer.sync(&mut index)?;
     let touched = first.added + first.modified + first.removed;
     if touched >= LARGE_SYNC {

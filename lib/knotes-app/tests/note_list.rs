@@ -93,3 +93,11 @@ fn no_headers_when_sorted_by_title() {
     let items = build_note_list(&rows, &ListFilter::All, &settings, &CLOCK);
     assert!(items.iter().all(|i| matches!(i, ListItem::Note(_))));
 }
+
+#[test]
+fn a_folder_s_list_shows_its_notes_and_its_search_covers_its_pdfs_too() {
+    let rows = vec![row("P/a.md", 1), row("P/doc.pdf", 2), row("Q/c.md", 3)];
+    let list = build_note_list(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), &CLOCK);
+    assert_eq!(notes(&rows, &list), ["P/a.md"], "no PDF among the notes");
+    assert_eq!(knotes_app::list_scope(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title)), ["P/a.md", "P/doc.pdf"]);
+}

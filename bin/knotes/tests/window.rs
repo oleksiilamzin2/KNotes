@@ -1811,3 +1811,15 @@ fn a_dropped_pdf_is_copied_and_embedded() {
     assert_eq!(attachments(vault.path()), ["paper.pdf"], "{out}");
     assert!(out.contains("note: a.md | ![[paper.pdf]]⏎Text"), "{out}");
 }
+
+#[test]
+fn the_search_finds_a_pdf_by_its_text_as_an_entry_of_its_own() {
+    let notes = [("Docs/a.md", "a note about apples")];
+    let pdfs = [("Docs/doc.pdf", PDF)];
+    let (_vault, out) = probe_images(&notes, &pdfs, &[("KNOTES_PROBE_SEARCH", "content: page")]);
+    assert_eq!(list_titles(&out), ["doc.pdf"], "{out}");
+    let (_vault, out) = probe_images(&notes, &pdfs, &[("KNOTES_PROBE_SELECT", "f:Docs"), ("KNOTES_PROBE_SEARCH", "content: page")]);
+    assert_eq!(list_titles(&out), ["doc.pdf"], "searched in its folder too: {out}");
+    let (_vault, out) = probe_images(&notes, &pdfs, &[("KNOTES_PROBE_SELECT", "f:Docs")]);
+    assert_eq!(list_titles(&out), ["a"], "the folder's list shows its notes only: {out}");
+}

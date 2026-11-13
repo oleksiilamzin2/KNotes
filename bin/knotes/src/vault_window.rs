@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
+use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
@@ -123,6 +123,8 @@ pub struct VaultWindow {
     search_worker: RefCell<Option<SearchWorker>>,
     search_generation: Cell<u64>,
     search_results: RefCell<Option<SearchResponse>>,
+    /// The paths a search of the shown list covers (`None`: all notes).
+    search_scope: RefCell<Option<Vec<String>>>,
     /// The sidebar's split view item, watched to hide the folders/tags switch with it.
     sidebar_item: Retained<NSSplitViewItem>,
     collapse_observer: RefCell<Option<Retained<CollapseObserver>>>,
@@ -244,6 +246,7 @@ impl VaultWindow {
             search_worker: RefCell::new(None),
             search_generation: Cell::new(0),
             search_results: RefCell::new(None),
+            search_scope: RefCell::new(None),
             sidebar_item: split.splitViewItems().objectAtIndex(0),
             collapse_observer: RefCell::new(None),
         });
@@ -1459,8 +1462,11 @@ impl VaultWindow {
         };
         self.list_menu.update(&settings, session_key.is_none());
         // Search results replace the list; it is built only without them (50k notes: ~2 ms).
+        // What a search here covers: the list's notes and its PDFs (ADR 0022).
+        let searching = !state.search.trim().is_empty();
+        *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings));
         let results = self.search_results.borrow();
-        let items = match results.as_ref().filter(|_| !state.search.trim().is_empty()) {
+        let items = match results.as_ref().filter(|_| searching) {
             Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content),
             None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now()),
         };
@@ -1616,8 +1622,7 @@ impl VaultWindow {
         self.search_generation.set(generation);
         let (query, scope, titles, index_dir) = {
             let state = self.state.borrow();
-            let filter_all = matches!(state.selection, SidebarItem::AllNotes);
-            let scope = (!filter_all).then(|| self.list.paths());
+            let scope = self.search_scope.borrow().clone();
             (state.search.clone(), scope, state.titles.clone(), state.index_dir.clone())
         };
         let (mode, query) = {

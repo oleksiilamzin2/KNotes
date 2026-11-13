@@ -9,6 +9,6 @@ pub struct NoteRow {
 }
 
 pub trait NoteRows {
-    /// All Markdown notes, sorted by path.
+    /// All Markdown notes and PDFs (the search finds PDFs too, ADR 0022), sorted by path.
     fn note_rows(&self) -> Result<Vec<NoteRow>, BoxError>;
 }

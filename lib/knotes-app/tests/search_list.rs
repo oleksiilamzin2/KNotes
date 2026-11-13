@@ -45,3 +45,12 @@ fn found_words_are_the_whole_words_that_start_like_a_query_word() {
     assert_eq!(words, ["fast", "Cats"]);
     assert!(knotes_app::found_words("text", "").is_empty());
 }
+
+#[test]
+fn a_pdf_found_by_its_text_is_an_entry_of_its_own() {
+    let rows = vec![knotes_core::NoteRow { path: "a.md".into(), mtime_ns: 1, snippet: String::new() }, knotes_core::NoteRow { path: "doc.pdf".into(), mtime_ns: 2, snippet: String::new() }];
+    let content = [knotes_app::ContentMatch { path: "doc.pdf".into(), snippet: "Page 2".into() }];
+    let settings = knotes_app::ListSettings { sort: knotes_app::SortOrder::Title, group_by_date: false, include_subfolders: true };
+    let items = knotes_app::search_list(&rows, &knotes_app::ListFilter::All, &settings, &[], &content);
+    assert_eq!(items, [knotes_app::ListItem::Found(1, "Page 2".into())]);
+}

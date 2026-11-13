@@ -265,12 +265,6 @@ impl NoteListSource {
         self.ivars().rows.borrow().get(i as usize).map(|r| r.path.clone())
     }
 
-    /// Paths of the notes in the list, in list order.
-    pub fn paths(&self) -> Vec<String> {
-        let rows = self.ivars().rows.borrow();
-        self.ivars().items.borrow().iter().filter_map(|i| i.row()).map(|i| rows[i as usize].path.clone()).collect()
-    }
-
     /// Row showing the note at `path`, if it is in the list.
     pub fn row_of(&self, path: &str) -> Option<usize> {
         let rows = self.ivars().rows.borrow();

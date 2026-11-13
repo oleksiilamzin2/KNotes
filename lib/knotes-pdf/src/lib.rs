@@ -1,7 +1,9 @@
 //! The text of PDF files, for the index and the search of the notes (ADR 0022), through
 //! PDFKit: on any thread, each call with its own document.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use knotes_core::{DocumentText, FileKind};
 
 use objc2::AnyThread;
 use objc2_foundation::{NSString, NSURL};
@@ -15,4 +17,22 @@ pub fn pdf_text(file: &Path) -> Option<String> {
     let document = unsafe { PDFDocument::initWithURL(PDFDocument::alloc(), &url) }?;
     // SAFETY: as above.
     Some(unsafe { document.string() }.map(|s| s.to_string()).unwrap_or_default())
+}
+
+/// The text of a vault's PDFs, for the index.
+pub struct PdfTexts {
+    root: PathBuf,
+}
+
+impl PdfTexts {
+    /// For the vault at `root`.
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+}
+
+impl DocumentText for PdfTexts {
+    fn document_text(&self, path: &str) -> Option<String> {
+        (FileKind::from_path(path) == FileKind::Pdf).then(|| pdf_text(&self.root.join(path))).flatten()
+    }
 }

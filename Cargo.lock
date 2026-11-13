@@ -535,6 +535,7 @@ dependencies = [
 name = "knotes-pdf"
 version = "0.1.0"
 dependencies = [
+ "knotes-core",
  "objc2",
  "objc2-foundation",
  "objc2-pdf-kit",
@@ -559,6 +560,7 @@ dependencies = [
  "knotes-index",
  "knotes-indexer",
  "knotes-md",
+ "knotes-pdf",
  "knotes-search",
  "knotes-vault",
  "serde_json",
