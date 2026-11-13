@@ -29,6 +29,8 @@ pub enum Style {
     QuoteMarker { depth: u8 },
     /// A fenced code block's opening (with its language) or closing fence line.
     Fence,
+    /// The note's name: the first line of its first block, a heading or a paragraph (ADR 0019).
+    Title,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,6 +75,8 @@ pub struct Highlight {
     pub formulas: Vec<FormulaRun>,
     /// Code blocks, fences included, sorted by start.
     pub code_blocks: Vec<Range<usize>>,
+    /// The title line (also a `Title` run); its markup is never shown.
+    pub title: Option<Range<usize>>,
 }
 
 impl Highlight {
@@ -105,6 +109,7 @@ impl Highlight {
             .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
             .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
+            .chain(self.title.iter().flat_map(|t| [t.start, t.end]))
             .collect();
         bounds.sort_unstable();
         bounds.dedup();
@@ -120,6 +125,7 @@ impl Highlight {
                 .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
                 .collect(),
             code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
+            title: self.title.as_ref().map(|t| map(t.start)..map(t.end)),
         }
     }
 }
@@ -132,8 +138,25 @@ pub fn highlight(source: &str) -> Highlight {
     let mut item: Option<usize> = None;
     // Quotes open: only the outermost marks the prefixes of all its lines.
     let mut quotes = 0;
+    // The first block after the frontmatter decides the title.
+    let mut first_block = true;
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
+        if let Event::Start(tag) = &event
+            && !matches!(tag, Tag::MetadataBlock(_))
+            && std::mem::take(&mut first_block)
+            && matches!(tag, Tag::Heading { .. } | Tag::Paragraph)
+        {
+            let line = text.find('\n').map_or(text, |n| &text[..n]).trim_end();
+            if !line.is_empty() {
+                h.title = Some(r.start..r.start + line.len());
+                // A paragraph's title run goes before the runs inside it, which then show over
+                // it; a heading's run becomes the title run below.
+                if matches!(tag, Tag::Paragraph) {
+                    h.runs.push(Run { range: r.start..r.start + line.len(), style: Style::Title });
+                }
+            }
+        }
         match event {
             Event::Start(Tag::BlockQuote(_)) => {
                 if quotes == 0 {
@@ -171,7 +194,11 @@ pub fn highlight(source: &str) -> Highlight {
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 let line_end = r.start + text.trim_end().len();
-                h.runs.push(Run { range: r.start..line_end, style: Style::Heading(level as u8) });
+                let run = match &h.title {
+                    Some(title) if title.start == r.start => Run { range: title.clone(), style: Style::Title },
+                    _ => Run { range: r.start..line_end, style: Style::Heading(level as u8) },
+                };
+                h.runs.push(run);
                 let hashes = text.bytes().take_while(|&b| b == b'#').count();
                 if hashes > 0 {
                     let spaces = text[hashes..].bytes().take_while(|&b| b == b' ').count();

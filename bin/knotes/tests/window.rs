@@ -229,17 +229,18 @@ fn editor_runs(out: &str) -> String {
 #[test]
 fn live_preview_hides_markup_outside_the_cursor_line() {
     let vault = tempfile::tempdir().unwrap();
-    std::fs::write(vault.path().join("n.md"), "## Title\n\nsome **bold** text\n\nlast line").unwrap();
-    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md")]);
+    // The first line is the note's title; the heading below is markup being written.
+    std::fs::write(vault.path().join("n.md"), "Note\n\n## Title\n\nsome **bold** text\n\nlast line").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "7")]);
     assert!(out.contains("textkit: 2"), "{out}");
     assert_eq!(
         editor_runs(&out),
-        "[markup]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
+        "[title]Note|[plain]⏎⏎|[markup]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
     );
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(
         editor_runs(&out),
-        "[hidden]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
+        "[title]Note|[plain]⏎⏎|[hidden]## |[heading2]Title|[plain]⏎⏎some |[hidden]**|[strong]bold|[hidden]**|[plain] text⏎⏎last line"
     );
 }
 
@@ -1005,4 +1006,12 @@ fn a_folder_is_renamed_from_the_sidebar_with_the_links_into_it() {
     assert_eq!(read("c.md").as_deref(), Some("[[Old stuff/a]] [a](Old%20stuff/a.md) [[b]] ![[Old stuff/img.png]]"));
     assert_eq!(read("Old stuff/a.md").as_deref(), Some("[b](b.md) [[Old stuff/b]]"));
     assert!(out.contains("note: Old stuff/a.md"), "the open note follows: {out}");
+}
+
+#[test]
+fn the_first_line_shows_as_the_title_without_its_hashes_even_with_the_cursor_on_it() {
+    let (_vault, out) = probe_notes(&[("t.md", "## My note\n\ntext")], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_CURSOR", "4")]);
+    assert!(editor_runs(&out).starts_with("[hidden]## |[title]My note|"), "{out}");
+    let (_vault, out) = probe_notes(&[("p.md", "Plain first line\nsame paragraph\n\nmore")], &[("KNOTES_PROBE_OPEN", "p.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(editor_runs(&out).starts_with("[title]Plain first line|[plain]⏎same paragraph"), "{out}");
 }
