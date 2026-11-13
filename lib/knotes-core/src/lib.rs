@@ -1,5 +1,6 @@
 //! Domain model and traits (ports) of Knotes. No I/O lives here.
 
+mod attachment_store;
 mod change_feed;
 mod content_scan;
 mod content_search;
@@ -23,6 +24,7 @@ mod vault_file;
 mod vault_reader;
 mod vault_scanner;
 
+pub use attachment_store::AttachmentStore;
 pub use change_feed::ChangeFeed;
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};
 pub use content_search::{BlockHit, ContentQuery, ContentSearch, Within};

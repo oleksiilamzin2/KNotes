@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use knotes_core::{ATTACHMENTS_FOLDER, FileKind, FolderRulesStore, NoteMover, NoteWriter, VaultFile, VaultReader, VaultScanner};
+use knotes_core::{ATTACHMENTS_FOLDER, AttachmentStore, FileKind, FolderRulesStore, NoteMover, NoteWriter, VaultFile, VaultReader, VaultScanner};
 use rayon::prelude::*;
 
 pub struct FsVault {
@@ -173,6 +173,47 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
         return Err(io::ErrorKind::AlreadyExists.into());
     }
     fs::rename(from, to)
+}
+
+impl AttachmentStore for FsVault {
+    /// Writes a hidden temporary file in the folder and renames it to the first free name, so
+    /// the watcher never sees half a file and no file is replaced.
+    fn add_attachment(&self, name: &str, bytes: &[u8]) -> io::Result<String> {
+        if name.is_empty() || name.contains('/') || name.starts_with('.') {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("not a file name: {name}")));
+        }
+        self.make_knotes_folder()?;
+        let dir = self.root.join(ATTACHMENTS_FOLDER);
+        fs::create_dir_all(&dir)?;
+        let tmp = dir.join(format!(".{name}.knotes-tmp"));
+        fs::write(&tmp, bytes)?;
+        let (stem, ext) = name.rsplit_once('.').map_or((name, String::new()), |(s, e)| (s, format!(".{e}")));
+        for n in 0.. {
+            let candidate = if n == 0 { name.to_owned() } else { format!("{stem} {n}{ext}") };
+            match rename_exclusive(&tmp, &dir.join(&candidate)) {
+                Ok(()) => return Ok(format!("{ATTACHMENTS_FOLDER}/{candidate}")),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(e);
+                }
+            }
+        }
+        unreachable!("some number is free")
+    }
+}
+
+impl FsVault {
+    /// Makes room for `.knotes/` at the vault root: an old root rules file there (ADR 0010)
+    /// becomes `.knotes.json`, or goes when a newer one exists.
+    fn make_knotes_folder(&self) -> io::Result<()> {
+        let old = self.root.join(OLD_RULES_FILE);
+        if !old.is_file() {
+            return Ok(());
+        }
+        let new = self.root.join(RULES_FILE);
+        if new.exists() { fs::remove_file(old) } else { fs::rename(old, new) }
+    }
 }
 
 impl NoteWriter for FsVault {
