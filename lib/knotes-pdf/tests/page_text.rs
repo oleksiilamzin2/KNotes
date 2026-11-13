@@ -86,3 +86,30 @@ fn characters_with_no_place_are_not_hit_or_highlighted() {
     assert!(page.highlight(1..2).is_empty());
     assert_eq!(hundredths(page.highlight(0..3)), [[10, 10, 30, 10]]);
 }
+
+#[test]
+fn a_box_in_pdf_space_is_placed_on_the_page_as_shown_turned() {
+    let crop = Bounds { x: 0.0, y: 0.0, width: 200.0, height: 100.0 };
+    let glyph = Bounds { x: 42.0, y: 40.0, width: 14.0, height: 17.0 };
+    assert_eq!(hundredths(vec![glyph.shown(crop, 0)]), [[21, 43, 7, 17]]);
+    assert_eq!(hundredths(vec![glyph.shown(crop, 90)]), [[40, 21, 17, 7]]);
+    assert_eq!(hundredths(vec![glyph.shown(crop, 180)]), [[72, 40, 7, 17]]);
+    assert_eq!(hundredths(vec![glyph.shown(crop, 270)]), [[43, 72, 17, 7]]);
+    assert_eq!(hundredths(vec![glyph.shown(crop, -90)]), [[43, 72, 17, 7]]);
+    let cropped = Bounds { x: 20.0, y: 10.0, width: 100.0, height: 50.0 };
+    assert_eq!(hundredths(vec![glyph.shown(cropped, 0)]), [[22, 6, 14, 34]]);
+}
+
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../bin/knotes/tests/fixtures/three-pages.pdf");
+
+#[test]
+fn a_page_s_text_comes_with_where_its_characters_are() {
+    let page = knotes_pdf::page_text(std::path::Path::new(FIXTURE), 1).unwrap();
+    assert_eq!(page.text(0..page.len()), "Page 2");
+    // "Page 2" in 24-point Helvetica at 42, 40 on a 200 by 100 page.
+    let line = page.highlight(0..page.len());
+    assert_eq!(line.len(), 1);
+    assert!((0.19..0.23).contains(&line[0].x) && (0.3..0.5).contains(&line[0].y), "{line:?}");
+    assert_eq!(page.word_at(0.3, 0.5), 0..4);
+    assert!(knotes_pdf::page_text(std::path::Path::new(FIXTURE), 3).is_none(), "no fourth page");
+}

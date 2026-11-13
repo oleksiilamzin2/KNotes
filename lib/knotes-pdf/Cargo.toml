@@ -10,4 +10,4 @@ publish.workspace = true
 knotes-core.workspace = true
 objc2 = "0.6.5"
 objc2-foundation = "0.3.2"
-objc2-pdf-kit = { version = "0.3.2", default-features = false, features = ["std", "PDFDocument"] }
+objc2-pdf-kit = { version = "0.3.2", default-features = false, features = ["std", "PDFDocument", "PDFPage", "PDFSelection", "objc2-core-foundation"] }

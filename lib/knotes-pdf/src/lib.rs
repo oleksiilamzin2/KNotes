@@ -11,17 +11,55 @@ use std::path::{Path, PathBuf};
 use knotes_core::{DocumentText, FileKind};
 
 use objc2::AnyThread;
-use objc2_foundation::{NSString, NSURL};
-use objc2_pdf_kit::PDFDocument;
+use objc2::rc::{Retained, autoreleasepool};
+use objc2_foundation::{NSRange, NSRect, NSString, NSURL};
+use objc2_pdf_kit::{PDFDisplayBox, PDFDocument};
 
 /// The text of the PDF at `file`, its pages' in order; `None` when it does not open (not a PDF,
 /// or locked).
 pub fn pdf_text(file: &Path) -> Option<String> {
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
-    // SAFETY: a document of its own, read from a file URL.
-    let document = unsafe { PDFDocument::initWithURL(PDFDocument::alloc(), &url) }?;
-    // SAFETY: as above.
+    let document = open(file)?;
+    // SAFETY: a document of its own.
     Some(unsafe { document.string() }.map(|s| s.to_string()).unwrap_or_default())
+}
+
+/// The text of page `index` of the PDF at `file`, with where its characters are on the page
+/// as shown; `None` when the PDF does not open or has no such page. The document goes when
+/// this returns: nothing of PDFKit's stays.
+pub fn page_text(file: &Path, index: usize) -> Option<PageText> {
+    autoreleasepool(|_| {
+        let document = open(file)?;
+        // SAFETY: a document of its own; the page is asked for within its count.
+        let page = unsafe { (index < document.pageCount()).then(|| document.pageAtIndex(index)).flatten() }?;
+        // SAFETY: as above.
+        let (crop, rotation, text) = unsafe { (bounds(page.boundsForBox(PDFDisplayBox::CropBox)), page.rotation() as i64, page.string()) };
+        let text = text.map(|s| s.to_string()).unwrap_or_default();
+        let mut at = 0;
+        let glyphs: Vec<(char, Bounds)> = text
+            .chars()
+            .map(|ch| {
+                // A selection's indices are the text's (UTF-16), as `characterBoundsAtIndex`'s
+                // are not: they skip the line breaks PDFKit puts in the text.
+                let range = NSRange::new(at, ch.len_utf16());
+                at += range.length;
+                // SAFETY: a range within the page's text, on the page's own document.
+                let placed = autoreleasepool(|_| unsafe { page.selectionForRange(range).map(|s| bounds(s.boundsForPage(&page))) });
+                (ch, placed.filter(|b| b.width > 0.0 && b.height > 0.0).map_or_else(Bounds::default, |b| b.shown(crop, rotation)))
+            })
+            .collect();
+        Some(PageText::new(glyphs))
+    })
+}
+
+/// The PDF at `file`, a document of its own.
+fn open(file: &Path) -> Option<Retained<PDFDocument>> {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
+    // SAFETY: a document read from a file URL.
+    unsafe { PDFDocument::initWithURL(PDFDocument::alloc(), &url) }
+}
+
+fn bounds(rect: NSRect) -> Bounds {
+    Bounds { x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height }
 }
 
 /// The text of a vault's PDFs, for the index.

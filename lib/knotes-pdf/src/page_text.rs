@@ -14,6 +14,21 @@ pub struct Bounds {
 }
 
 impl Bounds {
+    /// This box in PDF space (y up) placed on the page as shown: `crop` is the page's crop
+    /// box, `rotation` the degrees it is turned clockwise when shown.
+    pub fn shown(self, crop: Bounds, rotation: i64) -> Bounds {
+        // Fractions of the crop box, y down.
+        let (left, right) = ((self.x - crop.x) / crop.width, (self.right() - crop.x) / crop.width);
+        let (top, bottom) = (1.0 - (self.bottom() - crop.y) / crop.height, 1.0 - (self.y - crop.y) / crop.height);
+        let (x0, x1, y0, y1) = match rotation.rem_euclid(360) {
+            90 => (1.0 - bottom, 1.0 - top, left, right),
+            180 => (1.0 - right, 1.0 - left, 1.0 - bottom, 1.0 - top),
+            270 => (top, bottom, 1.0 - right, 1.0 - left),
+            _ => (left, right, top, bottom),
+        };
+        Bounds { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+    }
+
     fn right(&self) -> f64 {
         self.x + self.width
     }
