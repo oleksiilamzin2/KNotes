@@ -1,5 +1,6 @@
 //! What the live preview draws in place of hidden source, inside TextKit 2 layout fragments
-//! (ADR 0017): typeset formulas, list bullets, task circles, quote bars and code backgrounds. The text keeps the source (hidden, its room
+//! (ADR 0017): typeset formulas, list bullets, task circles, quote bars, code backgrounds and
+//! the arrows of links to websites. The text keeps the source (hidden, its room
 //! reserved by the live preview) and the paragraph's layout fragment draws at that place, so
 //! the drawing moves with its text however TextKit lays out, scrolls or resizes (layers over
 //! the view lagged a run loop behind and jumped while scrolling). Clicks reach the text.
@@ -40,6 +41,8 @@ pub enum Mark {
     /// A code block's background across the column behind the paragraph, its corners rounded
     /// at the block's top and bottom.
     CodeBackground { top: bool, bottom: bool },
+    /// An arrow after a link to a website, in the room of its hidden `](url)`.
+    External { offset: usize, centre: f64 },
 }
 
 /// Space between a display formula's source and its preview.
@@ -53,6 +56,9 @@ pub const TASK_ROOM: f64 = 22.0;
 const TASK_BOX: f64 = 14.0;
 const QUOTE_BAR: f64 = 3.0;
 const CODE_CORNER: f64 = 5.0;
+/// Room after a link to a website for its arrow, and the arrow's size.
+pub const EXTERNAL_ROOM: f64 = 13.0;
+const EXTERNAL_ARROW: f64 = 7.0;
 
 pub struct Ivars {
     /// Each mark with its image, for formulas.
@@ -98,6 +104,7 @@ define_class!(
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
                     (Mark::CodeBackground { .. }, _) => {}
+                    (Mark::External { .. }, _) => draw_external_arrow(rect),
                     (Mark::QuoteBar { .. }, _) => {
                         NSColor::controlAccentColor().setFill();
                         // Square ends: the bars of consecutive lines join into one.
@@ -126,7 +133,7 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
-                Mark::Bullet { .. } | Mark::Task { .. } | Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => Some((m, None)),
+                Mark::Bullet { .. } | Mark::Task { .. } | Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::External { .. } => Some((m, None)),
             })
             .collect();
         let this = Self::alloc().set_ivars(Ivars { marks });
@@ -148,7 +155,7 @@ impl PreviewFragment {
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
-            Mark::Bullet { offset, .. } | Mark::Task { offset, .. } => (*offset, false),
+            Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } => (*offset, false),
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
         };
         let line: Retained<NSTextLineFragment> =
@@ -175,6 +182,10 @@ impl PreviewFragment {
             }
             Mark::Task { centre, .. } => {
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - TASK_BOX / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
+            }
+            Mark::External { centre, .. } => {
+                let half = EXTERNAL_ARROW / 2.0;
+                NSRect::new(NSPoint::new(x + 3.0, baseline - centre - half), NSSize::new(EXTERNAL_ARROW, EXTERNAL_ARROW))
             }
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } => return None,
         };
@@ -204,6 +215,7 @@ impl PreviewFragment {
                     }
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::External { .. } => format!("decoration: external {x:.1} {y:.1} {w:.1} {h:.1}"),
                 })
             })
             .collect()
@@ -231,6 +243,23 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// An arrow up and to the right in the link colour: the link leads out of the vault.
+fn draw_external_arrow(rect: NSRect) {
+    let (x0, y0, s) = (rect.origin.x, rect.origin.y, rect.size.width);
+    let arrow = NSBezierPath::bezierPath();
+    // Flipped: y0 is the top. The shaft from the bottom left, the head at the top right.
+    arrow.moveToPoint(NSPoint::new(x0, y0 + s));
+    arrow.lineToPoint(NSPoint::new(x0 + s, y0));
+    arrow.moveToPoint(NSPoint::new(x0 + s * 0.35, y0));
+    arrow.lineToPoint(NSPoint::new(x0 + s, y0));
+    arrow.lineToPoint(NSPoint::new(x0 + s, y0 + s * 0.65));
+    arrow.setLineWidth(1.3);
+    arrow.setLineCapStyle(objc2_app_kit::NSLineCapStyle::Round);
+    arrow.setLineJoinStyle(objc2_app_kit::NSLineJoinStyle::Round);
+    NSColor::linkColor().setStroke();
+    arrow.stroke();
 }
 
 /// `rect` with its top and/or bottom corners rounded.

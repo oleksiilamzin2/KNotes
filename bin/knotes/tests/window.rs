@@ -1085,3 +1085,13 @@ fn formulas_take_the_text_colour_of_a_new_appearance() {
     assert!(out.contains("formula-ink: dark"), "{out}");
     assert_eq!(formula_images(&out).len(), 2, "still typeset: {out}");
 }
+
+#[test]
+fn links_to_websites_are_marked_with_an_arrow_and_links_inside_the_vault_are_not() {
+    let note = "T\n\nsee [site](https://example.com) and [[b]] and [local](b.md)\n\nend";
+    let (_vault, out) = probe_notes(&[("a.md", note), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let arrows = decorations(&out, "external");
+    assert_eq!(arrows.len(), 1, "{out}");
+    let (_vault, out) = probe_notes(&[("a.md", note), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "5")]);
+    assert!(decorations(&out, "external").is_empty(), "the source shows in the cursor's line: {out}");
+}

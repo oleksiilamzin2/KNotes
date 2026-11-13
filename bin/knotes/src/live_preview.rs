@@ -9,7 +9,7 @@ use std::sync::Arc;
 use knotes_core::{Link, LinkKind, LinkResolver};
 use knotes_editor::{Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
-use crate::preview_fragment::{Anchor, BULLET_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
+use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -335,6 +335,12 @@ impl LivePreview {
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
             let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
             canvas.paint(m.clone(), |p| p.look = id);
+        }
+        // A link to a website keeps room after its text for the arrow the fragment draws, while
+        // its `](url)` is hidden.
+        let arrow = palette.kern(EXTERNAL_ROOM);
+        for close in external_link_ends(&styled, region, revealed) {
+            canvas.paint(close..close + 1, |p| p.kern = arrow);
         }
         // A done task's text is muted, bold or italic inside it too (links keep their colour).
         for run in styled.runs.iter().filter(|r| r.style == Style::Done && meets(&r.range)) {
@@ -829,6 +835,10 @@ impl LivePreview {
             let Ok(image) = self.formula_image(f) else { continue };
             marks.push(Mark::Formula { offset: at - from, image, anchor });
         }
+        let centre_x = self.ivars().look.body.xHeight() / 2.0;
+        for close in external_link_ends(&styled, (from, to), self.ivars().revealed.get()) {
+            marks.push(Mark::External { offset: close - from, centre: centre_x + 1.5 });
+        }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
         if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
             marks.push(Mark::CodeBackground { top: from <= c.start, bottom: to >= c.end });
@@ -1116,6 +1126,22 @@ fn is_dark(view: &NSTextView) -> bool {
 fn paragraph(storage: &NSTextStorage, selection: NSRange) -> (usize, usize) {
     let p = storage.string().paragraphRangeForRange(selection);
     (p.location, p.location + p.length)
+}
+
+/// Where the hidden `](url)` of each link to a website meeting `region` starts (outside the
+/// `revealed` paragraph, whose source shows).
+fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usize, usize)) -> Vec<usize> {
+    let first = styled.links.partition_point(|l| l.range.end <= region.0);
+    styled.links[first..]
+        .iter()
+        .take_while(|l| l.range.start < region.1)
+        .filter(|l| l.link.kind == LinkKind::External && !overlaps(&l.range, revealed))
+        .filter_map(|l| {
+            let after = styled.markup.partition_point(|m| m.start <= l.range.start);
+            styled.markup[after..].iter().take_while(|m| m.start < l.range.end).find(|m| m.end == l.range.end).map(|m| m.start)
+        })
+        .filter(|&close| close >= region.0 && close < region.1)
+        .collect()
 }
 
 /// How far before a selection a list marker touching it may start.
