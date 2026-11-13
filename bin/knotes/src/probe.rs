@@ -102,13 +102,30 @@ pub fn resize_requested() -> Option<(usize, f64)> {
     Some((line.parse().ok()?, width.parse().ok()?))
 }
 
-/// `KNOTES_PROBE_NOTE_SCROLL=end`: scrolls the note to its end, as the scroll wheel does.
+/// `KNOTES_PROBE_NOTE_SCROLL=end`: scrolls the note to its end, as the scroll wheel does;
+/// `end-later`: 300 ms later, once its start has been shown.
 pub fn note_scroll_requested(view: &objc2_app_kit::NSTextView) {
-    if std::env::var("KNOTES_PROBE_NOTE_SCROLL").as_deref() != Ok("end") {
-        return;
+    match std::env::var("KNOTES_PROBE_NOTE_SCROLL").as_deref() {
+        Ok("end") => scroll_note_to_end(view),
+        Ok("end-later") => {
+            let view = dispatch2::MainThreadBound::new(objc2::Message::retain(view), view.mtm());
+            let when = DispatchTime::try_from(Duration::from_millis(300)).expect("short delay");
+            let _ = DispatchQueue::main().after(when, move || {
+                let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                scroll_note_to_end(view.get(mtm));
+            });
+        }
+        _ => {}
     }
+}
+
+fn scroll_note_to_end(view: &objc2_app_kit::NSTextView) {
     let end = view.string().length();
     view.scrollRangeToVisible(objc2_foundation::NSRange::new(end, 0));
+    // Drawn there, as on screen.
+    if let Some(window) = view.window() {
+        window.displayIfNeeded();
+    }
 }
 
 /// `KNOTES_PROBE_KEYS=down,return,…`: key commands as the keyboard sends them to the text
@@ -818,8 +835,9 @@ fn report_note(window: &VaultWindow) {
     }
     // What a look at the window decodes: the images drawn in view.
     window.window.displayIfNeeded();
-    let (decoded, kept) = window.decoded_images();
-    println!("images-decoded: {decoded}");
+    let (ready, kept) = window.decoded_images();
+    println!("images-decoded: {}", ready.len());
+    println!("images-ready: {}", ready.join(" "));
     println!("images-kept: {kept}");
     let row = window.table.selectedRow();
     if row >= 0

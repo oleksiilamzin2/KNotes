@@ -124,9 +124,14 @@ define_class!(
                         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None)
                     },
                     (Mark::Image { image, .. }, _) => {
+                        image.drawn_at.set(Some(self.layoutFragmentFrame().origin.y + rect.origin.y - point.y));
                         if let Some(image) = image.get() {
                             // SAFETY: as above.
                             unsafe { image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None) };
+                        } else {
+                            // Being decoded: its place, faintly.
+                            NSColor::quaternarySystemFillColor().setFill();
+                            rounded(rect, CODE_CORNER, true, true).fill();
                         }
                     }
                     (Mark::Bullet { .. }, _) => {

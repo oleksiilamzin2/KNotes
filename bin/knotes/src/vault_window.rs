@@ -894,7 +894,7 @@ impl VaultWindow {
 
     /// How many of the open note's images have been decoded, and how many are kept (probe
     /// mode).
-    pub fn decoded_images(&self) -> (usize, usize) {
+    pub fn decoded_images(&self) -> (Vec<String>, usize) {
         self.live_preview.decoded_images()
     }
 

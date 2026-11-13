@@ -108,6 +108,11 @@ pub struct Ivars {
     column: Cell<f64>,
     /// The image being resized (where its source starts) and the width it shows at meanwhile.
     resizing: Cell<Option<(usize, f64)>>,
+    /// The note's text view, to draw an image once it is decoded.
+    view: RefCell<objc2::rc::Weak<NSTextView>>,
+    /// Where the view's top was when far images were last let go (text container
+    /// coordinates).
+    images_checked_at: Cell<Option<f64>>,
     /// The edit being made and its inserted text, between `shouldChangeText` and
     /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
     pending: Cell<Option<Edit>>,
@@ -158,6 +163,14 @@ define_class!(
 
     impl LivePreview {
         /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
+        /// The note scrolled.
+        #[unsafe(method(boundsDidChange:))]
+        fn bounds_did_change(&self, _notification: &NSNotification) {
+            if let Some(view) = self.ivars().view.borrow().load() {
+                self.let_far_images_go(&view);
+            }
+        }
+
         #[unsafe(method(frameDidChange:))]
         fn frame_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
@@ -275,6 +288,8 @@ impl LivePreview {
             bitmaps: RefCell::new(HashMap::new()),
             column: Cell::new(READABLE_WIDTH),
             resizing: Cell::new(None),
+            view: RefCell::new(objc2::rc::Weak::default()),
+            images_checked_at: Cell::new(None),
             pending: Cell::new(None),
             inserted: RefCell::new(String::new()),
             source: RefCell::new(String::new()),
@@ -456,6 +471,20 @@ impl LivePreview {
         }
         fit_readable_width(view);
         self.ivars().column.set(text_column(view));
+        *self.ivars().view.borrow_mut() = objc2::rc::Weak::new(view);
+        if let Some(scroll) = view.enclosingScrollView() {
+            let clip = scroll.contentView();
+            clip.setPostsBoundsChangedNotifications(true);
+            // SAFETY: as above; the clip view lives as long as the text view.
+            unsafe {
+                NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                    observer,
+                    sel!(boundsDidChange:),
+                    Some(objc2_app_kit::NSViewBoundsDidChangeNotification),
+                    Some(clip.as_ref()),
+                );
+            }
+        }
         // Paragraphs with typeset formulas draw them (the layout manager keeps a weak reference).
         if let Some(layout) = view.textLayoutManager() {
             layout.setDelegate(Some(ProtocolObject::from_ref(self)));
@@ -880,7 +909,13 @@ impl LivePreview {
         let image = match bitmaps.get(&path) {
             Some(image) if image.size.width >= size.width || resizing => Rc::clone(image),
             _ => {
-                let image = Rc::new(DeferredImage::new(file, size));
+                let this = objc2::rc::Weak::new(self);
+                let decoded = path.clone();
+                let image = Rc::new(DeferredImage::new(file, size, move || {
+                    if let Some(this) = this.load() {
+                        this.image_decoded(&decoded);
+                    }
+                }));
                 bitmaps.insert(path, Rc::clone(&image));
                 image
             }
@@ -918,10 +953,50 @@ impl LivePreview {
         }
     }
 
-    /// How many of the note's images have been decoded, and how many are kept (probe mode).
-    pub fn decoded_images(&self) -> (usize, usize) {
+    /// The note's images decoded (vault paths, sorted), and how many are kept (probe mode).
+    pub fn decoded_images(&self) -> (Vec<String>, usize) {
         let bitmaps = self.ivars().bitmaps.borrow();
-        (bitmaps.values().filter(|i| i.is_decoded()).count(), bitmaps.len())
+        let mut ready: Vec<String> = bitmaps.iter().filter(|(_, i)| i.is_decoded()).map(|(p, _)| p.clone()).collect();
+        ready.sort();
+        (ready, bitmaps.len())
+    }
+
+    /// The image at vault `path` is decoded: its lines are laid out again, to draw it.
+    fn image_decoded(&self, path: &str) {
+        let Some(view) = self.ivars().view.borrow().load() else { return };
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let links = self.ivars().links.borrow().clone();
+        let source = self.ivars().path.borrow().clone();
+        let lines: Vec<(usize, usize)> = self
+            .ivars()
+            .styled
+            .borrow()
+            .images
+            .iter()
+            .filter(|i| links.as_ref().and_then(|l| l.resolve(i.link.kind, &i.link.target, &source)).as_deref() == Some(path))
+            .map(|i| paragraph(&storage, ns(&i.range)))
+            .collect();
+        for line in lines {
+            self.restyle(&storage, line);
+        }
+    }
+
+    /// The note scrolled: images more than a screen above or below the view's visible part
+    /// are let go (decoded again when they come back), checked every quarter screen.
+    fn let_far_images_go(&self, view: &NSTextView) {
+        let visible = view.visibleRect();
+        let top = visible.origin.y - view.textContainerOrigin().y;
+        let screen = visible.size.height;
+        if self.ivars().images_checked_at.get().is_some_and(|at| (at - top).abs() < screen / 4.0) {
+            return;
+        }
+        self.ivars().images_checked_at.set(Some(top));
+        for image in self.ivars().bitmaps.borrow().values() {
+            let Some(at) = image.drawn_at.get() else { continue };
+            if at + image.size.height < top - screen || at > top + 2.0 * screen {
+                image.let_go();
+            }
+        }
     }
 
     /// An image away from the cursor: its line's source hidden, the line centred and as tall

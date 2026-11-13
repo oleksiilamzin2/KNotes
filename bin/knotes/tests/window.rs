@@ -1394,3 +1394,15 @@ fn an_image_rewritten_on_disk_shows_anew() {
     assert_eq!(shown.len(), 1, "{out}");
     assert!(shown[0].2 > 300.0 && (shown[0].2 / shown[0].3 - 4.0).abs() < 0.05, "the new, wide picture: {out}");
 }
+
+#[test]
+fn images_far_out_of_view_are_let_go() {
+    let text: String = (0..30).map(|i| format!("Line {i}\n![[wide{i}.png]]\n")).collect();
+    let names: Vec<String> = (0..30).map(|i| format!("wide{i}.png")).collect();
+    let files: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), WIDE)).collect();
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_DELAY_MS", "1000")];
+    let (_vault, out) = probe_images(&[("a.md", &text)], &files, &env);
+    let ready: Vec<&str> = out.lines().find_map(|l| l.strip_prefix("images-ready: ")).unwrap_or_else(|| panic!("{out}")).split(' ').collect();
+    assert!(ready.contains(&"wide29.png"), "the images in view are decoded: {ready:?}");
+    assert!(!ready.contains(&"wide0.png") && !ready.contains(&"wide1.png"), "those at the top are let go: {ready:?}");
+}
