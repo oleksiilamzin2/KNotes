@@ -1,5 +1,7 @@
-//! The documents open as tabs in the sidebar (ADR 0024): every document opened is a tab, and
-//! each remembers where its document was.
+//! The documents open as tabs in the sidebar (ADR 0024): a note opens in the tab shown, a PDF
+//! (or a note asked to) in a new tab beside it, and each document is shown again where it was.
+
+use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
@@ -9,12 +11,6 @@ use serde_json::{Value, json};
 pub struct TabPlace {
     pub top: (usize, f64),
     pub cursor: Option<(usize, usize)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Tab {
-    path: String,
-    place: Option<TabPlace>,
 }
 
 /// What closing a tab leaves to show.
@@ -30,28 +26,49 @@ pub enum AfterClose {
 
 #[derive(Debug, Default)]
 pub struct Tabs {
-    tabs: Vec<Tab>,
+    /// The documents of the tabs, in order.
+    tabs: Vec<String>,
     current: Option<usize>,
+    /// Where each document was when last left, tab or not: a tab moving on to another
+    /// document does not lose where the first was.
+    places: HashMap<String, TabPlace>,
 }
 
 impl Tabs {
-    /// Shows `path`'s tab, a new one last when it has none; gives where it was.
-    pub fn open(&mut self, path: &str) -> Option<TabPlace> {
-        let i = match self.tabs.iter().position(|t| t.path == path) {
-            Some(i) => i,
-            None => {
-                self.tabs.push(Tab { path: path.to_owned(), place: None });
-                self.tabs.len() - 1
+    /// Shows `path` in the tab shown (a first tab when there is none), or brings back its tab
+    /// when it has one; gives where it was.
+    pub fn navigate(&mut self, path: &str) -> Option<TabPlace> {
+        match (self.position(path), self.current) {
+            (Some(i), _) => self.current = Some(i),
+            (None, Some(c)) => self.tabs[c] = path.to_owned(),
+            (None, None) => {
+                self.tabs.push(path.to_owned());
+                self.current = Some(self.tabs.len() - 1);
             }
-        };
+        }
+        self.places.get(path).copied()
+    }
+
+    /// Shows `path` in a new tab right after the one shown, or brings back its tab when it has
+    /// one; gives where it was.
+    pub fn open_beside(&mut self, path: &str) -> Option<TabPlace> {
+        let i = self.position(path).unwrap_or_else(|| {
+            let at = self.current.map_or(self.tabs.len(), |c| c + 1);
+            self.tabs.insert(at, path.to_owned());
+            at
+        });
         self.current = Some(i);
-        self.tabs[i].place
+        self.places.get(path).copied()
+    }
+
+    fn position(&self, path: &str) -> Option<usize> {
+        self.tabs.iter().position(|t| t == path)
     }
 
     /// Where the document of the tab shown is now.
     pub fn remember(&mut self, place: TabPlace) {
-        if let Some(tab) = self.current.and_then(|i| self.tabs.get_mut(i)) {
-            tab.place = Some(place);
+        if let Some(path) = self.current_path().map(str::to_owned) {
+            self.places.insert(path, place);
         }
     }
 
@@ -69,7 +86,7 @@ impl Tabs {
                 }
                 let next = i.min(self.tabs.len() - 1);
                 self.current = Some(next);
-                AfterClose::Show(self.tabs[next].path.clone())
+                AfterClose::Show(self.tabs[next].clone())
             }
             Some(c) if c > i => {
                 self.current = Some(c - 1);
@@ -81,8 +98,11 @@ impl Tabs {
 
     /// A document moved from `from` to `to`.
     pub fn rename(&mut self, from: &str, to: &str) {
-        for tab in self.tabs.iter_mut().filter(|t| t.path == from) {
-            tab.path = to.to_owned();
+        for tab in self.tabs.iter_mut().filter(|t| *t == from) {
+            *tab = to.to_owned();
+        }
+        if let Some(place) = self.places.remove(from) {
+            self.places.insert(to.to_owned(), place);
         }
     }
 
@@ -90,12 +110,12 @@ impl Tabs {
     /// none is shown.
     pub fn retain(&mut self, exists: impl Fn(&str) -> bool) {
         let current = self.current_path().map(str::to_owned);
-        self.tabs.retain(|t| exists(&t.path));
-        self.current = current.and_then(|c| self.tabs.iter().position(|t| t.path == c));
+        self.tabs.retain(|t| exists(t));
+        self.current = current.and_then(|c| self.position(&c));
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {
-        self.tabs.iter().map(|t| t.path.as_str())
+        self.tabs.iter().map(String::as_str)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -108,21 +128,22 @@ impl Tabs {
     }
 
     pub fn current_path(&self) -> Option<&str> {
-        self.current.and_then(|i| self.tabs.get(i)).map(|t| t.path.as_str())
+        self.current.and_then(|i| self.tabs.get(i)).map(String::as_str)
     }
 
     /// Where `path`'s document was.
     pub fn place_of(&self, path: &str) -> Option<TabPlace> {
-        self.tabs.iter().find(|t| t.path == path).and_then(|t| t.place)
+        self.places.get(path).copied()
     }
 
+    /// The tabs, the places of their documents and the tab shown.
     pub fn to_json(&self) -> Value {
         let tabs: Vec<Value> = self
             .tabs
             .iter()
-            .map(|t| match t.place {
-                Some(p) => json!({ "path": t.path, "top": [p.top.0, p.top.1], "cursor": p.cursor.map(|c| [c.0, c.1]) }),
-                None => json!({ "path": t.path }),
+            .map(|path| match self.places.get(path) {
+                Some(p) => json!({ "path": path, "top": [p.top.0, p.top.1], "cursor": p.cursor.map(|c| [c.0, c.1]) }),
+                None => json!({ "path": path }),
             })
             .collect();
         json!({ "tabs": tabs, "current": self.current })
@@ -135,21 +156,17 @@ impl Tabs {
 
     /// Tabs read back; anything broken gives none.
     pub fn from_json(value: &Value) -> Self {
-        let tabs: Vec<Tab> = value
-            .get("tabs")
-            .and_then(Value::as_array)
-            .map(|tabs| {
-                tabs.iter()
-                    .filter_map(|t| {
-                        let path = t.get("path")?.as_str()?.to_owned();
-                        let top = t.get("top").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)));
-                        let cursor = t.get("cursor").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize)));
-                        Some(Tab { path, place: top.map(|top| TabPlace { top, cursor }) })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let current = value.get("current").and_then(Value::as_u64).map(|c| c as usize).filter(|&c| c < tabs.len());
-        Self { tabs, current }
+        let mut tabs = Self::default();
+        for t in value.get("tabs").and_then(Value::as_array).into_iter().flatten() {
+            let Some(path) = t.get("path").and_then(Value::as_str) else { continue };
+            let top = t.get("top").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)));
+            let cursor = t.get("cursor").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize)));
+            tabs.tabs.push(path.to_owned());
+            if let Some(top) = top {
+                tabs.places.insert(path.to_owned(), TabPlace { top, cursor });
+            }
+        }
+        tabs.current = value.get("current").and_then(Value::as_u64).map(|c| c as usize).filter(|&c| c < tabs.tabs.len());
+        tabs
     }
 }

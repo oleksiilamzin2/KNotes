@@ -115,6 +115,8 @@ pub struct VaultWindow {
     /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
     tabs: RefCell<Tabs>,
     tabs_restored: Cell<bool>,
+    /// The next document opened goes in a new tab (the list's menu asked for it).
+    new_tab_next: Cell<bool>,
     /// What the right panel shows.
     panel_mode: Cell<PanelMode>,
     /// The document the outline shows (a note's or a PDF's path), and whether an edit's
@@ -270,6 +272,7 @@ impl VaultWindow {
             outline_panel,
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
+            new_tab_next: Cell::new(false),
             panel_mode: Cell::new(PanelMode::Ai),
             outline_of: RefCell::new(None),
             outline_due: Cell::new(false),
@@ -414,6 +417,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        let weak_new_tab: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_new_tab(move |path| {
+            if let Some(window) = weak_new_tab.upgrade() {
+                window.open_in_new_tab(&path);
+            }
+        });
         let weak_close: Weak<Self> = Rc::downgrade(&this);
         this.sidebar.on_close(move |path| {
             if let Some(window) = weak_close.upgrade() {
@@ -915,6 +924,10 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            // `KNOTES_PROBE_NEW_TAB=b.md`: that note opened in a new tab, as the list's menu does.
+            if let Ok(path) = std::env::var("KNOTES_PROBE_NEW_TAB") {
+                self.open_in_new_tab(&path);
+            }
             // `KNOTES_PROBE_TAB_CLICK=a.md`: a click on that document's tab, after the opening.
             if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLICK") {
                 let item = SidebarItem::Tab(path);
@@ -993,7 +1006,10 @@ impl VaultWindow {
     /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow. Gives
     /// where the document was when its tab was last left.
     fn show_tab(&self, path: &str) -> Option<TabPlace> {
-        let place = self.tabs.borrow_mut().open(path);
+        // A note opens in the tab shown; a PDF, or a note asked to, in a new tab beside it
+        // (owner's choice).
+        let beside = self.new_tab_next.replace(false) || FileKind::from_path(path) == FileKind::Pdf;
+        let place = if beside { self.tabs.borrow_mut().open_beside(path) } else { self.tabs.borrow_mut().navigate(path) };
         if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
             self.rebuild_sidebar();
             self.highlight(&SidebarItem::Gap);
@@ -1048,6 +1064,13 @@ impl VaultWindow {
         if let Some(path) = current {
             self.open_note(&path, true);
         }
+    }
+
+    /// Opens `path` in a new tab beside the tab shown (the list's menu).
+    pub fn open_in_new_tab(&self, path: &str) {
+        self.new_tab_next.set(true);
+        self.open_note(path, true);
+        self.new_tab_next.set(false);
     }
 
     /// `other`'s tab clicked, then the tab shown before (probe mode).

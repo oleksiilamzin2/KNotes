@@ -66,6 +66,8 @@ pub struct Ivars {
     table: RefCell<Weak<NSTableView>>,
     /// Called with the path of a note to move.
     on_move: RefCell<Option<OnSelect>>,
+    /// Called with the path of a note to open in a new tab (ADR 0024).
+    on_new_tab: RefCell<Option<OnSelect>>,
     /// The note whose row title is being edited, and that title field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
     rows: RefCell<Arc<Vec<NoteRow>>>,
@@ -124,6 +126,14 @@ define_class!(
             }
         }
 
+        #[unsafe(method(openInNewTab:))]
+        fn open_in_new_tab(&self, _sender: Option<&AnyObject>) {
+            let path = self.menu_row().and_then(|row| self.path_at(row));
+            if let (Some(path), Some(callback)) = (path, self.ivars().on_new_tab.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
         #[unsafe(method(moveNote:))]
         fn move_note(&self, _sender: Option<&AnyObject>) {
             let path = self.menu_row().and_then(|row| self.path_at(row));
@@ -172,6 +182,7 @@ impl NoteListSource {
             on_select: RefCell::new(None),
             on_rename: RefCell::new(None),
             on_move: RefCell::new(None),
+            on_new_tab: RefCell::new(None),
             table: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             rows: RefCell::new(Arc::new(Vec::new())),
@@ -195,6 +206,10 @@ impl NoteListSource {
 
     pub fn on_rename(&self, callback: impl Fn(String, String) + 'static) {
         *self.ivars().on_rename.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_new_tab(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_new_tab.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_move(&self, callback: impl Fn(String) + 'static) {
@@ -361,7 +376,7 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
     *source.ivars().table.borrow_mut() = Weak::new(&table);
     table.setDraggingSourceOperationMask_forLocal(objc2_app_kit::NSDragOperation::Move, true);
     let menu = NSMenu::new(mtm);
-    for (title, action) in [(strings::RENAME_NOTE, sel!(renameNote:)), (strings::MOVE_NOTE, sel!(moveNote:))] {
+    for (title, action) in [(strings::OPEN_IN_NEW_TAB, sel!(openInNewTab:)), (strings::RENAME_NOTE, sel!(renameNote:)), (strings::MOVE_NOTE, sel!(moveNote:))] {
         // SAFETY: the source outlives the table (it is its data source), and implements the action.
         let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), ns_string!("")) };
         unsafe { item.setTarget(Some(source)) };

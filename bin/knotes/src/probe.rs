@@ -528,15 +528,15 @@ pub fn rename_requested() -> Option<String> {
 /// to… from that menu (the folder picker answers with the folder).
 pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: &objc2_app_kit::NSTableView) {
     let Ok(action) = std::env::var("KNOTES_PROBE_ACTION") else { return };
-    let (index, name) = match (action.strip_prefix("list-rename="), action.starts_with("list-move=")) {
-        (Some(name), _) => (0, Some(name.to_owned())),
-        (None, true) => (1, None),
+    let (chosen, name) = match (action.strip_prefix("list-rename="), action.starts_with("list-move=")) {
+        (Some(name), _) => (objc2::sel!(renameNote:), Some(name.to_owned())),
+        (None, true) => (objc2::sel!(moveNote:), None),
         _ => return,
     };
     let Some(menu) = table.menu() else { return };
     let items = menu.itemArray();
     println!("list-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
-    let Some(item) = items.iter().nth(index) else { return };
+    let Some(item) = items.iter().find(|i| i.action() == Some(chosen)) else { return };
     let mtm = MainThreadMarker::new().expect("main thread");
     // SAFETY: the menu item's own target and action, sent as a click would.
     unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };

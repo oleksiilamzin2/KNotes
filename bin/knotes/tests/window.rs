@@ -999,7 +999,7 @@ fn a_note_is_renamed_in_its_list_row_from_the_context_menu() {
         &RENAME_VAULT,
         &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "list-rename=Renamed in list"), ("KNOTES_PROBE_ANSWER", "update")],
     );
-    assert!(out.contains("list-menu-items: Перейменувати"), "{out}");
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати"), "{out}");
     assert!(vault.path().join("Renamed in list.md").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Renamed in list]] and [[Renamed in list#Part|p]]");
 }
@@ -1008,7 +1008,7 @@ fn a_note_is_renamed_in_its_list_row_from_the_context_menu() {
 fn a_note_is_moved_to_a_folder_picked_from_the_context_menu() {
     let notes = [("Old.md", "# Old"), ("a.md", "[x](Old.md) [[Old]]"), ("Archive/keep.md", "k")];
     let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "list-move=Archive")]);
-    assert!(out.contains("list-menu-items: Перейменувати | Перемістити в…"), "{out}");
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в…"), "{out}");
     assert!(out.contains("move-folders: / | Archive"), "{out}");
     assert!(vault.path().join("Archive/Old.md").exists() && !vault.path().join("Old.md").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "[x](Archive/Old.md) [[Old]]");
@@ -2217,20 +2217,30 @@ fn sidebar_tabs(out: &str) -> (String, String) {
 }
 
 #[test]
-fn the_tabs_segment_lists_every_document_opened_the_one_shown_selected() {
+fn a_note_opens_in_the_tab_shown_and_a_pdf_in_a_new_tab_beside_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md,a.md")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
     assert!(out.contains("sidebar-mode: tabs"), "{out}");
     assert!(out.contains("sidebar-segments: Вкладки, Теки, Теги\n"), "tabs first (owner's order): {out}");
-    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()), "a.md opened again: no second tab");
+    assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()), "b.md in a.md's tab");
+    let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
-    assert_eq!(sidebar_tabs(&out).1, "doc", "a PDF is a tab too: {out}");
+    assert_eq!(sidebar_tabs(&out), ("a | doc".to_owned(), "doc".to_owned()), "the PDF shown in a tab of its own: {out}");
+}
+
+#[test]
+fn a_note_opens_in_a_new_tab_from_the_list_s_menu_and_a_document_with_a_tab_brings_it_back() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()));
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()));
 }
 
 #[test]
 fn a_click_on_a_tab_shows_its_document() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
     assert!(out.contains("note: a.md"), "{out}");
     assert_eq!(sidebar_tabs(&out).1, "a");
 }
@@ -2238,7 +2248,7 @@ fn a_click_on_a_tab_shows_its_document() {
 #[test]
 fn closing_another_tab_keeps_the_document_shown() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
     assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()));
     assert!(out.contains("note-title: b\n"), "{out}");
 }
@@ -2246,7 +2256,7 @@ fn closing_another_tab_keeps_the_document_shown() {
 #[test]
 fn closing_the_tab_shown_shows_its_neighbour_and_closing_the_last_shows_nothing() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TAB_CLOSE", "b.md")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLOSE", "b.md")]);
     assert_eq!(sidebar_tabs(&out), ("a".to_owned(), "a".to_owned()));
     assert!(out.contains("note-title: a\n") && out.contains("text: See [[doc.pdf]] here"), "{out}");
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
@@ -2259,7 +2269,14 @@ fn a_tab_brings_its_note_back_where_it_was() {
     let (vault, home) = (tabs_vault(), tabs_home());
     std::fs::write(vault.path().join("a.md"), long_sections()).unwrap();
     // Scrolled to the end 300 ms in; then b's tab and a's again.
-    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "40"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_TAB_TRIP", "b.md")];
+    let env = [
+        ("KNOTES_PROBE_OPEN", "a.md"),
+        ("KNOTES_PROBE_CURSOR", "40"),
+        ("KNOTES_PROBE_NEW_TAB", "b.md"),
+        ("KNOTES_PROBE_TAB_CLICK", "a.md"),
+        ("KNOTES_PROBE_NOTE_SCROLL", "end-later"),
+        ("KNOTES_PROBE_TAB_TRIP", "b.md"),
+    ];
     let out = probe_env(&[vault.path()], Some(home.path()), &env);
     let before = out.lines().find_map(|l| l.strip_prefix("note-top-before-trip: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
     assert_ne!(before, "# A", "scrolled: {out}");
@@ -2281,10 +2298,17 @@ fn a_tab_brings_its_pdf_back_at_the_page_it_was_at() {
 fn tabs_and_where_their_documents_were_come_back_after_a_restart() {
     let (vault, home) = (tabs_vault(), tabs_home());
     std::fs::write(vault.path().join("a.md"), long_sections()).unwrap();
-    let env = [("KNOTES_PROBE_OPEN", "b.md,a.md"), ("KNOTES_PROBE_CURSOR", "40"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later")];
+    // The cursor put in a, b opened beside it, a's tab clicked and a scrolled.
+    let env = [
+        ("KNOTES_PROBE_OPEN", "a.md"),
+        ("KNOTES_PROBE_CURSOR", "40"),
+        ("KNOTES_PROBE_NEW_TAB", "b.md"),
+        ("KNOTES_PROBE_TAB_CLICK", "a.md"),
+        ("KNOTES_PROBE_NOTE_SCROLL", "end-later"),
+    ];
     let first = probe_env(&[vault.path()], Some(home.path()), &env);
     let out = probe_env(&[vault.path()], Some(home.path()), &[]);
-    assert_eq!(sidebar_tabs(&out), ("b | a".to_owned(), "a".to_owned()), "{out}");
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()), "{out}");
     assert!(out.contains("note-title: a\n") && out.contains("cursor: 40\n"), "{out}");
     assert_eq!(note_top(&out), note_top(&first));
 }
@@ -2295,7 +2319,7 @@ fn closing_the_tab_shown_does_not_give_its_place_to_the_next() {
     std::fs::write(vault.path().join("a.md"), long_sections()).unwrap();
     std::fs::write(vault.path().join("b.md"), format!("b start\n{}", "b line\n".repeat(300))).unwrap();
     // b's place is its top; a scrolled down, then a's tab closed: b shows from its top.
-    let env = [("KNOTES_PROBE_OPEN", "b.md,a.md"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")];
+    let env = [("KNOTES_PROBE_OPEN", "b.md"), ("KNOTES_PROBE_NEW_TAB", "a.md"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")];
     let out = probe_env(&[vault.path()], Some(home.path()), &env);
     assert!(out.contains("note-title: b\n"), "{out}");
     assert_eq!(note_top(&out), "b start");
@@ -2304,7 +2328,7 @@ fn closing_the_tab_shown_does_not_give_its_place_to_the_next() {
 #[test]
 fn a_deleted_document_loses_its_tab_and_a_renamed_one_keeps_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
+    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
     std::fs::remove_file(vault.path().join("a.md")).unwrap();
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "toolbar-rename=c")]);
     assert_eq!(sidebar_tabs(&out).0, "c", "{out}");

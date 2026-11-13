@@ -19,6 +19,7 @@ pub const CHAT: &str = "Чат";
 pub const AI: &str = "ШІ";
 pub const TABS: &str = "Вкладки";
 pub const CLOSE_TAB: &str = "Закрити вкладку";
+pub const OPEN_IN_NEW_TAB: &str = "Відкрити в новій вкладці";
 pub const OUTLINE: &str = "Зміст";
 pub const NO_HEADINGS: &str = "Немає заголовків";
 pub const NO_PDF_OUTLINE: &str = "У цьому PDF немає змісту";
