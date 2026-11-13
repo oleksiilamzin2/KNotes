@@ -1,4 +1,4 @@
-//! Per-folder view rules in a `.knotes` JSON file inside the folder (ADR 0010).
+//! Per-folder view rules in a `.knotes.json` file inside the folder (ADR 0010, 0020).
 //!
 //! ```json
 //! { "list": { "sort": "modified", "groupByDate": true, "includeSubfolders": true } }
@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{ListOption, ListSettings, SortOrder};
 
-pub const RULES_FILE: &str = ".knotes";
+pub const RULES_FILE: &str = ".knotes.json";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FolderRules {
@@ -85,14 +85,14 @@ impl FolderRules {
 }
 
 /// Folder for notes created from links (and by Cmd+N without a selected folder): the root
-/// `.knotes` field `newNotes.folder`, else `default` (ADR 0013). `""` is the vault root.
+/// `.knotes.json` field `newNotes.folder`, else `default` (ADR 0013). `""` is the vault root.
 pub fn new_notes_folder(rules: &HashMap<String, FolderRules>, default: &str) -> String {
     let set = rules.get("").and_then(|r| r.root.get("newNotes")).and_then(|n| n.get("folder")).and_then(Value::as_str);
     set.unwrap_or(default).trim_matches('/').to_owned()
 }
 
 /// List settings of `folder` (`""` is the vault root), given the rules of the folders that
-/// have a `.knotes` file.
+/// have a `.knotes.json` file.
 pub fn resolve_list_settings(folder: &str, rules: &HashMap<String, FolderRules>) -> ListSettings {
     let mut settings = ListSettings::default();
     // Root first, then each deeper ancestor, then the folder itself: later levels win.

@@ -166,7 +166,7 @@ fn choosing_a_sort_order_reorders_and_saves_only_that_field() {
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_ACTION", "sort=title")]);
     assert_eq!(list_titles(&out), ["a note", "b note"]);
     assert!(out.contains("list-menu: Сортувати за > [Датою зміни, ✓ Назвою]"), "{out}");
-    let saved = std::fs::read_to_string(vault.path().join("Projects/.knotes")).unwrap();
+    let saved = std::fs::read_to_string(vault.path().join("Projects/.knotes.json")).unwrap();
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json, serde_json::json!({"list": {"sort": "title"}}));
 }
@@ -461,7 +461,7 @@ fn clicking_a_link_to_a_missing_note_creates_it_in_the_new_notes_folder() {
     assert!(vault.path().join("Вхідні/Нова ідея.md").is_file(), "{out}");
     assert!(out.contains("note: Вхідні/Нова ідея.md"), "{out}");
     let (vault, _) = probe_notes(
-        &[("a.md", "[[Ідея]]\n\nx"), (".knotes", r#"{"newNotes": {"folder": "Inbox"}}"#)],
+        &[("a.md", "[[Ідея]]\n\nx"), (".knotes.json", r#"{"newNotes": {"folder": "Inbox"}}"#)],
         &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "3")],
     );
     assert!(vault.path().join("Inbox/Ідея.md").is_file());

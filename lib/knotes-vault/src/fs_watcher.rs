@@ -10,7 +10,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// FSEvents watcher with debouncing: changes arriving within `debounce` of the first one
 /// form one batch. Hidden paths (`.obsidian`, `.git`, dotfiles) are dropped, except the
-/// per-folder rules files `.knotes`.
+/// per-folder rules files `.knotes.json`.
 /// Dropping the watcher stops the background thread.
 pub struct FsWatcher {
     _watcher: RecommendedWatcher,
@@ -77,13 +77,13 @@ fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, on_batch: &impl Fn(Vec<St
     }
 }
 
-/// Keeps visible paths and per-folder rules files (`.knotes`, ADR 0010); drops anything
-/// else hidden.
+/// Keeps visible paths and per-folder rules files (`.knotes.json` and the old `.knotes`, ADR
+/// 0010, 0020); drops anything else hidden.
 fn add_visible(root: &Path, path: &Path, paths: &mut BTreeSet<String>) {
     let Some(rel) = path.strip_prefix(root).ok().and_then(Path::to_str) else { return };
     let (folders, name) = rel.rsplit_once('/').unwrap_or(("", rel));
     let hidden_folder = folders.split('/').any(|part| part.starts_with('.'));
-    if !rel.is_empty() && !hidden_folder && (!name.starts_with('.') || name == ".knotes") {
+    if !rel.is_empty() && !hidden_folder && (!name.starts_with('.') || name == ".knotes.json" || name == ".knotes") {
         paths.insert(rel.to_owned());
     }
 }

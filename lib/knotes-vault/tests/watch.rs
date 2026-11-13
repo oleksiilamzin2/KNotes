@@ -44,13 +44,13 @@ fn folder_rules_files_are_reported() {
     fs::create_dir(root.join("Journal")).unwrap();
     let watcher = FsWatcher::new(&root, Duration::from_millis(100)).unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    fs::write(root.join("Journal/.knotes"), "{}").unwrap();
+    fs::write(root.join("Journal/.knotes.json"), "{}").unwrap();
     let mut seen = Vec::new();
     while let Some(batch) = watcher.next_change(WAIT) {
         seen.extend(batch);
-        if seen.contains(&"Journal/.knotes".to_owned()) {
+        if seen.contains(&"Journal/.knotes.json".to_owned()) {
             break;
         }
     }
-    assert!(seen.contains(&"Journal/.knotes".to_owned()), "{seen:?}");
+    assert!(seen.contains(&"Journal/.knotes.json".to_owned()), "{seen:?}");
 }

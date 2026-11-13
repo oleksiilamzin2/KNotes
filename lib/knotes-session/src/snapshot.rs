@@ -15,7 +15,7 @@ pub struct Snapshot {
     pub tags: Arc<Vec<TagNode>>,
     /// Notes without any tag.
     pub untagged: usize,
-    /// `.knotes` rules by folder (`""` is the vault root); unreadable files are skipped.
+    /// `.knotes.json` rules by folder (`""` is the vault root); unreadable files are skipped.
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// Link resolution for the editor (ADR 0013).
     pub links: Arc<LinkTargets>,
@@ -54,7 +54,7 @@ impl Snapshot {
             .filter_map(|(folder, text)| match FolderRules::parse(&text) {
                 Ok(rules) => Some((folder, rules)),
                 Err(e) => {
-                    eprintln!("knotes: ignoring {folder}/.knotes: {e}");
+                    eprintln!("knotes: ignoring {folder}/.knotes.json: {e}");
                     None
                 }
             })

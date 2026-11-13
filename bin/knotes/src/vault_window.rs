@@ -55,7 +55,7 @@ struct State {
     untagged: usize,
     index_dir: Option<PathBuf>,
     vault: Option<PathBuf>,
-    /// List settings of tag views: tags have no folder and no `.knotes`; kept for the session.
+    /// List settings of tag views: tags have no folder and no `.knotes.json`; kept for the session.
     tag_settings: HashMap<String, ListSettings>,
     history: History,
     /// Read-only index connection, opened on first need (the index exists after the first snapshot).
@@ -430,7 +430,7 @@ impl VaultWindow {
         state.index_dir = Some(index_dir);
     }
 
-    /// Applies a list options choice: saved in the folder's `.knotes` (only that field), or
+    /// Applies a list options choice: saved in the folder's `.knotes.json` (only that field), or
     /// kept for the session for tag views.
     pub fn choose(&self, option: ListOption) {
         let mut state = self.state.borrow_mut();
@@ -450,7 +450,7 @@ impl VaultWindow {
                 if let Some(vault) = &state.vault
                     && let Err(e) = FsVault::new(vault).write_rules(&folder, &rules.to_json())
                 {
-                    eprintln!("knotes: cannot save {folder}/.knotes: {e}");
+                    eprintln!("knotes: cannot save {folder}/.knotes.json: {e}");
                 }
                 Arc::make_mut(&mut state.rules).insert(folder, rules);
             }
@@ -1564,7 +1564,7 @@ fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) -> Option<String>
     }
 }
 
-/// Tags and "Untagged" have no folder and no `.knotes`: their list options last the session.
+/// Tags and "Untagged" have no folder and no `.knotes.json`: their list options last the session.
 fn session_settings_key(item: &SidebarItem) -> Option<String> {
     matches!(item, SidebarItem::Tag(_) | SidebarItem::Untagged).then(|| item.key())
 }

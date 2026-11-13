@@ -1,4 +1,4 @@
-/// Reads and writes the per-folder rules files (`.knotes`) of a vault.
+/// Reads and writes the per-folder rules files (`.knotes.json`) of a vault.
 pub trait FolderRulesStore {
     /// `(folder, file text)` for each of `folders` (`""` is the vault root) that has a file.
     fn read_rules(&self, folders: &[&str]) -> std::io::Result<Vec<(String, String)>>;

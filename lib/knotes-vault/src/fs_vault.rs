@@ -67,17 +67,32 @@ impl VaultReader for FsVault {
     }
 }
 
-/// Name of the per-folder rules file (ADR 0010).
-const RULES_FILE: &str = ".knotes";
+/// Name of the per-folder rules file (ADR 0010, 0020).
+const RULES_FILE: &str = ".knotes.json";
+/// Its old name, read while there is no new file and removed by the next write. At the vault
+/// root `.knotes` is now Knotes's folder (ADR 0020).
+const OLD_RULES_FILE: &str = ".knotes";
+
+/// The text of the file at `path`; `None` when there is none (or a folder stands there).
+fn read_if_file(path: &Path) -> io::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::IsADirectory) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 
 impl FolderRulesStore for FsVault {
     fn read_rules(&self, folders: &[&str]) -> io::Result<Vec<(String, String)>> {
         let mut found = Vec::new();
         for folder in folders {
-            match fs::read_to_string(self.root.join(folder).join(RULES_FILE)) {
-                Ok(text) => found.push(((*folder).to_owned(), text)),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
+            let dir = self.root.join(folder);
+            let text = match read_if_file(&dir.join(RULES_FILE))? {
+                Some(text) => Some(text),
+                None => read_if_file(&dir.join(OLD_RULES_FILE))?,
+            };
+            if let Some(text) = text {
+                found.push(((*folder).to_owned(), text));
             }
         }
         Ok(found)
@@ -91,7 +106,12 @@ impl FolderRulesStore for FsVault {
         fs::write(&tmp, text)?;
         fs::rename(&tmp, dir.join(RULES_FILE)).inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
-        })
+        })?;
+        let old = dir.join(OLD_RULES_FILE);
+        if old.is_file() {
+            fs::remove_file(old)?;
+        }
+        Ok(())
     }
 }
 
