@@ -3,11 +3,13 @@
 //! Every styled range also carries a `knotes.style` attribute, so tests can read what is shown.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
@@ -15,7 +17,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
+    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSImage,
     NSAttributedStringNSStringDrawing, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
     NSBackgroundColorAttributeName, NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
@@ -92,6 +94,12 @@ pub struct Ivars {
     formula_cache: RefCell<FormulaCache>,
     /// Light or dark: formulas are typeset in the text colour.
     dark: Cell<bool>,
+    /// The vault's folder: images are read from it (ADR 0020).
+    vault: RefCell<Option<PathBuf>>,
+    /// Images by vault path, once read; `None` for one that does not load.
+    images: RefCell<HashMap<String, Option<Retained<NSImage>>>>,
+    /// Width of the text column, which images fit in.
+    column: Cell<f64>,
     /// The edit being made and its inserted text, between `shouldChangeText` and
     /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
     pending: Cell<Option<Edit>>,
@@ -146,6 +154,7 @@ define_class!(
         fn frame_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
                 fit_readable_width(&view);
+                self.fit_images(&view);
             }
         }
     }
@@ -253,6 +262,9 @@ impl LivePreview {
             path: RefCell::new(String::new()),
             formula_cache: RefCell::new(FormulaCache::default()),
             dark: Cell::new(false),
+            vault: RefCell::new(None),
+            images: RefCell::new(HashMap::new()),
+            column: Cell::new(READABLE_WIDTH),
             pending: Cell::new(None),
             inserted: RefCell::new(String::new()),
             source: RefCell::new(String::new()),
@@ -391,6 +403,9 @@ impl LivePreview {
         for f in styled.formulas.iter().filter(|f| meets(&f.range)) {
             self.paint_formula(&mut canvas, &mut palette, storage, f, overlaps(&f.range, revealed));
         }
+        for image in styled.images.iter().filter(|i| meets(&i.range)) {
+            self.paint_image(&mut canvas, &mut palette, storage, image, overlaps(&image.range, revealed));
+        }
         self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region, revealed);
         look.paint.apply(storage, &canvas, &palette);
     }
@@ -430,6 +445,7 @@ impl LivePreview {
             );
         }
         fit_readable_width(view);
+        self.ivars().column.set(text_column(view));
         // Paragraphs with typeset formulas draw them (the layout manager keeps a weak reference).
         if let Some(layout) = view.textLayoutManager() {
             layout.setDelegate(Some(ProtocolObject::from_ref(self)));
@@ -807,6 +823,82 @@ impl LivePreview {
         canvas.paint(f.range.start..f.range.start + 1, |p| p.kern = kern);
     }
 
+    /// The vault the shown notes are in: images are read from it.
+    pub fn set_vault(&self, root: PathBuf) {
+        *self.ivars().vault.borrow_mut() = Some(root);
+        self.ivars().images.borrow_mut().clear();
+    }
+
+    /// The image `run` embeds and the size it shows at: its own, or the one written after `|`
+    /// (its proportions kept), no wider than the text column. `None` when it does not load.
+    fn image(&self, run: &ImageRun) -> Option<(Retained<NSImage>, NSSize)> {
+        let path = self.ivars().links.borrow().as_ref()?.resolve(run.link.kind, &run.link.target, &self.ivars().path.borrow())?;
+        let image = self
+            .ivars()
+            .images
+            .borrow_mut()
+            .entry(path)
+            .or_insert_with_key(|path| {
+                let file = self.ivars().vault.borrow().as_ref()?.join(path);
+                NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&file.to_string_lossy()))
+            })
+            .clone()?;
+        let natural = image.size();
+        if natural.width <= 0.0 || natural.height <= 0.0 {
+            return None;
+        }
+        let ratio = natural.height / natural.width;
+        let width = match (run.width, run.height) {
+            (Some(w), Some(h)) => f64::from(w).min(f64::from(h) / ratio),
+            (Some(w), None) => f64::from(w),
+            (None, Some(h)) => f64::from(h) / ratio,
+            (None, None) => natural.width,
+        };
+        // A point narrower than the column: the hidden source's tiny glyphs beside the kept
+        // width would otherwise wrap onto a second line as tall as the image.
+        let width = width.min(self.ivars().column.get() - 1.0).max(1.0).round();
+        Some((image, NSSize::new(width, (width * ratio).round())))
+    }
+
+    /// An image away from the cursor: its line's source hidden, the line centred and as tall
+    /// as the image, the image's width kept by kerning (ADR 0020). With the cursor on its line:
+    /// the source, and room below it for the image.
+    fn paint_image<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, run: &ImageRun, revealed: bool) {
+        let Some((_, size)) = self.image(run) else { return };
+        let line = paragraph(storage, ns(&run.range));
+        let reserved = size.height + 2.0 * PREVIEW_GAP;
+        if revealed {
+            let para = palette.para(Para { spacing_after: reserved, ..Para::default() });
+            canvas.paint(line.0..line.1, |p| p.para = para);
+            return;
+        }
+        let look = &self.ivars().look;
+        let text = storage.string();
+        let end = if line.1 > line.0 && matches!(text.characterAtIndex(line.1 - 1), 0x0a | 0x0d) { line.1 - 1 } else { line.1 };
+        let hidden = palette.look(&look.hidden, &look.clear, "image");
+        let kern = palette.kern(size.width);
+        canvas.paint(line.0..end, |p| {
+            p.look = hidden;
+            p.kern = 0;
+        });
+        canvas.paint(line.0..line.0 + 1, |p| p.kern = kern);
+        let para = palette.para(Para { centred: true, min_line: reserved, max_line: reserved, ..Para::default() });
+        canvas.paint(line.0..line.1, |p| p.para = para);
+    }
+
+    /// The text column changed width: images wider than it, or that were, fit again.
+    fn fit_images(&self, view: &NSTextView) {
+        let column = text_column(view);
+        if self.ivars().column.replace(column) == column {
+            return;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let paragraphs: Vec<(usize, usize)> = self.ivars().styled.borrow().images.iter().map(|i| paragraph(&storage, ns(&i.range))).collect();
+        for para in paragraphs {
+            self.restyle(&storage, para);
+        }
+    }
+
     /// Line height of each paragraph in `region` with inline formulas: enough for the tallest
     /// typeset one above and below the baseline. Paragraphs of display formulas are left to
     /// them; the paragraph's other settings (a list item's indentation) stay.
@@ -876,6 +968,17 @@ impl LivePreview {
             }
             let Ok(image) = self.formula_image(f) else { continue };
             marks.push(Mark::Formula { offset: at - from, image, anchor });
+        }
+        for run in styled.images.iter().filter(|i| i.range.start < to && i.range.end > from) {
+            let Some((image, size)) = self.image(run) else { continue };
+            let (anchor, at) = if overlaps(&run.range, revealed) {
+                (Anchor::Below, run.range.end.saturating_sub(1))
+            } else {
+                (Anchor::Line, paragraph(&storage, ns(&run.range)).0)
+            };
+            if (from..to).contains(&at) {
+                marks.push(Mark::Image { offset: at - from, image, size, anchor });
+            }
         }
         let centre_x = self.ivars().look.body.xHeight() / 2.0;
         let text = storage.string();
@@ -961,6 +1064,8 @@ impl LivePreview {
     /// New link resolution (files came or went): restyle the note's links.
     pub fn set_links(&self, view: &NSTextView, links: Arc<dyn LinkResolver>) {
         *self.ivars().links.borrow_mut() = Some(links);
+        // An image may have come, gone or changed.
+        self.ivars().images.borrow_mut().clear();
         if let Some(storage) = unsafe { view.textStorage() } {
             self.restyle(&storage, (0, storage.length()));
         }
@@ -991,7 +1096,9 @@ impl LivePreview {
         let styled = self.ivars().styled.borrow();
         let revealed = self.ivars().revealed.get();
         let in_cursor_line = index >= revealed.0 && index < revealed.1;
-        link_at(&styled, index).filter(|_| cmd || !in_cursor_line).map(|link| link.link.clone())
+        // An image is no link to follow: a click puts the cursor in its source.
+        let image = |l: &&LinkRun| styled.images.iter().any(|i| i.range == l.range);
+        link_at(&styled, index).filter(|l| (cmd || !in_cursor_line) && !image(l)).map(|link| link.link.clone())
     }
 
     /// The task marker whose drawn circle holds character `index` (not one showing its source).
@@ -1127,6 +1234,11 @@ impl LivePreview {
         }
         parts.iter().map(|(name, piece)| format!("[{name}]{piece}")).collect::<Vec<_>>().join("|")
     }
+}
+
+/// Width of the text column: the text container less its line padding.
+fn text_column(view: &NSTextView) -> f64 {
+    unsafe { view.textContainer() }.map_or(READABLE_WIDTH, |c| c.size().width - 2.0 * c.lineFragmentPadding())
 }
 
 /// Side insets that center a text column of at most `READABLE_WIDTH` in the view.

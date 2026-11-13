@@ -1162,3 +1162,101 @@ fn the_list_gets_its_width_back_when_the_sidebar_comes_back() {
     let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
     assert!((widths[1] - 340.0).abs() < 2.0, "the list as wide as before the sidebar went: {widths:?}");
 }
+
+const PIC: &[u8] = include_bytes!("fixtures/pic-120x80.png");
+const WIDE: &[u8] = include_bytes!("fixtures/wide-1600x400.png");
+
+fn probe_images(notes: &[(&str, &str)], images: &[(&str, &[u8])], env: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+    let vault = tempfile::tempdir().unwrap();
+    for (path, bytes) in notes.iter().map(|(p, t)| (*p, t.as_bytes())).chain(images.iter().copied()) {
+        let file = vault.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, bytes).unwrap();
+    }
+    let out = probe_env(&[vault.path()], None, env);
+    (vault, out)
+}
+
+/// `image: x y w h kind` lines, as numbers and kind.
+fn images(out: &str) -> Vec<(f64, f64, f64, f64, String)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("image: "))
+        .map(|l| {
+            let p: Vec<&str> = l.split(' ').collect();
+            (p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap(), p[4].to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn an_image_alone_on_its_line_shows_centred_at_its_size() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "Before\n![[pic.png]]\nAfter")],
+        &[("att/pic.png", PIC)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")],
+    );
+    let shown = images(&out);
+    assert_eq!(shown.len(), 1, "{out}");
+    let (x, _, w, h, kind) = &shown[0];
+    assert_eq!((*w, *h, kind.as_str()), (120.0, 80.0, "shown"), "{out}");
+    let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
+    assert!((x + w / 2.0 - widths[2] / 2.0).abs() < 12.0, "centred in the note column ({}): {out}", widths[2]);
+}
+
+#[test]
+fn an_image_takes_the_width_written_after_the_bar_and_no_more_than_the_column() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "![[pic.png|60]]\n![[wide.png]]\nend")],
+        &[("pic.png", PIC), ("wide.png", WIDE)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")],
+    );
+    let shown = images(&out);
+    assert_eq!(shown.len(), 2, "{out}");
+    assert_eq!((shown[0].2, shown[0].3), (60.0, 40.0), "{out}");
+    let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
+    let (w, h) = (shown[1].2, shown[1].3);
+    assert!(w < widths[2] - 40.0 && w > 300.0, "as wide as the column at most: {w} of {}", widths[2]);
+    assert!((w / h - 4.0).abs() < 0.05, "keeps its proportions: {w} x {h}");
+}
+
+#[test]
+fn with_the_cursor_on_its_line_an_image_shows_its_source_and_stays_below() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "Before\n![[pic.png]]\nAfter")],
+        &[("pic.png", PIC)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "10")],
+    );
+    let shown = images(&out);
+    assert_eq!(shown.iter().map(|i| i.4.as_str()).collect::<Vec<_>>(), ["preview"], "{out}");
+    assert!(out.contains("[wikilink]![[pic.png]]") || out.contains("[markup]![["), "the source shows: {out}");
+}
+
+#[test]
+fn a_click_on_an_image_puts_the_cursor_in_its_source_and_opens_nothing() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "Before\n![[pic.png]]\nAfter")],
+        &[("pic.png", PIC)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "12")],
+    );
+    assert!(out.contains("note: a.md"), "{out}");
+    assert_eq!(images(&out).iter().map(|i| i.4.as_str()).collect::<Vec<_>>(), ["preview"], "{out}");
+}
+
+#[test]
+fn a_missing_image_stays_a_link() {
+    let (_vault, out) = probe_images(&[("a.md", "![[gone.png]]\nend")], &[], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(images(&out).is_empty(), "{out}");
+}
+
+#[test]
+fn an_image_as_wide_as_the_column_takes_one_line() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "![[wide.png]]\n![[wide.png]]\nend")],
+        &[("wide.png", WIDE)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")],
+    );
+    let shown = images(&out);
+    assert_eq!(shown.len(), 2, "{out}");
+    let step = shown[1].1 - shown[0].1;
+    assert!((step - (shown[0].3 + 12.0)).abs() < 1.5, "one line each, as tall as the image and its gaps: {step} {out}");
+}

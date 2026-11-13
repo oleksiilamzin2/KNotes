@@ -1,6 +1,6 @@
 //! What the live preview draws in place of hidden source, inside TextKit 2 layout fragments
-//! (ADR 0017): typeset formulas, list bullets, task circles, quote bars, code backgrounds and
-//! the arrows of links to websites. The text keeps the source (hidden, its room
+//! (ADR 0017): typeset formulas, images (ADR 0020), list bullets, task circles, quote bars,
+//! code backgrounds and the arrows of links to websites. The text keeps the source (hidden, its room
 //! reserved by the live preview) and the paragraph's layout fragment draws at that place, so
 //! the drawing moves with its text however TextKit lays out, scrolls or resizes (layers over
 //! the view lagged a run loop behind and jumped while scrolling). Clicks reach the text.
@@ -19,7 +19,7 @@ use objc2_app_kit::{
 use objc2_core_graphics::CGContext;
 use objc2_foundation::{NSData, NSDictionary, NSObject, NSPoint, NSRect, NSSize, NSString, NSZeroRect};
 
-/// Where a formula's image goes in its paragraph.
+/// Where a formula's or an image's picture goes in its paragraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
     /// Inline, from the formula's first character, its baseline on the text baseline.
@@ -34,6 +34,8 @@ pub enum Anchor {
 /// Something to draw in a paragraph, at UTF-16 `offset` from the paragraph's start.
 pub enum Mark {
     Formula { offset: usize, image: Arc<FormulaImage>, anchor: Anchor },
+    /// An image embedded alone on its line, `size` points large (`Line` or `Below`).
+    Image { offset: usize, image: Retained<NSImage>, size: NSSize, anchor: Anchor },
     /// A list bullet in the room of a hidden `- `, its centre `centre` above the baseline.
     Bullet { offset: usize, centre: f64 },
     /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
@@ -114,7 +116,7 @@ define_class!(
                 let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
                 match (mark, image) {
                     // SAFETY: a valid image drawn into the current context.
-                    (Mark::Formula { .. }, Some(image)) => unsafe {
+                    (Mark::Formula { .. } | Mark::Image { .. }, Some(image)) => unsafe {
                         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None)
                     },
                     (Mark::Bullet { .. }, _) => {
@@ -153,6 +155,10 @@ impl PreviewFragment {
             .into_iter()
             .filter_map(|m| match &m {
                 Mark::Formula { image, .. } => NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&image.png)).map(|i| (m, Some(i))),
+                Mark::Image { image, .. } => {
+                    let image = image.clone();
+                    Some((m, Some(image)))
+                }
                 _ => Some((m, None)),
             })
             .collect();
@@ -174,7 +180,7 @@ impl PreviewFragment {
         }
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
-            Mark::Formula { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
+            Mark::Formula { offset, anchor, .. } | Mark::Image { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
             Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } => return None,
         };
@@ -184,10 +190,14 @@ impl PreviewFragment {
         let x = bounds.origin.x + line.locationForCharacterAtIndex(offset as isize).x;
         let baseline = bounds.origin.y + line.glyphOrigin().y;
         let rect = match mark {
-            Mark::Formula { image, anchor, .. } => {
-                let size = NSSize::new(image.width_pt, image.height_pt);
+            Mark::Formula { .. } | Mark::Image { .. } => {
+                let (size, anchor, above) = match mark {
+                    Mark::Formula { image, anchor, .. } => (NSSize::new(image.width_pt, image.height_pt), anchor, image.baseline_pt),
+                    Mark::Image { size, anchor, .. } => (*size, anchor, size.height),
+                    _ => return None,
+                };
                 let origin = match anchor {
-                    Anchor::Inline => NSPoint::new(x, baseline - image.baseline_pt),
+                    Anchor::Inline => NSPoint::new(x, baseline - above),
                     Anchor::Line => NSPoint::new(x, bounds.origin.y + (bounds.size.height - size.height) / 2.0),
                     Anchor::Below => {
                         let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(0.0, |c| c.size().width);
@@ -231,6 +241,10 @@ impl PreviewFragment {
                     Mark::Formula { anchor, .. } => {
                         let kind = if *anchor == Anchor::Below { "preview" } else { "typeset" };
                         format!("formula-image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}")
+                    }
+                    Mark::Image { anchor, .. } => {
+                        let kind = if *anchor == Anchor::Below { "preview" } else { "shown" };
+                        format!("image: {x:.1} {y:.1} {w:.1} {h:.1} {kind}")
                     }
                     Mark::Bullet { .. } => format!("decoration: bullet {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::Task { checked, .. } => {

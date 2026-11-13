@@ -425,6 +425,7 @@ impl VaultWindow {
     }
 
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
+        self.live_preview.set_vault(vault.clone());
         let mut state = self.state.borrow_mut();
         state.vault = Some(vault);
         state.index_dir = Some(index_dir);
