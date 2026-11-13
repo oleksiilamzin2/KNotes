@@ -1801,3 +1801,13 @@ fn a_link_to_a_pdf_opens_it_at_its_page() {
     );
     assert!(out.contains("pdf-view: doc.pdf 3/3"), "{out}");
 }
+
+#[test]
+fn a_dropped_pdf_is_copied_and_embedded() {
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("paper.pdf"), PDF).unwrap();
+    let drop = format!("{}@0", source.path().join("paper.pdf").display());
+    let (vault, out) = probe_images(&[("a.md", "Text")], &[], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_DROP", &drop)]);
+    assert_eq!(attachments(vault.path()), ["paper.pdf"], "{out}");
+    assert!(out.contains("note: a.md | ![[paper.pdf]]⏎Text"), "{out}");
+}

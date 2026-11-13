@@ -1741,7 +1741,7 @@ enum PastedImage {
     New { name: String, bytes: Vec<u8> },
 }
 
-/// The images a paste or a drop brings: image files (others are left), or else an image's
+/// The images a paste or a drop brings: image and PDF files (others are left), or else an image's
 /// data alone; none when text comes with it (a cell copied from a table carries its picture
 /// too, and the text is what is meant).
 fn pasteboard_images(pasteboard: &NSPasteboard, vault: &Path) -> Vec<PastedImage> {
@@ -1763,7 +1763,7 @@ fn pasteboard_images(pasteboard: &NSPasteboard, vault: &Path) -> Vec<PastedImage
         let vaults = [vault.to_path_buf(), vault.canonicalize().unwrap_or_default()];
         return files
             .into_iter()
-            .filter(|f| f.to_str().is_some_and(|f| FileKind::from_path(f) == FileKind::Image))
+            .filter(|f| f.to_str().is_some_and(|f| matches!(FileKind::from_path(f), FileKind::Image | FileKind::Pdf)))
             .filter_map(|file| {
                 let inside = vaults.iter().find_map(|v| file.strip_prefix(v).ok().and_then(Path::to_str).map(str::to_owned));
                 match inside {
