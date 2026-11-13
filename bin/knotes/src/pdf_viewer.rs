@@ -37,6 +37,8 @@ const MARGIN: f64 = 16.0;
 const GAP: f64 = 12.0;
 /// Pages kept drawn above and below the one shown.
 const KEPT_AROUND: usize = 2;
+/// How long the width stays put before the pages are drawn again for it.
+const REDRAW_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// A place in the text: a page (index) and a caret on it.
 type Spot = (usize, usize);
@@ -67,8 +69,8 @@ pub struct PagesIvars {
     /// Pages as drawn for the width or zoom before, shown stretched until drawn again (a gap
     /// between them flickered as the width changed).
     stand_ins: RefCell<HashMap<usize, Retained<NSImage>>>,
-    /// The width changed during a live resize: drawn again once it ends.
-    resized_live: Cell<bool>,
+    /// Counts width changes: the pages are drawn again once it stops changing.
+    resizes: Cell<u64>,
 }
 
 define_class!(
@@ -84,12 +86,20 @@ define_class!(
             true
         }
 
-        /// The width follows the scroll view; the height is the pages'.
+        /// The width follows the scroll view; the height is the pages'. A new width keeps the
+        /// place at the top where it is, the pages stretched until the width settles.
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
-            let height = self.lay_out(size.width);
+            let anchor = self.anchor_at_top();
+            let (height, resized) = self.lay_out(size.width);
             // SAFETY: the superclass sets the frame's size.
             let _: () = unsafe { msg_send![super(self), setFrameSize: NSSize::new(size.width, height)] };
+            if resized {
+                if let Some(anchor) = anchor {
+                    self.keep_at_top(anchor);
+                }
+                self.redraw_later();
+            }
             self.follow();
         }
 
@@ -169,16 +179,6 @@ define_class!(
             self.follow();
         }
 
-        /// A live resize ended: the pages are drawn again for the width it left.
-        #[unsafe(method(viewDidEndLiveResize))]
-        fn did_end_live_resize(&self) {
-            // SAFETY: the superclass's own handling first.
-            let _: () = unsafe { msg_send![super(self), viewDidEndLiveResize] };
-            if self.ivars().resized_live.replace(false) {
-                self.redraw_all();
-                self.follow();
-            }
-        }
     }
 );
 
@@ -217,8 +217,8 @@ define_class!(
 );
 
 impl PdfPages {
-    /// Places the pages for `width`; gives the height they take.
-    fn lay_out(&self, width: f64) -> f64 {
+    /// Places the pages for `width`; gives the height they take and whether their width changed.
+    fn lay_out(&self, width: f64) -> (f64, bool) {
         let page_width = (width - 2.0 * MARGIN).max(1.0);
         let mut y = MARGIN;
         let frames: Vec<NSRect> = self
@@ -234,16 +234,46 @@ impl PdfPages {
             .collect();
         let resized = self.ivars().frames.borrow().first().is_some_and(|f| (f.size.width - page_width).abs() > 0.5);
         *self.ivars().frames.borrow_mut() = frames;
-        if resized {
-            // Drawn for another width: stretched meanwhile, and while the user drags, drawn
-            // again only once the drag ends.
-            if self.inLiveResize() {
-                self.ivars().resized_live.set(true);
-            } else {
-                self.redraw_all();
+        (y - GAP + MARGIN, resized)
+    }
+
+    /// The place at the top of the view, under the toolbar: a page (index) and how far down it
+    /// (a fraction), or how many points above it, in the space before it.
+    fn anchor_at_top(&self) -> Option<(usize, f64, bool)> {
+        let frames = self.ivars().frames.borrow();
+        let y = self.visibleRect().origin.y + self.enclosingScrollView().map_or(0.0, |s| s.contentInsets().top);
+        let page = frames.iter().position(|f| f.origin.y + f.size.height > y).or(frames.len().checked_sub(1))?;
+        let f = frames[page];
+        Some(if y < f.origin.y { (page, y - f.origin.y, false) } else { (page, (y - f.origin.y) / f.size.height, true) })
+    }
+
+    /// Scrolls the place `anchor_at_top` gave back to the top.
+    fn keep_at_top(&self, (page, at, fraction): (usize, f64, bool)) {
+        let Some(f) = self.ivars().frames.borrow().get(page).copied() else { return };
+        let Some(scroll) = self.enclosingScrollView() else { return };
+        let y = f.origin.y + if fraction { at * f.size.height } else { at };
+        let clip = scroll.contentView();
+        clip.scrollToPoint(NSPoint::new(clip.bounds().origin.x, y - scroll.contentInsets().top));
+        scroll.reflectScrolledClipView(&clip);
+    }
+
+    /// Draws the pages again for the new width once it has not changed for a moment: while
+    /// a divider or the window is dragged, they only stretch (drawing every step made them
+    /// blur and sharpen over and over).
+    fn redraw_later(&self) {
+        let resize = self.ivars().resizes.get() + 1;
+        self.ivars().resizes.set(resize);
+        let target = dispatch2::MainThreadBound::new(objc2::rc::Weak::new(self), self.mtm());
+        let when = dispatch2::DispatchTime::try_from(REDRAW_DELAY).expect("short delay");
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(this) = target.get(mtm).load()
+                && this.ivars().resizes.get() == resize
+            {
+                this.redraw_all();
+                this.follow();
             }
-        }
-        y - GAP + MARGIN
+        });
     }
 
     /// Draws the pages meeting `dirty` (the pages' coordinates) into the current context.
@@ -475,7 +505,7 @@ impl PdfViewer {
             selection: Cell::new(None),
             on_scroll: RefCell::new(None),
             stand_ins: RefCell::new(HashMap::new()),
-            resized_live: Cell::new(false),
+            resizes: Cell::new(0),
         };
         let width = scroll.contentSize().width;
         let start = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 0.0));
@@ -575,12 +605,13 @@ impl PdfViewer {
         kept
     }
 
-    /// What each page kept shows, `1:ready` (from 1), in order (probe mode).
+    /// What each page kept shows and the width it is drawn for, `1:ready:568` (from 1), in
+    /// order (probe mode).
     pub fn drawn(&self) -> Vec<String> {
         let images = self.pages.ivars().images.borrow();
-        let mut pages: Vec<(usize, &'static str)> = images.iter().map(|(i, image)| (i + 1, image.shows())).collect();
-        pages.sort_unstable();
-        pages.iter().map(|(page, shows)| format!("{page}:{shows}")).collect()
+        let mut pages: Vec<(usize, &'static str, f64)> = images.iter().map(|(i, image)| (i + 1, image.shows(), image.size.width)).collect();
+        pages.sort_by_key(|p| p.0);
+        pages.iter().map(|(page, shows, width)| format!("{page}:{shows}:{width:.0}")).collect()
     }
 
     /// The pages kept drawn (from 1), in order (probe mode).

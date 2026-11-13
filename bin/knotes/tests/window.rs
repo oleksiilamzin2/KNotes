@@ -2124,9 +2124,32 @@ fn a_pdf_preview_widened_shows_the_old_picture_stretched_until_the_new_one_is_dr
     assert!(out.contains("images-shown: doc.pdf#page=1 stand-in\n"), "{out}");
 }
 
+/// `page:shows:width` for each page the viewer keeps, from a `name:` line.
+fn pdf_drawn(out: &str, name: &str) -> Vec<(usize, String, f64)> {
+    let line = out.lines().find_map(|l| l.strip_prefix(&format!("{name}: "))).unwrap_or_else(|| panic!("{out}"));
+    line.split(' ')
+        .map(|p| {
+            let parts: Vec<&str> = p.split(':').collect();
+            (parts[0].parse().unwrap(), parts[1].to_owned(), parts[2].parse().unwrap())
+        })
+        .collect()
+}
+
 #[test]
-fn a_pdf_viewer_made_narrower_shows_its_pages_stretched_until_they_are_drawn_again() {
-    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_WIDTH", "300")];
+fn a_pdf_viewer_made_narrower_keeps_its_pages_until_the_width_settles_then_draws_them_again() {
+    // The width changed 300 ms in, once the pages are drawn; the report 1.2 s in.
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_WIDTH", "300"), ("KNOTES_PROBE_DELAY_MS", "1200")];
     let (_vault, out) = probe_images(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", PDF)], &env);
-    assert!(out.contains("pdf-drawn: 1:stand-in 2:stand-in 3:stand-in\n"), "{out}");
+    let now = pdf_drawn(&out, "pdf-drawn-now");
+    assert!(now.len() == 3 && now.iter().all(|(_, shows, width)| shows == "ready" && *width > 300.0), "as drawn before, stretched: {now:?}");
+    let later = pdf_drawn(&out, "pdf-drawn");
+    assert!(later.len() == 3 && later.iter().all(|(_, shows, width)| shows == "ready" && *width < 300.0), "drawn again for the width: {later:?}");
+}
+
+#[test]
+fn a_pdf_viewer_made_narrower_keeps_the_page_at_the_top() {
+    let long = pdf_of(30);
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_WIDTH", "300")];
+    let (_vault, out) = probe_images(&[("a.md", "See [[long.pdf#page=15]] here\n\nend")], &[("long.pdf", &long)], &env);
+    assert!(out.contains("pdf-top-now: 15\n"), "{out}");
 }

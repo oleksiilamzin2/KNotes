@@ -328,6 +328,21 @@ pub fn pdf_copy_requested(viewer: &crate::pdf_viewer::PdfViewer) {
     println!("pdf-menu: {}", if titles.is_empty() { "none".to_owned() } else { titles.join(", ") });
 }
 
+/// `KNOTES_PROBE_PDF_WIDTH=300`: 300 ms in, once its pages are drawn, the PDF viewer made that
+/// wide; then what its pages show and the page at its top, at once.
+pub fn pdf_width_requested(window: &std::rc::Rc<VaultWindow>) {
+    let Some(width) = std::env::var("KNOTES_PROBE_PDF_WIDTH").ok().and_then(|w| w.parse::<f64>().ok()) else { return };
+    let target = dispatch2::MainThreadBound::new(std::rc::Rc::downgrade(window), window.window.mtm());
+    let when = DispatchTime::try_from(Duration::from_millis(300)).expect("short delay");
+    let _ = DispatchQueue::main().after(when, move || {
+        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+        let Some(window) = target.get(mtm).upgrade() else { return };
+        window.pdf_set_width(width);
+        println!("pdf-drawn-now: {}", window.pdf_drawn().join(" "));
+        println!("pdf-top-now: {}", window.pdf_top_page().map(|p| p.to_string()).unwrap_or_default());
+    });
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
@@ -1033,9 +1048,7 @@ fn report_note(window: &VaultWindow) {
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
-    // `KNOTES_PROBE_PDF_WIDTH=300`: the PDF viewer made that wide, once its pages are drawn.
-    if let Some(width) = std::env::var("KNOTES_PROBE_PDF_WIDTH").ok().and_then(|w| w.parse().ok()) {
-        window.pdf_set_width(width);
+    if std::env::var("KNOTES_PROBE_PDF_WIDTH").is_ok() {
         println!("pdf-drawn: {}", window.pdf_drawn().join(" "));
     }
     println!("pdf-view: {}", window.describe_pdf());

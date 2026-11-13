@@ -896,6 +896,9 @@ impl VaultWindow {
                 probe::pdf_mouse_requested(viewer);
                 probe::pdf_copy_requested(viewer);
             }
+            if let Some(this) = self.this.borrow().upgrade() {
+                probe::pdf_width_requested(&this);
+            }
             if let Some(page) = std::env::var("KNOTES_PROBE_PDF_GO").ok().and_then(|p| p.parse().ok()) {
                 self.window.displayIfNeeded();
                 self.pdf_go_to(page);
@@ -1256,6 +1259,11 @@ impl VaultWindow {
             let frame = viewer.scroll.frame();
             viewer.scroll.setFrameSize(objc2_foundation::NSSize::new(width, frame.size.height));
         }
+    }
+
+    /// The page at the top of the PDF viewer, from 1 (probe mode).
+    pub fn pdf_top_page(&self) -> Option<usize> {
+        self.pdf_view.borrow().as_ref().map(|v| v.top_place().0 + 1)
     }
 
     /// What each page the PDF viewer keeps shows (probe mode).
