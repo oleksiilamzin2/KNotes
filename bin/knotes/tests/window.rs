@@ -979,3 +979,12 @@ fn a_note_is_moved_to_a_folder_picked_from_the_context_menu() {
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "[x](Archive/Old.md) [[Old]]");
     assert!(out.contains("note: Archive/Old.md"), "{out}");
 }
+
+#[test]
+fn a_note_dragged_onto_a_sidebar_folder_moves_there() {
+    let notes = [("Old.md", "# Old"), ("a.md", "[x](Old.md)"), ("Archive/keep.md", "k")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "drag-to=Archive")]);
+    assert!(out.contains("drop-targets: Archive=move All notes=none"), "{out}");
+    assert!(vault.path().join("Archive/Old.md").exists(), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "[x](Archive/Old.md)");
+}

@@ -1,4 +1,5 @@
-//! Sidebar: an `NSOutlineView` (source list style) over the `knotes_app::Sidebar` model.
+//! Sidebar: an `NSOutlineView` (source list style) over the `knotes_app::Sidebar` model. A
+//! note dragged from the list onto a folder moves there (ADR 0019).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -8,19 +9,24 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSColor, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSScrollView,
-    NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification, NSView,
+    NSColor, NSControlTextEditingDelegate, NSDragOperation, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
+    NSOutlineViewDelegate, NSPasteboard, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification,
+    NSView,
 };
-use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
+use objc2_foundation::{NSArray, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
 
+use crate::note_list_view::NOTE_PATH_TYPE;
 use crate::strings;
 
 type OnSelect = Box<dyn Fn(SidebarItem)>;
+type OnDrop = Box<dyn Fn(String, String)>;
 
 pub struct Ivars {
     model: RefCell<Sidebar>,
     /// Called with the newly selected item.
     on_select: RefCell<Option<OnSelect>>,
+    /// Called with the path of a note dropped on a folder, and the folder (ADR 0019).
+    on_drop: RefCell<Option<OnDrop>>,
     /// One object per item key: the outline view identifies items by object, so reusing them
     /// keeps expansion and selection across reloads.
     objects: RefCell<HashMap<String, Retained<NSString>>>,
@@ -52,6 +58,23 @@ define_class!(
         #[unsafe(method(outlineView:isItemExpandable:))]
         fn is_expandable(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
             item_of(item).is_some_and(|i| self.ivars().model.borrow().child_count(Some(&i)) > 0)
+        }
+
+        /// A dragged note can be dropped on a folder (the drop goes on the folder itself).
+        #[unsafe(method(outlineView:validateDrop:proposedItem:proposedChildIndex:))]
+        fn validate_drop(&self, outline: &NSOutlineView, _info: &ProtocolObject<dyn NSDraggingInfo>, item: Option<&AnyObject>, _index: NSInteger) -> NSDragOperation {
+            if item.and_then(item_of).is_some_and(|i| drop_folder(&i).is_some()) {
+                // SAFETY: an item of this outline view; -1 drops on it rather than between rows.
+                unsafe { outline.setDropItem_dropChildIndex(item, -1) };
+                NSDragOperation::Move
+            } else {
+                NSDragOperation::None
+            }
+        }
+
+        #[unsafe(method(outlineView:acceptDrop:item:childIndex:))]
+        fn accept_drop(&self, _outline: &NSOutlineView, info: &ProtocolObject<dyn NSDraggingInfo>, item: Option<&AnyObject>, _index: NSInteger) -> bool {
+            item.and_then(item_of).is_some_and(|item| self.accept_note_drop(&info.draggingPasteboard(), &item))
         }
     }
 
@@ -90,6 +113,7 @@ impl SidebarSource {
         let this = Self::alloc(mtm).set_ivars(Ivars {
             model: RefCell::new(model),
             on_select: RefCell::new(None),
+            on_drop: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
         });
         unsafe { msg_send![super(this), init] }
@@ -127,6 +151,23 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         *self.ivars().on_select.borrow_mut() = Some(Box::new(callback));
     }
 
+    pub fn on_drop(&self, callback: impl Fn(String, String) + 'static) {
+        *self.ivars().on_drop.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// A note dragged from the list (its path on `pasteboard`) dropped on `item`: moves it
+    /// there when `item` is a folder.
+    pub fn accept_note_drop(&self, pasteboard: &NSPasteboard, item: &SidebarItem) -> bool {
+        let (Some(folder), Some(path)) = (drop_folder(item), pasteboard.stringForType(&NSString::from_str(NOTE_PATH_TYPE))) else { return false };
+        match self.ivars().on_drop.borrow().as_ref() {
+            Some(callback) => {
+                callback(path.to_string(), folder.to_owned());
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn set_model(&self, model: Sidebar) {
         *self.ivars().model.borrow_mut() = model;
     }
@@ -135,6 +176,14 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let mut objects = self.ivars().objects.borrow_mut();
         let object = objects.entry(item.key()).or_insert_with(|| NSString::from_str(&item.key()));
         Retained::into_super(Retained::into_super(object.clone()))
+    }
+}
+
+/// The folder a note dropped on `item` moves to; only folders take notes.
+pub fn drop_folder(item: &SidebarItem) -> Option<&str> {
+    match item {
+        SidebarItem::Folder(path) => Some(path),
+        _ => None,
     }
 }
 
@@ -157,6 +206,7 @@ pub fn outline(mtm: MainThreadMarker, source: &SidebarSource) -> (Retained<NSScr
         outline.setDelegate(Some(ProtocolObject::from_ref(source)));
     }
     outline.setFloatsGroupRows(false);
+    outline.registerForDraggedTypes(&NSArray::from_retained_slice(&[NSString::from_str(NOTE_PATH_TYPE)]));
     let scroll = NSScrollView::new(mtm);
     scroll.setDocumentView(Some(&outline));
     scroll.setHasVerticalScroller(true);

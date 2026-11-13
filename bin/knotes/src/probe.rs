@@ -276,6 +276,25 @@ pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: 
     }
 }
 
+/// `KNOTES_PROBE_ACTION=drag-to=folder`: the selected note dragged onto that sidebar folder:
+/// its row writes the pasteboard and the folder takes the drop, as in a drag (the gesture
+/// itself cannot be made here). Reports which rows take a note.
+pub fn drag_requested(list: &crate::note_list_view::NoteListSource, table: &objc2_app_kit::NSTableView, sidebar: &crate::sidebar_view::SidebarSource) {
+    use knotes_app::SidebarItem;
+    let Some(folder) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("drag-to=").map(str::to_owned)) else { return };
+    let targets = [(folder.clone(), SidebarItem::Folder(folder.clone())), ("All notes".to_owned(), SidebarItem::AllNotes)];
+    let shown: Vec<String> = targets
+        .iter()
+        .map(|(name, item)| format!("{name}={}", if crate::sidebar_view::drop_folder(item).is_some() { "move" } else { "none" }))
+        .collect();
+    println!("drop-targets: {}", shown.join(" "));
+    let Some(writer) = list.note_writer(table.selectedRow()) else { return };
+    let pasteboard = objc2_app_kit::NSPasteboard::pasteboardWithUniqueName();
+    pasteboard.clearContents();
+    pasteboard.writeObjects(&objc2_foundation::NSArray::from_retained_slice(&[writer]));
+    sidebar.accept_note_drop(&pasteboard, &SidebarItem::Folder(folder));
+}
+
 /// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
 pub fn save_requested() {
     if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {

@@ -250,6 +250,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_drop(move |path, folder| {
+            if let Some(window) = weak.upgrade() {
+                window.move_note_to(&path, &folder);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.list.on_select(move |path| {
             if let Some(window) = weak.upgrade()
                 && !window.highlighting.get()
@@ -442,6 +448,7 @@ impl VaultWindow {
                 self.rename_note(&open, &name);
             }
             probe::list_menu_requested(&self.list, &self.table);
+            probe::drag_requested(&self.list, &self.table, &self.sidebar);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -780,13 +787,18 @@ impl VaultWindow {
         };
         let name = knotes_app::title_of(path).to_owned();
         let Some(folder) = rename_dialog::ask_folder(objc2::MainThreadOnly::mtm(&*self.window), &name, &folders) else { return };
+        self.move_note_to(path, &folder);
+    }
+
+    /// Moves the note at `path` into `folder` (`""`: the vault's root), with the links to it.
+    pub fn move_note_to(&self, path: &str, folder: &str) {
         let Some(vault) = self.vault() else { return };
         let file = path.rsplit('/').next().unwrap_or(path);
         let wanted = if folder.is_empty() { file.to_owned() } else { format!("{folder}/{file}") };
         if wanted == path {
             return;
         }
-        let new = unique_note_path(&folder, knotes_app::title_of(file), |p| vault.join(p).exists());
+        let new = unique_note_path(folder, knotes_app::title_of(file), |p| vault.join(p).exists());
         self.move_notes(Moves::from([(path.to_owned(), new)]));
     }
 

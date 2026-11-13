@@ -13,7 +13,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::{
     NSColor, NSControl, NSControlTextEditingDelegate, NSFont, NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuItem,
     NSScrollView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
-    NSTextFieldDelegate, NSTextView, NSUserInterfaceItemIdentification, NSView,
+    NSPasteboardItem, NSPasteboardWriting, NSTextFieldDelegate, NSTextView, NSUserInterfaceItemIdentification, NSView,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
@@ -87,6 +87,12 @@ define_class!(
         #[unsafe(method(numberOfRowsInTableView:))]
         fn number_of_rows(&self, _table: &NSTableView) -> NSInteger {
             self.ivars().items.borrow().len() as NSInteger
+        }
+
+        /// A note row drags its path, for a sidebar folder to move it to (ADR 0019).
+        #[unsafe(method_id(tableView:pasteboardWriterForRow:))]
+        fn pasteboard_writer(&self, _table: &NSTableView, row: NSInteger) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+            self.note_writer(row)
         }
     }
 
@@ -195,6 +201,14 @@ impl NoteListSource {
         *self.ivars().on_move.borrow_mut() = Some(Box::new(callback));
     }
 
+
+    /// The dragged form of the note in `row`: its vault path, under `NOTE_PATH_TYPE`.
+    pub fn note_writer(&self, row: NSInteger) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+        let path = usize::try_from(row).ok().and_then(|row| self.path_at(row))?;
+        let item = NSPasteboardItem::new();
+        item.setString_forType(&NSString::from_str(&path), &NSString::from_str(NOTE_PATH_TYPE));
+        Some(ProtocolObject::from_retained(item))
+    }
 
     /// The note row the context menu was opened on, else the selected one.
     fn menu_row(&self) -> Option<usize> {
@@ -351,6 +365,7 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
         table.setDelegate(Some(ProtocolObject::from_ref(source)));
     }
     *source.ivars().table.borrow_mut() = Weak::new(&table);
+    table.setDraggingSourceOperationMask_forLocal(objc2_app_kit::NSDragOperation::Move, true);
     let menu = NSMenu::new(mtm);
     for (title, action) in [(strings::RENAME_NOTE, sel!(renameNote:)), (strings::MOVE_NOTE, sel!(moveNote:))] {
         // SAFETY: the source outlives the table (it is its data source), and implements the action.
@@ -366,6 +381,9 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
     scroll.setHasVerticalScroller(true);
     (scroll, table)
 }
+
+/// Pasteboard type of a dragged note's vault path.
+pub const NOTE_PATH_TYPE: &str = "app.knotes.note-path";
 
 pub const TITLE_ID: &str = "title";
 pub const TIME_ID: &str = "time";
