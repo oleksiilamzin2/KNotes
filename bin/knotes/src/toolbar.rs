@@ -15,7 +15,6 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
 use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLineBreakMode, NSResponder, NSTextField, NSTextFieldDelegate, NSTextView, NSView};
-use objc2_foundation::NSRange;
 
 use knotes_app::{PanelMode, SearchMode, SidebarMode};
 
@@ -485,17 +484,12 @@ impl TitleField {
         field
     }
 
-    /// Lets the name be edited, selected without a PDF's `.pdf`, as Finder selects a name.
+    /// Lets the name be edited, all of it selected.
     pub fn begin_editing(&self) {
         self.setEditable(true);
         self.setSelectable(true);
         if let Some(window) = self.window() {
             window.makeFirstResponder(Some(self));
-        }
-        let name = self.stringValue().to_string();
-        let stem = name.len() - if name.to_lowercase().ends_with(".pdf") { 4 } else { 0 };
-        if let Some(editor) = self.currentEditor() {
-            editor.setSelectedRange(NSRange::new(0, name[..stem].encode_utf16().count()));
         }
     }
 }

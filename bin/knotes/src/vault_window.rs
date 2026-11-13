@@ -1700,10 +1700,15 @@ impl VaultWindow {
         let state = self.state.borrow();
         self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
         drop(state);
-        // A note's name; a PDF's file name, without its folder. Both are renamed in place.
+        // A note's name; a PDF's, without its folder or `.pdf` (owner's choice). Both are renamed
+        // in place.
         match (self.open_path(), self.pdf_path.borrow().as_deref()) {
             (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true),
-            (None, Some(pdf)) => self.toolbar_delegate.set_note_title(pdf.rsplit('/').next().unwrap_or(pdf), true),
+            (None, Some(pdf)) => {
+                let name = pdf.rsplit('/').next().unwrap_or(pdf);
+                let stem = if name.to_lowercase().ends_with(".pdf") { &name[..name.len() - 4] } else { name };
+                self.toolbar_delegate.set_note_title(stem, true);
+            }
             (None, None) => self.toolbar_delegate.set_note_title("", false),
         }
     }

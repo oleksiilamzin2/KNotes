@@ -1809,7 +1809,7 @@ fn a_click_on_a_pdf_preview_opens_the_pdf_in_place_of_the_note_and_back_returns(
     let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "7")];
     let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &env);
     assert!(out.contains("pdf-view: doc.pdf 2/3"), "{out}");
-    assert!(out.contains("note-title: doc.pdf"), "{out}");
+    assert!(out.contains("note-title: doc\n"), "{out}");
     let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &[env[0], env[1], env[2], ("KNOTES_PROBE_AFTER_CLICK", "back")]);
     assert!(out.contains("pdf-view: hidden") && out.contains("note: a.md"), "{out}");
 }
@@ -2162,7 +2162,7 @@ fn the_toolbar_names_a_pdf_open_by_its_file_name_without_its_folder() {
     std::fs::write(vault.path().join(".knotes/attachments/paper.pdf"), PDF).unwrap();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
     assert!(out.contains("pdf-view: .knotes/attachments/paper.pdf 1/3"), "{out}");
-    assert!(out.contains("note-title: paper.pdf\n"), "{out}");
+    assert!(out.contains("note-title: paper\n"), "without its folder or .pdf: {out}");
 }
 
 #[test]
@@ -2185,9 +2185,9 @@ fn a_pdf_is_renamed_from_the_toolbar_and_links_to_it_follow() {
     let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
     let pdf = |more: (&str, &str)| probe_env(&[vault.path()], None, &[open[0], open[1], open[2], more]);
     let out = pdf(("KNOTES_PROBE_TITLE_CLICKS", "2"));
-    assert!(out.contains("note-title-editing: paper (selected)\n"), "the name without .pdf: {out}");
+    assert!(out.contains("note-title-editing: paper (all selected)\n"), "{out}");
     let out = pdf(("KNOTES_PROBE_ACTION", "toolbar-rename=Report"));
     assert!(vault.path().join("Report.pdf").exists() && !vault.path().join("paper.pdf").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "See [[Report.pdf]] here\n\nend");
-    assert!(out.contains("pdf-view: Report.pdf 1/3") && out.contains("note-title: Report.pdf\n"), "{out}");
+    assert!(out.contains("pdf-view: Report.pdf 1/3") && out.contains("note-title: Report\n"), "{out}");
 }
