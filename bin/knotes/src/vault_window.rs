@@ -787,6 +787,11 @@ impl VaultWindow {
         self.pdf_view.borrow().as_ref().map(PdfViewer::selected_text).unwrap_or_default()
     }
 
+    /// The pages whose text the PDF viewer keeps, from 1 (probe mode).
+    pub fn pdf_texts_kept(&self) -> Vec<usize> {
+        self.pdf_view.borrow().as_ref().map(PdfViewer::texts_kept).unwrap_or_default()
+    }
+
     /// The pages the PDF viewer keeps drawn, from 1 (probe mode).
     pub fn pdf_pages_kept(&self) -> Vec<usize> {
         self.pdf_view.borrow().as_ref().map(PdfViewer::kept).unwrap_or_default()

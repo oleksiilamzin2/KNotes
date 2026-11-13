@@ -236,7 +236,8 @@ impl PdfPages {
                 // SAFETY: a valid image drawn into the current context.
                 unsafe { image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(*frame, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None) };
             }
-            if let Some((range, text)) = self.selected_on(i).zip(self.text_of(i)) {
+            // The page's text read only when something on it is selected.
+            if let Some((range, text)) = self.selected_on(i).and_then(|range| Some((range, self.text_of(i)?))) {
                 NSColor::selectedTextBackgroundColor().setFill();
                 for b in text.highlight(range) {
                     let at = NSPoint::new(frame.origin.x + b.x * frame.size.width, frame.origin.y + b.y * frame.size.height);
@@ -260,7 +261,8 @@ impl PdfPages {
     }
 
     /// Chooses the page shown (unless one was jumped to) and keeps drawn that page, two
-    /// above and two below it and the pages in view; lets the others go.
+    /// above and two below it and the pages in view; lets the others go, and the text of pages
+    /// neither in view nor selected.
     fn track(&self) {
         let frames = self.ivars().frames.borrow().clone();
         if frames.is_empty() {
@@ -297,6 +299,8 @@ impl PdfPages {
                 }))
             });
         }
+        drop(images);
+        self.keep_texts();
     }
 
     /// The page at `point` (the pages' coordinates; the nearest page between them) and the
@@ -336,6 +340,15 @@ impl PdfPages {
         if let Some(canvas) = self.ivars().canvas.borrow().as_ref() {
             canvas.setNeedsDisplay(true);
         }
+        self.keep_texts();
+    }
+
+    /// Keeps the text of the pages in view and of the pages selected; lets the others go.
+    fn keep_texts(&self) {
+        let visible = self.visibleRect();
+        let selected = self.ordered().map(|((first, _), (last, _))| first..=last);
+        let frames = self.ivars().frames.borrow();
+        self.ivars().texts.borrow_mut().retain(|&i, _| frames.get(i).is_some_and(|f| intersects(*f, visible)) || selected.as_ref().is_some_and(|s| s.contains(&i)));
     }
 
     /// The selection in order, when it holds anything.
@@ -479,6 +492,13 @@ impl PdfViewer {
     pub fn window_point(&self, page: usize, x: f64, y: f64) -> Option<NSPoint> {
         let f = self.pages.ivars().frames.borrow().get(page).copied()?;
         Some(self.pages.convertPoint_toView(NSPoint::new(f.origin.x + x * f.size.width, f.origin.y + y * f.size.height), None))
+    }
+
+    /// The pages whose text is kept (from 1), in order (probe mode).
+    pub fn texts_kept(&self) -> Vec<usize> {
+        let mut kept: Vec<usize> = self.pages.ivars().texts.borrow().keys().map(|i| i + 1).collect();
+        kept.sort_unstable();
+        kept
     }
 
     /// The pages kept drawn (from 1), in order (probe mode).

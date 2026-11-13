@@ -1944,3 +1944,26 @@ fn the_selected_pdf_text_is_copied_from_the_edit_menu_or_the_context_menu() {
     let out = pdf_mouse_with("1:0.3,0.5", &[("KNOTES_PROBE_PDF_COPY", "1")]);
     assert!(out.contains("copy-menu: off\n") && out.contains("pdf-menu: none\n"), "nothing selected: {out}");
 }
+
+/// The pages whose text the PDF viewer keeps (`pdf-texts-kept:` line).
+fn texts_kept(out: &str) -> Vec<usize> {
+    out.lines().find_map(|l| l.strip_prefix("pdf-texts-kept:")).unwrap_or_else(|| panic!("{out}")).split_whitespace().map(|p| p.parse().unwrap()).collect()
+}
+
+#[test]
+fn the_pdf_viewer_keeps_the_text_of_pages_in_view_and_of_pages_selected_only() {
+    let long = pdf_of(30);
+    let notes = [("a.md", "See [[long.pdf#page=15]] here\n\nend")];
+    let probe = |gestures: &str, go: Option<&str>| {
+        let mut env = vec![("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_MOUSE", gestures)];
+        env.extend(go.map(|page| ("KNOTES_PROBE_PDF_GO", page)));
+        probe_images(&notes, &[("long.pdf", &long)], &env).1
+    };
+    // "Page N" at y 0.15–0.17 of each page.
+    let out = probe("15:0.05,0.16>16:0.5,0.16", Some("25"));
+    assert_eq!((pdf_selection(&out), texts_kept(&out)), ("Page 15⏎Page 16".to_owned(), vec![15, 16]), "selected, out of view: {out}");
+    let out = probe("15:0.3,0.5", None);
+    assert_eq!(texts_kept(&out), [15], "clicked, in view: {out}");
+    let out = probe("15:0.05,0.16>16:0.5,0.16;15:0.3,0.5", Some("25"));
+    assert!(texts_kept(&out).is_empty(), "the selection cleared, then out of view: {out}");
+}
