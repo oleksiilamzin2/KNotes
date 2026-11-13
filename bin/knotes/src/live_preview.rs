@@ -828,31 +828,44 @@ impl LivePreview {
         if !cmd && self.toggle_task_at(view, index) {
             return true;
         }
-        let link = {
-            let styled = self.ivars().styled.borrow();
-            let revealed = self.ivars().revealed.get();
-            let in_cursor_line = index >= revealed.0 && index < revealed.1;
-            match link_at(&styled, index) {
-                Some(link) if cmd || !in_cursor_line => link.link.clone(),
-                _ => return false,
-            }
-        };
+        let Some(link) = self.followed_link(index, cmd) else { return false };
         if let Some(callback) = self.ivars().on_link.borrow().as_ref() {
             callback(&link);
         }
         true
     }
 
+    /// Whether a plain click on character `index` acts (follows a link, ticks a task): the
+    /// pointer shows a hand there.
+    pub fn clickable(&self, index: usize) -> bool {
+        self.followed_link(index, false).is_some() || self.task_at(index).is_some()
+    }
+
+    /// The link a click on character `index` follows: where its markup is hidden, or anywhere
+    /// with Cmd.
+    fn followed_link(&self, index: usize, cmd: bool) -> Option<Link> {
+        let styled = self.ivars().styled.borrow();
+        let revealed = self.ivars().revealed.get();
+        let in_cursor_line = index >= revealed.0 && index < revealed.1;
+        link_at(&styled, index).filter(|_| cmd || !in_cursor_line).map(|link| link.link.clone())
+    }
+
+    /// The task marker whose drawn circle holds character `index` (not one showing its source).
+    fn task_at(&self, index: usize) -> Option<Run> {
+        let styled = self.ivars().styled.borrow();
+        let after = styled.runs.partition_point(|r| r.range.start <= index);
+        styled.runs[after.saturating_sub(MARKER_REACH)..after]
+            .iter()
+            .rev()
+            .find(|r| matches!(r.style, Style::ListMarker { kind: ListKind::Task { .. }, .. }) && r.range.contains(&index) && !touches(&r.range, self.ivars().selection.get()))
+            .cloned()
+    }
+
     /// Ticks or unticks the task whose drawn box holds character `index`: an edit of the
     /// text, so it can be undone and is saved; the cursor stays.
     fn toggle_task_at(&self, view: &NSTextView, index: usize) -> bool {
         let at = {
-            let styled = self.ivars().styled.borrow();
-            let after = styled.runs.partition_point(|r| r.range.start <= index);
-            let task = styled.runs[after.saturating_sub(MARKER_REACH)..after].iter().rev().find(|r| {
-                matches!(r.style, Style::ListMarker { kind: ListKind::Task { .. }, .. }) && r.range.contains(&index) && !touches(&r.range, self.ivars().selection.get())
-            });
-            let Some(task) = task else { return false };
+            let Some(task) = self.task_at(index) else { return false };
             let text = view.string();
             let Some(open) = task.range.clone().find(|&i| text.characterAtIndex(i) == u16::from(b'[')) else { return false };
             let checked = matches!(task.style, Style::ListMarker { kind: ListKind::Task { checked: true }, .. });

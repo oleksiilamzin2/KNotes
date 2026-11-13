@@ -144,6 +144,8 @@ impl VaultWindow {
         live_preview.attach(&note_text);
         let clicks = live_preview.clone();
         note_text.on_click(move |view, index, cmd| clicks.click(view, index, cmd));
+        let hovers = live_preview.clone();
+        note_text.on_hover(move |index| hovers.clickable(index));
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
         let chat = chat_view::chat_view(mtm);
@@ -481,6 +483,9 @@ impl VaultWindow {
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
             probe::click_requested(&self.note_text);
+            if let Some(at) = std::env::var("KNOTES_PROBE_HOVER").ok().and_then(|a| a.parse().ok()) {
+                println!("hover: {}", if self.live_preview.clickable(at) { "hand" } else { "text" });
+            }
             probe::note_scroll_requested(&self.note_text);
             probe::schedule(true);
         }

@@ -1017,3 +1017,16 @@ fn the_toolbar_shows_the_open_notes_name_and_renames_it() {
     assert_eq!(std::fs::read_to_string(vault.path().join("From toolbar.md")).ok().as_deref(), Some("# Old\n\ntext"), "the first line is content, not the name: {out}");
     assert!(out.contains("note-title: From toolbar"), "{out}");
 }
+
+#[test]
+fn links_and_task_circles_show_a_hand_where_a_click_acts() {
+    let note = "T\n\nsee [[b]] here\n\n- [ ] task\n\nplain";
+    let hover = |at: &str, cursor: &str| {
+        let (_vault, out) = probe_notes(&[("a.md", note), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", cursor), ("KNOTES_PROBE_HOVER", at)]);
+        out.lines().find_map(|l| l.strip_prefix("hover: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+    };
+    assert_eq!(hover("9", "end"), "hand", "a link away from the cursor");
+    assert_eq!(hover("9", "3"), "text", "in the cursor's line a plain click places the cursor");
+    assert_eq!(hover("20", "end"), "hand", "a task circle");
+    assert_eq!(hover("30", "end"), "text");
+}

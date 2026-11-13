@@ -1,22 +1,31 @@
 //! The note column's text view (live preview editing, ADR 0005, 0011): a TextKit 2
-//! `NSTextView` that lets the live preview take clicks on links first (ADR 0013).
+//! `NSTextView` that lets the live preview take clicks on links first (ADR 0013), and shows a
+//! hand over what a click acts on.
 
 use std::cell::RefCell;
 
 use objc2::rc::Retained;
 
 use crate::quiet_scroll_view::QuietScrollView;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSEvent, NSEventModifierFlags, NSFont, NSResponder, NSScrollView, NSText, NSTextInputClient, NSTextView, NSView};
+use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSResponder, NSScrollView, NSText, NSTextInputClient, NSTextView,
+    NSTrackingArea, NSTrackingAreaOptions, NSView,
+};
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
 
 /// Gets the text view, the character index under a click and whether Cmd is held; returns
 /// true when it handled the click (the text view then ignores it).
 type OnClick = Box<dyn Fn(&NSTextView, usize, bool) -> bool>;
+/// Whether a plain click on a character acts (the pointer shows a hand there).
+type OnHover = Box<dyn Fn(usize) -> bool>;
 
 #[derive(Default)]
 pub struct Ivars {
     on_click: RefCell<Option<OnClick>>,
+    on_hover: RefCell<Option<OnHover>>,
+    /// The tracking area that reports mouse moves over the view.
+    moves: RefCell<Option<Retained<NSTrackingArea>>>,
 }
 
 define_class!(
@@ -29,6 +38,39 @@ define_class!(
     unsafe impl NSObjectProtocol for NoteTextView {}
 
     impl NoteTextView {
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            // SAFETY: the superclass keeps its own areas up to date.
+            let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
+            if self.ivars().moves.borrow().is_none() {
+                let options = NSTrackingAreaOptions::MouseMoved | NSTrackingAreaOptions::ActiveInKeyWindow | NSTrackingAreaOptions::InVisibleRect;
+                // SAFETY: the view owns the area and outlives it.
+                let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, options, Some(self), None) };
+                self.addTrackingArea(&area);
+                *self.ivars().moves.borrow_mut() = Some(area);
+            }
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            // SAFETY: forwarding the same event to the superclass implementation.
+            let _: () = unsafe { msg_send![super(self), mouseMoved: event] };
+            if self.over_clickable(event.locationInWindow()) {
+                NSCursor::pointingHandCursor().set();
+            }
+        }
+
+        /// The text view would set the I-beam over a link too.
+        #[unsafe(method(cursorUpdate:))]
+        fn cursor_update(&self, event: &NSEvent) {
+            if self.over_clickable(event.locationInWindow()) {
+                NSCursor::pointingHandCursor().set();
+            } else {
+                // SAFETY: forwarding the same event to the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), cursorUpdate: event] };
+            }
+        }
+
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             if !self.offer_click(event) {
@@ -42,6 +84,16 @@ define_class!(
 impl NoteTextView {
     pub fn on_click(&self, callback: impl Fn(&NSTextView, usize, bool) -> bool + 'static) {
         *self.ivars().on_click.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_hover(&self, callback: impl Fn(usize) -> bool + 'static) {
+        *self.ivars().on_hover.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Whether the point (window coordinates) is over something a plain click acts on.
+    fn over_clickable(&self, in_window: NSPoint) -> bool {
+        let hover = self.ivars().on_hover.borrow();
+        hover.as_ref().zip(self.character_under(in_window)).is_some_and(|(hover, index)| hover(index))
     }
 
     fn offer_click(&self, event: &NSEvent) -> bool {
