@@ -119,6 +119,23 @@ define_class!(
             }
         }
 
+        /// Edit → Find…: the find bar over the open note, wherever the focus is (the text view
+        /// takes it itself when focused).
+        #[unsafe(method(performTextFinderAction:))]
+        fn find_in_note(&self, sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.find_in_note(sender);
+            }
+        }
+
+        /// Edit → Search Notes: the search over the note list.
+        #[unsafe(method(searchNotes:))]
+        fn search_notes(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.show_search();
+            }
+        }
+
         /// File → Save: writes the unsaved notes of all windows (autosave would in 2 s anyway).
         #[unsafe(method(saveDocument:))]
         fn save_document(&self, _sender: Option<&AnyObject>) {

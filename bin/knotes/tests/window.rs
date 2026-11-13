@@ -1030,3 +1030,14 @@ fn links_and_task_circles_show_a_hand_where_a_click_acts() {
     assert_eq!(hover("20", "end"), "hand", "a task circle");
     assert_eq!(hover("30", "end"), "text");
 }
+
+#[test]
+fn cmd_f_finds_in_the_note_and_cmd_shift_f_searches_the_notes() {
+    let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md")]);
+    assert!(out.contains("Знайти… ⌘F | Знайти далі ⌘G | Знайти попереднє ⇧⌘G | Пошук у нотатках ⇧⌘F"), "{out}");
+    // From the list, too: Cmd+F always finds in the open note.
+    let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Знайти…")]);
+    assert!(out.contains("find-bar: shown"), "{out}");
+    let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Пошук у нотатках")]);
+    assert!(out.contains("search-row: shown") && out.contains("focus: search"), "{out}");
+}

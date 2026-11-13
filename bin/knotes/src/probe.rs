@@ -321,6 +321,19 @@ pub fn folder_rename_requested(sidebar: &crate::sidebar_view::SidebarSource, out
     }
 }
 
+/// `KNOTES_PROBE_MENU=Item title`: that menu bar item chosen, as a click on it would.
+pub fn menu_requested() {
+    let Ok(title) = std::env::var("KNOTES_PROBE_MENU") else { return };
+    let mtm = MainThreadMarker::new().expect("main thread");
+    let Some(bar) = NSApplication::sharedApplication(mtm).mainMenu() else { return };
+    for menu in bar.itemArray().iter().filter_map(|i| i.submenu()) {
+        if let Some(index) = menu.itemArray().iter().position(|i| i.title().to_string() == title) {
+            menu.performActionForItemAtIndex(index as isize);
+            return;
+        }
+    }
+}
+
 /// `KNOTES_PROBE_ACTION=save`: File → Save, sent through the responder chain like the menu.
 pub fn save_requested() {
     if std::env::var("KNOTES_PROBE_ACTION").as_deref() != Ok("save") {
@@ -531,6 +544,7 @@ fn report(window: &NSWindow) {
     let (menus, file) = crate::main_menu::describe(&NSApplication::sharedApplication(window.mtm()));
     println!("menu: {menus}");
     println!("file-menu: {file}");
+    println!("edit-menu: {}", crate::main_menu::describe_edit(&NSApplication::sharedApplication(window.mtm())));
     println!("title: {}", window.title());
     println!("subtitle: {}", window.subtitle());
     let frame = window.frame();
@@ -658,8 +672,18 @@ fn report_note(window: &VaultWindow) {
     }
     println!("document: {}", if window.is_dirty() { "dirty" } else { "clean" });
     println!("completion: {}", window.describe_completion());
-    let focus = window.window.firstResponder().is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, &*window.note_text as *const _ as *const u8));
-    println!("focus: {}", if focus { "editor" } else { "other" });
+    let responder = window.window.firstResponder();
+    let is = |view: *const u8| responder.as_ref().is_some_and(|r| std::ptr::eq(&**r as *const _ as *const u8, view));
+    // The search field edits in the window's field editor, whose delegate is the field.
+    let searching = responder
+        .as_ref()
+        .and_then(|r| r.downcast_ref::<objc2_app_kit::NSTextView>().and_then(|t| t.delegate()))
+        .is_some_and(|d| std::ptr::eq(&*d as *const _ as *const u8, &*window.search_bar.field as *const _ as *const u8));
+    println!("focus: {}", if is(&*window.note_text as *const _ as *const u8) { "editor" } else if searching { "search" } else { "other" });
+    if let Some(scroll) = window.note_text.enclosingScrollView() {
+        println!("find-bar: {}", if objc2_app_kit::NSTextFinderBarContainer::isFindBarVisible(&*scroll) { "shown" } else { "hidden" });
+    }
+    println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");

@@ -94,3 +94,8 @@ pub const CONFLICT_OPEN_COPY: &str = "Відкрити копію";
 pub fn conflict_details(note: &str, copy: &str) -> String {
     format!("Ваші зміни лишилися в «{note}», а версію з диска збережено поруч як «{copy}».")
 }
+/// Edit menu: the find bar over the note, and the search over the note list.
+pub const FIND: &str = "Знайти…";
+pub const FIND_NEXT: &str = "Знайти далі";
+pub const FIND_PREVIOUS: &str = "Знайти попереднє";
+pub const SEARCH_NOTES: &str = "Пошук у нотатках";

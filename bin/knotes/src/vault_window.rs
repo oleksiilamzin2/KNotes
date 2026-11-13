@@ -482,6 +482,7 @@ impl VaultWindow {
                 let at = if cursor == "end" { end } else { cursor.parse().unwrap_or(0).min(end) };
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
+            probe::menu_requested();
             probe::click_requested(&self.note_text);
             if let Some(at) = std::env::var("KNOTES_PROBE_HOVER").ok().and_then(|a| a.parse().ok()) {
                 println!("hover: {}", if self.live_preview.clickable(at) { "hand" } else { "text" });
@@ -1170,6 +1171,19 @@ impl VaultWindow {
         let text = with_search_mode(&self.search_bar.field.stringValue().to_string(), mode);
         self.search_bar.set_text(&text);
         self.search(&text);
+    }
+
+    /// Edit → Search Notes (Cmd+Shift+F): the search row shown, its field focused.
+    pub fn show_search(&self) {
+        self.search_bar.show(true);
+    }
+
+    /// Edit → Find… and its neighbours: the find bar over the open note (the note's text view
+    /// takes the focus first).
+    pub fn find_in_note(&self, sender: Option<&objc2::runtime::AnyObject>) {
+        self.window.makeFirstResponder(Some(&self.note_text));
+        // SAFETY: a text view with a find bar performs the text finder's actions.
+        let _: () = unsafe { objc2::msg_send![&**self.note_text, performTextFinderAction: sender] };
     }
 
     /// The magnifying glass: shows the search row, or hides it and drops the search.

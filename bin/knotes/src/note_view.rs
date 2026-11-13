@@ -149,6 +149,9 @@ pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<Not
     text.setMinSize(NSSize::new(0.0, size.height));
     text.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
     text.setVerticallyResizable(true);
+    // Edit → Find… (Cmd+F): the standard find bar over the note.
+    text.setUsesFindBar(true);
+    text.setIncrementalSearchingEnabled(true);
     text.setHorizontallyResizable(false);
     text.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     if let Some(container) = unsafe { text.textContainer() } {
