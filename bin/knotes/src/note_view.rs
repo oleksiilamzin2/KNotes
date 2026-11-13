@@ -20,6 +20,8 @@ use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
 type OnClick = Box<dyn Fn(&NSTextView, usize, bool) -> bool>;
 /// Whether a plain click on a character acts (the pointer shows a hand there).
 type OnHover = Box<dyn Fn(usize) -> bool>;
+/// Gets the find action Edit → Find… and its neighbours ask for.
+type OnFind = Box<dyn Fn(isize)>;
 
 #[derive(Default)]
 pub struct Ivars {
@@ -31,7 +33,7 @@ pub struct Ivars {
     moves: RefCell<Option<Retained<NSTrackingArea>>>,
     /// Called with the find action (`NSTextFinderAction`) Edit → Find… and its neighbours ask
     /// for: the window's own find bar takes them.
-    on_find: RefCell<Option<Box<dyn Fn(isize)>>>,
+    on_find: RefCell<Option<OnFind>>,
 }
 
 define_class!(
