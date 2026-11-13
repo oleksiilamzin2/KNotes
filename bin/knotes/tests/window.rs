@@ -798,3 +798,11 @@ fn a_wide_inline_formula_at_a_line_end_moves_down_whole_instead_of_overflowing()
     assert_eq!(layers.len(), 3, "{out}");
     assert!(layers.iter().all(|l| l.0 + l.2 <= right + 1.0), "inside the text column (right edge {right}): {layers:?}");
 }
+
+#[test]
+fn struck_text_is_drawn_with_a_line_through_it_and_its_tildes_are_not() {
+    let note = "keep ~~gone **bold** too~~ here\n\nend";
+    let (_vault, out) = probe_notes(&[("s.md", note)], &[("KNOTES_PROBE_OPEN", "s.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let struck = out.lines().find_map(|l| l.strip_prefix("editor-struck: ")).unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(struck, "gone |bold| too", "the hidden ** between: {out}");
+}

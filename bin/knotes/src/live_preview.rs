@@ -17,7 +17,7 @@ use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSKernAttributeName,
     NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
-    NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
+    NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSUnderlineStyle, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
@@ -285,6 +285,9 @@ impl LivePreview {
             let (font, color, name) = self.run_look(run, &styled);
             set(storage, ns(&clip(&run.range)), font, color, &name, look);
         }
+        for run in styled.runs.iter().filter(|r| r.style == Style::Strike && r.range.start < region.1 && r.range.end > region.0) {
+            strike(storage, ns(&clip(&run.range)));
+        }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| m.start < region.1 && m.end > region.0) {
             self.style_markup(storage, m, font, overlaps(m, revealed));
         }
@@ -355,6 +358,10 @@ impl LivePreview {
         for run in &styled.runs {
             let (font, color, name) = self.run_look(run, &styled);
             set(storage, ns(&run.range), font, color, &name, look);
+        }
+        // After all runs (one inside would replace it), before the markup (which drops it).
+        for run in styled.runs.iter().filter(|r| r.style == Style::Strike) {
+            strike(storage, ns(&run.range));
         }
         let fonts = self.ivars().markup_fonts.borrow();
         for (m, font) in styled.markup.iter().zip(fonts.iter()) {
@@ -625,6 +632,28 @@ impl LivePreview {
         }
     }
 
+    /// The struck pieces of the text, `|` between those apart, for probe mode.
+    pub fn describe_struck(view: &NSTextView) -> String {
+        let Some(storage) = (unsafe { view.textStorage() }) else { return String::new() };
+        let utf16: Vec<u16> = storage.string().to_string().encode_utf16().collect();
+        let (mut pieces, mut at, mut last_end) = (String::new(), 0, None);
+        while at < storage.length() {
+            let mut range = NSRange::new(0, 0);
+            // SAFETY: AppKit's attribute name constant lives for the whole process.
+            let value = unsafe { storage.attribute_atIndex_effectiveRange(NSStrikethroughStyleAttributeName, at, &mut range) };
+            let end = (range.location + range.length).max(at + 1);
+            if value.and_then(|v| v.downcast::<NSNumber>().ok()).is_some_and(|n| n.integerValue() != 0) {
+                if last_end.is_some_and(|e| e != at) {
+                    pieces.push('|');
+                }
+                pieces.push_str(&String::from_utf16_lossy(&utf16[at..end]));
+                last_end = Some(end);
+            }
+            at = end;
+        }
+        pieces
+    }
+
     /// `[style]text|[style]text…` of the text view's storage, for probe mode.
     pub fn describe(view: &NSTextView) -> String {
         let Some(storage) = (unsafe { view.textStorage() }) else { return String::new() };
@@ -664,7 +693,7 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, String) {
         Style::Heading(level) => (&look.headings[usize::from(level.clamp(1, 6)) - 1], &look.text, format!("heading{level}")),
         Style::Strong => (&look.bold, &look.text, "strong".into()),
         Style::Emphasis => (&look.italic, &look.text, "emphasis".into()),
-        Style::Strike => (&look.body, &look.muted, "strike".into()),
+        Style::Strike => (&look.body, &look.text, "strike".into()),
         Style::Code => (&look.mono, &look.text, "code".into()),
         Style::CodeBlock => (&look.mono, &look.text, "codeblock".into()),
         Style::Link => (&look.body, &look.accent, "link".into()),
@@ -701,6 +730,13 @@ fn clear_layout(storage: &NSTextStorage, range: NSRange) {
         storage.removeAttribute_range(NSKernAttributeName, range);
         storage.removeAttribute_range(NSParagraphStyleAttributeName, range);
     }
+}
+
+/// A line through the text of `range`.
+fn strike(storage: &NSTextStorage, range: NSRange) {
+    let single = NSNumber::numberWithInteger(NSUnderlineStyle::Single.0);
+    // SAFETY: an NSNumber of an underline style is the attribute's value type.
+    unsafe { storage.addAttribute_value_range(NSStrikethroughStyleAttributeName, &single, range) };
 }
 
 fn add_kern(storage: &NSTextStorage, index: usize, points: f64) {

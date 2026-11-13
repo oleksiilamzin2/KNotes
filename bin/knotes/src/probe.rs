@@ -533,6 +533,7 @@ fn report_list(table: &NSTableView) {
 fn report_note(window: &VaultWindow) {
     println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
+    println!("editor-struck: {}", crate::live_preview::LivePreview::describe_struck(&window.note_text));
     for image in window.describe_formulas() {
         println!("formula-image: {image}");
     }
