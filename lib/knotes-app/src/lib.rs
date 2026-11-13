@@ -4,6 +4,7 @@ mod folder_rules;
 mod folder_tree;
 mod history;
 mod labels;
+mod link_rewrite;
 mod natural_order;
 mod search_list;
 mod search_query;
@@ -16,6 +17,7 @@ pub use folder_rules::{FolderRules, RULES_FILE, new_notes_folder, resolve_list_s
 pub use folder_tree::{FolderNode, folder_tree};
 pub use history::{HISTORY_DEPTH, History};
 pub use labels::{TimeStyle, plural_uk, time_style};
+pub use link_rewrite::rewrite_links;
 pub use natural_order::{natural_cmp, natural_key};
 pub use search_list::{ContentMatch, found_snippet, search_list};
 pub use search_query::{SearchMode, parse_search, with_search_mode};

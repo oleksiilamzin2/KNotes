@@ -301,6 +301,8 @@ name = "knotes-app"
 version = "0.1.0"
 dependencies = [
  "knotes-core",
+ "knotes-index",
+ "knotes-md",
  "serde_json",
 ]
 
