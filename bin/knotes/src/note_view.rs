@@ -27,6 +27,12 @@ type OnFind = Box<dyn Fn(isize)>;
 /// Gets the pasteboard of a paste, or of a drop and the character index it falls at; true
 /// when it took what is there (the text view then pastes nothing).
 type OnPaste = Box<dyn Fn(&NSPasteboard, Option<usize>) -> bool>;
+/// Gets the text view, the character where a resized image's line starts, the width it is
+/// dragged to and whether the drag is over.
+type OnResize = Box<dyn Fn(&NSTextView, usize, f64, bool)>;
+
+/// How near an image's right edge (points) the pointer resizes it.
+const IMAGE_EDGE: f64 = 6.0;
 
 #[derive(Default)]
 pub struct Ivars {
@@ -40,6 +46,7 @@ pub struct Ivars {
     /// for: the window's own find bar takes them.
     on_find: RefCell<Option<OnFind>>,
     on_paste: RefCell<Option<OnPaste>>,
+    on_resize: RefCell<Option<OnResize>>,
 }
 
 define_class!(
@@ -79,7 +86,9 @@ define_class!(
         fn mouse_moved(&self, event: &NSEvent) {
             // SAFETY: forwarding the same event to the superclass implementation.
             let _: () = unsafe { msg_send![super(self), mouseMoved: event] };
-            if self.over_clickable(event.locationInWindow()) {
+            if self.image_edge(event.locationInWindow()).is_some() {
+                resize_cursor().set();
+            } else if self.over_clickable(event.locationInWindow()) {
                 NSCursor::pointingHandCursor().set();
             }
         }
@@ -87,7 +96,9 @@ define_class!(
         /// The text view would set the I-beam over a link too.
         #[unsafe(method(cursorUpdate:))]
         fn cursor_update(&self, event: &NSEvent) {
-            if self.over_clickable(event.locationInWindow()) {
+            if self.image_edge(event.locationInWindow()).is_some() {
+                resize_cursor().set();
+            } else if self.over_clickable(event.locationInWindow()) {
                 NSCursor::pointingHandCursor().set();
             } else {
                 // SAFETY: forwarding the same event to the superclass implementation.
@@ -132,7 +143,9 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            if !self.offer_click(event) {
+            if let Some((line, rect)) = self.image_edge(event.locationInWindow()) {
+                self.resize_image(line, rect);
+            } else if !self.offer_click(event) {
                 // SAFETY: forwarding the same event to the superclass implementation.
                 let _: () = unsafe { msg_send![super(self), mouseDown: event] };
             }
@@ -155,6 +168,40 @@ pub fn finder_tag(sender: Option<&AnyObject>) -> isize {
 impl NoteTextView {
     pub fn on_find(&self, callback: impl Fn(isize) + 'static) {
         *self.ivars().on_find.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_resize(&self, callback: impl Fn(&NSTextView, usize, f64, bool) + 'static) {
+        *self.ivars().on_resize.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The image whose right edge is at a point in window coordinates: where its line starts
+    /// and its rect in the view.
+    fn image_edge(&self, in_window: NSPoint) -> Option<(usize, NSRect)> {
+        self.image_edge_at(self.convertPoint_fromView(in_window, None))
+    }
+
+    /// The same for a point in the view's coordinates.
+    pub fn image_edge_at(&self, point: NSPoint) -> Option<(usize, NSRect)> {
+        let (line, rect) = crate::preview_fragment::image_at(self, point)?;
+        let right = rect.origin.x + rect.size.width;
+        let inside = point.y >= rect.origin.y && point.y <= rect.origin.y + rect.size.height;
+        (inside && (point.x - right).abs() <= IMAGE_EDGE).then_some((line, rect))
+    }
+
+    /// Follows the mouse until it goes up: the centred image grows or shrinks on both sides,
+    /// its right edge under the pointer.
+    fn resize_image(&self, line: usize, rect: NSRect) {
+        let (Some(window), Some(callback)) = (self.window(), self.ivars().on_resize.borrow_mut().take()) else { return };
+        let centre = rect.origin.x + rect.size.width / 2.0;
+        while let Some(event) = window.nextEventMatchingMask(objc2_app_kit::NSEventMask::LeftMouseDragged | objc2_app_kit::NSEventMask::LeftMouseUp) {
+            let x = self.convertPoint_fromView(event.locationInWindow(), None).x;
+            let done = event.r#type() == objc2_app_kit::NSEventType::LeftMouseUp;
+            callback(self, line, 2.0 * (x - centre), done);
+            if done {
+                break;
+            }
+        }
+        *self.ivars().on_resize.borrow_mut() = Some(callback);
     }
 
     pub fn on_paste(&self, callback: impl Fn(&NSPasteboard, Option<usize>) -> bool + 'static) {
@@ -218,6 +265,11 @@ impl NoteTextView {
         let rect = self.convertRect_fromView(window.convertRectFromScreen(on_screen), None);
         self.scrollPoint(NSPoint::new(0.0, (rect.origin.y - self.textContainerInset().height).max(0.0)));
     }
+}
+
+/// The pointer over an image's right edge: a frame's right side being resized.
+fn resize_cursor() -> Retained<NSCursor> {
+    NSCursor::frameResizeCursorFromPosition_inDirections(objc2_app_kit::NSCursorFrameResizePosition::Right, objc2_app_kit::NSCursorFrameResizeDirections::All)
 }
 
 fn contains(rect: NSRect, p: NSPoint) -> bool {

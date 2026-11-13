@@ -13,7 +13,7 @@ use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSBezierPath, NSColor, NSCompositingOperation, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSGraphicsContext, NSImage,
-    NSImageSymbolConfiguration, NSStringDrawing, NSTextElement, NSTextLayoutFragment, NSTextLineFragment,
+    NSImageSymbolConfiguration, NSStringDrawing, NSTextElement, NSTextElementProvider, NSTextLayoutFragment, NSTextLineFragment,
     NSTextLocation, NSTextRange, NSTextView,
 };
 use objc2_core_graphics::CGContext;
@@ -260,6 +260,23 @@ impl PreviewFragment {
             })
             .collect()
     }
+}
+
+/// The image shown on its own line under `point` (text view coordinates): the character
+/// where its line starts, and its rect in the view.
+pub fn image_at(view: &NSTextView, point: NSPoint) -> Option<(usize, NSRect)> {
+    let layout = view.textLayoutManager()?;
+    let origin = view.textContainerOrigin();
+    let fragment = layout.textLayoutFragmentForPosition(NSPoint::new(point.x - origin.x, point.y - origin.y))?;
+    let preview = fragment.downcast_ref::<PreviewFragment>()?;
+    let content = layout.textContentManager()?;
+    let start = content.offsetFromLocation_toLocation(&content.documentRange().location(), &fragment.rangeInElement().location()).max(0) as usize;
+    let frame = fragment.layoutFragmentFrame();
+    preview.ivars().marks.iter().find_map(|(mark, _)| {
+        let Mark::Image { offset, anchor: Anchor::Line, .. } = mark else { return None };
+        let r = preview.mark_rect(mark)?;
+        Some((start + offset, NSRect::new(NSPoint::new(origin.x + frame.origin.x + r.origin.x, origin.y + frame.origin.y + r.origin.y), r.size)))
+    })
 }
 
 /// What TextKit drew in place of hidden source in the visible part of `view` (probe lines).

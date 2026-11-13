@@ -79,6 +79,29 @@ pub fn paste_requested(view: &crate::note_view::NoteTextView) {
     println!("pasted-images: {}", if view.offer_paste(&pasteboard, at) { "yes" } else { "no" });
 }
 
+/// `KNOTES_PROBE_EDGE=x,y;x,y`: whether the pointer at each point (text view coordinates)
+/// would resize an image (`resize`) or not (`none`).
+pub fn image_edge_requested(view: &crate::note_view::NoteTextView) {
+    let Ok(points) = std::env::var("KNOTES_PROBE_EDGE") else { return };
+    let answers: Vec<&str> = points
+        .split(';')
+        .filter_map(|p| {
+            let (x, y) = p.split_once(',')?;
+            let point = objc2_foundation::NSPoint::new(x.parse().ok()?, y.parse().ok()?);
+            Some(if view.image_edge_at(point).is_some() { "resize" } else { "none" })
+        })
+        .collect();
+    println!("image-edge: {}", answers.join(" "));
+}
+
+/// `KNOTES_PROBE_RESIZE=line:width`: the image on the line starting at character `line`
+/// dragged to `width` points and let go.
+pub fn resize_requested() -> Option<(usize, f64)> {
+    let request = std::env::var("KNOTES_PROBE_RESIZE").ok()?;
+    let (line, width) = request.split_once(':')?;
+    Some((line.parse().ok()?, width.parse().ok()?))
+}
+
 /// `KNOTES_PROBE_NOTE_SCROLL=end`: scrolls the note to its end, as the scroll wheel does.
 pub fn note_scroll_requested(view: &objc2_app_kit::NSTextView) {
     if std::env::var("KNOTES_PROBE_NOTE_SCROLL").as_deref() != Ok("end") {

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, changed_region, highlight};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, changed_region, highlight, set_image_width};
 
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
 use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
@@ -43,6 +43,8 @@ const QUOTE_INDENT: f64 = 18.0;
 /// Code's inset in its background, and the height a hidden fence line keeps as padding.
 const CODE_INSET: f64 = 12.0;
 const FENCE_PADDING: f64 = 8.0;
+/// Narrowest an image is dragged to.
+const MIN_IMAGE_WIDTH: f64 = 16.0;
 
 struct Look {
     body: Retained<NSFont>,
@@ -100,6 +102,8 @@ pub struct Ivars {
     images: RefCell<HashMap<String, Option<Retained<NSImage>>>>,
     /// Width of the text column, which images fit in.
     column: Cell<f64>,
+    /// The image being resized (where its source starts) and the width it shows at meanwhile.
+    resizing: Cell<Option<(usize, f64)>>,
     /// The edit being made and its inserted text, between `shouldChangeText` and
     /// `textDidChange`; `None` there means "unknown edit": copy and restyle everything.
     pending: Cell<Option<Edit>>,
@@ -265,6 +269,7 @@ impl LivePreview {
             vault: RefCell::new(None),
             images: RefCell::new(HashMap::new()),
             column: Cell::new(READABLE_WIDTH),
+            resizing: Cell::new(None),
             pending: Cell::new(None),
             inserted: RefCell::new(String::new()),
             source: RefCell::new(String::new()),
@@ -848,12 +853,13 @@ impl LivePreview {
             return None;
         }
         let ratio = natural.height / natural.width;
-        let width = match (run.width, run.height) {
+        let resized = self.ivars().resizing.get().filter(|r| r.0 == run.range.start).map(|r| r.1);
+        let width = resized.unwrap_or(match (run.width, run.height) {
             (Some(w), Some(h)) => f64::from(w).min(f64::from(h) / ratio),
             (Some(w), None) => f64::from(w),
             (None, Some(h)) => f64::from(h) / ratio,
             (None, None) => natural.width,
-        };
+        });
         // A point narrower than the column: the hidden source's tiny glyphs beside the kept
         // width would otherwise wrap onto a second line as tall as the image.
         let width = width.min(self.ivars().column.get() - 1.0).max(1.0).round();
@@ -884,6 +890,30 @@ impl LivePreview {
         canvas.paint(line.0..line.0 + 1, |p| p.kern = kern);
         let para = palette.para(Para { centred: true, min_line: reserved, max_line: reserved, ..Para::default() });
         canvas.paint(line.0..line.1, |p| p.para = para);
+    }
+
+    /// The image on the line starting at `line` dragged to `width` points: shown so at once;
+    /// when `done`, the width is written into its embed (`|300`), one edit to undo, the cursor
+    /// staying where it was.
+    pub fn resize_image(&self, view: &NSTextView, line: usize, width: f64, done: bool) {
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let run = self.ivars().styled.borrow().images.iter().find(|i| paragraph(&storage, ns(&i.range)).0 == line).cloned();
+        let Some(run) = run else { return };
+        let width = width.round().clamp(MIN_IMAGE_WIDTH, (self.ivars().column.get() - 1.0).max(MIN_IMAGE_WIDTH));
+        self.ivars().resizing.set(Some((run.range.start, width)));
+        if !done {
+            self.restyle(&storage, paragraph(&storage, ns(&run.range)));
+            return;
+        }
+        self.ivars().resizing.set(None);
+        let source = storage.string().substringWithRange(ns(&run.range)).to_string();
+        let new = set_image_width(&source, width as u32);
+        let selection = view.selectedRange();
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&new), ns(&run.range)) };
+        let grown = new.encode_utf16().count() as isize - run.range.len() as isize;
+        let keep = |at: usize| if at >= run.range.end { (at as isize + grown).max(0) as usize } else { at };
+        view.setSelectedRange(NSRange::new(keep(selection.location), selection.length));
     }
 
     /// The text column changed width: images wider than it, or that were, fit again.

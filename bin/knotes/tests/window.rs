@@ -1236,7 +1236,8 @@ fn a_click_on_an_image_puts_the_cursor_in_its_source_and_opens_nothing() {
     let (_vault, out) = probe_images(
         &[("a.md", "Before\n![[pic.png]]\nAfter")],
         &[("pic.png", PIC)],
-        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "12")],
+        // Character 7 keeps the image's width: its middle is the image's.
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "7")],
     );
     assert!(out.contains("note: a.md"), "{out}");
     assert_eq!(images(&out).iter().map(|i| i.4.as_str()).collect::<Vec<_>>(), ["preview"], "{out}");
@@ -1319,4 +1320,27 @@ fn an_image_pasted_with_text_pastes_the_text() {
     );
     assert!(attachments(vault.path()).is_empty(), "{out}");
     assert!(out.contains("pasted-images: no"), "{out}");
+}
+
+#[test]
+fn the_pointer_over_an_image_s_right_edge_resizes_it() {
+    let notes = [("a.md", "Before\n![[pic.png]]\nAfter")];
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")];
+    let (_vault, out) = probe_images(&notes, &[("pic.png", PIC)], &env);
+    let (x, y, w, h, _) = images(&out)[0].clone();
+    let points = format!("{},{};{},{}", x + w - 2.0, y + h / 2.0, x + w / 2.0, y + h / 2.0);
+    let (_vault, out) = probe_images(&notes, &[("pic.png", PIC)], &[env[0], env[1], ("KNOTES_PROBE_EDGE", &points)]);
+    assert!(out.contains("image-edge: resize none"), "{out}");
+}
+
+#[test]
+fn a_resized_image_writes_its_width_and_shows_at_it() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "Before\n![[pic.png]]\nAfter")],
+        &[("pic.png", PIC)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_RESIZE", "7:200")],
+    );
+    assert!(out.contains("note: a.md | Before⏎![[pic.png|200]]⏎After"), "{out}");
+    let shown = images(&out);
+    assert_eq!((shown[0].2, shown[0].3, shown[0].4.as_str()), (200.0, 133.0, "shown"), "{out}");
 }
