@@ -1076,3 +1076,12 @@ fn after_hash_caret_the_list_offers_the_targets_block_anchors() {
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[b#^t"), ("KNOTES_PROBE_KEYS", "return")]);
     assert!(out.contains("note: a.md | [[b#^two]]"), "{out}");
 }
+
+#[test]
+fn formulas_take_the_text_colour_of_a_new_appearance() {
+    let (_vault, out) = probe_notes(&[("f.md", FORMULA_NOTE)], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(out.contains("formula-ink: light"), "{out}");
+    let (_vault, out) = probe_notes(&[("f.md", FORMULA_NOTE)], &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_APPEARANCE", "dark")]);
+    assert!(out.contains("formula-ink: dark"), "{out}");
+    assert_eq!(formula_images(&out).len(), 2, "still typeset: {out}");
+}

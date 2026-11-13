@@ -24,6 +24,8 @@ type OnHover = Box<dyn Fn(usize) -> bool>;
 pub struct Ivars {
     on_click: RefCell<Option<OnClick>>,
     on_hover: RefCell<Option<OnHover>>,
+    /// Called when the view turns light or dark.
+    on_appearance: RefCell<Option<Box<dyn Fn()>>>,
     /// The tracking area that reports mouse moves over the view.
     moves: RefCell<Option<Retained<NSTrackingArea>>>,
 }
@@ -48,6 +50,15 @@ define_class!(
                 let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, options, Some(self), None) };
                 self.addTrackingArea(&area);
                 *self.ivars().moves.borrow_mut() = Some(area);
+            }
+        }
+
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn appearance_changed(&self) {
+            // SAFETY: the superclass updates its own colours first.
+            let _: () = unsafe { msg_send![super(self), viewDidChangeEffectiveAppearance] };
+            if let Some(callback) = self.ivars().on_appearance.borrow().as_ref() {
+                callback();
             }
         }
 
@@ -84,6 +95,10 @@ define_class!(
 impl NoteTextView {
     pub fn on_click(&self, callback: impl Fn(&NSTextView, usize, bool) -> bool + 'static) {
         *self.ivars().on_click.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_appearance(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_appearance.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_hover(&self, callback: impl Fn(usize) -> bool + 'static) {

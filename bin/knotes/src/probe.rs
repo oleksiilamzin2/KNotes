@@ -656,6 +656,7 @@ fn report_note(window: &VaultWindow) {
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
     println!("editor-struck: {}", crate::live_preview::LivePreview::describe_struck(&window.note_text));
     println!("editor-shaded: {}", crate::live_preview::LivePreview::describe_shaded(&window.note_text));
+    println!("formula-ink: {}", window.formula_ink());
     for line in window.describe_drawn() {
         println!("{line}");
     }

@@ -146,6 +146,14 @@ impl VaultWindow {
         note_text.on_click(move |view, index, cmd| clicks.click(view, index, cmd));
         let hovers = live_preview.clone();
         note_text.on_hover(move |index| hovers.clickable(index));
+        // Weak: the text view keeps its callbacks, and the text view is the live preview's.
+        let preview = live_preview.clone();
+        let text = objc2::rc::Weak::new(&*note_text);
+        note_text.on_appearance(move || {
+            if let Some(text) = text.load() {
+                preview.appearance_changed(&text);
+            }
+        });
         let note_vc = NSViewController::new(mtm);
         note_vc.setView(&note_scroll);
         let chat = chat_view::chat_view(mtm);
@@ -495,6 +503,10 @@ impl VaultWindow {
             probe::menu_requested();
             probe::click_requested(&self.note_text);
             println!("found-in-note: {}", self.live_preview.found_count());
+            if std::env::var("KNOTES_PROBE_APPEARANCE").as_deref() == Ok("dark") {
+                // SAFETY: AppKit's appearance name constant lives for the whole process.
+                objc2_app_kit::NSAppearanceCustomization::setAppearance(&*self.window, objc2_app_kit::NSAppearance::appearanceNamed(unsafe { objc2_app_kit::NSAppearanceNameDarkAqua }).as_deref());
+            }
             if let Some(at) = std::env::var("KNOTES_PROBE_HOVER").ok().and_then(|a| a.parse().ok()) {
                 println!("hover: {}", if self.live_preview.clickable(at) { "hand" } else { "text" });
             }
@@ -737,6 +749,11 @@ impl VaultWindow {
         let after = from + text.encode_utf16().count() + if closed { 2 } else { 0 };
         view.setSelectedRange(NSRange::new(after, 0));
         self.accepting.set(false);
+    }
+
+    /// `light` or `dark`: the colour formulas are typeset in (probe mode).
+    pub fn formula_ink(&self) -> &'static str {
+        self.live_preview.formula_ink()
     }
 
     /// Probe lines of what the note draws in place of hidden source, in view.

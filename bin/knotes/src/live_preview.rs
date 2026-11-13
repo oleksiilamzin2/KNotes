@@ -452,6 +452,22 @@ impl LivePreview {
         }
     }
 
+    /// The view's appearance changed (light or dark): formulas are typeset again in the new
+    /// text colour.
+    pub fn appearance_changed(&self, view: &NSTextView) {
+        let dark = is_dark(view);
+        if self.ivars().dark.replace(dark) != dark
+            && let Some(storage) = unsafe { view.textStorage() }
+        {
+            self.restyle(&storage, (0, storage.length()));
+        }
+    }
+
+    /// `light` or `dark`: the colour formulas are typeset in (probe mode).
+    pub fn formula_ink(&self) -> &'static str {
+        if self.ivars().dark.get() { "dark" } else { "light" }
+    }
+
     /// How many found words the note shows highlighted (probe mode).
     pub fn found_count(&self) -> usize {
         self.ivars().found.get()
