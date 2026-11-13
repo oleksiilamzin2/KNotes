@@ -2115,3 +2115,18 @@ fn the_heading_in_view_folded_away_highlights_the_one_it_is_folded_under() {
     let out = probe_outline(&[("a.md", &note)], &[], &env);
     assert_eq!((outline_rows(&out), outline_current(&out)), ("A | C".to_owned(), "A".to_owned()));
 }
+
+#[test]
+fn a_pdf_preview_widened_shows_the_old_picture_stretched_until_the_new_one_is_drawn() {
+    // Widened after its page was drawn, by dragging its edge (the embed's line starts at 7).
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_RESIZE_LATER", "7:300")];
+    let (_vault, out) = probe_images(&[("a.md", "Before\n![[doc.pdf|120]]\nAfter")], &[("doc.pdf", PDF)], &env);
+    assert!(out.contains("images-shown: doc.pdf#page=1 stand-in\n"), "{out}");
+}
+
+#[test]
+fn a_pdf_viewer_made_narrower_shows_its_pages_stretched_until_they_are_drawn_again() {
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_WIDTH", "300")];
+    let (_vault, out) = probe_images(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", PDF)], &env);
+    assert!(out.contains("pdf-drawn: 1:stand-in 2:stand-in 3:stand-in\n"), "{out}");
+}

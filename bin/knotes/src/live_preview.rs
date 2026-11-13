@@ -1824,14 +1824,20 @@ impl LivePreview {
         let mut bitmaps = self.ivars().bitmaps.borrow_mut();
         let image = match bitmaps.get(&path) {
             Some(image) if image.size.width >= size.width || resizing => Rc::clone(image),
-            _ => {
+            old => {
                 let this = objc2::rc::Weak::new(self);
                 let decoded = path.clone();
-                let image = Rc::new(DeferredImage::new(file, size, run.page, move || {
-                    if let Some(this) = this.load() {
-                        this.image_decoded(&decoded);
-                    }
-                }));
+                // The smaller picture stands in, stretched, until the larger one is decoded:
+                // a gap between them flickered as the image was widened.
+                let stand_in = old.and_then(|old| old.ready());
+                let image = Rc::new(
+                    DeferredImage::new(file, size, run.page, move || {
+                        if let Some(this) = this.load() {
+                            this.image_decoded(&decoded);
+                        }
+                    })
+                    .standing_in(stand_in),
+                );
                 bitmaps.insert(path, Rc::clone(&image));
                 image
             }
@@ -1869,6 +1875,14 @@ impl LivePreview {
         for line in lines {
             self.restyle(&storage, line);
         }
+    }
+
+    /// What each of the note's images shows, by key (`doc.pdf#page=1 stand-in`), sorted
+    /// (probe mode).
+    pub fn images_shown(&self) -> Vec<String> {
+        let mut shown: Vec<String> = self.ivars().bitmaps.borrow().iter().map(|(key, image)| format!("{key} {}", image.shows())).collect();
+        shown.sort();
+        shown
     }
 
     /// The note's images decoded (vault paths, sorted), and how many are kept (probe mode).

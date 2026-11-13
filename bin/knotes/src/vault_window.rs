@@ -1240,6 +1240,29 @@ impl VaultWindow {
         self.accepting.set(false);
     }
 
+    /// Image `line`'s edge dragged to `width` and let go (probe mode).
+    pub fn resize_image(&self, line: usize, width: f64) {
+        self.live_preview.resize_image(&self.note_text, line, width, true);
+    }
+
+    /// What each of the note's images shows (probe mode).
+    pub fn images_shown(&self) -> Vec<String> {
+        self.live_preview.images_shown()
+    }
+
+    /// The PDF viewer made `width` wide (probe mode).
+    pub fn pdf_set_width(&self, width: f64) {
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            let frame = viewer.scroll.frame();
+            viewer.scroll.setFrameSize(objc2_foundation::NSSize::new(width, frame.size.height));
+        }
+    }
+
+    /// What each page the PDF viewer keeps shows (probe mode).
+    pub fn pdf_drawn(&self) -> Vec<String> {
+        self.pdf_view.borrow().as_ref().map(PdfViewer::drawn).unwrap_or_default()
+    }
+
     /// How many of the open note's images have been decoded, and how many are kept (probe
     /// mode).
     pub fn decoded_images(&self) -> (Vec<String>, usize) {

@@ -160,20 +160,45 @@ pub struct DeferredImage {
     on_ready: Box<dyn Fn()>,
     /// Set when it is let go before it is decoded: the decoding not started yet is skipped.
     cancelled: RefCell<Arc<AtomicBool>>,
+    /// Shown, stretched, until it is decoded: the same picture decoded for another size.
+    stand_in: RefCell<Option<Retained<NSImage>>>,
 }
 
 impl DeferredImage {
     pub fn new(file: PathBuf, size: NSSize, page: Option<u32>, on_ready: impl Fn() + 'static) -> Self {
-        Self { file, size, page, state: RefCell::new(State::Empty), drawn_at: Cell::new(None), on_ready: Box::new(on_ready), cancelled: RefCell::new(Arc::new(AtomicBool::new(false))) }
+        Self {
+            file,
+            size,
+            page,
+            state: RefCell::new(State::Empty),
+            drawn_at: Cell::new(None),
+            on_ready: Box::new(on_ready),
+            cancelled: RefCell::new(Arc::new(AtomicBool::new(false))),
+            stand_in: RefCell::new(None),
+        }
     }
 
-    /// The image once decoded; until then `None`, and decoding starts.
+    /// With `image` shown until it is decoded.
+    pub fn standing_in(self, image: Option<Retained<NSImage>>) -> Self {
+        *self.stand_in.borrow_mut() = image;
+        self
+    }
+
+    /// The image once decoded; until then the one standing in, if any, and decoding starts.
     pub fn get(self: &Rc<Self>) -> Option<Retained<NSImage>> {
         if let State::Ready(image) = &*self.state.borrow() {
             return Some(image.clone());
         }
         self.start();
-        None
+        self.stand_in.borrow().clone()
+    }
+
+    /// The image if it is decoded, without starting to.
+    pub fn ready(&self) -> Option<Retained<NSImage>> {
+        match &*self.state.borrow() {
+            State::Ready(image) => Some(image.clone()),
+            _ => None,
+        }
     }
 
     fn start(self: &Rc<Self>) {
@@ -210,6 +235,7 @@ impl DeferredImage {
                     None => NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&file.to_string_lossy())),
                 };
                 *this.state.borrow_mut() = image.map_or(State::Failed, State::Ready);
+                this.stand_in.borrow_mut().take();
                 (this.on_ready)();
             });
         });
@@ -221,12 +247,25 @@ impl DeferredImage {
         if matches!(*state, State::Ready(_) | State::Loading) {
             *state = State::Empty;
         }
+        self.stand_in.borrow_mut().take();
         self.cancelled.borrow().store(true, Ordering::Relaxed);
     }
 
     /// Whether it is decoded (probe mode).
     pub fn is_decoded(&self) -> bool {
         matches!(*self.state.borrow(), State::Ready(_))
+    }
+
+    /// `ready`, `stand-in` (another size of it shows until it is decoded) or `blank` (probe
+    /// mode).
+    pub fn shows(&self) -> &'static str {
+        if self.is_decoded() {
+            "ready"
+        } else if self.stand_in.borrow().is_some() {
+            "stand-in"
+        } else {
+            "blank"
+        }
     }
 }
 

@@ -23,7 +23,7 @@ use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use knotes_pdf::PageText;
 use objc2_app_kit::{
-    NSAffineTransformNSAppKitAdditions, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSMenu, NSMenuItem, NSPasteboard,
+    NSAffineTransformNSAppKitAdditions, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSPasteboard,
     NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder, NSScrollView, NSScrollViewDidEndLiveMagnifyNotification, NSView, NSViewBoundsDidChangeNotification,
 };
 use objc2_foundation::{NSAffineTransform, NSNotification, NSNotificationCenter, NSObject, NSPoint, NSRect, NSSize, NSString, NSZeroRect};
@@ -64,6 +64,11 @@ pub struct PagesIvars {
     selection: Cell<Option<(Spot, Spot)>>,
     /// Called after the pages scrolled.
     on_scroll: RefCell<Option<Box<dyn Fn()>>>,
+    /// Pages as drawn for the width or zoom before, shown stretched until drawn again (a gap
+    /// between them flickered as the width changed).
+    stand_ins: RefCell<HashMap<usize, Retained<NSImage>>>,
+    /// The width changed during a live resize: drawn again once it ends.
+    resized_live: Cell<bool>,
 }
 
 define_class!(
@@ -160,8 +165,19 @@ define_class!(
             if let Some(scroll) = self.enclosingScrollView() {
                 self.ivars().zoom.set(scroll.magnification().max(1.0));
             }
-            self.let_all_go();
+            self.redraw_all();
             self.follow();
+        }
+
+        /// A live resize ended: the pages are drawn again for the width it left.
+        #[unsafe(method(viewDidEndLiveResize))]
+        fn did_end_live_resize(&self) {
+            // SAFETY: the superclass's own handling first.
+            let _: () = unsafe { msg_send![super(self), viewDidEndLiveResize] };
+            if self.ivars().resized_live.replace(false) {
+                self.redraw_all();
+                self.follow();
+            }
         }
     }
 );
@@ -219,8 +235,13 @@ impl PdfPages {
         let resized = self.ivars().frames.borrow().first().is_some_and(|f| (f.size.width - page_width).abs() > 0.5);
         *self.ivars().frames.borrow_mut() = frames;
         if resized {
-            // Drawn for another width.
-            self.let_all_go();
+            // Drawn for another width: stretched meanwhile, and while the user drags, drawn
+            // again only once the drag ends.
+            if self.inLiveResize() {
+                self.ivars().resized_live.set(true);
+            } else {
+                self.redraw_all();
+            }
         }
         y - GAP + MARGIN
     }
@@ -292,18 +313,23 @@ impl PdfPages {
             kept
         });
         let zoom = self.ivars().zoom.get();
+        let mut stand_ins = self.ivars().stand_ins.borrow_mut();
         for (i, frame) in frames.iter().enumerate().take(last + 1).skip(first) {
             images.entry(i).or_insert_with(|| {
                 let size = NSSize::new(frame.size.width * zoom, frame.size.height * zoom);
                 let this = objc2::rc::Weak::new(self);
-                Rc::new(DeferredImage::new(self.ivars().file.clone(), size, Some(i as u32 + 1), move || {
+                let image = DeferredImage::new(self.ivars().file.clone(), size, Some(i as u32 + 1), move || {
                     // Drawn: the canvas shows it.
                     if let Some(canvas) = this.load().and_then(|this| this.ivars().canvas.borrow().clone()) {
                         canvas.setNeedsDisplay(true);
                     }
-                }))
+                });
+                Rc::new(image.standing_in(stand_ins.remove(&i)))
             });
         }
+        // Pages no longer kept need none.
+        stand_ins.clear();
+        drop(stand_ins);
         drop(images);
         self.keep_texts();
     }
@@ -394,6 +420,19 @@ impl PdfPages {
         Some(text)
     }
 
+    /// Draws every page again (for a new width or zoom), each shown as it was, stretched,
+    /// until it is.
+    fn redraw_all(&self) {
+        let old: Vec<(usize, Rc<DeferredImage>)> = self.ivars().images.borrow_mut().drain().collect();
+        let mut stand_ins = self.ivars().stand_ins.borrow_mut();
+        for (i, image) in old {
+            if let Some(drawn) = image.ready() {
+                stand_ins.insert(i, drawn);
+            }
+            image.let_go();
+        }
+    }
+
     fn let_all_go(&self) {
         for image in self.ivars().images.borrow_mut().drain().map(|(_, image)| image) {
             image.let_go();
@@ -435,6 +474,8 @@ impl PdfViewer {
             texts: RefCell::new(HashMap::new()),
             selection: Cell::new(None),
             on_scroll: RefCell::new(None),
+            stand_ins: RefCell::new(HashMap::new()),
+            resized_live: Cell::new(false),
         };
         let width = scroll.contentSize().width;
         let start = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 0.0));
@@ -532,6 +573,14 @@ impl PdfViewer {
         let mut kept: Vec<usize> = self.pages.ivars().texts.borrow().keys().map(|i| i + 1).collect();
         kept.sort_unstable();
         kept
+    }
+
+    /// What each page kept shows, `1:ready` (from 1), in order (probe mode).
+    pub fn drawn(&self) -> Vec<String> {
+        let images = self.pages.ivars().images.borrow();
+        let mut pages: Vec<(usize, &'static str)> = images.iter().map(|(i, image)| (i + 1, image.shows())).collect();
+        pages.sort_unstable();
+        pages.iter().map(|(page, shows)| format!("{page}:{shows}")).collect()
     }
 
     /// The pages kept drawn (from 1), in order (probe mode).

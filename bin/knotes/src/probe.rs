@@ -1033,6 +1033,11 @@ fn report_note(window: &VaultWindow) {
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
+    // `KNOTES_PROBE_PDF_WIDTH=300`: the PDF viewer made that wide, once its pages are drawn.
+    if let Some(width) = std::env::var("KNOTES_PROBE_PDF_WIDTH").ok().and_then(|w| w.parse().ok()) {
+        window.pdf_set_width(width);
+        println!("pdf-drawn: {}", window.pdf_drawn().join(" "));
+    }
     println!("pdf-view: {}", window.describe_pdf());
     println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-texts-kept: {}", window.pdf_texts_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));
@@ -1049,6 +1054,14 @@ fn report_note(window: &VaultWindow) {
     }
     // What a look at the window decodes: the images drawn in view.
     window.window.displayIfNeeded();
+    // `KNOTES_PROBE_RESIZE_LATER=line:width`: an image's edge dragged to that width once it is
+    // drawn; then what each image shows.
+    if let Some((line, width)) = std::env::var("KNOTES_PROBE_RESIZE_LATER").ok().and_then(|r| r.split_once(':').and_then(|(l, w)| Some((l.parse().ok()?, w.parse().ok()?)))) {
+        window.resize_image(line, width);
+        // Drawn, as on screen.
+        window.window.displayIfNeeded();
+        println!("images-shown: {}", window.images_shown().join(" "));
+    }
     let (ready, kept) = window.decoded_images();
     println!("images-decoded: {}", ready.len());
     println!("images-ready: {}", ready.join(" "));
