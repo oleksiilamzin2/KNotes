@@ -14,7 +14,7 @@ mod task_box;
 mod utf16;
 
 pub use canvas::Canvas;
-pub use code_highlight::{CodeToken, highlight_code, load_code_grammars};
+pub use code_highlight::{CodeHighlighter, CodeToken, highlight_code, load_code_grammars};
 pub use completion::{LinkCompletion, link_completion};
 pub use formula::{FormulaCache, FormulaImage, FormulaStyle, render_formula};
 pub use document::{DiskChange, Document, conflict_path};

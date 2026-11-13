@@ -12,7 +12,7 @@ use std::sync::Arc;
 use dispatch2::DispatchQueue;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width, CodeRun, CodeToken, highlight_code, utf16_offsets};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width, CodeHighlighter, CodeRun, CodeToken, utf16_offsets};
 
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PDF_CAPTION, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
@@ -194,6 +194,9 @@ pub struct Ivars {
     /// Code blocks' tokens (UTF-16, from the code's start), by the hash of their language and
     /// code: highlighted again only when they change.
     code_tokens: RefCell<HashMap<u64, CodeTokens>>,
+    /// Each code block's highlighter (by its place among the note's blocks), kept between
+    /// edits so typing parses again only the lines it changes.
+    code_highlighters: RefCell<HashMap<usize, CodeHighlighter>>,
     tables_changed: Cell<bool>,
     /// The actions of the table menu being shown, by item tag, with the table's index.
     menu_actions: RefCell<Vec<(usize, TableAction)>>,
@@ -421,6 +424,7 @@ impl LivePreview {
             table_widths: RefCell::new(HashMap::new()),
             table_layouts: RefCell::new(HashMap::new()),
             code_tokens: RefCell::new(HashMap::new()),
+            code_highlighters: RefCell::new(HashMap::new()),
             apply_within: Cell::new(None),
             stale_table: Cell::new(None),
             catch_up: Cell::new(0),
@@ -720,6 +724,7 @@ impl LivePreview {
         self.ivars().table_scroll.borrow_mut().clear();
         self.ivars().table_layouts.borrow_mut().clear();
         self.ivars().code_tokens.borrow_mut().clear();
+        self.ivars().code_highlighters.borrow_mut().clear();
         *self.ivars().path.borrow_mut() = path.to_owned();
         // setString moves the selection, which reveals markup: the old note's ranges must not
         // be applied to the new text.
@@ -899,8 +904,8 @@ impl LivePreview {
             }
         }
         // Its code coloured by kind when the fence names a language (ADR 0025).
-        if let Some(run) = styled.code_langs.iter().find(|c| c.block == *block) {
-            for (range, token) in self.code_tokens(storage, run).iter() {
+        if let Some((nth, run)) = styled.code_langs.iter().enumerate().find(|(_, c)| c.block == *block) {
+            for (range, token) in self.code_tokens(storage, nth, run).iter() {
                 let (font, name) = match token {
                     CodeToken::Keyword => (&look.mono_bold, "code-keyword"),
                     other => (&look.mono, code_token_name(*other)),
@@ -911,8 +916,9 @@ impl LivePreview {
         }
     }
 
-    /// The tokens of a code block's code, from the cache or highlighted now.
-    fn code_tokens(&self, storage: &NSTextStorage, run: &CodeRun) -> CodeTokens {
+    /// The tokens of the `nth` code block's code, from the cache or highlighted now (only its
+    /// changed lines parsed again).
+    fn code_tokens(&self, storage: &NSTextStorage, nth: usize, run: &CodeRun) -> CodeTokens {
         let code = storage.string().substringWithRange(ns(&run.code)).to_string();
         let key = {
             use std::hash::{Hash, Hasher};
@@ -923,7 +929,20 @@ impl LivePreview {
         if let Some(tokens) = self.ivars().code_tokens.borrow().get(&key) {
             return Rc::clone(tokens);
         }
-        let tokens = highlight_code(&run.language, &code).unwrap_or_default();
+        let tokens = {
+            let mut highlighters = self.ivars().code_highlighters.borrow_mut();
+            if !highlighters.get(&nth).is_some_and(|h| h.language() == run.language) {
+                match CodeHighlighter::new(&run.language) {
+                    Some(h) => {
+                        highlighters.insert(nth, h);
+                    }
+                    None => {
+                        highlighters.remove(&nth);
+                    }
+                }
+            }
+            highlighters.get_mut(&nth).map(|h| h.update(&code).0).unwrap_or_default()
+        };
         let bytes: Vec<usize> = tokens.iter().flat_map(|(r, _)| [r.start, r.end]).collect();
         let units = utf16_offsets(&code, &bytes);
         let tokens: Vec<(Range<usize>, CodeToken)> = tokens.iter().enumerate().map(|(i, (_, token))| (units[2 * i]..units[2 * i + 1], *token)).collect();

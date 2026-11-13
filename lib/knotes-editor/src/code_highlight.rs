@@ -36,31 +36,100 @@ fn grammars() -> &'static SyntaxSet {
 /// The tokens of `code` in `language` (a fence's info: a language's name or extension, words
 /// after it ignored), as byte ranges in order; `None` when the language is unknown or missing.
 pub fn highlight_code(language: &str, code: &str) -> Option<Vec<(Range<usize>, CodeToken)>> {
-    let set = grammars();
-    let syntax = find_syntax(set, language)?;
-    let mut state = ParseState::new(syntax);
-    let mut stack = ScopeStack::new();
-    let mut tokens: Vec<(Range<usize>, CodeToken)> = Vec::new();
-    let mut push = |range: Range<usize>, kind: Option<CodeToken>| {
-        let Some(kind) = kind.filter(|_| !range.is_empty()) else { return };
-        match tokens.last_mut() {
-            Some((last, k)) if *k == kind && last.end == range.start => last.end = range.end,
-            _ => tokens.push((range, kind)),
-        }
-    };
-    let mut offset = 0;
-    for line in code.split_inclusive('\n') {
-        let ops = state.parse_line(line, set).ok()?;
-        let mut at = 0;
-        for (pos, op) in ops {
-            push(offset + at..offset + pos, token_of(&stack));
-            stack.apply(&op).ok()?;
-            at = pos;
-        }
-        push(offset + at..offset + line.len(), token_of(&stack));
-        offset += line.len();
+    Some(CodeHighlighter::new(language)?.update(code).0)
+}
+
+/// A code block's highlighting kept between edits: each line's state at its start and its
+/// tokens, so an edit parses again only the lines it changes (until the state after them is
+/// what it was).
+pub struct CodeHighlighter {
+    /// The fence's info it was made for.
+    language: String,
+    syntax: &'static SyntaxReference,
+    lines: Vec<Line>,
+}
+
+struct Line {
+    text: String,
+    /// The parser's state and scopes at the line's start, and at its end.
+    start: (ParseState, ScopeStack),
+    end: (ParseState, ScopeStack),
+    /// Its tokens, from the line's start.
+    tokens: Vec<(Range<usize>, CodeToken)>,
+}
+
+impl CodeHighlighter {
+    /// For code in `language`; `None` when the language is unknown or missing.
+    pub fn new(language: &str) -> Option<Self> {
+        Some(Self { language: language.to_owned(), syntax: find_syntax(grammars(), language)?, lines: Vec::new() })
     }
-    Some(tokens)
+
+    /// The fence's info it was made for.
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    /// The tokens of `code` (byte ranges, in order) and how many lines were parsed for them.
+    pub fn update(&mut self, code: &str) -> (Vec<(Range<usize>, CodeToken)>, usize) {
+        let set = grammars();
+        let mut state = (ParseState::new(self.syntax), ScopeStack::new());
+        let mut lines = Vec::new();
+        let mut parsed = 0;
+        let mut old = std::mem::take(&mut self.lines).into_iter();
+        for text in code.split_inclusive('\n') {
+            // An unchanged line from the same state: its tokens and the state after it kept.
+            match old.next().filter(|line| line.text == text && line.start == state) {
+                Some(line) => {
+                    state = line.end.clone();
+                    lines.push(line);
+                }
+                None => {
+                    parsed += 1;
+                    let start = state.clone();
+                    let tokens = parse_line(set, text, &mut state.0, &mut state.1);
+                    lines.push(Line { text: text.to_owned(), start, end: state.clone(), tokens });
+                }
+            }
+        }
+        self.lines = lines;
+        let mut tokens = Vec::new();
+        let mut offset = 0;
+        for line in &self.lines {
+            tokens.extend(line.tokens.iter().map(|(r, k)| (offset + r.start..offset + r.end, *k)));
+            offset += line.text.len();
+        }
+        (merge(tokens), parsed)
+    }
+}
+
+/// Parses one line from `parser` and `stack`, leaving them as the line ends; gives its tokens.
+fn parse_line(set: &SyntaxSet, text: &str, parser: &mut ParseState, stack: &mut ScopeStack) -> Vec<(Range<usize>, CodeToken)> {
+    let mut tokens = Vec::new();
+    let Ok(ops) = parser.parse_line(text, set) else { return tokens };
+    let mut at = 0;
+    for (pos, op) in ops {
+        if let Some(kind) = token_of(stack).filter(|_| pos > at) {
+            tokens.push((at..pos, kind));
+        }
+        let _ = stack.apply(&op);
+        at = pos;
+    }
+    if let Some(kind) = token_of(stack).filter(|_| text.len() > at) {
+        tokens.push((at..text.len(), kind));
+    }
+    tokens
+}
+
+/// Joins tokens of one kind that touch.
+fn merge(tokens: Vec<(Range<usize>, CodeToken)>) -> Vec<(Range<usize>, CodeToken)> {
+    let mut merged: Vec<(Range<usize>, CodeToken)> = Vec::with_capacity(tokens.len());
+    for (range, kind) in tokens {
+        match merged.last_mut() {
+            Some((last, k)) if *k == kind && last.end == range.start => last.end = range.end,
+            _ => merged.push((range, kind)),
+        }
+    }
+    merged
 }
 
 /// The grammar for a fence's info: its first word, without the braces and dot some write.
