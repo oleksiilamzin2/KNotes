@@ -36,7 +36,8 @@ fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(
             assert!(status.success(), "app failed: {out}");
             return out;
         }
-        if start.elapsed() > Duration::from_secs(20) {
+        // A cold index of the 50k vault takes about 20 s alone, longer beside other tests.
+        if start.elapsed() > Duration::from_secs(60) {
             child.kill().unwrap();
             panic!("app did not quit in probe mode");
         }
