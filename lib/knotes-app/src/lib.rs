@@ -10,6 +10,7 @@ mod search_list;
 mod search_query;
 mod new_note;
 mod note_list;
+mod relink_plan;
 mod sidebar;
 mod tag_tree;
 
@@ -17,11 +18,12 @@ pub use folder_rules::{FolderRules, RULES_FILE, new_notes_folder, resolve_list_s
 pub use folder_tree::{FolderNode, folder_tree};
 pub use history::{HISTORY_DEPTH, History};
 pub use labels::{TimeStyle, plural_uk, time_style};
-pub use link_rewrite::{rebase_links, rewrite_links};
+pub use link_rewrite::{Moves, relink};
 pub use natural_order::{natural_cmp, natural_key};
 pub use search_list::{ContentMatch, found_snippet, search_list};
 pub use search_query::{SearchMode, parse_search, with_search_mode};
 pub use new_note::{note_file_stem, unique_note_path};
+pub use relink_plan::{Relinks, plan_relinks};
 pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListOption, ListSettings, SortOrder, build_note_list, days_from_civil, title_of};
 pub use sidebar::{Sidebar, SidebarItem, SidebarMode};
 pub use tag_tree::{TagNode, tag_tree};

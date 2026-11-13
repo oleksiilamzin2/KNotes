@@ -1,20 +1,20 @@
-use knotes_app::rewrite_links;
-use knotes_core::{LinkResolver, NoteParser};
+use knotes_app::{Moves, relink};
+use knotes_core::{LinkResolver, NoteParser, OutLink};
 use knotes_index::LinkTargets;
 use knotes_md::MarkdownParser;
 
 /// The text of note `source` once the note at `from` moved to `to`, in a vault of `paths`
 /// (before the move).
 fn moved(text: &str, source: &str, from: &str, to: &str, paths: &[&str]) -> String {
-    let before = LinkTargets::new(paths.iter().copied());
     let after = LinkTargets::new(paths.iter().map(|p| if *p == from { to } else { p }));
-    let links: Vec<_> = MarkdownParser::new()
-        .parse(text)
-        .links
-        .into_iter()
-        .filter(|l| before.resolve(l.kind, &l.target, source).as_deref() == Some(from))
-        .collect();
-    rewrite_links(text, source, &links, from, to, &after)
+    let moves = Moves::from([(from.to_owned(), to.to_owned())]);
+    relink(text, &resolved(text, source, paths), source, &moves, &after).0
+}
+
+/// The links of `text` in note `source`, resolved in a vault of `paths`.
+fn resolved(text: &str, source: &str, paths: &[&str]) -> Vec<OutLink> {
+    let before = LinkTargets::new(paths.iter().copied());
+    MarkdownParser::new().parse(text).links.into_iter().map(|link| OutLink { resolved: before.resolve(link.kind, &link.target, source), link }).collect()
 }
 
 #[test]
@@ -59,16 +59,21 @@ fn other_links_and_text_stay_as_they_are() {
 #[test]
 fn a_moved_note_keeps_its_relative_markdown_links_pointing_where_they_did() {
     let paths = ["dir/a.md", "dir/b.md", "x/c.md"];
-    let before = LinkTargets::new(paths.iter().copied());
     let text = "[b](b.md) [c](../x/c.md) [root](x/c.md) [self](a.md#h) [[b]] [gone](nowhere.md)";
-    let links: Vec<knotes_core::OutLink> = MarkdownParser::new()
-        .parse(text)
-        .links
-        .into_iter()
-        .map(|link| knotes_core::OutLink { resolved: before.resolve(link.kind, &link.target, "dir/a.md"), link })
-        .collect();
-    assert_eq!(
-        knotes_app::rebase_links(text, &links, "dir/a.md", "other/sub/a.md"),
-        "[b](../../dir/b.md) [c](../../x/c.md) [root](x/c.md) [self](a.md#h) [[b]] [gone](nowhere.md)"
-    );
+    let moves = Moves::from([("dir/a.md".to_owned(), "other/sub/a.md".to_owned())]);
+    let after = LinkTargets::new(["other/sub/a.md", "dir/b.md", "x/c.md"]);
+    let (new, changed) = relink(text, &resolved(text, "dir/a.md", &paths), "dir/a.md", &moves, &after);
+    assert_eq!(new, "[b](../../dir/b.md) [c](../../x/c.md) [root](x/c.md) [self](a.md#h) [[b]] [gone](nowhere.md)");
+    assert_eq!(changed, 2);
+}
+
+#[test]
+fn notes_moved_together_keep_the_links_between_them() {
+    let paths = ["old/a.md", "old/b.md"];
+    let text = "[[b]] [b](b.md) [[old/b]]";
+    let moves = Moves::from([("old/a.md".to_owned(), "new/a.md".to_owned()), ("old/b.md".to_owned(), "new/b.md".to_owned())]);
+    let after = LinkTargets::new(["new/a.md", "new/b.md"]);
+    let (new, changed) = relink(text, &resolved(text, "old/a.md", &paths), "old/a.md", &moves, &after);
+    assert_eq!(new, "[[b]] [b](b.md) [[new/b]]");
+    assert_eq!(changed, 1, "only the full path changes");
 }
