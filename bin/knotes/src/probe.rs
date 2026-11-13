@@ -868,6 +868,11 @@ fn report_list_separator(window: &NSWindow) {
 fn report_panel(window: &VaultWindow) {
     let hidden = panel_switch(&window.window).is_some_and(|g| g.isHidden());
     println!("panel: {}", if hidden { "hidden".to_owned() } else { window.describe_panel() });
+    let (rows, empty) = window.outline_panel.describe();
+    println!("outline: {rows}");
+    if !empty.is_empty() {
+        println!("outline-empty: {empty}");
+    }
 }
 
 fn panel_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItemGroup>> {

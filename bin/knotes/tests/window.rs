@@ -1990,3 +1990,54 @@ fn the_pdf_viewer_keeps_the_text_of_pages_in_view_and_of_pages_selected_only() {
     let out = probe("15:0.05,0.16>16:0.5,0.16;15:0.3,0.5", Some("25"));
     assert!(texts_kept(&out).is_empty(), "the selection cleared, then out of view: {out}");
 }
+
+/// A HOME whose settings show the outline in the right panel.
+fn outline_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"panel": "outline"}"#).unwrap();
+    home
+}
+
+/// The vault with `notes` and `files` probed with the outline shown.
+fn probe_outline(notes: &[(&str, &str)], files: &[(&str, &[u8])], env: &[(&str, &str)]) -> String {
+    let vault = tempfile::tempdir().unwrap();
+    for (path, bytes) in notes.iter().map(|(p, t)| (*p, t.as_bytes())).chain(files.iter().copied()) {
+        std::fs::write(vault.path().join(path), bytes).unwrap();
+    }
+    let home = outline_home();
+    probe_env(&[vault.path()], Some(home.path()), env)
+}
+
+/// The outline's rows as shown, a dot per level under the top (`outline:` line).
+fn outline_rows(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("outline: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+const HEADINGS: &str = "# A\ntext\n## B\n### C\n## D\nmore\n# E\nend";
+
+#[test]
+fn the_outline_lists_the_note_s_headings_nested() {
+    let out = probe_outline(&[("a.md", HEADINGS)], &[], &[("KNOTES_PROBE_OPEN", "a.md")]);
+    assert_eq!(outline_rows(&out), "A | ·B | ··C | ·D | E");
+    let out = probe_outline(&[("a.md", "plain text")], &[], &[("KNOTES_PROBE_OPEN", "a.md")]);
+    assert_eq!(outline_rows(&out), "");
+    assert!(out.contains("outline-empty: Немає заголовків\n"), "{out}");
+}
+
+#[test]
+fn the_outline_follows_the_note_as_it_is_edited() {
+    let out = probe_outline(&[("a.md", HEADINGS)], &[], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "\n## F")]);
+    assert_eq!(outline_rows(&out), "A | ·B | ··C | ·D | E | ·F");
+}
+
+#[test]
+fn the_outline_of_a_pdf_is_its_bookmarks() {
+    let outlined: &[u8] = include_bytes!("fixtures/outlined.pdf");
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    let out = probe_outline(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", outlined)], &open);
+    assert_eq!(outline_rows(&out), "Вступ | Part | ·Detail");
+    let out = probe_outline(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", PDF)], &open);
+    assert!(out.contains("outline-empty: У цьому PDF немає змісту\n"), "{out}");
+}

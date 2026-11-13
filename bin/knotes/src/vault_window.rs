@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
@@ -76,6 +76,8 @@ struct State {
 
 /// Autosave runs after this long without edits (ADR 0011).
 const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
+/// The pause in typing after which the outline is listed again.
+const OUTLINE_DELAY: Duration = Duration::from_millis(150);
 
 /// The note open in the editor.
 struct Editing {
@@ -109,6 +111,10 @@ pub struct VaultWindow {
     pub outline_panel: OutlinePanel,
     /// What the right panel shows.
     panel_mode: Cell<PanelMode>,
+    /// The document the outline shows (a note's or a PDF's path), and whether an edit's
+    /// refresh of it is due.
+    outline_of: RefCell<Option<String>>,
+    outline_due: Cell<bool>,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
     state: RefCell<State>,
@@ -254,6 +260,8 @@ impl VaultWindow {
             chat,
             outline_panel,
             panel_mode: Cell::new(PanelMode::Ai),
+            outline_of: RefCell::new(None),
+            outline_due: Cell::new(false),
             toolbar_delegate: toolbar,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
@@ -315,6 +323,7 @@ impl VaultWindow {
             if let Some(window) = weak.upgrade() {
                 window.edited();
                 window.update_completion();
+                window.outline_later();
                 // An edit drops the highlights: the occurrences are found again, in place.
                 if window.find_bar.is_shown() {
                     window.find_text(&window.find_bar.text(), false);
@@ -469,6 +478,50 @@ impl VaultWindow {
         self.panel_mode.set(mode);
         self.chat.view.setHidden(mode != PanelMode::Ai);
         self.outline_panel.view.setHidden(mode != PanelMode::Outline);
+        self.refresh_outline();
+    }
+
+    /// Lists the headings of the document open in the outline, when the panel shows it.
+    fn refresh_outline(&self) {
+        if self.panel_mode.get() != PanelMode::Outline {
+            return;
+        }
+        let pdf = self.pdf_path.borrow().clone();
+        let note = self.editing.borrow().as_ref().map(|e| e.path.clone());
+        let (outline, empty) = if let Some(path) = &pdf {
+            let bookmarks = self.vault().and_then(|v| knotes_pdf::pdf_outline(&v.join(path))).unwrap_or_default();
+            let entries = bookmarks.into_iter().map(|b| OutlineEntry { level: b.level, title: b.title, place: (b.page, b.y) }).collect();
+            (Outline::new(entries), strings::NO_PDF_OUTLINE)
+        } else if note.is_some() {
+            let text = self.note_text.string().to_string();
+            let headings = note_headings(&text);
+            let offsets = utf16_offsets(&text, &headings.iter().map(|h| h.span.start as usize).collect::<Vec<_>>());
+            let entries = headings.into_iter().zip(offsets).map(|(h, at)| OutlineEntry { level: h.level, title: h.text, place: (at, 0.0) }).collect();
+            (Outline::new(entries), strings::NO_HEADINGS)
+        } else {
+            (Outline::default(), "")
+        };
+        let document = pdf.or(note);
+        let same = *self.outline_of.borrow() == document;
+        *self.outline_of.borrow_mut() = document;
+        self.outline_panel.show(outline, empty, same);
+    }
+
+    /// An edit: the outline is listed again once typing pauses briefly (typing stays as fast).
+    fn outline_later(&self) {
+        if self.panel_mode.get() != PanelMode::Outline || self.outline_due.replace(true) {
+            return;
+        }
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        let when = DispatchTime::try_from(OUTLINE_DELAY).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(window) = target.get(mtm).upgrade() {
+                window.outline_due.set(false);
+                window.refresh_outline();
+            }
+        });
     }
 
     /// What the right panel shows, and the view showing (probe mode).
@@ -798,6 +851,7 @@ impl VaultWindow {
         if self.find_bar.is_shown() {
             self.find_text(&self.find_bar.text(), true);
         }
+        self.refresh_outline();
         self.update_navigation();
     }
 
@@ -818,6 +872,7 @@ impl VaultWindow {
             self.window.layoutIfNeeded();
             viewer.go_to(page.unwrap_or(1).max(1) as usize - 1);
         }
+        self.refresh_outline();
         self.update_navigation();
     }
 
