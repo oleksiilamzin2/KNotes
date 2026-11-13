@@ -2041,3 +2041,31 @@ fn the_outline_of_a_pdf_is_its_bookmarks() {
     let out = probe_outline(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", PDF)], &open);
     assert!(out.contains("outline-empty: У цьому PDF немає змісту\n"), "{out}");
 }
+
+/// Three sections, each longer than the window, so each heading can reach the top.
+fn long_sections() -> String {
+    let filler = |name: &str| (0..80).map(|i| format!("{name} line {i}\n")).collect::<String>();
+    format!("# A\n{}## B\n{}# C\n{}", filler("a"), filler("b"), filler("c"))
+}
+
+/// The first line at the top of the note's visible part (`note-top:` line).
+fn note_top(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("note-top: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn a_click_on_a_heading_in_the_outline_scrolls_the_note_to_it() {
+    let note = long_sections();
+    let out = probe_outline(&[("a.md", &note)], &[], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_OUTLINE_CLICK", "B")]);
+    assert_eq!(note_top(&out), "## B");
+    let out = probe_outline(&[("a.md", &note)], &[], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_OUTLINE_CLICK", "C")]);
+    assert_eq!(note_top(&out), "# C");
+}
+
+#[test]
+fn a_click_on_a_bookmark_in_the_outline_shows_its_page_of_the_pdf() {
+    let outlined: &[u8] = include_bytes!("fixtures/outlined.pdf");
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_OUTLINE_CLICK", "Detail")];
+    let out = probe_outline(&[("a.md", "See [[doc.pdf]] here\n\nend")], &[("doc.pdf", outlined)], &env);
+    assert!(out.contains("pdf-view: doc.pdf 3/3"), "{out}");
+}

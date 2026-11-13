@@ -978,6 +978,11 @@ fn report_note(window: &VaultWindow) {
         let shown = scroll.contentView().bounds();
         println!("note-visible: {:.1} {:.1}", shown.origin.y, shown.origin.y + shown.size.height);
     }
+    if let Some(top) = window.note_top() {
+        let text = window.note_text.string().to_string();
+        let line: String = text.encode_utf16().skip(top).take_while(|&u| u != u16::from(b'\n')).collect::<Vec<u16>>().iter().map(|&u| char::from_u32(u32::from(u)).unwrap_or('?')).collect();
+        println!("note-top: {line}");
+    }
     let view = &window.note_text;
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);

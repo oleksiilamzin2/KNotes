@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
-use knotes_app::Outline;
+use knotes_app::{Outline, OutlineEntry};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -87,7 +87,8 @@ define_class!(
         /// A click on a heading.
         #[unsafe(method(headingClicked:))]
         fn heading_clicked(&self, sender: &NSOutlineView) {
-            let row = sender.clickedRow();
+            // The row clicked; the one selected when the action comes from the keyboard or a probe.
+            let row = if sender.clickedRow() >= 0 { sender.clickedRow() } else { sender.selectedRow() };
             let heading = (row >= 0).then(|| sender.itemAtRow(row)).flatten().and_then(|item| index_of(&item));
             if let (Some(heading), Some(callback)) = (heading, self.ivars().on_choose.borrow().as_ref()) {
                 callback(heading);
@@ -216,6 +217,32 @@ impl OutlinePanel {
             unsafe { self.outline.expandItem(Some(&self.source.object(i))) };
         }
         ivars.quiet.set(false);
+    }
+
+    /// Called with the heading clicked (index into the outline's entries).
+    pub fn on_choose(&self, callback: impl Fn(usize) + 'static) {
+        *self.source.ivars().on_choose.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Heading `i` of the outline shown.
+    pub fn entry(&self, i: usize) -> Option<OutlineEntry> {
+        self.source.ivars().model.borrow().entries().get(i).cloned()
+    }
+
+    /// A click on the row titled `title` (probe mode): the row selected and the outline
+    /// view's action sent to its target, as AppKit does after a click (the probe's window is not
+    /// key, and the outline view tracks no click there).
+    pub fn click(&self, title: &str) {
+        let outline = &self.outline;
+        let row = {
+            let model = self.source.ivars().model.borrow();
+            (0..outline.numberOfRows()).find(|&row| outline.itemAtRow(row).and_then(|item| index_of(&item)).is_some_and(|i| model.entries()[i].title == title))
+        };
+        let (Some(row), Some(action)) = (row, outline.action()) else { return };
+        outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
+        let target = outline.target();
+        // SAFETY: the outline view's own action and target, with it as the sender.
+        unsafe { objc2_app_kit::NSApplication::sharedApplication(self.view.mtm()).sendAction_to_from(action, target.as_deref(), Some(&**outline)) };
     }
 
     /// The rows shown, a dot per level under the top, and what the panel says with no

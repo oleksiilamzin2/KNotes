@@ -455,6 +455,12 @@ impl PdfViewer {
 
     /// Shows page `page` (index) at the top.
     pub fn go_to(&self, page: usize) {
+        self.go_to_place(page, 0.0);
+    }
+
+    /// Shows the point `y` (a fraction) down page `page` (index) at the top; the page's top
+    /// with the margin above it.
+    pub fn go_to_place(&self, page: usize, y: f64) {
         let ivars = self.pages.ivars();
         let Some(frame) = ivars.frames.borrow().get(page).copied() else { return };
         ivars.jumped.set(true);
@@ -462,7 +468,8 @@ impl PdfViewer {
         // Laid out first: the content insets under the toolbar come with layout.
         self.scroll.layoutSubtreeIfNeeded();
         let clip = self.scroll.contentView();
-        clip.scrollToPoint(NSPoint::new(0.0, frame.origin.y - MARGIN - self.scroll.contentInsets().top));
+        let top = if y > 0.0 { frame.origin.y + y * frame.size.height } else { frame.origin.y - MARGIN };
+        clip.scrollToPoint(NSPoint::new(0.0, top - self.scroll.contentInsets().top));
         self.scroll.reflectScrolledClipView(&clip);
         self.pages.follow();
     }

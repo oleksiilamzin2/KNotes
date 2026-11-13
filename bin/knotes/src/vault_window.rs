@@ -28,7 +28,8 @@ use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
 use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSView, NSViewController, NSWindow, NSWorkspace};
 use crate::pdf_viewer::PdfViewer;
-use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
+use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSPoint, NSRange, NSString, NSURL};
+use objc2_app_kit::NSTextElementProvider;
 
 use crate::chat_view::{self, ChatView};
 use crate::collapse_observer::CollapseObserver;
@@ -313,6 +314,12 @@ impl VaultWindow {
         *this.panel_observer.borrow_mut() = Some(CollapseObserver::watch(mtm, &this.panel_item, move |collapsed| toolbar.set_panel_shown(!collapsed)));
         *this.this.borrow_mut() = Rc::downgrade(&this);
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.outline_panel.on_choose(move |heading| {
+            if let Some(window) = weak.upgrade() {
+                window.go_to_heading(heading);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.live_preview.on_link(move |link| {
             if let Some(window) = weak.upgrade() {
                 window.follow_link(link);
@@ -505,6 +512,43 @@ impl VaultWindow {
         let same = *self.outline_of.borrow() == document;
         *self.outline_of.borrow_mut() = document;
         self.outline_panel.show(outline, empty, same);
+    }
+
+    /// Scrolls the document open to heading `heading` of the outline (a click on it).
+    fn go_to_heading(&self, heading: usize) {
+        let Some(entry) = self.outline_panel.entry(heading) else { return };
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            viewer.go_to_place(entry.place.0, entry.place.1);
+        } else if self.editing.borrow().is_some() {
+            self.scroll_note_to(entry.place.0);
+        }
+    }
+
+    /// Scrolls the note so the line at `offset` (UTF-16) is at the top, under the toolbar (as
+    /// far as the note goes).
+    fn scroll_note_to(&self, offset: usize) {
+        let view = &self.note_text;
+        // Laid out around it first: TextKit only estimates where lines out of view are.
+        view.scrollRangeToVisible(NSRange::new(offset, 0));
+        let (Some(layout), Some(scroll)) = (view.textLayoutManager(), view.enclosingScrollView()) else { return };
+        let Some(content) = layout.textContentManager() else { return };
+        let Some(fragment) = content.locationFromLocation_withOffset(&content.documentRange().location(), offset as isize).and_then(|at| layout.textLayoutFragmentForLocation(&at)) else { return };
+        let y = fragment.layoutFragmentFrame().origin.y + view.textContainerOrigin().y;
+        let clip = scroll.contentView();
+        clip.scrollToPoint(NSPoint::new(clip.bounds().origin.x, y - scroll.contentInsets().top));
+        scroll.reflectScrolledClipView(&clip);
+        layout.textViewportLayoutController().layoutViewport();
+    }
+
+    /// The offset (UTF-16) of the paragraph at the top of the note's visible part, under the
+    /// toolbar.
+    pub fn note_top(&self) -> Option<usize> {
+        let view = &self.note_text;
+        let (layout, scroll) = (view.textLayoutManager()?, view.enclosingScrollView()?);
+        let content = layout.textContentManager()?;
+        let y = scroll.contentView().bounds().origin.y + scroll.contentInsets().top - view.textContainerOrigin().y + 1.0;
+        let fragment = layout.textLayoutFragmentForPosition(NSPoint::new(1.0, y.max(0.0)))?;
+        Some(content.offsetFromLocation_toLocation(&content.documentRange().location(), &fragment.rangeInElement().location()).max(0) as usize)
     }
 
     /// An edit: the outline is listed again once typing pauses briefly (typing stays as fast).
@@ -802,6 +846,10 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            if let Ok(title) = std::env::var("KNOTES_PROBE_OUTLINE_CLICK") {
+                self.window.displayIfNeeded();
+                self.outline_panel.click(&title);
+            }
             if let Some(viewer) = self.pdf_view.borrow().as_ref() {
                 probe::pdf_mouse_requested(viewer);
                 probe::pdf_copy_requested(viewer);
