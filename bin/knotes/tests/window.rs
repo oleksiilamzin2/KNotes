@@ -118,7 +118,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, chat"
+        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, panel-mode(2), panel"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -623,6 +623,29 @@ fn the_sidebar_switch_hides_with_the_sidebar() {
     assert!(out.contains("sidebar-mode: folders"), "{out}");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "toggle-sidebar")]);
     assert!(out.contains("sidebar-mode: hidden"), "{out}");
+}
+
+#[test]
+fn the_panel_switch_shows_the_ai_or_the_outline_and_is_remembered() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let out = probe_env(&[vault.path()], Some(home.path()), &[]);
+    assert!(out.contains("panel: ai, shows chat\n"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "panel=outline")]);
+    assert!(out.contains("panel: outline, shows outline\n"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[]);
+    assert!(out.contains("panel: outline, shows outline\n"), "remembered: {out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "panel=ai")]);
+    assert!(out.contains("panel: ai, shows chat\n"), "{out}");
+}
+
+#[test]
+fn the_panel_switch_hides_with_the_panel() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "toggle-panel")]);
+    assert!(out.contains("panel: hidden"), "{out}");
 }
 
 /// x of the toolbar's separator line and of the list/note column boundary.

@@ -12,6 +12,7 @@ mod live_preview;
 mod main_menu;
 mod note_list_view;
 mod note_view;
+mod outline_panel;
 mod pdf_viewer;
 mod probe;
 mod quick_look;

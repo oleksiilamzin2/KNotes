@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
@@ -26,12 +26,13 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
+use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSView, NSViewController, NSWindow, NSWorkspace};
 use crate::pdf_viewer::PdfViewer;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
 use crate::collapse_observer::CollapseObserver;
+use crate::outline_panel::OutlinePanel;
 use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
@@ -104,6 +105,10 @@ pub struct VaultWindow {
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
     pub chat: ChatView,
+    /// The outline of the document open, in the right panel beside the chat.
+    pub outline_panel: OutlinePanel,
+    /// What the right panel shows.
+    panel_mode: Cell<PanelMode>,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
     state: RefCell<State>,
@@ -129,12 +134,18 @@ pub struct VaultWindow {
     /// The sidebar's split view item, watched to hide the folders/tags switch with it.
     sidebar_item: Retained<NSSplitViewItem>,
     collapse_observer: RefCell<Option<Retained<CollapseObserver>>>,
+    /// The right panel's split view item, watched to hide the AI/outline switch with it.
+    panel_item: Retained<NSSplitViewItem>,
+    panel_observer: RefCell<Option<Retained<CollapseObserver>>>,
 }
 
 impl Drop for VaultWindow {
     fn drop(&mut self) {
         if let Some(observer) = self.collapse_observer.take() {
             observer.stop(&self.sidebar_item);
+        }
+        if let Some(observer) = self.panel_observer.take() {
+            observer.stop(&self.panel_item);
         }
     }
 }
@@ -185,8 +196,23 @@ impl VaultWindow {
         let find_bar = FindBar::new(mtm, note_scroll.clone());
         note_vc.setView(&find_bar.column);
         let chat = chat_view::chat_view(mtm);
+        let outline_panel = OutlinePanel::new(mtm);
+        let panel = NSView::new(mtm);
+        for view in [&chat.view, &outline_panel.view] {
+            view.setTranslatesAutoresizingMaskIntoConstraints(false);
+            panel.addSubview(view);
+            for c in [
+                view.topAnchor().constraintEqualToAnchor(&panel.topAnchor()),
+                view.bottomAnchor().constraintEqualToAnchor(&panel.bottomAnchor()),
+                view.leadingAnchor().constraintEqualToAnchor(&panel.leadingAnchor()),
+                view.trailingAnchor().constraintEqualToAnchor(&panel.trailingAnchor()),
+            ] {
+                c.setActive(true);
+            }
+        }
+        outline_panel.view.setHidden(true);
         let chat_vc = NSViewController::new(mtm);
-        chat_vc.setView(&chat.view);
+        chat_vc.setView(&panel);
         let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc, &chat_vc);
         let list_menu = ListMenu::new(mtm);
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
@@ -226,6 +252,8 @@ impl VaultWindow {
             find_current: Cell::new(None),
             live_preview,
             chat,
+            outline_panel,
+            panel_mode: Cell::new(PanelMode::Ai),
             toolbar_delegate: toolbar,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
@@ -242,6 +270,8 @@ impl VaultWindow {
             search_scope: RefCell::new(None),
             sidebar_item: split.splitViewItems().objectAtIndex(0),
             collapse_observer: RefCell::new(None),
+            panel_item: split.splitViewItems().objectAtIndex(3),
+            panel_observer: RefCell::new(None),
         });
         let toolbar = this.toolbar_delegate.clone();
         let list_item = split.splitViewItems().objectAtIndex(1);
@@ -271,6 +301,8 @@ impl VaultWindow {
             }
         });
         *this.collapse_observer.borrow_mut() = Some(observer);
+        let toolbar = this.toolbar_delegate.clone();
+        *this.panel_observer.borrow_mut() = Some(CollapseObserver::watch(mtm, &this.panel_item, move |collapsed| toolbar.set_panel_shown(!collapsed)));
         *this.this.borrow_mut() = Rc::downgrade(&this);
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.live_preview.on_link(move |link| {
@@ -425,6 +457,35 @@ impl VaultWindow {
         self.rebuild_sidebar();
         let selection = self.state.borrow().selection.clone();
         self.highlight(&selection);
+    }
+
+    /// The AI or the outline in the right panel (the toolbar switch).
+    pub fn set_panel_mode(&self, mode: PanelMode) {
+        self.toolbar_delegate.set_panel_mode(mode);
+        self.show_panel(mode);
+    }
+
+    fn show_panel(&self, mode: PanelMode) {
+        self.panel_mode.set(mode);
+        self.chat.view.setHidden(mode != PanelMode::Ai);
+        self.outline_panel.view.setHidden(mode != PanelMode::Outline);
+    }
+
+    /// What the right panel shows, and the view showing (probe mode).
+    pub fn describe_panel(&self) -> String {
+        let shows = if !self.chat.view.isHidden() { "chat" } else if !self.outline_panel.view.isHidden() { "outline" } else { "nothing" };
+        format!("{}, shows {shows}", self.panel_mode.get().key())
+    }
+
+    /// Called when the user flips the AI/outline switch (the app saves the choice).
+    pub fn on_panel_mode(&self, callback: impl Fn(PanelMode) + 'static) {
+        let weak = self.this.borrow().clone();
+        self.toolbar_delegate.on_panel_mode(move |mode| {
+            if let Some(window) = weak.upgrade() {
+                window.show_panel(mode);
+            }
+            callback(mode);
+        });
     }
 
     /// Called when the user flips the folders/tags switch (the app saves the choice).
@@ -587,6 +648,7 @@ impl VaultWindow {
             probe::sidebar_mode_requested(&self.window);
             probe::search_requested(&self.window);
             probe::toggle_sidebar_requested(&self.window);
+            probe::panel_requested(&self.window);
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
                 self.select(item);

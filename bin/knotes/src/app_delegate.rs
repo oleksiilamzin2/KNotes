@@ -228,6 +228,14 @@ impl AppDelegate {
                 eprintln!("knotes: cannot save settings: {e}");
             }
         });
+        window.set_panel_mode(settings.panel_mode);
+        window.on_panel_mode(|mode| {
+            let mut settings = AppSettings::load(&app_data());
+            settings.panel_mode = mode;
+            if let Err(e) = settings.save(&app_data()) {
+                eprintln!("knotes: cannot save settings: {e}");
+            }
+        });
         forward(events, &window, mtm);
         settings.last_vault = Some(path.clone());
         if let Err(e) = settings.save(&app_data()) {

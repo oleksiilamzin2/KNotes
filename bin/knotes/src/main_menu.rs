@@ -76,7 +76,7 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     ]);
     submenu(mtm, &bar, s::MENU_VIEW, &[
         Some(item(mtm, s::TOGGLE_SIDEBAR, sel!(toggleSidebar:), "s", cmd(NSEventModifierFlags::Control))),
-        Some(item(mtm, s::TOGGLE_CHAT, sel!(toggleInspector:), "i", cmd(NSEventModifierFlags::Option))),
+        Some(item(mtm, s::TOGGLE_PANEL, sel!(toggleInspector:), "i", cmd(NSEventModifierFlags::Option))),
         None,
         Some(item(mtm, s::FULL_SCREEN, sel!(toggleFullScreen:), "f", cmd(NSEventModifierFlags::Control))),
     ]);

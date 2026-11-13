@@ -677,6 +677,7 @@ pub fn schedule(with_sidebar: bool) {
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
+                    report_panel(window);
                     report_list_separator(&window.window);
                     report_search(&window.window);
                     report_list(&window.table);
@@ -860,6 +861,45 @@ fn report_list_separator(window: &NSWindow) {
     }
     let nearest = lines.iter().copied().min_by(|a, b| (a - boundary).abs().total_cmp(&(b - boundary).abs())).unwrap_or(f64::NAN);
     println!("list-separator: {nearest:.1} boundary {boundary:.1}");
+}
+
+/// `panel: outline, shows outline`: the AI/outline switch (or `hidden` with the panel) and
+/// the view the panel shows.
+fn report_panel(window: &VaultWindow) {
+    let hidden = panel_switch(&window.window).is_some_and(|g| g.isHidden());
+    println!("panel: {}", if hidden { "hidden".to_owned() } else { window.describe_panel() });
+}
+
+fn panel_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItemGroup>> {
+    let id = NSString::from_str(crate::toolbar::PANEL_MODE);
+    window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?.downcast::<NSToolbarItemGroup>().ok()
+}
+
+/// `KNOTES_PROBE_ACTION=panel=ai` or `panel=outline`: a click on that segment of the toolbar's
+/// AI/outline switch, sent to its target as AppKit does; `toggle-panel`: the panel's button,
+/// sent to the split view controller (the probe's window is not key).
+pub fn panel_requested(window: &NSWindow) {
+    let action = std::env::var("KNOTES_PROBE_ACTION");
+    let app = NSApplication::sharedApplication(window.mtm());
+    if action.as_deref() == Ok("toggle-panel") {
+        if let Some(controller) = window.contentViewController() {
+            // SAFETY: NSSplitViewController implements toggleInspector:.
+            unsafe { app.sendAction_to_from(objc2::sel!(toggleInspector:), Some(&controller), None) };
+        }
+        return;
+    }
+    let index = match action.as_deref() {
+        Ok("panel=ai") => 0,
+        Ok("panel=outline") => 1,
+        _ => return,
+    };
+    let Some(group) = panel_switch(window) else { return };
+    group.setSelectedIndex(index);
+    if let Some(action) = group.action() {
+        let target = group.target();
+        // SAFETY: the group's own action and target, with the group as sender.
+        unsafe { app.sendAction_to_from(action, target.as_deref(), Some(&group)) };
+    }
 }
 
 fn report_sidebar_mode(window: &NSWindow) {

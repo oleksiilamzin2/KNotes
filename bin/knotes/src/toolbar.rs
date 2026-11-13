@@ -1,5 +1,6 @@
 //! Window toolbar as in Knotes v1: sidebar toggle and the folders/tags switch, list title (window title and subtitle),
-//! new note and back/forward over the note, chat toggle over the inspector. Separators track
+//! new note and back/forward over the note, the AI/outline switch and the panel's toggle over
+//! the inspector (ADR 0023). Separators track
 //! the split view columns, so each group sits above its column; macOS draws the glass.
 
 use std::cell::{Cell, RefCell};
@@ -15,7 +16,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
 use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSFont, NSLineBreakMode, NSTextField, NSTextFieldDelegate, NSTextView};
 
-use knotes_app::{SearchMode, SidebarMode};
+use knotes_app::{PanelMode, SearchMode, SidebarMode};
 
 use crate::strings;
 
@@ -27,11 +28,15 @@ pub const NEW_NOTE: &str = "knotes.new-note";
 pub const HISTORY: &str = "knotes.history";
 /// The open note's name, edited in place to rename it (ADR 0019).
 pub const NOTE_TITLE: &str = "knotes.note-title";
-pub const CHAT: &str = "knotes.chat";
+/// The AI/outline switch over the right panel (ADR 0023).
+pub const PANEL_MODE: &str = "knotes.panel-mode";
+/// Shows and hides the right panel.
+pub const PANEL: &str = "knotes.panel";
 
 type OnNavigate = Box<dyn Fn(bool)>;
 type OnNewNote = Box<dyn Fn()>;
 type OnSidebarMode = Box<dyn Fn(SidebarMode)>;
+type OnPanelMode = Box<dyn Fn(PanelMode)>;
 type OnSearch = Box<dyn Fn(String)>;
 type OnToggleSearch = Box<dyn Fn()>;
 type OnSearchMode = Box<dyn Fn(SearchMode)>;
@@ -56,6 +61,11 @@ pub struct Ivars {
     sidebar_mode_state: Cell<SidebarMode>,
     /// The switch shows only while the sidebar does.
     sidebar_shown: Cell<bool>,
+    /// The AI/outline switch, once made, the mode it shows, and whether the panel shows.
+    panel_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
+    panel_mode_state: Cell<PanelMode>,
+    panel_shown: Cell<bool>,
+    on_panel_mode: RefCell<Option<OnPanelMode>>,
     history: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     /// Back/forward availability, applied when the group item is created later.
     history_state: Cell<(bool, bool)>,
@@ -117,6 +127,15 @@ define_class!(
             let mode = if sender.selectedIndex() == 1 { SidebarMode::Tags } else { SidebarMode::Folders };
             self.ivars().sidebar_mode_state.set(mode);
             if let Some(callback) = self.ivars().on_sidebar_mode.borrow().as_ref() {
+                callback(mode);
+            }
+        }
+
+        #[unsafe(method(panelMode:))]
+        fn panel_mode_chosen(&self, sender: &NSToolbarItemGroup) {
+            let mode = if sender.selectedIndex() == 1 { PanelMode::Outline } else { PanelMode::Ai };
+            self.ivars().panel_mode_state.set(mode);
+            if let Some(callback) = self.ivars().on_panel_mode.borrow().as_ref() {
                 callback(mode);
             }
         }
@@ -190,6 +209,10 @@ impl ToolbarDelegate {
             sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
             sidebar_shown: Cell::new(true),
+            panel_mode: RefCell::new(None),
+            panel_mode_state: Cell::new(PanelMode::Ai),
+            panel_shown: Cell::new(true),
+            on_panel_mode: RefCell::new(None),
             history: RefCell::new(None),
             history_state: Cell::new((false, false)),
         });
@@ -228,6 +251,26 @@ impl ToolbarDelegate {
     pub fn set_sidebar_shown(&self, shown: bool) {
         self.ivars().sidebar_shown.set(shown);
         if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
+            group.setHidden(!shown);
+        }
+    }
+
+    pub fn on_panel_mode(&self, callback: impl Fn(PanelMode) + 'static) {
+        *self.ivars().on_panel_mode.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Shows `mode` in the AI/outline switch (without calling back).
+    pub fn set_panel_mode(&self, mode: PanelMode) {
+        self.ivars().panel_mode_state.set(mode);
+        if let Some(group) = self.ivars().panel_mode.borrow().as_ref() {
+            group.setSelectedIndex(panel_index(mode));
+        }
+    }
+
+    /// Hides the AI/outline switch while the panel is collapsed.
+    pub fn set_panel_shown(&self, shown: bool) {
+        self.ivars().panel_shown.set(shown);
+        if let Some(group) = self.ivars().panel_mode.borrow().as_ref() {
             group.setHidden(!shown);
         }
     }
@@ -364,8 +407,30 @@ impl ToolbarDelegate {
                 *self.ivars().note_title.borrow_mut() = Some(field);
                 Some(item)
             }
-            CHAT => {
-                let item = button(mtm, id, "brain", strings::CHAT);
+            PANEL_MODE => {
+                let images = NSArray::from_retained_slice(&[symbol("brain", strings::AI)?, symbol("list.bullet.indent", strings::OUTLINE)?]);
+                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::AI), NSString::from_str(strings::OUTLINE)]);
+                let group = unsafe {
+                    NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
+                        id,
+                        &images,
+                        NSToolbarItemGroupSelectionMode::SelectOne,
+                        Some(&labels),
+                        Some(target),
+                        Some(sel!(panelMode:)),
+                        mtm,
+                    )
+                };
+                for (item, tip) in group.subitems().iter().zip([strings::AI, strings::OUTLINE]) {
+                    item.setToolTip(Some(&NSString::from_str(tip)));
+                }
+                group.setSelectedIndex(panel_index(self.ivars().panel_mode_state.get()));
+                group.setHidden(!self.ivars().panel_shown.get());
+                *self.ivars().panel_mode.borrow_mut() = Some(group.clone());
+                Some(Retained::into_super(group))
+            }
+            PANEL => {
+                let item = button(mtm, id, "sidebar.right", strings::TOGGLE_PANEL);
                 // Up the responder chain to the split view controller.
                 unsafe { item.setAction(Some(sel!(toggleInspector:))) };
                 Some(item)
@@ -401,7 +466,8 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         custom(NOTE_TITLE),
         system[2].copy(),
         system[3].copy(),
-        custom(CHAT),
+        custom(PANEL_MODE),
+        custom(PANEL),
     ])
 }
 
@@ -429,6 +495,13 @@ fn mode_index(mode: SidebarMode) -> isize {
     match mode {
         SidebarMode::Folders => 0,
         SidebarMode::Tags => 1,
+    }
+}
+
+fn panel_index(mode: PanelMode) -> isize {
+    match mode {
+        PanelMode::Ai => 0,
+        PanelMode::Outline => 1,
     }
 }
 
