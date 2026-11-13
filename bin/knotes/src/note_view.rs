@@ -44,6 +44,8 @@ type OnPress = Box<dyn Fn(&NSTextView, NSPoint) -> bool>;
 /// Gets the text view, where the pointer is in it and a sideways scroll (points); true when it
 /// took the scroll (a wide table).
 type OnScrollSideways = Box<dyn Fn(&NSTextView, NSPoint, f64) -> bool>;
+/// Gets a right click's context menu and the character index it is at, to add to it.
+type OnContextMenu = Box<dyn Fn(&objc2_app_kit::NSMenu, usize)>;
 
 /// How near an image's right edge (points) the pointer resizes it.
 const IMAGE_EDGE: f64 = 6.0;
@@ -66,6 +68,7 @@ pub struct Ivars {
     on_pointer: RefCell<Option<OnPointer>>,
     on_press: RefCell<Option<OnPress>>,
     on_scroll_sideways: RefCell<Option<OnScrollSideways>>,
+    on_context_menu: RefCell<Option<OnContextMenu>>,
     /// The image the last click was on (where its line starts): a second click previews it,
     /// though the first one moved it below its source.
     image_clicked: Cell<Option<usize>>,
@@ -119,6 +122,18 @@ define_class!(
             } else if self.over_clickable(event.locationInWindow()) {
                 NSCursor::pointingHandCursor().set();
             }
+        }
+
+        /// The text's context menu, with a table cell's row and column actions first.
+        #[unsafe(method_id(menuForEvent:))]
+        fn menu_for_event(&self, event: &NSEvent) -> Option<Retained<objc2_app_kit::NSMenu>> {
+            // SAFETY: the superclass builds the text view's own context menu.
+            let menu: Option<Retained<objc2_app_kit::NSMenu>> = unsafe { msg_send![super(self), menuForEvent: event] };
+            let index = self.characterIndexForInsertionAtPoint(self.convertPoint_fromView(event.locationInWindow(), None));
+            if let (Some(menu), Some(callback)) = (menu.as_deref(), self.ivars().on_context_menu.borrow().as_ref()) {
+                callback(menu, index);
+            }
+            menu
         }
 
         /// A sideways scroll over a wide table scrolls the table; the rest scrolls the note.
@@ -262,6 +277,10 @@ impl NoteTextView {
     /// and its rect in the view.
     fn image_edge(&self, in_window: NSPoint) -> Option<(usize, NSRect)> {
         self.image_edge_at(self.convertPoint_fromView(in_window, None))
+    }
+
+    pub fn on_context_menu(&self, callback: impl Fn(&objc2_app_kit::NSMenu, usize) + 'static) {
+        *self.ivars().on_context_menu.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_scroll_sideways(&self, callback: impl Fn(&NSTextView, NSPoint, f64) -> bool + 'static) {

@@ -1696,3 +1696,18 @@ fn a_wide_table_scrolls_sideways_by_columns_and_follows_the_cursor() {
     let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &format!("{scroll};cursor=5")), ("KNOTES_PROBE_RANGE_X", "2,17")]);
     assert!(range_xs(&out)[0].1 - range_xs(&out)[0].0 > 50.0, "the cursor's column shows again: {out}");
 }
+
+#[test]
+fn a_right_click_in_a_cell_offers_the_table_s_row_and_column_actions() {
+    // In Ann's cell (37..40).
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_CONTEXT", "38")]);
+    let menu = out.lines().find_map(|l| l.strip_prefix("table-context: ")).unwrap_or_else(|| panic!("{out}"));
+    let items: Vec<&str> = menu.split(" | ").collect();
+    assert_eq!(&items[..6], ["Вставити рядок вище", "Вставити рядок нижче", "Видалити рядок", "Вставити колонку ліворуч", "Вставити колонку праворуч", "Видалити колонку"]);
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_CONTEXT", "38:2")]);
+    assert!(note_text(&out).contains("| :--- | ---: |⏎| Bartholomew | 42 |⏎"), "Ann's row deleted: {out}");
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_CONTEXT", "38:5")]);
+    assert!(note_text(&out).contains("| Age |⏎| ---: |⏎| 3 |⏎| 42 |"), "the first column deleted: {out}");
+    let out = table_probe(&[("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_TABLE_CONTEXT", "70")]);
+    assert!(out.contains("table-context: none"), "outside a table: {out}");
+}

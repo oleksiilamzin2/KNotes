@@ -164,6 +164,8 @@ impl VaultWindow {
         note_text.on_press(move |view, point| presses.press_table(view, point));
         let scrolls = live_preview.clone();
         note_text.on_scroll_sideways(move |view, point, dx| scrolls.scroll_table(view, point, dx));
+        let menus = live_preview.clone();
+        note_text.on_context_menu(move |menu, index| menus.add_table_items(menu, index));
         // Weak: the text view keeps its callbacks, and the text view is the live preview's.
         let preview = live_preview.clone();
         let text = objc2::rc::Weak::new(&*note_text);
@@ -629,6 +631,9 @@ impl VaultWindow {
             probe::pointer_requested(&self.note_text);
             if let Ok(scroll) = std::env::var("KNOTES_PROBE_TABLE_SCROLL") {
                 probe::table_scroll_requested(&self.note_text, &scroll);
+            }
+            if let Ok(spec) = std::env::var("KNOTES_PROBE_TABLE_CONTEXT") {
+                self.live_preview.probe_table_context(&self.note_text, &spec);
             }
             if let Ok(press) = std::env::var("KNOTES_PROBE_TABLE_PRESS") {
                 self.live_preview.probe_table_press(&self.note_text, &press);

@@ -1426,22 +1426,70 @@ impl LivePreview {
 
     /// Shows a handle's menu at `point`; the chosen item acts (`tableMenuItem:`).
     fn show_table_menu(&self, view: &NSTextView, control: TableControl, point: NSPoint) {
+        let menu = objc2_app_kit::NSMenu::new(self.mtm());
+        self.fill_table_menu(&menu, control_table(control), &self.table_menu(control), 0);
+        menu.popUpMenuPositioningItem_atLocation_inView(None, point, Some(view));
+    }
+
+    /// Puts table `t`'s `items` in `menu` from position `at`, groups apart (rows; columns;
+    /// alignment; sorting); the chosen item acts (`tableMenuItem:`). Gives the position after
+    /// them.
+    fn fill_table_menu(&self, menu: &objc2_app_kit::NSMenu, t: usize, items: &[(&'static str, TableAction)], mut at: isize) -> isize {
         let mtm = self.mtm();
-        let items = self.table_menu(control);
-        *self.ivars().menu_actions.borrow_mut() = items.iter().map(|(_, a)| (control_table(control), *a)).collect();
-        let menu = objc2_app_kit::NSMenu::new(mtm);
+        *self.ivars().menu_actions.borrow_mut() = items.iter().map(|(_, a)| (t, *a)).collect();
+        let group = |a: &TableAction| match a {
+            TableAction::InsertRow(_) | TableAction::DeleteRow(_) | TableAction::MoveRow(..) => 0,
+            TableAction::InsertColumn(_) | TableAction::DeleteColumn(_) | TableAction::MoveColumn(..) => 1,
+            TableAction::Align(..) => 2,
+            TableAction::Sort(..) => 3,
+        };
         for (tag, (title, action)) in items.iter().enumerate() {
-            if matches!(action, TableAction::Align(..) | TableAction::Sort(..)) && matches!(items.get(tag.wrapping_sub(1)), Some((_, TableAction::DeleteColumn(_) | TableAction::Align(_, Align::Right)))) {
-                menu.addItem(&objc2_app_kit::NSMenuItem::separatorItem(mtm));
+            if tag > 0 && group(&items[tag - 1].1) != group(action) {
+                menu.insertItem_atIndex(&objc2_app_kit::NSMenuItem::separatorItem(mtm), at);
+                at += 1;
             }
             // SAFETY: the live preview is the target and lives as long as the view.
             let item = unsafe { objc2_app_kit::NSMenuItem::initWithTitle_action_keyEquivalent(objc2_app_kit::NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(tableMenuItem:)), &NSString::new()) };
             // SAFETY: as above.
             unsafe { item.setTarget(Some(self)) };
             item.setTag(tag as isize);
-            menu.addItem(&item);
+            menu.insertItem_atIndex(&item, at);
+            at += 1;
         }
-        menu.popUpMenuPositioningItem_atLocation_inView(None, point, Some(view));
+        at
+    }
+
+    /// The table actions for the cell holding character `index`: its row's, then its
+    /// column's, with the table's index.
+    fn cell_menu(&self, index: usize) -> Option<(usize, Vec<(&'static str, TableAction)>)> {
+        let (t, row, column) = cell_at(&self.ivars().styled.borrow(), index)?;
+        let mut items = self.table_menu(TableControl::RowHandle(t, row));
+        items.extend(self.table_menu(TableControl::ColumnHandle(t, column)));
+        Some((t, items))
+    }
+
+    /// A right click at character `index`: in a table's cell, its row's and column's actions
+    /// come first in the context `menu`, before the text's own items.
+    pub fn add_table_items(&self, menu: &objc2_app_kit::NSMenu, index: usize) {
+        let Some((t, items)) = self.cell_menu(index) else { return };
+        let at = self.fill_table_menu(menu, t, &items, 0);
+        if menu.numberOfItems() > at {
+            menu.insertItem_atIndex(&objc2_app_kit::NSMenuItem::separatorItem(self.mtm()), at);
+        }
+    }
+
+    /// `KNOTES_PROBE_TABLE_CONTEXT`: a right click at character `index` (its table items
+    /// printed, `none` outside a table), or `index:n` (item n chosen).
+    pub fn probe_table_context(&self, view: &NSTextView, spec: &str) {
+        let (index, choice) = spec.split_once(':').map_or((spec, None), |(i, n)| (i, n.parse::<usize>().ok()));
+        let Some((t, items)) = index.parse().ok().and_then(|i| self.cell_menu(i)) else {
+            println!("table-context: none");
+            return;
+        };
+        match choice.and_then(|n| items.get(n)) {
+            Some(&(_, action)) => self.act_on_table(view, t, action),
+            None => println!("table-context: {}", items.iter().map(|(title, _)| *title).collect::<Vec<_>>().join(" | ")),
+        }
     }
 
     /// A handle dropped at `point`: its row or column moves to the one there.
