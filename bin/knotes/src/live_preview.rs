@@ -425,8 +425,18 @@ impl LivePreview {
     /// Highlights `ranges` (UTF-16), the words the search found in the note, until the next
     /// edit or note; the first is scrolled into view with the find indicator.
     pub fn show_found(&self, view: &NSTextView, ranges: &[(usize, usize)]) {
+        self.highlight(view, ranges);
+        let Some(&first) = ranges.first() else { return };
+        let first = NSRange::new(first.0, first.1 - first.0);
+        view.scrollRangeToVisible(first);
+        view.showFindIndicatorForRange(first);
+    }
+
+    /// Highlights `ranges` (UTF-16) in the find colour, instead of what was highlighted, until
+    /// the next edit or note.
+    pub fn highlight(&self, view: &NSTextView, ranges: &[(usize, usize)]) {
         self.clear_found(view);
-        let (Some(layout), Some(&first)) = (view.textLayoutManager(), ranges.first()) else { return };
+        let Some(layout) = view.textLayoutManager() else { return };
         let Some(content) = layout.textContentManager() else { return };
         let start = content.documentRange().location();
         let color = NSColor::findHighlightColor();
@@ -442,13 +452,10 @@ impl LivePreview {
             }
         }
         self.ivars().found.set(ranges.len());
-        let first = NSRange::new(first.0, first.1 - first.0);
-        view.scrollRangeToVisible(first);
-        view.showFindIndicatorForRange(first);
     }
 
     /// Drops the highlights of found words.
-    fn clear_found(&self, view: &NSTextView) {
+    pub fn clear_found(&self, view: &NSTextView) {
         if self.ivars().found.replace(0) == 0 {
             return;
         }

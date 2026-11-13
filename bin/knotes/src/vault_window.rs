@@ -37,6 +37,7 @@ use crate::live_preview::LivePreview;
 use crate::rename_dialog::{self, LinkUpdate};
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view::{self, NoteTextView};
+use crate::find_bar::FindBar;
 use crate::search_bar::SearchBar;
 use crate::search_worker::{SearchRequest, SearchResponse, SearchWorker};
 use crate::sidebar_view::{self, SidebarSource};
@@ -90,6 +91,11 @@ pub struct VaultWindow {
     pub note_text: Retained<NoteTextView>,
     /// The search row over the note list.
     pub search_bar: SearchBar,
+    /// Find in the open note (Cmd+F), over the note.
+    pub find_bar: FindBar,
+    /// The occurrences found in the note (UTF-16) and the one selected.
+    find_matches: RefCell<Vec<(usize, usize)>>,
+    find_current: Cell<Option<usize>>,
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
     pub chat: ChatView,
@@ -155,7 +161,8 @@ impl VaultWindow {
             }
         });
         let note_vc = NSViewController::new(mtm);
-        note_vc.setView(&note_scroll);
+        let find_bar = FindBar::new(mtm, note_scroll.clone());
+        note_vc.setView(&find_bar.column);
         let chat = chat_view::chat_view(mtm);
         let chat_vc = NSViewController::new(mtm);
         chat_vc.setView(&chat.view);
@@ -191,6 +198,9 @@ impl VaultWindow {
             list_menu,
             note_text,
             search_bar,
+            find_bar,
+            find_matches: RefCell::new(Vec::new()),
+            find_current: Cell::new(None),
             live_preview,
             chat,
             toolbar_delegate: toolbar,
@@ -231,6 +241,34 @@ impl VaultWindow {
             if let Some(window) = weak.upgrade() {
                 window.edited();
                 window.update_completion();
+                // An edit drops the highlights: the occurrences are found again, in place.
+                if window.find_bar.is_shown() {
+                    window.find_text(&window.find_bar.text(), false);
+                }
+            }
+        });
+        let (text_weak, step_weak, close_weak) = (Rc::downgrade(&this), Rc::downgrade(&this), Rc::downgrade(&this));
+        this.find_bar.on_events(
+            move |text| {
+                if let Some(window) = text_weak.upgrade() {
+                    window.find_text(&text, true);
+                }
+            },
+            move |forward| {
+                if let Some(window) = step_weak.upgrade() {
+                    window.find_step(forward);
+                }
+            },
+            move || {
+                if let Some(window) = close_weak.upgrade() {
+                    window.close_find();
+                }
+            },
+        );
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.note_text.on_find(move |action| {
+            if let Some(window) = weak.upgrade() {
+                window.find_action(action);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -507,7 +545,13 @@ impl VaultWindow {
                 probe::shortcut_requested(&self.window, &self.note_text);
             }
             if let Ok(word) = std::env::var("KNOTES_PROBE_FIND") {
-                self.note_text.find_word(&word);
+                self.open_find();
+                self.find_bar.set_text(&word);
+                self.find_text(&word, true);
+                let steps: usize = std::env::var("KNOTES_PROBE_FIND_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+                for _ in 0..steps {
+                    self.find_step(true);
+                }
             }
             probe::click_requested(&self.note_text);
             println!("found-in-note: {}", self.live_preview.found_count());
@@ -538,6 +582,9 @@ impl VaultWindow {
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
         self.live_preview.show(&self.note_text, path, &text);
         self.show_found_words(&text);
+        if self.find_bar.is_shown() {
+            self.find_text(&self.find_bar.text(), true);
+        }
         self.update_navigation();
     }
 
@@ -1245,12 +1292,87 @@ impl VaultWindow {
         self.search_bar.show(true);
     }
 
-    /// Edit → Find… and its neighbours: the find bar over the open note (the note's text view
-    /// takes the focus first).
+    /// Edit → Find… and its neighbours from anywhere in the window.
     pub fn find_in_note(&self, sender: Option<&objc2::runtime::AnyObject>) {
+        self.find_action(note_view::finder_tag(sender));
+    }
+
+    /// A find action (`NSTextFinderAction`): show the bar, the next or previous occurrence, or
+    /// hide the bar.
+    pub fn find_action(&self, action: isize) {
+        use objc2_app_kit::NSTextFinderAction as A;
+        match A(action) {
+            A::NextMatch | A::PreviousMatch if self.find_bar.is_shown() || !self.find_bar.text().is_empty() => {
+                if !self.find_bar.is_shown() {
+                    self.open_find();
+                }
+                self.find_step(A(action) == A::NextMatch);
+            }
+            A::HideFindInterface => self.close_find(),
+            _ => self.open_find(),
+        }
+    }
+
+    /// Shows the find bar, its text selected and found again in the note.
+    fn open_find(&self) {
+        self.find_bar.show(true);
+        let text = self.find_bar.text();
+        if !text.is_empty() {
+            self.find_text(&text, true);
+        }
+    }
+
+    /// Done or Escape: the bar and its highlights go, the note gets the focus back.
+    pub fn close_find(&self) {
+        self.find_bar.show(false);
+        self.live_preview.clear_found(&self.note_text);
+        self.find_matches.borrow_mut().clear();
+        self.find_current.set(None);
         self.window.makeFirstResponder(Some(&self.note_text));
-        // SAFETY: a text view with a find bar performs the text finder's actions.
-        let _: () = unsafe { objc2::msg_send![&**self.note_text, performTextFinderAction: sender] };
+    }
+
+    /// Finds `query` in the note: every occurrence highlighted; with `jump`, the first one from
+    /// the cursor on selected and in view (an edit refinds in place).
+    fn find_text(&self, query: &str, jump: bool) {
+        let text = self.note_text.string().to_string();
+        let found = knotes_app::find_all(&text, query);
+        let bounds: Vec<usize> = found.iter().flat_map(|r| [r.start, r.end]).collect();
+        let units = utf16_offsets(&text, &bounds);
+        let matches: Vec<(usize, usize)> = units.chunks(2).map(|p| (p[0], p[1])).collect();
+        self.live_preview.highlight(&self.note_text, &matches);
+        let cursor = self.note_text.selectedRange().location;
+        let current = (!matches.is_empty()).then(|| matches.iter().position(|m| m.0 >= cursor).unwrap_or(0));
+        *self.find_matches.borrow_mut() = matches;
+        self.find_current.set(current);
+        if jump && let Some(i) = current {
+            self.select_match(i);
+        }
+        self.find_bar.show_count(self.find_current.get(), self.find_matches.borrow().len(), !query.is_empty());
+    }
+
+    /// The next (or previous) occurrence, round the note.
+    fn find_step(&self, forward: bool) {
+        let n = self.find_matches.borrow().len();
+        if n == 0 {
+            return;
+        }
+        let i = match self.find_current.get() {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None => 0,
+        };
+        self.find_current.set(Some(i));
+        self.select_match(i);
+        self.find_bar.show_count(Some(i), n, true);
+    }
+
+    /// Selects occurrence `i`, scrolls it into view and points at it.
+    fn select_match(&self, i: usize) {
+        let Some(&(from, to)) = self.find_matches.borrow().get(i) else { return };
+        let range = objc2_foundation::NSRange::new(from, to - from);
+        self.note_text.setSelectedRange(range);
+        self.note_text.scrollRangeToVisible(range);
+        self.note_text.showFindIndicatorForRange(range);
     }
 
     /// The magnifying glass: shows the search row, or hides it and drops the search.

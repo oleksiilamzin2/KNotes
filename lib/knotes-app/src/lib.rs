@@ -1,5 +1,6 @@
 //! View models of the Knotes window: plain Rust, no AppKit.
 
+mod find_in_text;
 mod folder_rules;
 mod folder_tree;
 mod history;
@@ -14,6 +15,7 @@ mod relink_plan;
 mod sidebar;
 mod tag_tree;
 
+pub use find_in_text::find_all;
 pub use folder_rules::{FolderRules, RULES_FILE, new_notes_folder, resolve_list_settings};
 pub use folder_tree::{FolderNode, folder_tree};
 pub use history::{HISTORY_DEPTH, History};

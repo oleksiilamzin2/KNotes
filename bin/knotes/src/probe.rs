@@ -694,14 +694,25 @@ fn report_note(window: &VaultWindow) {
     let responder = window.window.firstResponder();
     let is = |view: *const u8| responder.as_ref().is_some_and(|r| std::ptr::eq(&**r as *const _ as *const u8, view));
     // The search field edits in the window's field editor, whose delegate is the field.
-    let searching = responder
-        .as_ref()
-        .and_then(|r| r.downcast_ref::<objc2_app_kit::NSTextView>().and_then(|t| t.delegate()))
-        .is_some_and(|d| std::ptr::eq(&*d as *const _ as *const u8, &*window.search_bar.field as *const _ as *const u8));
-    println!("focus: {}", if is(&*window.note_text as *const _ as *const u8) { "editor" } else if searching { "search" } else { "other" });
-    if let Some(scroll) = window.note_text.enclosingScrollView() {
-        println!("find-bar: {}", if objc2_app_kit::NSTextFinderBarContainer::isFindBarVisible(&*scroll) { "shown" } else { "hidden" });
-        println!("find-dims-note: {}", if window.note_text.finder_dims() { "yes" } else { "no" });
+    let editing = |field: *const u8| {
+        responder
+            .as_ref()
+            .and_then(|r| r.downcast_ref::<objc2_app_kit::NSTextView>().and_then(|t| t.delegate()))
+            .is_some_and(|d| std::ptr::eq(&*d as *const _ as *const u8, field))
+    };
+    let focus = if is(&*window.note_text as *const _ as *const u8) {
+        "editor"
+    } else if editing(&*window.search_bar.field as *const _ as *const u8) {
+        "search"
+    } else if editing(&*window.find_bar.field as *const _ as *const u8) {
+        "find"
+    } else {
+        "other"
+    };
+    println!("focus: {focus}");
+    {
+        println!("find-bar: {}", if window.find_bar.is_shown() { "shown" } else { "hidden" });
+        println!("find: {}", window.find_bar.count_text());
         // The menu validates its items against the focused note, as before a key press.
         window.window.makeFirstResponder(Some(&window.note_text));
         let mtm = window.window.mtm();

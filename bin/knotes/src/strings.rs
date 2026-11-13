@@ -99,3 +99,12 @@ pub const FIND: &str = "Знайти…";
 pub const FIND_NEXT: &str = "Знайти далі";
 pub const FIND_PREVIOUS: &str = "Знайти попереднє";
 pub const SEARCH_NOTES: &str = "Пошук у нотатках";
+/// The find bar over the note.
+pub const FIND_PLACEHOLDER: &str = "Знайти в нотатці";
+pub const FIND_DONE: &str = "Готово";
+pub const FIND_NONE: &str = "Немає";
+
+/// "3 з 12"
+pub fn find_count(current: usize, total: usize) -> String {
+    format!("{current} з {total}")
+}

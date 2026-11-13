@@ -11,7 +11,7 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSResponder, NSScrollView, NSText, NSTextInputClient, NSTextView,
-    NSControl, NSMenuItem, NSTextFinder, NSTextFinderAction, NSTextFinderClient, NSTrackingArea, NSTrackingAreaOptions, NSValidatedUserInterfaceItem, NSView,
+    NSControl, NSMenuItem, NSTextFinderAction, NSTrackingArea, NSTrackingAreaOptions, NSValidatedUserInterfaceItem, NSView,
 };
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
 
@@ -29,8 +29,9 @@ pub struct Ivars {
     on_appearance: RefCell<Option<Box<dyn Fn()>>>,
     /// The tracking area that reports mouse moves over the view.
     moves: RefCell<Option<Retained<NSTrackingArea>>>,
-    /// The find bar's engine: the text view's own would dim the note while matches show.
-    finder: RefCell<Option<Retained<NSTextFinder>>>,
+    /// Called with the find action (`NSTextFinderAction`) Edit → Find… and its neighbours ask
+    /// for: the window's own find bar takes them.
+    on_find: RefCell<Option<Box<dyn Fn(isize)>>>,
 }
 
 define_class!(
@@ -42,9 +43,6 @@ define_class!(
 
     unsafe impl NSObjectProtocol for NoteTextView {}
 
-    // SAFETY: every method of the protocol is optional; the text view implements those its own
-    // find bar uses (string, selection, ranges' rects, drawing matches).
-    unsafe impl NSTextFinderClient for NoteTextView {}
 
     impl NoteTextView {
         #[unsafe(method(updateTrackingAreas))]
@@ -89,42 +87,23 @@ define_class!(
             }
         }
 
-        /// Edit → Find… and its neighbours go to the view's own text finder.
+        /// Edit → Find… and its neighbours go to the window's find bar.
         #[unsafe(method(performTextFinderAction:))]
         fn perform_text_finder_action(&self, sender: Option<&AnyObject>) {
-            if let Some(finder) = self.ivars().finder.borrow().as_ref() {
-                finder.performAction(NSTextFinderAction(finder_tag(sender)));
+            if let Some(callback) = self.ivars().on_find.borrow().as_ref() {
+                callback(finder_tag(sender));
             }
         }
 
+        /// The find bar is the window's: the text view's own find items would be off.
         #[unsafe(method(validateUserInterfaceItem:))]
         fn validate_item(&self, item: &ProtocolObject<dyn NSValidatedUserInterfaceItem>) -> bool {
             if item.action() == Some(sel!(performTextFinderAction:)) {
-                self.ivars().finder.borrow().as_ref().is_some_and(|f| f.validateAction(NSTextFinderAction(item.tag())))
+                true
             } else {
                 // SAFETY: the superclass validates its other actions.
                 unsafe { msg_send![super(self), validateUserInterfaceItem: item] }
             }
-        }
-
-        /// A note opened: the finder must not search the text it saw before.
-        #[unsafe(method(setString:))]
-        fn set_string(&self, string: &objc2_foundation::NSString) {
-            if let Some(finder) = self.ivars().finder.borrow().as_ref() {
-                finder.noteClientStringWillChange();
-            }
-            // SAFETY: the superclass replaces the text.
-            let _: () = unsafe { msg_send![super(self), setString: string] };
-        }
-
-        /// The finder's matches follow the text.
-        #[unsafe(method(didChangeText))]
-        fn did_change_text(&self) {
-            if let Some(finder) = self.ivars().finder.borrow().as_ref() {
-                finder.noteClientStringWillChange();
-            }
-            // SAFETY: the superclass posts its notifications.
-            let _: () = unsafe { msg_send![super(self), didChangeText] };
         }
 
         #[unsafe(method(mouseDown:))]
@@ -137,16 +116,8 @@ define_class!(
     }
 );
 
-/// The search field inside the find bar.
-fn find_search_field(view: &NSView) -> Option<Retained<objc2_app_kit::NSSearchField>> {
-    if let Some(field) = view.downcast_ref::<objc2_app_kit::NSSearchField>() {
-        return Some(objc2::Message::retain(field));
-    }
-    view.subviews().iter().find_map(|sub| find_search_field(&sub))
-}
-
 /// The text finder action a menu item or control asks for (its tag).
-fn finder_tag(sender: Option<&AnyObject>) -> isize {
+pub fn finder_tag(sender: Option<&AnyObject>) -> isize {
     let Some(sender) = sender else { return NSTextFinderAction::ShowFindInterface.0 };
     if let Some(item) = sender.downcast_ref::<NSMenuItem>() {
         item.tag()
@@ -158,26 +129,8 @@ fn finder_tag(sender: Option<&AnyObject>) -> isize {
 }
 
 impl NoteTextView {
-    /// The find bar opened and `word` typed into its field, as a user would (probe mode).
-    pub fn find_word(&self, word: &str) {
-        let Some(finder) = self.ivars().finder.borrow().clone() else { return };
-        finder.performAction(NSTextFinderAction::ShowFindInterface);
-        let Some(scroll) = self.enclosingScrollView() else { return };
-        let Some(bar) = objc2_app_kit::NSTextFinderBarContainer::findBarView(&*scroll, self.mtm()) else { return };
-        let Some(field) = find_search_field(&bar) else { return };
-        if let Some(window) = self.window() {
-            window.makeFirstResponder(Some(&field));
-        }
-        if let Some(editor) = field.currentEditor() {
-            let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
-            // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
-            unsafe { NSTextInputClient::insertText_replacementRange(&*editor.downcast::<NSTextView>().expect("field editor"), &objc2_foundation::NSString::from_str(word), not_found) };
-        }
-    }
-
-    /// The finder dims the note while it shows matches (probe mode).
-    pub fn finder_dims(&self) -> bool {
-        self.ivars().finder.borrow().as_ref().is_some_and(|f| f.incrementalSearchingShouldDimContentView())
+    pub fn on_find(&self, callback: impl Fn(isize) + 'static) {
+        *self.ivars().on_find.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_click(&self, callback: impl Fn(&NSTextView, usize, bool) -> bool + 'static) {
@@ -251,17 +204,6 @@ pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<Not
     text.setMinSize(NSSize::new(0.0, size.height));
     text.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
     text.setVerticallyResizable(true);
-    // Edit → Find… (Cmd+F): the standard find bar over the note, matches highlighted as they
-    // are typed without dimming the rest of the note (owner's choice).
-    let finder = NSTextFinder::init(NSTextFinder::alloc());
-    // SAFETY: the text view and its scroll view outlive the finder, which the view owns.
-    unsafe {
-        finder.setClient(Some(ProtocolObject::from_ref(&*text)));
-        finder.setFindBarContainer(Some(ProtocolObject::from_ref(&*scroll)));
-    }
-    finder.setIncrementalSearchingEnabled(true);
-    finder.setIncrementalSearchingShouldDimContentView(false);
-    *text.ivars().finder.borrow_mut() = Some(finder);
     text.setHorizontallyResizable(false);
     text.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     if let Some(container) = unsafe { text.textContainer() } {

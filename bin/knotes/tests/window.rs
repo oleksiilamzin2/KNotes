@@ -1037,8 +1037,7 @@ fn cmd_f_finds_in_the_note_and_cmd_shift_f_searches_the_notes() {
     assert!(out.contains("Знайти… ⌘F | Знайти далі ⌘G | Знайти попереднє ⇧⌘G | Пошук у нотатках ⇧⌘F"), "{out}");
     // From the list, too: Cmd+F always finds in the open note.
     let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Знайти…")]);
-    assert!(out.contains("find-bar: shown"), "{out}");
-    assert!(out.contains("find-dims-note: no"), "matches are highlighted without dimming the note: {out}");
+    assert!(out.contains("find-bar: shown") && out.contains("focus: find"), "{out}");
     let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Пошук у нотатках")]);
     assert!(out.contains("search-row: shown") && out.contains("focus: search"), "{out}");
 }
@@ -1115,4 +1114,16 @@ fn find_is_enabled_in_the_menu_while_the_note_has_the_focus() {
             probe_notes(&[("a.md", "text")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_SHORTCUT", "f"), ("KNOTES_PROBE_SHORTCUT_FOCUS", focus)]);
         assert!(out.contains("shortcut-handled: true") && out.contains("find-bar: shown"), "Cmd+F from the {focus}: {out}");
     }
+}
+
+#[test]
+fn find_highlights_every_occurrence_selects_one_and_steps_through_them() {
+    let note = "Пункт один.\n\nДругий пункт і ще ПУНКТ.\n\nкінець";
+    let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_FIND", "пункт")]);
+    assert!(out.contains("find: 1 з 3") && out.contains("found-in-note: 3"), "{out}");
+    assert!(out.contains("cursor: 0"), "the first occurrence selected: {out}");
+    let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_FIND", "пункт"), ("KNOTES_PROBE_FIND_STEPS", "3")]);
+    assert!(out.contains("find: 1 з 3"), "round the note: {out}");
+    let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_FIND", "немає такого")]);
+    assert!(out.contains("find: Немає") && out.contains("found-in-note: 0"), "{out}");
 }
