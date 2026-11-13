@@ -32,7 +32,7 @@ pub const READABLE_WIDTH: f64 = 700.0;
 const MIN_MARGIN: f64 = 32.0;
 const TOP_MARGIN: f64 = 24.0;
 const BODY_SIZE: f64 = 15.0;
-const HEADING_SIZES: [f64; 6] = [26.0, 22.0, 19.0, 17.0, 15.0, 15.0];
+const HEADING_SIZES: [f64; 6] = [23.0, 20.0, 18.0, 16.0, 15.0, 15.0];
 const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"];
 /// Indentation of each list level (the source's own indentation is hidden).
 const LIST_INDENT: f64 = 20.0;
