@@ -77,3 +77,18 @@ fn symlinks_are_not_followed() {
     std::os::unix::fs::symlink(r.join("Folder/n.md"), r.join("link.md")).unwrap();
     assert_eq!(scan(r), [("Folder/n.md".to_owned(), FileKind::Markdown)]);
 }
+
+#[test]
+fn takes_in_the_attachments_in_the_knotes_folder_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = dir.path();
+    touch(r, "note.md", "x");
+    touch(r, ".knotes/attachments/Pasted image 20261113114500.png", "png");
+    touch(r, ".knotes/attachments/.DS_Store", "");
+    touch(r, ".knotes/cache/x.bin", "x");
+    touch(r, "Folder/.knotes/attachments/no.png", "png");
+    assert_eq!(
+        scan(r),
+        [(".knotes/attachments/Pasted image 20261113114500.png".to_owned(), FileKind::Image), ("note.md".to_owned(), FileKind::Markdown)]
+    );
+}

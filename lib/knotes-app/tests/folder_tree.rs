@@ -27,3 +27,9 @@ fn empty_vault() {
     let root = folder_tree(std::iter::empty::<&str>());
     assert_eq!((root.notes, root.children.len()), (0, 0));
 }
+
+#[test]
+fn the_hidden_attachments_folder_is_no_folder_in_the_tree() {
+    let root = folder_tree(["a.md", ".knotes/attachments/Pasted image 20261113114500.png"]);
+    assert_eq!(names(&root), []);
+}

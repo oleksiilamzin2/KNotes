@@ -32,6 +32,10 @@ pub fn folder_tree<'a>(paths: impl IntoIterator<Item = &'a str>) -> FolderNode {
             nodes[0].notes += 1;
         }
         let Some((folders, _file)) = path.rsplit_once('/') else { continue };
+        // The attachments folder (ADR 0020) is the only hidden one in the catalog.
+        if folders.starts_with('.') {
+            continue;
+        }
         let mut end = 0;
         for segment in folders.split('/') {
             end += segment.len();

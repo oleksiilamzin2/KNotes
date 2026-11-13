@@ -1,3 +1,7 @@
+/// Where images pasted or dropped into notes go, from the vault root (ADR 0020): the only
+/// hidden folder the scan and the watcher take in.
+pub const ATTACHMENTS_FOLDER: &str = ".knotes/attachments";
+
 /// What a vault file is, decided by its extension (case-insensitive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileKind {

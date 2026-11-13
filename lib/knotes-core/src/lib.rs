@@ -42,7 +42,7 @@ pub use note_text::NoteText;
 pub use note_writer::NoteWriter;
 pub use tag_index::TagIndex;
 pub use title_search::{TitleHit, TitleSearch};
-pub use vault_file::{FileKind, VaultFile};
+pub use vault_file::{ATTACHMENTS_FOLDER, FileKind, VaultFile};
 pub use vault_reader::VaultReader;
 pub use vault_scanner::VaultScanner;
 

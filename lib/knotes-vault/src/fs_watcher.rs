@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use knotes_core::ChangeFeed;
+use knotes_core::{ATTACHMENTS_FOLDER, ChangeFeed};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// FSEvents watcher with debouncing: changes arriving within `debounce` of the first one
@@ -77,11 +77,12 @@ fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, on_batch: &impl Fn(Vec<St
     }
 }
 
-/// Keeps visible paths and per-folder rules files (`.knotes.json` and the old `.knotes`, ADR
-/// 0010, 0020); drops anything else hidden.
+/// Keeps visible paths, the attachments folder's files and per-folder rules files
+/// (`.knotes.json` and the old `.knotes`, ADR 0010, 0020); drops anything else hidden.
 fn add_visible(root: &Path, path: &Path, paths: &mut BTreeSet<String>) {
     let Some(rel) = path.strip_prefix(root).ok().and_then(Path::to_str) else { return };
     let (folders, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let folders = folders.strip_prefix(ATTACHMENTS_FOLDER).filter(|rest| rest.is_empty() || rest.starts_with('/')).unwrap_or(folders);
     let hidden_folder = folders.split('/').any(|part| part.starts_with('.'));
     if !rel.is_empty() && !hidden_folder && (!name.starts_with('.') || name == ".knotes.json" || name == ".knotes") {
         paths.insert(rel.to_owned());

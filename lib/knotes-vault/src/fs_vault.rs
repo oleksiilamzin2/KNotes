@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use knotes_core::{FileKind, FolderRulesStore, NoteMover, NoteWriter, VaultFile, VaultReader, VaultScanner};
+use knotes_core::{ATTACHMENTS_FOLDER, FileKind, FolderRulesStore, NoteMover, NoteWriter, VaultFile, VaultReader, VaultScanner};
 use rayon::prelude::*;
 
 pub struct FsVault {
@@ -22,9 +22,13 @@ impl FsVault {
 
 impl VaultScanner for FsVault {
     /// Walks folders in parallel. Hidden entries (`.obsidian`, `.git`, `.trash`, dotfiles),
-    /// symlinks and names that are not UTF-8 are skipped.
+    /// symlinks and names that are not UTF-8 are skipped, except the attachments folder.
     fn scan(&self) -> io::Result<Vec<VaultFile>> {
         let mut files = scan_dir(&self.root, "")?;
+        let attachments = self.root.join(ATTACHMENTS_FOLDER);
+        if fs::symlink_metadata(&attachments).is_ok_and(|m| m.is_dir()) {
+            files.extend(scan_dir(&attachments, ATTACHMENTS_FOLDER)?);
+        }
         files.par_sort_unstable_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
     }
