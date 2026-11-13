@@ -52,6 +52,7 @@ answered a question round (2026-11-13).
   pasteboard writer and the folder's drop handler are).
 - Later (2026-11-13, owner's requests): the name in the toolbar is edited only after a double
   click (a single click started renaming by accident), the name selected without a PDF's
-  `.pdf`, as Finder selects it. A PDF open is named there by its file name, without its folder,
+  `.pdf`, as Finder selects it. The field keeps its clicks from the window: as a label in the
+  toolbar it let the window take them to drag it, and a double click zoomed the window. A PDF open is named there by its file name, without its folder,
   and renamed there too: `.pdf` is kept, links to it are updated as a note's are, and the
   viewer shows it from its new place at the page it was at.

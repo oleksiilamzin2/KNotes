@@ -457,6 +457,13 @@ define_class!(
     pub struct TitleField;
 
     impl TitleField {
+        /// Its clicks are its own: a label in the toolbar lets the window take them to drag
+        /// it, and a double click zoomed the window instead of starting to rename.
+        #[unsafe(method(mouseDownCanMoveWindow))]
+        fn mouse_down_can_move_window(&self) -> bool {
+            false
+        }
+
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             if event.clickCount() == 2 && self.ivars().get() && self.currentEditor().is_none() {

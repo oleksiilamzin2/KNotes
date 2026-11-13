@@ -2173,6 +2173,8 @@ fn a_double_click_on_the_name_in_the_toolbar_starts_renaming_and_a_single_click_
     };
     assert_eq!(editing("1"), "no");
     assert_eq!(editing("2"), "Old (all selected)");
+    let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_TITLE_CLICKS", "1")]);
+    assert!(out.contains("note-title-moves-window: no\n"), "the window must not take its clicks (a double click zoomed it): {out}");
 }
 
 #[test]

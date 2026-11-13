@@ -768,6 +768,7 @@ pub fn title_clicks_requested(window: &NSWindow) {
     use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
     let Some(clicks) = std::env::var("KNOTES_PROBE_TITLE_CLICKS").ok().and_then(|c| c.parse::<isize>().ok()) else { return };
     let Some(field) = note_title_field(window) else { return };
+    println!("note-title-moves-window: {}", if field.mouseDownCanMoveWindow() { "yes" } else { "no" });
     let bounds = field.bounds();
     let at = field.convertPoint_toView(objc2_foundation::NSPoint::new(bounds.size.width / 2.0, bounds.size.height / 2.0), None);
     let down = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
