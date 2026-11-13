@@ -695,6 +695,8 @@ impl VaultWindow {
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
             if std::env::var("KNOTES_PROBE_AFTER_CLICK").as_deref() == Ok("back") {
+                // Shown first, as on screen.
+                self.window.displayIfNeeded();
                 self.navigate(false);
             }
             println!("found-in-note: {}", self.live_preview.found_count());
