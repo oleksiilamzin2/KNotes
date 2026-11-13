@@ -18,6 +18,8 @@ the reference (ADR 0011), with one change the owner asked for.
 - Tasks: circles, not Obsidian's squares (owner's choice): outlined, or filled in the accent
   colour with a tick. A click on one ticks or unticks it through the text view (undoable,
   saved; the cursor stays). Done tasks' text is muted and struck through.
+- A space typed after a list item's `- []` makes it `- [ ] `, a task: `[]` is no task in
+  Markdown or Obsidian, but it is what one types for one. A paste stays as it is.
 - Quotes: a bar per level down the paragraph instead of `>`, the text indented past them;
   `>` shows with the cursor on the line, like other markup.
 - Code blocks: one background across the column, rounded at the block's ends, the code

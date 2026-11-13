@@ -121,7 +121,12 @@ define_class!(
         #[unsafe(method(textDidChange:))]
         fn text_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
+                let edit = self.ivars().pending.get();
+                let typed_space = *self.ivars().inserted.borrow() == " ";
                 self.restyle_after_edit(&view);
+                if let Some(edit) = edit.filter(|e| typed_space && e.removed == 0) {
+                    self.complete_task_box(&view, edit.location);
+                }
             }
             if let Some(callback) = self.ivars().on_change.borrow().as_ref() {
                 callback();
@@ -817,6 +822,25 @@ impl LivePreview {
             view.setSelectedRange(selection);
         }
         true
+    }
+
+    /// A space typed at `space` after a list item's `- []` makes it a task, `- [ ] `: `[]` is
+    /// no task in Markdown, nor in Obsidian, but it is what one types for one. An edit of its
+    /// own, so undo takes it back first.
+    fn complete_task_box(&self, view: &NSTextView, space: usize) {
+        let text = view.string();
+        let line = text.paragraphRangeForRange(NSRange::new(space, 0)).location;
+        let typed = text.substringWithRange(NSRange::new(line, space + 1 - line)).to_string();
+        let Some(at) = knotes_editor::task_box_typed(&typed) else { return };
+        let brackets = NSRange::new(line + typed[..at].encode_utf16().count(), 2);
+        let task = NSString::from_str("[ ]");
+        if view.shouldChangeTextInRange_replacementString(brackets, Some(&task)) {
+            if let Some(storage) = unsafe { view.textStorage() } {
+                storage.replaceCharactersInRange_withString(brackets, &task);
+            }
+            view.didChangeText();
+            view.setSelectedRange(NSRange::new(space + 2, 0));
+        }
     }
 
     /// Font, colour and test name of a run; links to missing notes are dimmed.

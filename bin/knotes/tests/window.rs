@@ -889,3 +889,14 @@ fn code_blocks_get_a_background_and_fold_their_fences_away_from_the_cursor() {
     assert!(editor_runs(&out).contains("[code-fence]```rust|[codeblock]⏎let x = 1;⏎let y = 2;⏎|[code-fence]```|"), "{out}");
     assert!(decorations(&out, "code").iter().all(|b| b.3 >= 17.0), "fences show as lines: {out}");
 }
+
+#[test]
+fn typing_a_space_after_empty_brackets_in_a_list_item_makes_a_task() {
+    let (_vault, out) =
+        probe_notes(&[("t.md", "- [ ] one\n")], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TYPE", "- [] two"), ("KNOTES_PROBE_TYPE_CHARS", "1")]);
+    assert!(out.contains("note: t.md | - [ ] one⏎- [ ] two"), "{out}");
+    assert!(editor_runs(&out).contains("[task]- [ ] |[plain]two"), "{out}");
+    assert!(out.contains("cursor: 19"), "the cursor after what was typed: {out}");
+    let (_vault, out) = probe_notes(&[("t.md", "")], &[("KNOTES_PROBE_OPEN", "t.md"), ("KNOTES_PROBE_TYPE", "- [] pasted")]);
+    assert!(out.contains("note: t.md | - [] pasted"), "a paste stays as it is: {out}");
+}

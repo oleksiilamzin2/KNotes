@@ -28,7 +28,9 @@ pub fn act_once() -> bool {
 }
 
 /// Types `KNOTES_PROBE_TYPE` the way the keyboard inserts text: at the end of the note, or
-/// over `KNOTES_PROBE_RANGE=location,length` (UTF-16; empty text there deletes).
+/// over `KNOTES_PROBE_RANGE=location,length` (UTF-16; empty text there deletes). In one
+/// insertion, as a paste or an input method does, or with `KNOTES_PROBE_TYPE_CHARS=1` one
+/// character after another, as keys do.
 pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     let Ok(text) = std::env::var("KNOTES_PROBE_TYPE") else { return };
     let range = std::env::var("KNOTES_PROBE_RANGE").ok().and_then(|r| {
@@ -38,8 +40,12 @@ pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     let range = range.unwrap_or_else(|| objc2_foundation::NSRange::new(view.string().length(), 0));
     view.setSelectedRange(range);
     let not_found = objc2_foundation::NSRange::new(objc2_foundation::NSNotFound as usize, 0);
-    // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
-    unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&text), not_found) };
+    let pieces: Vec<String> =
+        if std::env::var("KNOTES_PROBE_TYPE_CHARS").is_ok() { text.chars().map(String::from).collect() } else { vec![text] };
+    for piece in pieces {
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&piece), not_found) };
+    }
 }
 
 /// `KNOTES_PROBE_NOTE_SCROLL=end`: scrolls the note to its end, as the scroll wheel does.
