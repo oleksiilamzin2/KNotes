@@ -8,6 +8,7 @@ mod highlight;
 mod image_width;
 mod restyle;
 mod subpath;
+mod table_edit;
 mod task_box;
 mod utf16;
 
@@ -19,5 +20,6 @@ pub use highlight::{Align, CalloutRun, FormulaRun, Highlight, ImageRun, LinkRun,
 pub use image_width::set_image_width;
 pub use restyle::{Edit, changed_region};
 pub use subpath::{note_headings, subpath_offset};
+pub use table_edit::TableText;
 pub use task_box::task_box_typed;
 pub use utf16::{byte_offset, utf16_offsets};
