@@ -59,11 +59,19 @@ TextKit 2 lays out no tables: `NSTextTable` blocks send a text view back to Text
   column's actions first in the text's context menu (owner's request: deleting a row or a
   column was hard to find behind the handles). In probe mode the menu is listed or an
   item chosen instead of shown.
-- A wide table scrolls by columns, not by points: kerning cannot move glyphs left of a line's
-  start (a glyph's advance does not go below nothing), and shifting only the drawing would
-  leave the cursor and clicks where the text is laid out. Columns scrolled away collapse to
-  the table's left edge; a sideways swipe (or Shift with the wheel) moves a column at a time;
-  the cursor in a hidden column scrolls it back; shadows mark the cut edges.
+- A wide table scrolls sideways smoothly, by points (owner's request over scrolling a column
+  at a time, the first version). Kerning cannot move glyphs left of a line's start (a glyph's
+  advance does not go below nothing), and shifting only the drawing would leave the cursor and
+  clicks where the text is laid out; so cells scrolled past the table's left edge are hidden,
+  and in the cell the edge cuts, the characters before the edge are hidden and the first one
+  after it is placed where it would be (characters' starts measured once per text and font).
+  What shows is what is laid out, so the cursor and clicks stay right; characters leave at the
+  edge one by one, under its shadow. The cursor in a column out of view scrolls it in.
+- A sideways scroll step sets only the rows in the viewport; the others are set 150 ms after
+  the last step, or at once when the note scrolls. Finding the table, row and controls under
+  the pointer asks for the fragment at the pointer's height instead of measuring every row:
+  measuring all 200 rows of a long table took 40 ms a step (and as long on every mouse move).
+  A step (M5 Pro, release): p50 2.2 ms on a 20-row table, 3.9 ms on a 200-row one.
 - A table is laid out whole on every restyle (its columns come from all its rows), but its
   other rows are set again only when its column widths change: setting a row lays it out
   again. Typing in a cell of a 200-row table (M5 Pro, release): p50 1.9 ms, p95 2.5 ms; with
