@@ -806,3 +806,30 @@ fn struck_text_is_drawn_with_a_line_through_it_and_its_tildes_are_not() {
     let struck = out.lines().find_map(|l| l.strip_prefix("editor-struck: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(struck, "gone |bold| too", "the hidden ** between: {out}");
 }
+
+/// `decoration: kind x y w h` lines of the probe (bullets, boxes and bars drawn in view).
+fn decorations(out: &str, kind: &str) -> Vec<(f64, f64, f64, f64)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("decoration: "))
+        .filter_map(|l| l.strip_prefix(kind).and_then(|rest| rest.strip_prefix(' ')))
+        .map(|l| {
+            let p: Vec<f64> = l.split(' ').map(|v| v.parse().unwrap()).collect();
+            (p[0], p[1], p[2], p[3])
+        })
+        .collect()
+}
+
+#[test]
+fn list_bullets_show_as_dots_indented_by_depth_and_the_marker_shows_with_the_cursor_on_it() {
+    let note = "- one\n\t- two\n- three\n\nend";
+    let (_vault, out) = probe_notes(&[("l.md", note)], &[("KNOTES_PROBE_OPEN", "l.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.starts_with("[bullet]- |[plain]one⏎|[indent]\t|[bullet]- |"), "{runs}");
+    let dots = decorations(&out, "bullet");
+    assert_eq!(dots.len(), 3, "{out}");
+    assert!(dots[1].0 > dots[0].0 + 10.0 && (dots[2].0 - dots[0].0).abs() < 0.5, "nested one indented: {dots:?}");
+    assert!(dots.iter().all(|d| d.2 > 3.0 && d.2 < 8.0), "{dots:?}");
+    let (_vault, out) = probe_notes(&[("l.md", note)], &[("KNOTES_PROBE_OPEN", "l.md"), ("KNOTES_PROBE_CURSOR", "0")]);
+    assert!(editor_runs(&out).starts_with("[list-marker]- |[plain]one⏎|[indent]\t|[bullet]- |"), "{out}");
+    assert_eq!(decorations(&out, "bullet").len(), 2, "{out}");
+}

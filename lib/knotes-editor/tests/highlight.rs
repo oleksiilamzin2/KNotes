@@ -155,6 +155,8 @@ fn nested_list_items_know_their_depth_and_leave_the_indentation_out() {
     assert_eq!(list_marks(src), [(ListKind::Bullet, 0, "- "), (ListKind::Bullet, 1, "- "), (ListKind::Ordered, 2, "1. "), (ListKind::Bullet, 0, "- ")]);
     let at: Vec<usize> = highlight(src).runs.iter().map(|r| r.range.start).collect();
     assert_eq!(at, [0, 6, 14, 19]);
+    // Obsidian indents with tabs.
+    assert_eq!(list_marks("- one\n\t- two\n\t\t- three"), [(ListKind::Bullet, 0, "- "), (ListKind::Bullet, 1, "- "), (ListKind::Bullet, 2, "- ")]);
 }
 
 #[test]

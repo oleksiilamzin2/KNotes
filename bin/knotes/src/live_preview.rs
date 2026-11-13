@@ -3,24 +3,25 @@
 //! Every styled range also carries a `knotes.style` attribute, so tests can read what is shown.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, Run, Style, changed_region, highlight};
+use knotes_editor::{Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, LinkRun, ListKind, Run, Style, changed_region, highlight};
 
-use crate::formula_fragment::{Anchor, FormulaFragment, Mark, PREVIEW_GAP};
+use crate::preview_fragment::{Anchor, BULLET_ROOM, Mark, PREVIEW_GAP, PreviewFragment};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask, NSForegroundColorAttributeName, NSKernAttributeName,
-    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextContentStorage, NSTextDelegate, NSTextElement,
+    NSAttributedStringNSStringDrawing, NSMutableParagraphStyle, NSParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
     NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSUnderlineStyle, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
-    NSArray, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
+    NSArray, NSAttributedString, NSDictionary, NSInteger, NSMutableCopying, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSRange, NSSize, NSString,
     NSValue,
 };
 
@@ -32,12 +33,17 @@ const MIN_MARGIN: f64 = 32.0;
 const TOP_MARGIN: f64 = 24.0;
 const BODY_SIZE: f64 = 15.0;
 const HEADING_SIZES: [f64; 6] = [26.0, 22.0, 19.0, 17.0, 15.0, 15.0];
+const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"];
+/// Indentation of each list level (the source's own indentation is hidden).
+const LIST_INDENT: f64 = 20.0;
 
 struct Look {
     body: Retained<NSFont>,
     bold: Retained<NSFont>,
     italic: Retained<NSFont>,
     mono: Retained<NSFont>,
+    /// List numbers: digits of one width, so items' text lines up.
+    digits: Retained<NSFont>,
     headings: Vec<Retained<NSFont>>,
     /// Hidden markup: a near-zero font size collapses its width; clear colour hides the rest.
     hidden: Retained<NSFont>,
@@ -50,7 +56,16 @@ struct Look {
     error: Retained<NSColor>,
     clear: Retained<NSColor>,
     style_key: Retained<NSString>,
+    /// Attribute sets by font, colour and test name: made once, not for every styled range.
+    attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
+    /// List items' paragraph styles by indentation, marker room and hidden indentation.
+    list_styles: RefCell<HashMap<(u64, u64, bool), Retained<NSParagraphStyle>>>,
+    /// Widths of a digit, `.`, `)` and a space in the digits font, once measured.
+    number_widths: Cell<Option<[f64; 4]>>,
 }
+
+/// Font, colour, test name, kerning and paragraph style of an attribute set.
+type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle);
 
 type OnChange = Box<dyn Fn()>;
 type OnLink = Box<dyn Fn(&Link)>;
@@ -88,6 +103,8 @@ pub struct Ivars {
     markup_fonts: RefCell<Vec<Retained<NSFont>>>,
     /// Paragraph whose markup is shown (UTF-16).
     revealed: Cell<(usize, usize)>,
+    /// The selection (UTF-16 start and end): a list marker it touches shows its source.
+    selection: Cell<(usize, usize)>,
     look: Look,
 }
 
@@ -123,9 +140,9 @@ define_class!(
     }
 
     unsafe impl NSTextLayoutManagerDelegate for LivePreview {
-        /// A paragraph holding typeset formulas gets a fragment that draws them. TextKit asks
-        /// again whenever a paragraph's attributes change, and every change of what a formula
-        /// shows restyles it.
+        /// A paragraph holding typeset formulas or list bullets gets a fragment that draws them.
+        /// TextKit asks again whenever a paragraph's attributes change, and every change of what
+        /// they show restyles them.
         #[unsafe(method_id(textLayoutManager:textLayoutFragmentForLocation:inTextElement:))]
         fn fragment_for(
             &self,
@@ -134,11 +151,11 @@ define_class!(
             element: &NSTextElement,
         ) -> Retained<NSTextLayoutFragment> {
             let range = element.elementRange();
-            let marks = self.formula_marks(layout, range.as_deref());
+            let marks = self.preview_marks(layout, range.as_deref());
             if marks.is_empty() {
                 NSTextLayoutFragment::initWithTextElement_range(NSTextLayoutFragment::alloc(), element, range.as_deref())
             } else {
-                Retained::into_super(FormulaFragment::new(element, range.as_deref(), marks))
+                Retained::into_super(PreviewFragment::new(element, range.as_deref(), marks))
             }
         }
     }
@@ -193,6 +210,7 @@ impl LivePreview {
             bold: NSFont::boldSystemFontOfSize(BODY_SIZE),
             italic: fonts.convertFont_toHaveTrait(&body, NSFontTraitMask::ItalicFontMask),
             mono: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.0),
+            digits: NSFont::monospacedDigitSystemFontOfSize_weight(BODY_SIZE, 0.0),
             headings: HEADING_SIZES.iter().map(|&s| NSFont::boldSystemFontOfSize(s)).collect(),
             hidden: NSFont::systemFontOfSize(0.01),
             text: NSColor::labelColor(),
@@ -202,6 +220,9 @@ impl LivePreview {
             error: NSColor::systemRedColor(),
             clear: NSColor::clearColor(),
             style_key: NSString::from_str(STYLE_KEY),
+            attributes: RefCell::new(HashMap::new()),
+            list_styles: RefCell::new(HashMap::new()),
+            number_widths: Cell::new(None),
             body,
         };
         let ivars = Ivars {
@@ -220,6 +241,7 @@ impl LivePreview {
             styled: RefCell::new(Highlight::default()),
             markup_fonts: RefCell::new(Vec::new()),
             revealed: Cell::new((0, 0)),
+            selection: Cell::new((0, 0)),
             look,
         };
         let this = Self::alloc(mtm).set_ivars(ivars);
@@ -250,6 +272,7 @@ impl LivePreview {
         let new = highlight(&source).to_utf16(&source);
         drop(source);
         let revealed = paragraph(&storage, view.selectedRange());
+        self.ivars().selection.set(span(view.selectedRange()));
         let region = edit.map(|edit| {
             let (start, end) = changed_region(&self.ivars().styled.borrow(), &new, edit);
             let old = self.ivars().revealed.get();
@@ -283,13 +306,16 @@ impl LivePreview {
         clear_layout(storage, NSRange::new(region.0, region.1 - region.0));
         for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
             let (font, color, name) = self.run_look(run, &styled);
-            set(storage, ns(&clip(&run.range)), font, color, &name, look);
+            set(storage, ns(&clip(&run.range)), font, color, name, look);
         }
         for run in styled.runs.iter().filter(|r| r.style == Style::Strike && r.range.start < region.1 && r.range.end > region.0) {
             strike(storage, ns(&clip(&run.range)));
         }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| m.start < region.1 && m.end > region.0) {
             self.style_markup(storage, m, font, overlaps(m, revealed));
+        }
+        for run in styled.runs.iter().filter(|r| r.range.start < region.1 && r.range.end > region.0) {
+            self.style_list_marker(storage, run);
         }
         for f in styled.formulas.iter().filter(|f| f.range.start < region.1 && f.range.end > region.0) {
             self.style_formula(storage, f, overlaps(&f.range, revealed));
@@ -344,6 +370,7 @@ impl LivePreview {
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
         let para = paragraph(&storage, view.selectedRange());
         self.ivars().revealed.set(para);
+        self.ivars().selection.set(span(view.selectedRange()));
         self.ivars().dark.set(is_dark(view));
         self.apply_all(&storage, para);
     }
@@ -357,7 +384,7 @@ impl LivePreview {
         clear_layout(storage, full);
         for run in &styled.runs {
             let (font, color, name) = self.run_look(run, &styled);
-            set(storage, ns(&run.range), font, color, &name, look);
+            set(storage, ns(&run.range), font, color, name, look);
         }
         // After all runs (one inside would replace it), before the markup (which drops it).
         for run in styled.runs.iter().filter(|r| r.style == Style::Strike) {
@@ -366,6 +393,9 @@ impl LivePreview {
         let fonts = self.ivars().markup_fonts.borrow();
         for (m, font) in styled.markup.iter().zip(fonts.iter()) {
             self.style_markup(storage, m, font, overlaps(m, revealed));
+        }
+        for run in &styled.runs {
+            self.style_list_marker(storage, run);
         }
         for f in &styled.formulas {
             self.style_formula(storage, f, overlaps(&f.range, revealed));
@@ -382,6 +412,7 @@ impl LivePreview {
             return;
         }
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        self.reveal_touched_markers(&storage, span(view.selectedRange()));
         let new = paragraph(&storage, view.selectedRange());
         let old = self.ivars().revealed.replace(new);
         if old == new {
@@ -406,6 +437,122 @@ impl LivePreview {
             self.fit_formula_lines_in(&storage, (old.0.min(new.0), old.1.max(new.1)), new);
         }
         storage.endEditing();
+    }
+
+    /// Shows the source of the list markers the selection now touches and hides that of those
+    /// it left.
+    fn reveal_touched_markers(&self, storage: &NSTextStorage, new: (usize, usize)) {
+        let old = self.ivars().selection.replace(new);
+        if old == new {
+            return;
+        }
+        let styled = self.ivars().styled.borrow();
+        // Markers are short: those touching a selection start a little before it.
+        let near = |sel: (usize, usize)| {
+            let first = styled.runs.partition_point(|r| r.range.start + MARKER_REACH < sel.0);
+            styled.runs[first..].iter().take_while(move |r| r.range.start <= sel.1)
+        };
+        let changed: Vec<&Run> = near(old)
+            .chain(near(new))
+            .filter(|r| matches!(r.style, Style::ListMarker { .. }) && touches(&r.range, old) != touches(&r.range, new))
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        let region = changed.iter().fold((usize::MAX, 0), |r, run| (r.0.min(run.range.start), r.1.max(run.range.end)));
+        storage.beginEditing();
+        for run in changed {
+            self.style_list_marker(storage, run);
+        }
+        drop(styled);
+        // The new paragraph style dropped a formula's line height there.
+        self.fit_formula_lines_in(storage, paragraph(storage, NSRange::new(region.0, region.1 - region.0)), self.ivars().revealed.get());
+        storage.endEditing();
+    }
+
+    /// A list item's marker and its paragraph's indentation. A bullet's `- ` is hidden, its room
+    /// kept (by kerning) for the dot the fragment draws, unless the selection touches it;
+    /// numbers show. The source's indentation is hidden: each level indents by `LIST_INDENT`,
+    /// and wrapped lines line up with the item's text. One attribute change per range: the
+    /// paragraph style goes on the paragraph's first character, and the text storage gives it
+    /// to the whole paragraph (it fixes paragraph styles so).
+    fn style_list_marker(&self, storage: &NSTextStorage, run: &Run) {
+        let Style::ListMarker { kind, depth } = run.style else { return };
+        let look = &self.ivars().look;
+        let text = storage.string();
+        let mut line_start = run.range.start;
+        while line_start > 0 && matches!(text.characterAtIndex(line_start - 1), 0x20 | 0x09) {
+            line_start -= 1;
+        }
+        let blank = line_start == 0 || matches!(text.characterAtIndex(line_start - 1), 0x0a | 0x0d);
+        let range = ns(&run.range);
+        let hidden = kind == ListKind::Bullet && !touches(&run.range, self.ivars().selection.get());
+        let font = if kind == ListKind::Ordered { &look.digits } else { &look.body };
+        let room = if hidden {
+            BULLET_ROOM
+        } else if kind == ListKind::Ordered {
+            self.number_width(&text, &run.range)
+        } else {
+            let attrs = attributes(font, &look.muted, "list-marker", 0.0, None, look);
+            text_width(&text.substringWithRange(range), &attrs)
+        };
+        let start = if blank { f64::from(depth) * LIST_INDENT } else { 0.0 };
+        let style = self.list_style(start, room, blank);
+        let indent = line_start..run.range.start;
+        let on_marker = (!blank || indent.is_empty()).then_some(&*style);
+        if hidden {
+            let kern = BULLET_ROOM / run.range.len() as f64;
+            set_with(storage, range, &look.hidden, &look.clear, "bullet", kern, on_marker, look);
+        } else {
+            set_with(storage, range, font, &look.muted, "list-marker", 0.0, on_marker, look);
+        }
+        if blank && !indent.is_empty() {
+            set_with(storage, ns(&indent), &look.hidden, &look.clear, "indent", 0.0, Some(&style), look);
+        }
+    }
+
+    /// Width of a list number (`12. `) in the digits font, without measuring the text.
+    fn number_width(&self, text: &NSString, range: &Range<usize>) -> f64 {
+        let look = &self.ivars().look;
+        let widths = look.number_widths.get().unwrap_or_else(|| {
+            let width = |s: &str| {
+                let attrs = attributes(&look.digits, &look.muted, "list-marker", 0.0, None, look);
+                text_width(&NSString::from_str(s), &attrs)
+            };
+            let w = [width("0"), width("."), width(")"), width(" ")];
+            look.number_widths.set(Some(w));
+            w
+        });
+        range
+            .clone()
+            .map(|i| match text.characterAtIndex(i) {
+                0x30..=0x39 => widths[0],
+                0x2e => widths[1],
+                0x29 => widths[2],
+                0x20 => widths[3],
+                _ => 0.0,
+            })
+            .sum()
+    }
+
+    /// The paragraph style of list items starting at `start` with `room` for their marker
+    /// (made once for each).
+    fn list_style(&self, start: f64, room: f64, hidden_indent: bool) -> Retained<NSParagraphStyle> {
+        let mut styles = self.ivars().look.list_styles.borrow_mut();
+        styles
+            .entry((start.to_bits(), room.to_bits(), hidden_indent))
+            .or_insert_with(|| {
+                let style = NSMutableParagraphStyle::new();
+                style.setFirstLineHeadIndent(start);
+                style.setHeadIndent(start + room);
+                if hidden_indent {
+                    // Hidden tabs must not jump to tab stops.
+                    style.setTabStops(Some(&NSArray::new()));
+                    style.setDefaultTabInterval(0.01);
+                }
+                Retained::into_super(style)
+            })
+            .clone()
     }
 
     /// Text colour for typeset formulas, and the typeset image of `f` (cached).
@@ -482,9 +629,6 @@ impl LivePreview {
         if styled.formulas.iter().filter(in_paragraph).any(|f| f.display && is_block(storage, f)) {
             return;
         }
-        let range = NSRange::new(paragraph_range.0, paragraph_range.1 - paragraph_range.0);
-        // SAFETY: AppKit's attribute name constant lives for the whole process.
-        unsafe { storage.removeAttribute_range(NSParagraphStyleAttributeName, range) };
         let font = &self.ivars().look.body;
         let (ascent, descent) = (font.ascender(), -font.descender());
         let (mut above, mut below) = (ascent, descent);
@@ -494,11 +638,10 @@ impl LivePreview {
                 below = below.max(image.height_pt - image.baseline_pt);
             }
         }
-        if above > ascent || below > descent {
-            let line = NSMutableParagraphStyle::new();
-            line.setMinimumLineHeight(above + below + 2.0);
-            add_paragraph_style(storage, paragraph_range, &line);
-        }
+        // The paragraph's other settings (a list item's indentation) stay.
+        let line = paragraph_style_at(storage, paragraph_range.0);
+        line.setMinimumLineHeight(if above > ascent || below > descent { above + below + 2.0 } else { 0.0 });
+        add_paragraph_style(storage, paragraph_range, &line);
     }
 
     /// Fits the lines of every paragraph holding an inline formula that meets `region`.
@@ -520,11 +663,11 @@ impl LivePreview {
     }
 
     /// What the paragraph at `range` draws: each typeset formula starting in it (inline, or a
-    /// display formula on its own line), and the preview of a display formula with the cursor
-    /// in it below its last paragraph.
-    fn formula_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
+    /// display formula on its own line), the preview of a display formula with the cursor in
+    /// it below its last paragraph, and the dot of a hidden bullet.
+    fn preview_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
         let styled = self.ivars().styled.borrow();
-        let (Some(range), false) = (range, styled.formulas.is_empty()) else { return Vec::new() };
+        let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty()) else { return Vec::new() };
         let Some(content) = layout.textContentManager() else { return Vec::new() };
         let storage = content.downcast_ref::<NSTextContentStorage>().and_then(|c| c.textStorage());
         let Some(storage) = storage else { return Vec::new() };
@@ -546,14 +689,22 @@ impl LivePreview {
                 continue;
             }
             let Ok(image) = self.formula_image(f) else { continue };
-            marks.push(Mark { offset: at - from, image, anchor });
+            marks.push(Mark::Formula { offset: at - from, image, anchor });
+        }
+        let selection = self.ivars().selection.get();
+        let centre = self.ivars().look.body.xHeight() / 2.0;
+        let first = styled.runs.partition_point(|r| r.range.start < from);
+        for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
+            if matches!(run.style, Style::ListMarker { kind: ListKind::Bullet, .. }) && !touches(&run.range, selection) {
+                marks.push(Mark::Bullet { offset: run.range.start - from, centre });
+            }
         }
         marks
     }
 
-    /// `x y w h kind` of each typeset formula in view, for probe mode.
-    pub fn describe_formulas(view: &NSTextView) -> Vec<String> {
-        crate::formula_fragment::describe_visible(view)
+    /// Probe lines of what is drawn in place of hidden source in view.
+    pub fn describe_drawn(view: &NSTextView) -> Vec<String> {
+        crate::preview_fragment::describe_visible(view)
     }
 
     fn style_markup(&self, storage: &NSTextStorage, m: &Range<usize>, font: &NSFont, visible: bool) {
@@ -610,7 +761,7 @@ impl LivePreview {
     }
 
     /// Font, colour and test name of a run; links to missing notes are dimmed.
-    fn run_look<'a>(&'a self, run: &Run, styled: &Highlight) -> (&'a NSFont, &'a NSColor, String) {
+    fn run_look<'a>(&'a self, run: &Run, styled: &Highlight) -> (&'a NSFont, &'a NSColor, &'static str) {
         let look = &self.ivars().look;
         if matches!(run.style, Style::Link | Style::WikiLink)
             && let Some(links) = self.ivars().links.borrow().as_ref()
@@ -618,7 +769,7 @@ impl LivePreview {
             && link.link.kind != LinkKind::External
             && links.resolve(link.link.kind, &link.link.target, &self.ivars().path.borrow()).is_none()
         {
-            return (&look.body, &look.missing, "missing".into());
+            return (&look.body, &look.missing, "missing");
         }
         run_look(run.style, look)
     }
@@ -688,20 +839,23 @@ pub fn fit_readable_width(view: &NSTextView) {
     }
 }
 
-fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, String) {
+fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'static str) {
     match style {
-        Style::Heading(level) => (&look.headings[usize::from(level.clamp(1, 6)) - 1], &look.text, format!("heading{level}")),
-        Style::Strong => (&look.bold, &look.text, "strong".into()),
-        Style::Emphasis => (&look.italic, &look.text, "emphasis".into()),
-        Style::Strike => (&look.body, &look.text, "strike".into()),
-        Style::Code => (&look.mono, &look.text, "code".into()),
-        Style::CodeBlock => (&look.mono, &look.text, "codeblock".into()),
-        Style::Link => (&look.body, &look.accent, "link".into()),
-        Style::WikiLink => (&look.body, &look.accent, "wikilink".into()),
-        Style::Tag => (&look.body, &look.accent, "tag".into()),
-        Style::Math => (&look.body, &look.text, "math".into()),
-        Style::ListMarker { .. } => (&look.body, &look.muted, "list-marker".into()),
-        Style::Done => (&look.body, &look.muted, "done".into()),
+        Style::Heading(level) => {
+            let i = usize::from(level.clamp(1, 6)) - 1;
+            (&look.headings[i], &look.text, HEADING_NAMES[i])
+        }
+        Style::Strong => (&look.bold, &look.text, "strong"),
+        Style::Emphasis => (&look.italic, &look.text, "emphasis"),
+        Style::Strike => (&look.body, &look.text, "strike"),
+        Style::Code => (&look.mono, &look.text, "code"),
+        Style::CodeBlock => (&look.mono, &look.text, "codeblock"),
+        Style::Link => (&look.body, &look.accent, "link"),
+        Style::WikiLink => (&look.body, &look.accent, "wikilink"),
+        Style::Tag => (&look.body, &look.accent, "tag"),
+        Style::Math => (&look.body, &look.text, "math"),
+        Style::ListMarker { .. } => (&look.body, &look.muted, "list-marker"),
+        Style::Done => (&look.body, &look.muted, "done"),
     }
 }
 
@@ -716,13 +870,59 @@ fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
 }
 
-fn set(storage: &NSTextStorage, range: NSRange, font: &NSFont, color: &NSColor, name: &str, look: &Look) {
-    let style = NSString::from_str(name);
-    // SAFETY: AppKit's attribute name constants live for the whole process.
-    let keys = unsafe { [NSFontAttributeName, NSForegroundColorAttributeName, &*look.style_key] };
-    let values: [&AnyObject; 3] = [font.as_ref(), color.as_ref(), style.as_ref()];
-    let attrs = NSDictionary::from_slices(&keys, &values);
+fn set(storage: &NSTextStorage, range: NSRange, font: &NSFont, color: &NSColor, name: &'static str, look: &Look) {
+    set_with(storage, range, font, color, name, 0.0, None, look);
+}
+
+/// Replaces the attributes of `range`; `kern` and `paragraph` only when given.
+#[allow(clippy::too_many_arguments)]
+fn set_with(
+    storage: &NSTextStorage,
+    range: NSRange,
+    font: &NSFont,
+    color: &NSColor,
+    name: &'static str,
+    kern: f64,
+    paragraph: Option<&NSParagraphStyle>,
+    look: &Look,
+) {
+    let attrs = attributes(font, color, name, kern, paragraph, look);
+    // SAFETY: values of their attributes' types.
     unsafe { storage.setAttributes_range(Some(&attrs), range) };
+}
+
+/// An attribute set, made once and then shared.
+fn attributes(
+    font: &NSFont,
+    color: &NSColor,
+    name: &'static str,
+    kern: f64,
+    paragraph: Option<&NSParagraphStyle>,
+    look: &Look,
+) -> Retained<NSDictionary<NSString, AnyObject>> {
+    let key: AttributesKey = (font, color, name, kern.to_bits(), paragraph.map_or(std::ptr::null(), |p| p as *const _));
+    let mut cache = look.attributes.borrow_mut();
+    cache
+        .entry(key)
+        .or_insert_with(|| {
+            let style = NSString::from_str(name);
+            let kern = NSNumber::numberWithDouble(kern);
+            // SAFETY: AppKit's attribute name constants live for the whole process.
+            let mut keys = unsafe { vec![NSFontAttributeName, NSForegroundColorAttributeName, &*look.style_key] };
+            let mut values: Vec<&AnyObject> = vec![font.as_ref(), color.as_ref(), style.as_ref()];
+            if key.3 != 0 {
+                // SAFETY: as above.
+                keys.push(unsafe { NSKernAttributeName });
+                values.push(kern.as_ref());
+            }
+            if let Some(paragraph) = paragraph {
+                // SAFETY: as above.
+                keys.push(unsafe { NSParagraphStyleAttributeName });
+                values.push(paragraph.as_ref());
+            }
+            NSDictionary::from_slices(&keys, &values)
+        })
+        .clone()
 }
 
 /// Drops kerning and paragraph styles (set only for formulas) from `range`.
@@ -747,7 +947,25 @@ fn add_kern(storage: &NSTextStorage, index: usize, points: f64) {
     unsafe { storage.addAttribute_value_range(NSKernAttributeName, &value, NSRange::new(index, 1)) };
 }
 
-fn add_paragraph_style(storage: &NSTextStorage, paragraphs: (usize, usize), style: &NSMutableParagraphStyle) {
+/// Width of `text` laid out on one line with `attrs`.
+fn text_width(text: &NSString, attrs: &NSDictionary<NSString, AnyObject>) -> f64 {
+    // SAFETY: an attribute set of valid values.
+    unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), text, Some(attrs)) }.size().width
+}
+
+/// A copy of the paragraph style at `index` to change, or a new one.
+fn paragraph_style_at(storage: &NSTextStorage, index: usize) -> Retained<NSMutableParagraphStyle> {
+    if index < storage.length() {
+        // SAFETY: AppKit's attribute name constant lives for the whole process.
+        let value = unsafe { storage.attribute_atIndex_effectiveRange(NSParagraphStyleAttributeName, index, std::ptr::null_mut()) };
+        if let Some(style) = value.and_then(|v| v.downcast::<NSParagraphStyle>().ok()) {
+            return style.mutableCopy();
+        }
+    }
+    NSMutableParagraphStyle::new()
+}
+
+fn add_paragraph_style(storage: &NSTextStorage, paragraphs: (usize, usize), style: &NSParagraphStyle) {
     // SAFETY: a paragraph style is the attribute's value type.
     unsafe { storage.addAttribute_value_range(NSParagraphStyleAttributeName, style, NSRange::new(paragraphs.0, paragraphs.1 - paragraphs.0)) };
 }
@@ -767,6 +985,18 @@ fn is_dark(view: &NSTextView) -> bool {
 fn paragraph(storage: &NSTextStorage, selection: NSRange) -> (usize, usize) {
     let p = storage.string().paragraphRangeForRange(selection);
     (p.location, p.location + p.length)
+}
+
+/// How far before a selection a list marker touching it may start.
+const MARKER_REACH: usize = 16;
+
+/// Whether the selection touches a list marker: starts in it or ends in or after its start.
+fn touches(marker: &Range<usize>, selection: (usize, usize)) -> bool {
+    selection.0 < marker.end && selection.1 >= marker.start
+}
+
+fn span(selection: NSRange) -> (usize, usize) {
+    (selection.location, selection.location + selection.length)
 }
 
 fn overlaps(m: &Range<usize>, para: (usize, usize)) -> bool {

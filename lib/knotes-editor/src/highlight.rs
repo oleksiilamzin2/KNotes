@@ -130,10 +130,13 @@ pub fn highlight(source: &str) -> Highlight {
             }
             Event::Start(Tag::Item) => {
                 let ordered = lists.last().copied().unwrap_or(false);
+                // A nested item indented with tabs starts at the line break before it.
+                let start = r.start + (text.len() - text.trim_start().len());
+                let text = &source[start..r.end];
                 let marker = if ordered { text.bytes().take_while(u8::is_ascii_digit).count() + 1 } else { 1 }.min(text.len());
-                let end = r.start + marker + blanks(&text[marker..]);
+                let end = start + marker + blanks(&text[marker..]);
                 let kind = if ordered { ListKind::Ordered } else { ListKind::Bullet };
-                h.runs.push(Run { range: r.start..end, style: Style::ListMarker { kind, depth: lists.len().saturating_sub(1) as u8 } });
+                h.runs.push(Run { range: start..end, style: Style::ListMarker { kind, depth: lists.len().saturating_sub(1) as u8 } });
                 item = Some(h.runs.len() - 1);
             }
             Event::TaskListMarker(checked) => {

@@ -644,9 +644,9 @@ impl VaultWindow {
         self.accepting.set(false);
     }
 
-    /// Typeset formulas of the note in view, for probe mode.
-    pub fn describe_formulas(&self) -> Vec<String> {
-        LivePreview::describe_formulas(&self.note_text)
+    /// Probe lines of what the note draws in place of hidden source, in view.
+    pub fn describe_drawn(&self) -> Vec<String> {
+        LivePreview::describe_drawn(&self.note_text)
     }
 
     pub fn describe_completion(&self) -> String {

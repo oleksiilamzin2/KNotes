@@ -534,8 +534,8 @@ fn report_note(window: &VaultWindow) {
     println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
     println!("editor-struck: {}", crate::live_preview::LivePreview::describe_struck(&window.note_text));
-    for image in window.describe_formulas() {
-        println!("formula-image: {image}");
+    for line in window.describe_drawn() {
+        println!("{line}");
     }
     if let Some(scroll) = window.note_text.enclosingScrollView() {
         let shown = scroll.contentView().bounds();
