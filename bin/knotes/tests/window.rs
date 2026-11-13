@@ -1365,3 +1365,14 @@ fn only_images_in_view_are_decoded() {
     let decoded: usize = out.lines().find_map(|l| l.strip_prefix("images-decoded: ")).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("{out}"));
     assert!(decoded > 0 && decoded < 15, "{decoded} of 30 decoded: {out}");
 }
+
+#[test]
+fn opening_another_note_lets_the_last_one_s_images_go() {
+    let (_vault, out) = probe_images(
+        &[("a.md", "![[one.png]]\n![[two.png]]\nend"), ("b.md", "![[three.png]]\nend")],
+        &[("one.png", PIC), ("two.png", PIC), ("three.png", WIDE)],
+        &[("KNOTES_PROBE_OPEN", "a.md,b.md")],
+    );
+    assert!(out.contains("note: b.md"), "{out}");
+    assert!(out.contains("images-kept: 1\n"), "only the open note's image is kept: {out}");
+}

@@ -810,7 +810,9 @@ fn report_note(window: &VaultWindow) {
     }
     // What a look at the window decodes: the images drawn in view.
     window.window.displayIfNeeded();
-    println!("images-decoded: {}", window.decoded_images());
+    let (decoded, kept) = window.decoded_images();
+    println!("images-decoded: {decoded}");
+    println!("images-kept: {kept}");
     let row = window.table.selectedRow();
     if row >= 0
         && let Some(cell) = window.table.viewAtColumn_row_makeIfNecessary(0, row, true).and_then(|v| v.downcast::<NSTableCellView>().ok())

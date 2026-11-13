@@ -529,6 +529,8 @@ impl LivePreview {
     /// Shows `source` in `view` with live preview styles.
     pub fn show(&self, view: &NSTextView, path: &str, source: &str) {
         self.clear_found(view);
+        // The last note's images go with it.
+        self.forget_images();
         *self.ivars().path.borrow_mut() = path.to_owned();
         // setString moves the selection, which reveals markup: the old note's ranges must not
         // be applied to the new text.
@@ -886,9 +888,10 @@ impl LivePreview {
         Some((image, size))
     }
 
-    /// How many of the note's images have been decoded (probe mode).
-    pub fn decoded_images(&self) -> usize {
-        self.ivars().bitmaps.borrow().values().filter(|i| i.is_decoded()).count()
+    /// How many of the note's images have been decoded, and how many are kept (probe mode).
+    pub fn decoded_images(&self) -> (usize, usize) {
+        let bitmaps = self.ivars().bitmaps.borrow();
+        (bitmaps.values().filter(|i| i.is_decoded()).count(), bitmaps.len())
     }
 
     /// An image away from the cursor: its line's source hidden, the line centred and as tall

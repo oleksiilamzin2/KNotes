@@ -579,6 +579,8 @@ impl VaultWindow {
                 if let Some(row) = self.list.row_of(path) {
                     // Selecting the row goes through the same delegate path as a click.
                     self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
+                    // Shown before the next one opens, as on screen.
+                    self.window.displayIfNeeded();
                 }
                 if i == 0 {
                     probe::type_requested(&self.note_text);
@@ -887,8 +889,9 @@ impl VaultWindow {
         self.accepting.set(false);
     }
 
-    /// How many of the open note's images have been decoded (probe mode).
-    pub fn decoded_images(&self) -> usize {
+    /// How many of the open note's images have been decoded, and how many are kept (probe
+    /// mode).
+    pub fn decoded_images(&self) -> (usize, usize) {
         self.live_preview.decoded_images()
     }
 
