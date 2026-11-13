@@ -26,7 +26,7 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
+use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
 use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
@@ -970,18 +970,49 @@ impl VaultWindow {
     /// seen yet is kept next to the note as a conflict copy instead of being overwritten.
     fn write_edits(&self) {
         let Some(vault) = self.state.borrow().vault.clone() else { return };
-        let mut editing = self.editing.borrow_mut();
-        let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return };
-        let vault = FsVault::new(&vault);
-        let text = self.note_text.string().to_string();
-        if let Ok(disk) = vault.read_text(&editing.path) {
-            match editing.document.on_disk(&disk, &text) {
-                DiskChange::Conflict => keep_conflict_copy(&vault, &editing.path, &disk),
-                DiskChange::Ignore if !editing.document.is_dirty() => return,
-                _ => {}
+        let copy = {
+            let mut editing = self.editing.borrow_mut();
+            let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return };
+            let vault = FsVault::new(&vault);
+            let text = self.note_text.string().to_string();
+            let mut copy = None;
+            if let Ok(disk) = vault.read_text(&editing.path) {
+                match editing.document.on_disk(&disk, &text) {
+                    DiskChange::Conflict => copy = keep_conflict_copy(&vault, &editing.path, &disk),
+                    DiskChange::Ignore if !editing.document.is_dirty() => return,
+                    _ => {}
+                }
             }
+            write(&vault, editing, &text);
+            copy.map(|copy| (editing.path.clone(), copy))
+        };
+        if let Some((path, copy)) = copy {
+            self.tell_conflict(&path, &copy);
         }
-        write(&vault, editing, &text);
+    }
+
+    /// Tells where the other version of a note went (ADR 0011), in a sheet on the window that
+    /// can open it.
+    fn tell_conflict(&self, path: &str, copy: &str) {
+        if probe::enabled() {
+            println!("conflict-notice: {copy}");
+            return;
+        }
+        let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
+        alert.setMessageText(&NSString::from_str(strings::CONFLICT_TITLE));
+        alert.setInformativeText(&NSString::from_str(&strings::conflict_details(knotes_app::title_of(path), knotes_app::title_of(copy))));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OPEN_COPY));
+        let weak = self.this.borrow().clone();
+        let copy = copy.to_owned();
+        let handler = block2::RcBlock::new(move |response: NSModalResponse| {
+            if response == NSAlertSecondButtonReturn
+                && let Some(window) = weak.upgrade()
+            {
+                window.open_note(&copy, true);
+            }
+        });
+        alert.beginSheetModalForWindow_completionHandler(&self.window, Some(&handler));
     }
 
     /// The open note changed on disk: our own save is ignored, a clean editor reloads, and
@@ -1005,9 +1036,12 @@ impl VaultWindow {
             DiskChange::Conflict => {
                 // The editor's text keeps the note's name; the copy holds the other side.
                 let vault = FsVault::new(&vault);
-                keep_conflict_copy(&vault, path, &disk);
+                let copy = keep_conflict_copy(&vault, path, &disk);
                 if let Some(editing) = self.editing.borrow_mut().as_mut() {
                     write(&vault, editing, &text);
+                }
+                if let Some(copy) = copy {
+                    self.tell_conflict(path, &copy);
                 }
             }
         }
@@ -1284,7 +1318,7 @@ fn write(vault: &FsVault, editing: &mut Editing, text: &str) {
 }
 
 /// Writes the disk version of `path` as "Name (конфлікт date time).md" next to it.
-fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) {
+fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) -> Option<String> {
     let formatter = NSDateFormatter::new();
     formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm")));
     let stamp = formatter.stringFromDate(&NSDate::now()).to_string();
@@ -1293,8 +1327,12 @@ fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) {
         formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm.ss")));
         copy = conflict_path(path, &formatter.stringFromDate(&NSDate::now()).to_string());
     }
-    if let Err(e) = vault.write_note(&copy, disk) {
-        eprintln!("knotes: cannot keep conflict copy {copy}: {e}");
+    match vault.write_note(&copy, disk) {
+        Ok(()) => Some(copy),
+        Err(e) => {
+            eprintln!("knotes: cannot keep conflict copy {copy}: {e}");
+            None
+        }
     }
 }
 

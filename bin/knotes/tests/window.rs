@@ -401,6 +401,7 @@ fn an_outside_change_to_an_edited_note_keeps_both_versions() {
         .collect();
     assert_eq!(copies.len(), 1, "{copies:?}");
     assert_eq!(read(vault.path(), &copies[0]), "changed outside");
+    assert!(out.contains(&format!("conflict-notice: {}", copies[0])), "the user is told where the other version went: {out}");
     assert!(out.contains("document: clean"), "{out}");
 }
 

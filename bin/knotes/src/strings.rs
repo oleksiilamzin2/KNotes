@@ -85,3 +85,12 @@ pub fn move_question(note: &str) -> String {
 }
 /// The open note's name in the toolbar.
 pub const NOTE_TITLE: &str = "Назва нотатки";
+/// The notice of a conflict (ADR 0011).
+pub const CONFLICT_TITLE: &str = "Нотатку змінили ззовні";
+pub const CONFLICT_OK: &str = "Гаразд";
+pub const CONFLICT_OPEN_COPY: &str = "Відкрити копію";
+
+/// What happened to each version.
+pub fn conflict_details(note: &str, copy: &str) -> String {
+    format!("Ваші зміни лишилися в «{note}», а версію з диска збережено поруч як «{copy}».")
+}
