@@ -10,7 +10,7 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
+    NSButton, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
     NSOutlineViewDelegate, NSPasteboard, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification,
     NSView,
 };
@@ -21,6 +21,7 @@ use crate::strings;
 
 type OnSelect = Box<dyn Fn(SidebarItem)>;
 type OnDrop = Box<dyn Fn(String, String)>;
+type OnClose = Box<dyn Fn(String)>;
 
 pub struct Ivars {
     model: RefCell<Sidebar>,
@@ -30,6 +31,8 @@ pub struct Ivars {
     on_drop: RefCell<Option<OnDrop>>,
     /// Called with a folder's path and the name typed in its row.
     on_rename: RefCell<Option<OnDrop>>,
+    /// Called with the path of a tab whose cross was clicked (ADR 0024).
+    on_close: RefCell<Option<OnClose>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -113,6 +116,17 @@ define_class!(
     }
 
     impl SidebarSource {
+        /// A tab's cross: the tab closes.
+        #[unsafe(method(closeTab:))]
+        fn close_tab(&self, sender: &NSView) {
+            let outline = self.ivars().outline.borrow().load();
+            let row = outline.as_ref().map_or(-1, |o| o.rowForView(sender));
+            let item = outline.filter(|_| row >= 0).and_then(|o| o.itemAtRow(row)).and_then(|o| item_of(&o));
+            if let (Some(SidebarItem::Tab(path)), Some(callback)) = (item, self.ivars().on_close.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
         #[unsafe(method(renameFolder:))]
         fn rename_folder(&self, _sender: Option<&AnyObject>) {
             if let Some((row, _)) = self.menu_folder() {
@@ -156,6 +170,7 @@ impl SidebarSource {
             on_select: RefCell::new(None),
             on_drop: RefCell::new(None),
             on_rename: RefCell::new(None),
+            on_close: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -189,6 +204,14 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             let text = model.count(&item).map(|n| n.to_string()).unwrap_or_default();
             count.setStringValue(&NSString::from_str(&text));
         }
+        if let Some(close) = close_button(&cell) {
+            close.setHidden(!matches!(item, SidebarItem::Tab(_)));
+            // SAFETY: the source outlives the outline's cells (it is the outline's data source).
+            unsafe {
+                close.setTarget(Some(self));
+                close.setAction(Some(sel!(closeTab:)));
+            }
+        }
         Some(Retained::into_super(cell))
     }
 
@@ -198,6 +221,10 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
 
     pub fn on_drop(&self, callback: impl Fn(String, String) + 'static) {
         *self.ivars().on_drop.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_close(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_close.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_rename(&self, callback: impl Fn(String, String) + 'static) {
@@ -326,6 +353,7 @@ const CELL_ID: &str = "SidebarCell";
 /// Height of the empty row between the fixed rows and the tree.
 const GAP_HEIGHT: f64 = 10.0;
 const COUNT_ID: &str = "count";
+const CLOSE_ID: &str = "close";
 
 /// A reused cell (icon, name, count on the right), laid out with constraints.
 fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
@@ -343,7 +371,15 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     count.setIdentifier(Some(&NSString::from_str(COUNT_ID)));
     count.setTextColor(Some(&NSColor::secondaryLabelColor()));
     count.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(NSFont::systemFontSize(), 0.0)));
-    for view in [&*image as &NSView, &name, &count] {
+    // A tab's cross (ADR 0024); hidden on other rows.
+    let close = NSButton::new(mtm);
+    close.setBordered(false);
+    close.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("xmark"), Some(&NSString::from_str(strings::CLOSE_TAB))).as_deref());
+    close.setToolTip(Some(&NSString::from_str(strings::CLOSE_TAB)));
+    close.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+    close.setIdentifier(Some(&NSString::from_str(CLOSE_ID)));
+    close.setHidden(true);
+    for view in [&*image as &NSView, &name, &count, &close] {
         view.setTranslatesAutoresizingMaskIntoConstraints(false);
         cell.addSubview(view);
     }
@@ -356,6 +392,10 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         count.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -6.0),
         count.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         name.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&count.leadingAnchor(), -6.0),
+        close.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
+        close.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
+        close.widthAnchor().constraintEqualToConstant(16.0),
+        name.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&close.leadingAnchor(), -4.0),
     ];
     for c in &constraints {
         c.setActive(true);
@@ -365,6 +405,12 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         cell.setTextField(Some(&name));
     }
     cell
+}
+
+/// A cell's cross for closing a tab.
+pub fn close_button(cell: &NSTableCellView) -> Option<Retained<NSButton>> {
+    let id = NSString::from_str(CLOSE_ID);
+    cell.subviews().iter().find(|v| v.identifier().is_some_and(|i| i.isEqualToString(&id))).and_then(|v| v.downcast::<NSButton>().ok())
 }
 
 pub fn count_field(cell: &NSTableCellView) -> Option<Retained<NSTextField>> {

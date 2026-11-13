@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, TagNode, parse_search,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
@@ -410,6 +410,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        let weak_close: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_close(move |path| {
+            if let Some(window) = weak_close.upgrade() {
+                window.close_tab(&path);
+            }
+        });
         this.sidebar.on_rename(move |folder, name| {
             if let Some(window) = weak.upgrade() {
                 window.rename_folder(&folder, &name);
@@ -904,6 +910,10 @@ impl VaultWindow {
                 self.highlight(&item);
                 self.select(item);
             }
+            // `KNOTES_PROBE_TAB_CLOSE=a.md`: a click on the cross of that document's tab.
+            if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLOSE") {
+                probe::tab_close_requested(&self.outline, &self.sidebar, &path);
+            }
             // After the click: it may open a PDF to rename.
             probe::toolbar_rename_requested(&self.window);
             probe::title_clicks_requested(&self.window);
@@ -941,6 +951,35 @@ impl VaultWindow {
             probe::note_scroll_requested(&self.note_text);
             probe::schedule(true);
         }
+    }
+
+    /// Closes `path`'s tab: the document shown stays, or its neighbour's shows, or nothing.
+    pub fn close_tab(&self, path: &str) {
+        let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return };
+        let after = self.tabs.borrow_mut().close(i);
+        match after {
+            AfterClose::Show(next) => self.open_note(&next, true),
+            AfterClose::Nothing => self.show_nothing(),
+            AfterClose::Same => {}
+        }
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+    }
+
+    /// The note column empty: no document open.
+    fn show_nothing(&self) {
+        self.leave();
+        self.completion.hide();
+        if self.find_bar.is_shown() {
+            self.close_find();
+        }
+        *self.editing.borrow_mut() = None;
+        self.show_pdf(None);
+        self.live_preview.show(&self.note_text, "", "");
+        self.refresh_outline();
+        self.update_navigation();
     }
 
     /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow.

@@ -2233,3 +2233,22 @@ fn a_click_on_a_tab_shows_its_document() {
     assert!(out.contains("note: a.md"), "{out}");
     assert_eq!(sidebar_tabs(&out).1, "a");
 }
+
+#[test]
+fn closing_another_tab_keeps_the_document_shown() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
+    assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()));
+    assert!(out.contains("note-title: b\n"), "{out}");
+}
+
+#[test]
+fn closing_the_tab_shown_shows_its_neighbour_and_closing_the_last_shows_nothing() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md,b.md"), ("KNOTES_PROBE_TAB_CLOSE", "b.md")]);
+    assert_eq!(sidebar_tabs(&out), ("a".to_owned(), "a".to_owned()));
+    assert!(out.contains("note-title: a\n") && out.contains("text: See [[doc.pdf]] here"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TAB_CLOSE", "a.md")]);
+    assert_eq!(sidebar_tabs(&out), ("".to_owned(), "none".to_owned()));
+    assert!(out.contains("note-title: \n") && out.contains("text: \n"), "{out}");
+}

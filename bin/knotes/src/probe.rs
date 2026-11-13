@@ -343,6 +343,17 @@ pub fn pdf_width_requested(window: &std::rc::Rc<VaultWindow>) {
     });
 }
 
+/// A click on the cross of `path`'s tab in the sidebar: its button pressed.
+pub fn tab_close_requested(outline: &NSOutlineView, sidebar: &crate::sidebar_view::SidebarSource, path: &str) {
+    // SAFETY: the item object comes from the outline view's data source.
+    let row = unsafe { outline.rowForItem(Some(&sidebar.object_for(&knotes_app::SidebarItem::Tab(path.to_owned())))) };
+    let cell = (row >= 0).then(|| outline.viewAtColumn_row_makeIfNecessary(0, row, true)).flatten().and_then(|v| v.downcast::<NSTableCellView>().ok());
+    if let Some(button) = cell.as_deref().and_then(crate::sidebar_view::close_button) {
+        // SAFETY: a click with no sender, as the button's own.
+        unsafe { button.performClick(None) };
+    }
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
