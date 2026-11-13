@@ -921,3 +921,11 @@ fn an_empty_list_item_or_quote_line_sits_on_the_same_baseline_as_its_neighbours(
     let bars = decorations(&out, "quote");
     assert!(bars.windows(2).all(|w| (w[1].1 - w[0].1 - 18.0).abs() < 0.5 && (w[0].3 - 18.0).abs() < 0.5), "{bars:?}");
 }
+
+#[test]
+fn a_task_circle_is_centred_on_capital_letters_higher_than_a_bullet_dot() {
+    let (_vault, out) = probe_notes(&[("c.md", "- [ ] Task\n- Bullet\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let (task, dot) = (decorations(&out, "task")[0], decorations(&out, "bullet")[0]);
+    let (task_centre, dot_centre_a_line_up) = (task.1 + task.3 / 2.0, dot.1 + dot.3 / 2.0 - 18.0);
+    assert!(dot_centre_a_line_up - task_centre > 1.0, "the circle sits higher in its line: {task:?} {dot:?}");
+}

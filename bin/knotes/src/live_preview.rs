@@ -768,7 +768,9 @@ impl LivePreview {
             marks.push(Mark::CodeBackground { top: from <= c.start, bottom: to >= c.end });
         }
         let selection = self.ivars().selection.get();
+        // A dot on the middle of small letters; a circle, as tall as capitals, on theirs.
         let centre = self.ivars().look.body.xHeight() / 2.0;
+        let task_centre = self.ivars().look.body.capHeight() / 2.0;
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
             if let Style::QuoteMarker { depth } = run.style {
@@ -782,7 +784,7 @@ impl LivePreview {
             let offset = run.range.start - from;
             match kind {
                 ListKind::Bullet => marks.push(Mark::Bullet { offset, centre }),
-                ListKind::Task { checked } => marks.push(Mark::Task { offset, centre, checked }),
+                ListKind::Task { checked } => marks.push(Mark::Task { offset, centre: task_centre, checked }),
                 ListKind::Ordered => {}
             }
         }
