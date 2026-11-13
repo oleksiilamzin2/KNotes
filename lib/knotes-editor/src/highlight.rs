@@ -111,7 +111,8 @@ pub struct TableRow {
     pub cells: Vec<Range<usize>>,
 }
 
-/// An image embed alone on its line: `![[pic.png|300]]` or `![alt|300x200](pic.png)`.
+/// An image or PDF embed alone on its line: `![[pic.png|300]]`, `![alt|300x200](pic.png)`,
+/// `![[doc.pdf#page=3]]` (ADR 0020, 0022).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageRun {
     pub range: Range<usize>,
@@ -119,6 +120,9 @@ pub struct ImageRun {
     /// Size written after `|`, in points.
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// A PDF, shown as a preview of its page `page` (from `#page=3`; the first otherwise).
+    pub pdf: bool,
+    pub page: Option<u32>,
 }
 
 /// An Obsidian callout: a quote whose first line starts with `[!kind]`.
@@ -364,12 +368,15 @@ pub fn highlight(source: &str) -> Highlight {
     h
 }
 
-/// The image `l` embeds, when it is an image in the vault alone on its line.
+/// The image or PDF `l` embeds, when it is one in the vault alone on its line.
 fn image(source: &str, l: &LinkRun) -> Option<ImageRun> {
     let link = &l.link;
-    if !link.embed || link.kind == LinkKind::External || FileKind::from_path(&link.target) != FileKind::Image {
+    let kind = FileKind::from_path(&link.target);
+    if !link.embed || link.kind == LinkKind::External || !matches!(kind, FileKind::Image | FileKind::Pdf) {
         return None;
     }
+    let pdf = kind == FileKind::Pdf;
+    let page = link.subpath.as_deref().and_then(|s| s.strip_prefix("page=")).and_then(|p| p.parse().ok()).filter(|_| pdf);
     let line_start = source[..l.range.start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = source[l.range.end..].find('\n').map_or(source.len(), |i| l.range.end + i);
     if !source[line_start..l.range.start].trim().is_empty() || !source[l.range.end..line_end].trim().is_empty() {
@@ -378,7 +385,7 @@ fn image(source: &str, l: &LinkRun) -> Option<ImageRun> {
     // `300` or `300x200`, after the alias's or alt text's last `|`.
     let size = link.display.as_deref().map_or("", |d| d.rsplit('|').next().unwrap_or(d)).trim();
     let (width, height) = size.split_once('x').map_or((size, ""), |(w, h)| (w, h));
-    Some(ImageRun { range: l.range.clone(), link: link.clone(), width: width.parse().ok(), height: height.parse().ok() })
+    Some(ImageRun { range: l.range.clone(), link: link.clone(), width: width.parse().ok(), height: height.parse().ok(), pdf, page })
 }
 
 /// Marks the opening fence line of a fenced code block at `block`, and its closing one: its

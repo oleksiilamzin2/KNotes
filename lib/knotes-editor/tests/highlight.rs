@@ -264,7 +264,7 @@ fn image_embeds_alone_on_their_line_are_images_with_their_size() {
 
 #[test]
 fn other_embeds_inline_images_and_web_images_are_no_images() {
-    let src = "![[note]]\n![[doc.pdf]]\nsee ![[pic.png]] here\n![](https://example.com/a.png)\n[[pic.png]]\n";
+    let src = "![[note]]\n![[data.csv]]\nsee ![[pic.png]] here\n![](https://example.com/a.png)\n[[pic.png]]\n";
     assert!(highlight(src).images.is_empty(), "{:?}", highlight(src).images);
 }
 
@@ -308,4 +308,13 @@ fn table_ranges_convert_to_utf16() {
     let t = &h.tables[0];
     assert_eq!(text(&t.rows[1].cells[0]), "Аня");
     assert_eq!(text(&t.delimiter), "|---|---|");
+}
+
+#[test]
+fn pdf_embeds_alone_on_their_line_are_previews_of_their_page() {
+    let src = "![[doc.pdf]]\n![[Paper.PDF#page=3|300]]\n![scan](dir/scan.pdf#page=2)\nsee ![[doc.pdf]] inline\n";
+    let h = highlight(src);
+    let pdfs: Vec<(&str, bool, Option<u32>, Option<u32>)> = h.images.iter().map(|i| (i.link.target.as_str(), i.pdf, i.page, i.width)).collect();
+    assert_eq!(pdfs, [("doc.pdf", true, None, None), ("Paper.PDF", true, Some(3), Some(300)), ("dir/scan.pdf", true, Some(2), None)]);
+    assert!(!highlight("![[pic.png#page=2]]\n").images[0].pdf);
 }
