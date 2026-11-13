@@ -109,6 +109,9 @@ pub enum TableControl {
     AddColumn(usize),
 }
 
+/// A right click's table actions: the table's index, the items, and whether they stand alone.
+type ContextItems = (usize, Vec<(&'static str, TableAction)>, bool);
+
 /// What a table control or its menu does.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TableAction {
@@ -1475,7 +1478,7 @@ impl LivePreview {
     /// The table actions a right click at `point` offers: a handle's (only its row's or
     /// column's), or a cell's (its row's and column's, the nearest cell on a table's line), with
     /// the table's index and whether they stand alone (a handle's) or come before the text's.
-    fn context_items(&self, view: &NSTextView, point: NSPoint) -> Option<(usize, Vec<(&'static str, TableAction)>, bool)> {
+    fn context_items(&self, view: &NSTextView, point: NSPoint) -> Option<ContextItems> {
         match self.table_control_at(view, point) {
             Some(control @ (TableControl::RowHandle(..) | TableControl::ColumnHandle(..))) => Some((control_table(control), self.table_menu(control), true)),
             Some(_) => None,
