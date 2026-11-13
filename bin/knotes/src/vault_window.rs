@@ -687,6 +687,9 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+                probe::pdf_mouse_requested(viewer);
+            }
             if let Some(page) = std::env::var("KNOTES_PROBE_PDF_GO").ok().and_then(|p| p.parse().ok()) {
                 self.window.displayIfNeeded();
                 self.pdf_go_to(page);
@@ -776,6 +779,11 @@ impl VaultWindow {
     pub fn describe_pdf(&self) -> String {
         let (Some(path), Some(viewer)) = (self.pdf_path.borrow().clone(), self.pdf_view.borrow().as_ref().map(|v| v.page())) else { return "hidden".to_owned() };
         format!("{path} {}/{}", viewer.0, viewer.1)
+    }
+
+    /// The text selected in the PDF shown (probe mode).
+    pub fn pdf_selection(&self) -> String {
+        self.pdf_view.borrow().as_ref().map(PdfViewer::selected_text).unwrap_or_default()
     }
 
     /// The pages the PDF viewer keeps drawn, from 1 (probe mode).

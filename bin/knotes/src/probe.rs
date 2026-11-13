@@ -263,6 +263,39 @@ pub fn mouse_drag_requested(view: &crate::note_view::NoteTextView) {
     NSResponder::mouseDown(view, &down);
 }
 
+/// `KNOTES_PROBE_PDF_MOUSE=1:0.1,0.5>2:0.4,0.5;3:0.2,0.5*2;^1:0.3,0.5`: gestures with the
+/// mouse on the PDF viewer's pages, `;` between them: a drag (`>`), a click (`*2` a double one,
+/// `^` before it with Shift); a place is a page (from 1) and x, y as fractions of it. The
+/// viewer's handlers get the events as AppKit would send them.
+pub fn pdf_mouse_requested(viewer: &crate::pdf_viewer::PdfViewer) {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
+    let Ok(spec) = std::env::var("KNOTES_PROBE_PDF_MOUSE") else { return };
+    let view = viewer.view();
+    let Some(window) = view.window() else { return };
+    let place = |p: &str| {
+        let (page, at) = p.split_once(':')?;
+        let (x, y) = at.split_once(',')?;
+        viewer.window_point(page.parse::<usize>().ok()?.checked_sub(1)?, x.parse().ok()?, y.parse().ok()?)
+    };
+    let event = |kind, at, clicks, flags| {
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(kind, at, flags, 0.0, window.windowNumber(), None, 0, clicks, 1.0)
+    };
+    for gesture in spec.split(';') {
+        let (flags, gesture) = gesture.strip_prefix('^').map_or((NSEventModifierFlags::empty(), gesture), |g| (NSEventModifierFlags::Shift, g));
+        if let Some((from, to)) = gesture.split_once('>') {
+            let (Some(from), Some(to)) = (place(from), place(to)) else { continue };
+            let (Some(down), Some(dragged)) = (event(NSEventType::LeftMouseDown, from, 1, flags), event(NSEventType::LeftMouseDragged, to, 1, flags)) else { continue };
+            NSResponder::mouseDown(view, &down);
+            NSResponder::mouseDragged(view, &dragged);
+        } else {
+            let (at, clicks) = gesture.split_once('*').map_or((gesture, 1), |(at, n)| (at, n.parse().unwrap_or(1)));
+            if let Some(down) = place(at).and_then(|at| event(NSEventType::LeftMouseDown, at, clicks, flags)) {
+                NSResponder::mouseDown(view, &down);
+            }
+        }
+    }
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
@@ -918,6 +951,7 @@ fn report_note(window: &VaultWindow) {
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
     println!("pdf-view: {}", window.describe_pdf());
+    println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-pages-kept: {}", window.pdf_pages_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");

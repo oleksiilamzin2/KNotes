@@ -26,6 +26,7 @@ knotes-md.workspace = true
 knotes-editor.workspace = true
 knotes-vault.workspace = true
 knotes-search.workspace = true
+knotes-pdf.workspace = true
 
 [dev-dependencies]
 knotes-synth.workspace = true

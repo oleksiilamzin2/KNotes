@@ -1889,3 +1889,45 @@ fn the_pdf_viewer_keeps_only_the_page_shown_and_two_either_side() {
     let (_vault, out) = probe_images(&notes, &[("long.pdf", &long)], &[env[0], env[1], env[2], ("KNOTES_PROBE_AFTER_CLICK", "back")]);
     assert!(out.contains("pdf-view: hidden") && pages_kept(&out).is_empty(), "all let go: {out}");
 }
+
+/// The text selected in the PDF viewer (`pdf-selection:` line).
+fn pdf_selection(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("pdf-selection: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+/// The three-page PDF opened from a link, then `gestures` with the mouse on its pages
+/// (`KNOTES_PROBE_PDF_MOUSE`: `page:x,y>page:x,y` a drag, `page:x,y*2` a double click, `^` before
+/// a click with Shift; x and y as fractions of the page).
+fn pdf_mouse(gestures: &str) -> String {
+    let (_vault, out) = probe_images(
+        &[("a.md", "See [[doc.pdf]] here\n\nend")],
+        &[("doc.pdf", PDF)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_PDF_MOUSE", gestures)],
+    );
+    out
+}
+
+// "Page N" on each page of the three-page PDF: x 0.21–0.56, y 0.43–0.65.
+
+#[test]
+fn dragging_over_a_pdf_page_s_text_selects_it() {
+    assert_eq!(pdf_selection(&pdf_mouse("1:0.1,0.5>1:0.47,0.5")), "Page");
+    assert_eq!(pdf_selection(&pdf_mouse("1:0.9,0.5>1:0.1,0.5")), "Page 1", "backwards too");
+}
+
+#[test]
+fn a_selection_can_run_over_several_pdf_pages() {
+    assert_eq!(pdf_selection(&pdf_mouse("1:0.1,0.5>3:0.9,0.5")), "Page 1⏎Page 2⏎Page 3");
+}
+
+#[test]
+fn a_double_click_selects_a_word_and_a_triple_click_a_line_in_a_pdf() {
+    assert_eq!(pdf_selection(&pdf_mouse("2:0.3,0.5*2")), "Page");
+    assert_eq!(pdf_selection(&pdf_mouse("2:0.3,0.5*3")), "Page 2");
+}
+
+#[test]
+fn a_click_in_a_pdf_clears_the_selection_and_shift_click_extends_it() {
+    assert_eq!(pdf_selection(&pdf_mouse("1:0.1,0.5>1:0.9,0.5;1:0.3,0.5")), "");
+    assert_eq!(pdf_selection(&pdf_mouse("1:0.1,0.5;^2:0.47,0.5")), "Page 1⏎Page");
+}
