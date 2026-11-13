@@ -107,7 +107,7 @@ pub fn image_hover_requested(view: &crate::note_view::NoteTextView) {
 }
 
 /// `KNOTES_PROBE_RANGE_X=start,length;…`: where each range of the note's text starts and ends
-/// across (text view coordinates), as `range-x: x0-x1 …`.
+/// across (text view coordinates), as `range-x: x0:x1 …`.
 pub fn report_range_xs(view: &objc2_app_kit::NSTextView, ranges: &str) {
     let Some(window) = view.window() else { return };
     if let Some(layout) = view.textLayoutManager() {
@@ -121,7 +121,7 @@ pub fn report_range_xs(view: &objc2_app_kit::NSTextView, ranges: &str) {
             // SAFETY: the range lies inside the text; a null actual range is allowed.
             let on_screen = unsafe { objc2_app_kit::NSTextInputClient::firstRectForCharacterRange_actualRange(view, range, std::ptr::null_mut()) };
             let rect = view.convertRect_fromView(window.convertRectFromScreen(on_screen), None);
-            format!("{:.1}-{:.1}", rect.origin.x, rect.origin.x + rect.size.width)
+            format!("{:.1}:{:.1}", rect.origin.x, rect.origin.x + rect.size.width)
         })
         .collect();
     println!("range-x: {}", xs.join(" "));
@@ -581,6 +581,9 @@ pub fn schedule(with_sidebar: bool) {
                 if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("table-bench") {
                     table_bench(&window.note_text);
                 }
+                if let Some(at) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("table-scroll-bench=").map(str::to_owned)) {
+                    table_scroll_bench(&window.note_text, &at);
+                }
                 if with_sidebar {
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
@@ -938,6 +941,29 @@ fn table_bench(view: &objc2_app_kit::NSTextView) {
     times.sort_unstable();
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
     println!("table-bench: keystroke p50={:.2}ms p95={:.2}ms max={:.2}ms n={}", ms(times[50]), ms(times[95]), ms(times[99]), times.len());
+}
+
+/// `KNOTES_PROBE_ACTION=table-scroll-bench=x,y`: 100 sideways scroll steps of 10 points
+/// with the pointer at x,y (over a wide table), each drawn, timed.
+fn table_scroll_bench(view: &crate::note_view::NoteTextView, at: &str) {
+    let Some((x, y)) = at.split_once(',').and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))) else { return };
+    let point = objc2_foundation::NSPoint::new(x, y);
+    view.pointer_at(Some(point));
+    let mut times = Vec::new();
+    for _ in 0..100 {
+        objc2::rc::autoreleasepool(|_| {
+            let t = std::time::Instant::now();
+            view.scroll_sideways_at(point, -10.0);
+            view.layoutSubtreeIfNeeded();
+            if let Some(scroll) = view.enclosingScrollView() {
+                scroll.displayIfNeeded();
+            }
+            times.push(t.elapsed());
+        });
+    }
+    times.sort_unstable();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    println!("table-scroll-bench: step p50={:.2}ms p95={:.2}ms max={:.2}ms n={}", ms(times[50]), ms(times[95]), ms(times[99]), times.len());
 }
 
 /// Scrolls the note list in 40-point steps (a fast flick at 120 Hz) and times the main-thread

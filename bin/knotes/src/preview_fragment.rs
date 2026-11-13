@@ -178,13 +178,12 @@ define_class!(
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
                     (Mark::TableRow { columns, controls, .. }, _) => {
-                        // The add column bar only where the table's right edge shows; the add
-                        // row bar as wide as what shows.
-                        let right = clip.map_or(f64::MAX, |c| c.origin.x + c.size.width);
-                        let cut = rect.origin.x + rect.size.width > right + 0.5;
+                        // The add column bar only where the table's right edge shows; the row's
+                        // handle and the add row bar along what shows.
+                        let shown = within(rect, clip);
+                        let cut = rect.origin.x + rect.size.width > shown.origin.x + shown.size.width + 0.5;
                         let controls = TableControls { add_column: controls.add_column && !cut, ..*controls };
-                        let shown = NSRect::new(rect.origin, NSSize::new(rect.size.width.min(right - rect.origin.x), rect.size.height));
-                        for (kind, control) in table_controls(shown, columns, &controls) {
+                        for (kind, control) in table_controls(rect, shown, columns, &controls) {
                             if kind == "table-add-column" {
                                 // One bar down the table: its parts meet square.
                                 draw_add_bar(control, (controls.first, controls.last), controls.add_column_plus);
@@ -218,7 +217,7 @@ define_class!(
                 .filter_map(|(mark, _)| {
                     let rect = self.mark_rect(mark)?;
                     Some(match mark {
-                        Mark::TableRow { columns, controls, .. } => table_controls(rect, columns, controls).into_iter().map(|c| c.1).fold(rect, union),
+                        Mark::TableRow { columns, controls, .. } => table_controls(rect, within(rect, self.table_clip()), columns, controls).into_iter().map(|c| c.1).fold(rect, union),
                         _ => rect,
                     })
                 })
@@ -243,12 +242,14 @@ impl PreviewFragment {
         unsafe { msg_send![super(this), initWithTextElement: element, range: range] }
     }
 
-    /// The text column, in this fragment's coordinates, when it draws a table row.
+    /// The text column (within the line padding), in this fragment's coordinates, when it draws
+    /// a table row.
     fn table_clip(&self) -> Option<NSRect> {
         self.ivars().marks.iter().any(|(m, _)| matches!(m, Mark::TableRow { .. })).then(|| {
             let frame = self.layoutFragmentFrame();
-            let width = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
-            NSRect::new(NSPoint::new(-frame.origin.x, -frame.origin.y - 1.0e4), NSSize::new(width, 2.0e4))
+            let container = self.textLayoutManager().and_then(|l| l.textContainer());
+            let (width, padding) = container.map_or((frame.size.width, 0.0), |c| (c.size().width, c.lineFragmentPadding()));
+            NSRect::new(NSPoint::new(padding - frame.origin.x, -frame.origin.y - 1.0e4), NSSize::new(width - 2.0 * padding, 2.0e4))
         })
     }
 
@@ -359,7 +360,12 @@ impl PreviewFragment {
                     Mark::CalloutBox { .. } => format!("decoration: callout-box {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::TableRow { header, columns, controls, .. } => {
                         let mut lines = format!("decoration: table-row {x:.1} {y:.1} {w:.1} {h:.1} {}", if *header { "header" } else { "body" });
-                        for (kind, c) in table_controls(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)), columns, controls) {
+                        // As drawn: within the text column, in the view's coordinates.
+                        let inside = within(r, self.table_clip());
+                        let cut = r.origin.x + r.size.width > inside.origin.x + inside.size.width + 0.5;
+                        let shown = NSRect::new(NSPoint::new(inside.origin.x + x - r.origin.x, y), inside.size);
+                        let controls = TableControls { add_column: controls.add_column && !cut, ..*controls };
+                        for (kind, c) in table_controls(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)), shown, columns, &controls) {
                             lines += &format!("\ndecoration: {kind} {:.1} {:.1} {:.1} {:.1}", c.origin.x, c.origin.y, c.size.width, c.size.height);
                         }
                         lines
@@ -461,26 +467,38 @@ pub struct TableControls {
     pub last: bool,
 }
 
-/// The controls a table row with `rect` (across the table) draws, and where.
-pub fn table_controls(rect: NSRect, columns: &[f64], controls: &TableControls) -> Vec<(&'static str, NSRect)> {
+/// The controls a table row with `rect` (across the whole table) draws, and where: the row's
+/// handle and the add row bar along `shown` (the part within the text column), a column's
+/// handle over its column, the add column bar at the table's right edge.
+pub fn table_controls(rect: NSRect, shown: NSRect, columns: &[f64], controls: &TableControls) -> Vec<(&'static str, NSRect)> {
     let mut out = Vec::new();
-    let (x, y, w, h) = (rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
+    let (y, h) = (rect.origin.y, rect.size.height);
     if controls.handle {
-        out.push(("table-row-handle", NSRect::new(NSPoint::new(x - TABLE_HANDLE_GAP - 10.0, y + h / 2.0 - 8.0), NSSize::new(10.0, 16.0))));
+        out.push(("table-row-handle", NSRect::new(NSPoint::new(shown.origin.x - TABLE_HANDLE_GAP - 10.0, y + h / 2.0 - 8.0), NSSize::new(10.0, 16.0))));
     }
     if let Some(c) = controls.column_handle
         && c + 1 < columns.len()
     {
+        let x = rect.origin.x;
         let (left, right) = (x + columns[c] - columns[0], x + columns[c + 1] - columns[0]);
-        out.push(("table-column-handle", NSRect::new(NSPoint::new((left + right) / 2.0 - 8.0, y - TABLE_HANDLE_GAP - 10.0), NSSize::new(16.0, 10.0))));
+        let centre = ((left + right) / 2.0).clamp(shown.origin.x + 8.0, shown.origin.x + shown.size.width - 8.0);
+        out.push(("table-column-handle", NSRect::new(NSPoint::new(centre - 8.0, y - TABLE_HANDLE_GAP - 10.0), NSSize::new(16.0, 10.0))));
     }
     if controls.add_row {
-        out.push(("table-add-row", NSRect::new(NSPoint::new(x, y + h + 3.0), NSSize::new(w, TABLE_ADD_BAR))));
+        out.push(("table-add-row", NSRect::new(NSPoint::new(shown.origin.x, y + h + 3.0), NSSize::new(shown.size.width, TABLE_ADD_BAR))));
     }
     if controls.add_column {
-        out.push(("table-add-column", NSRect::new(NSPoint::new(x + w + 3.0, y), NSSize::new(TABLE_ADD_BAR, h))));
+        out.push(("table-add-column", NSRect::new(NSPoint::new(rect.origin.x + rect.size.width + 3.0, y), NSSize::new(TABLE_ADD_BAR, h))));
     }
     out
+}
+
+/// The part of a table row's `rect` within `clip` across.
+fn within(rect: NSRect, clip: Option<NSRect>) -> NSRect {
+    let Some(clip) = clip else { return rect };
+    let left = rect.origin.x.max(clip.origin.x);
+    let right = (rect.origin.x + rect.size.width).min(clip.origin.x + clip.size.width);
+    NSRect::new(NSPoint::new(left, rect.origin.y), NSSize::new((right - left).max(0.0), rect.size.height))
 }
 
 /// A handle as two columns (or rows) of dots; an add bar faint with a plus.

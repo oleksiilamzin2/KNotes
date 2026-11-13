@@ -58,10 +58,10 @@ const TABLE_MIN_COLUMN: f64 = 24.0;
 /// How near a table the pointer shows its controls: beside and under it, and over it.
 const TABLE_NEAR_SIDE: f64 = 26.0;
 const TABLE_NEAR_TOP: f64 = 20.0;
+/// How long after a table's last sideways scroll step its rows out of view are set.
+const CATCH_UP_MS: u64 = 150;
 /// Widths of pieces of table cells kept at most.
 const MAX_PIECE_WIDTHS: usize = 20_000;
-/// Sideways scrolling over a wide table that shows the next column.
-const SCROLL_COLUMN: f64 = 30.0;
 
 struct Look {
     body: Retained<NSFont>,
@@ -91,12 +91,16 @@ struct Look {
     body_widths: RefCell<std::collections::HashMap<u16, f64>>,
     /// Widths of pieces of table cells by text and font, once measured.
     piece_widths: RefCell<std::collections::HashMap<(String, usize), f64>>,
+    /// Where the characters of pieces of table cells start, by text and font, once measured.
+    char_starts: RefCell<std::collections::HashMap<(String, usize), CharStarts>>,
 }
 
 
 type OnChange = Box<dyn Fn()>;
-/// A table's column widths, first column shown and start, as laid out.
-type TableLayout = (Vec<f64>, usize, usize);
+/// Where each character of a piece of text starts: (UTF-16 units in, points in).
+type CharStarts = Rc<Vec<(usize, f64)>>;
+/// A table's column widths, sideways scroll (its bits) and start, as laid out.
+type TableLayout = (Vec<f64>, u64, usize);
 /// A table under the pointer: where it starts, and the row and column under the pointer.
 type TableHover = (usize, Option<usize>, Option<usize>);
 
@@ -161,17 +165,20 @@ pub struct Ivars {
     hovered_image: Cell<Option<usize>>,
     /// The table the pointer is over (where it starts), and the row and column under it.
     hovered_table: Cell<Option<TableHover>>,
-    /// Each wide table's first column shown (by the table's index in the note): those before
-    /// it are scrolled away.
-    table_scroll: RefCell<HashMap<usize, usize>>,
+    /// How far each wide table is scrolled sideways, in points (by its index in the note).
+    table_scroll: RefCell<HashMap<usize, f64>>,
     /// Each table's column widths with their padding (by its index), as last laid out.
     table_widths: RefCell<HashMap<usize, Vec<f64>>>,
-    /// Each table's column widths, first column shown and start, as last laid out (by its
+    /// While a table scrolls sideways: the part of the text in view, the only one set again.
+    apply_within: Cell<Option<(usize, usize)>>,
+    /// A table whose rows out of view still wait for its last sideways scroll, and the
+    /// generation of the catch-up scheduled for it.
+    stale_table: Cell<Option<usize>>,
+    catch_up: Cell<u64>,
+    /// Each table's column widths, sideways scroll (its bits) and start, as last laid out (by its
     /// index), and whether a restyle changed any: then all of its rows are set again.
     table_layouts: RefCell<HashMap<usize, TableLayout>>,
     tables_changed: Cell<bool>,
-    /// Sideways scrolling over a table not yet a column's worth.
-    scroll_sideways: Cell<f64>,
     /// The actions of the table menu being shown, by item tag, with the table's index.
     menu_actions: RefCell<Vec<(usize, TableAction)>>,
     /// A table edit of the live preview's own is under way: not checked against the table's
@@ -246,6 +253,8 @@ define_class!(
         fn bounds_did_change(&self, _notification: &NSNotification) {
             if let Some(view) = self.ivars().view.borrow().load() {
                 self.let_far_images_go(&view);
+                // Rows coming into view must not show a sideways scroll they missed.
+                self.catch_up_table(&view);
             }
         }
 
@@ -356,6 +365,7 @@ impl LivePreview {
             number_widths: Cell::new(None),
             body_widths: RefCell::new(std::collections::HashMap::new()),
             piece_widths: RefCell::new(std::collections::HashMap::new()),
+            char_starts: RefCell::new(std::collections::HashMap::new()),
             body,
         };
         let ivars = Ivars {
@@ -378,8 +388,10 @@ impl LivePreview {
             menu_actions: RefCell::new(Vec::new()),
             table_scroll: RefCell::new(HashMap::new()),
             table_widths: RefCell::new(HashMap::new()),
-            scroll_sideways: Cell::new(0.0),
             table_layouts: RefCell::new(HashMap::new()),
+            apply_within: Cell::new(None),
+            stale_table: Cell::new(None),
+            catch_up: Cell::new(0),
             tables_changed: Cell::new(false),
             hovered_table: Cell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
@@ -535,6 +547,8 @@ impl LivePreview {
         }
         self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region, revealed);
         let applied = if self.ivars().tables_changed.get() { region } else { asked };
+        // A table scrolling sideways sets only its rows in view; the rest catch up after.
+        let applied = self.ivars().apply_within.get().map_or(applied, |w| (applied.0.max(w.0), applied.1.min(w.1).max(applied.0.max(w.0))));
         look.paint.apply_in(storage, &canvas, &palette, applied.0..applied.1);
     }
 
@@ -998,7 +1012,7 @@ impl LivePreview {
     fn paint_table<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, t: usize, table: &TableRun) {
         let text = storage.string();
         let columns = table.aligns.len().max(table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0));
-        let mut widths: Vec<Vec<f64>> = table.rows.iter().map(|row| row.cells.iter().map(|c| self.shown_width(canvas, palette, &text, c)).collect()).collect();
+        let widths: Vec<Vec<f64>> = table.rows.iter().map(|row| row.cells.iter().map(|c| self.shown_width(canvas, palette, &text, c)).collect()).collect();
         let mut column_widths = vec![TABLE_MIN_COLUMN; columns];
         for row in &widths {
             for (w, column) in row.iter().zip(column_widths.iter_mut()) {
@@ -1006,36 +1020,31 @@ impl LivePreview {
             }
         }
         let padded: Vec<f64> = column_widths.iter().map(|w| w + 2.0 * TABLE_PAD).collect();
-        let first = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0).min(columns.saturating_sub(1));
-        let laid_out = (padded.clone(), first, table.range.start);
+        // A wide table scrolled sideways by `scroll` points, no further than its right edge.
+        let total: f64 = padded.iter().sum();
+        let scroll = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0.0).clamp(0.0, (total - self.ivars().column.get()).max(0.0));
+        if scroll > 0.0 {
+            self.ivars().table_scroll.borrow_mut().insert(t, scroll);
+        } else {
+            self.ivars().table_scroll.borrow_mut().remove(&t);
+        }
+        let laid_out = (padded.clone(), scroll.to_bits(), table.range.start);
         if self.ivars().table_layouts.borrow_mut().insert(t, laid_out.clone()).as_ref() != Some(&laid_out) {
             self.ivars().tables_changed.set(true);
         }
-        self.ivars().table_widths.borrow_mut().insert(t, padded);
-        // Columns scrolled away collapse to the table's left edge, their text hidden.
-        let hidden = palette.look(&self.ivars().look.hidden, &self.ivars().look.clear, "table");
-        for (row, row_widths) in table.rows.iter().zip(widths.iter_mut()) {
-            for (cell, w) in row.cells.iter().zip(row_widths.iter_mut()).take(first) {
-                canvas.paint(cell.clone(), |p| {
-                    p.look = hidden;
-                    p.kern = 0;
-                });
-                *w = 0.0;
-            }
-        }
         let mut edges = Vec::with_capacity(columns + 1);
-        let mut x = 0.0;
-        for (j, w) in column_widths.iter_mut().enumerate() {
+        let mut x = -scroll;
+        for w in &padded {
             edges.push(x);
-            if j < first {
-                *w = 0.0;
-            } else {
-                x += *w + 2.0 * TABLE_PAD;
-            }
+            x += w;
         }
         edges.push(x);
+        self.ivars().table_widths.borrow_mut().insert(t, padded);
         self.ivars().table_columns.borrow_mut().insert(table.range.start, Rc::new(edges.clone()));
+        let hidden = palette.look(&self.ivars().look.hidden, &self.ivars().look.clear, "table");
         for (row, widths) in table.rows.iter().zip(&widths) {
+            // `from` starts the hidden source still to place before the next text shown, `at`
+            // is where the text shown so far ends.
             let (mut at, mut from, mut first_indent) = (0.0, row.range.start, 0.0);
             for (j, (cell, width)) in row.cells.iter().zip(widths).enumerate() {
                 let room = column_widths[j] - width;
@@ -1044,14 +1053,30 @@ impl LivePreview {
                     Some(Align::Right) => room,
                     _ => 0.0,
                 };
-                let target = if j < first { edges[j] } else { edges[j] + TABLE_PAD + offset };
-                if cell.start > from {
-                    self.paint_hidden(canvas, palette, storage, &(from..cell.start), "table", target - at);
+                let x = edges[j] + TABLE_PAD + offset;
+                if x + width <= 0.0 {
+                    // Scrolled away whole: hidden with the pipes around it.
+                    canvas.paint(cell.clone(), |p| {
+                        p.look = hidden;
+                        p.kern = 0;
+                    });
+                    continue;
+                }
+                // Cut by the table's left edge: the characters before it hidden, the first one
+                // after it where it would be (glyphs cannot go left of a line's start).
+                let (shown, shown_x) = if x < 0.0 {
+                    let (cut, before) = self.cut_at(canvas, palette, &text, cell, -x);
+                    (cut, x + before)
+                } else {
+                    (cell.start, x)
+                };
+                if shown > from {
+                    self.paint_hidden(canvas, palette, storage, &(from..shown), "table", shown_x - at);
                 } else {
                     // No pipe before the first cell: the line starts there.
-                    first_indent = target;
+                    first_indent = shown_x;
                 }
-                at = target + width;
+                at = x + width;
                 from = cell.end;
             }
             if from < row.range.end {
@@ -1068,6 +1093,46 @@ impl LivePreview {
         });
         let folded = palette.para(Para { max_line: 0.01, ..Para::default() });
         canvas.paint(table.delimiter.start..table.delimiter.end + 1, |p| p.para = folded);
+    }
+
+    /// Where `cell`'s text is cut `amount` points into it: the first character starting at or
+    /// past that point (the text's end when none does), and how far into the text it starts.
+    fn cut_at(&self, canvas: &Canvas<Paint>, palette: &Palette, text: &NSString, cell: &Range<usize>, amount: f64) -> (usize, f64) {
+        let mut before = 0.0;
+        for (run, paint) in canvas.runs_in(cell.clone()) {
+            let piece = text.substringWithRange(ns(&run)).to_string();
+            let font = palette.font_of(paint.look);
+            let kern = palette.kern_of(paint.kern);
+            let starts = self.char_starts(&piece, font);
+            for &(units, width) in starts.iter() {
+                let x = before + width + kern * units as f64;
+                if x >= amount {
+                    return (run.start + units, x);
+                }
+            }
+            before += starts.last().map_or(0.0, |&(units, width)| width + kern * units as f64);
+        }
+        (cell.end, before)
+    }
+
+    /// Where each character of `piece` starts in `font`, and where it ends last: (UTF-16
+    /// units in, points in), measured once per text and font.
+    fn char_starts(&self, piece: &str, font: &NSFont) -> CharStarts {
+        let key = (piece.to_owned(), font as *const NSFont as usize);
+        let mut cache = self.ivars().look.char_starts.borrow_mut();
+        if cache.len() > MAX_PIECE_WIDTHS {
+            cache.clear();
+        }
+        Rc::clone(cache.entry(key).or_insert_with(|| {
+            let mut starts = Vec::with_capacity(piece.len() + 1);
+            let mut units = 0;
+            for (i, c) in piece.char_indices() {
+                starts.push((units, if i == 0 { 0.0 } else { text_width(&NSString::from_str(&piece[..i]), font) }));
+                units += c.len_utf16();
+            }
+            starts.push((units, text_width(&NSString::from_str(piece), font)));
+            Rc::new(starts)
+        }))
     }
 
     /// Whether an edit of `range` to `text` may go ahead as it is: anywhere outside tables, in a
@@ -1221,77 +1286,115 @@ impl LivePreview {
     }
 
     /// The table at `point` (its start) with the row and column under it, the band around it
-    /// where its handles and add bars are included.
+    /// where its handles and add bars are included. Rows are found by the fragment at the
+    /// point's height, not by measuring every row (a long table's would take milliseconds).
     fn table_at_point(&self, view: &NSTextView, point: NSPoint) -> Option<TableHover> {
         let layout = view.textLayoutManager()?;
         let content = layout.textContentManager()?;
+        // A restyle (the pointer coming over the table restyles it) leaves rows to lay out.
+        layout.textViewportLayoutController().layoutViewport();
         let origin = view.textContainerOrigin();
         let padding = layout.textContainer().map_or(0.0, |c| c.lineFragmentPadding());
         let styled = self.ivars().styled.borrow();
-        let columns = self.ivars().table_columns.borrow();
-        styled.tables.iter().find_map(|table| {
-            let edges = columns.get(&table.range.start)?;
-            let rows: Vec<(f64, f64)> = table.rows.iter().filter_map(|r| row_band(&layout, &content, r.range.start)).map(|(t, b)| (t + origin.y, b + origin.y)).collect();
-            let (top, bottom) = (rows.first()?.0, rows.last()?.1);
-            let x0 = origin.x + padding;
-            let (left, right) = (x0 + edges.first()?, x0 + edges.last()?);
-            let near = point.x >= left - TABLE_NEAR_SIDE && point.x <= right + TABLE_NEAR_SIDE && point.y >= top - TABLE_NEAR_TOP && point.y <= bottom + TABLE_NEAR_SIDE;
-            near.then(|| {
-                let row = rows.iter().position(|(t, b)| point.y >= *t && point.y < *b);
-                let column = edges.windows(2).position(|w| point.x >= x0 + w[0] && point.x < x0 + w[1]);
-                (table.range.start, row, column)
-            })
-        })
+        let y = point.y - origin.y;
+        let row_at = |y: f64| table_row_at(&layout, &content, &styled, y);
+        // On a row; or just over the header (its column handles); or just under the last row
+        // (the add row bar).
+        let (t, row) = match row_at(y) {
+            Some((t, r)) => (t, Some(r)),
+            None => match row_at(y + TABLE_NEAR_TOP).filter(|&(_, r)| r == 0) {
+                Some((t, _)) => (t, None),
+                None => {
+                    let (t, r) = row_at(y - TABLE_NEAR_SIDE)?;
+                    (r + 1 == styled.tables[t].rows.len()).then_some((t, None))?
+                }
+            },
+        };
+        let table = &styled.tables[t];
+        let edges = self.ivars().table_columns.borrow().get(&table.range.start).cloned()?;
+        let x0 = origin.x + padding;
+        let (left, right) = ((x0 + edges.first()?).max(x0), (x0 + edges.last()?).min(x0 + text_column(view)));
+        if point.x < left - TABLE_NEAR_SIDE || point.x > right + TABLE_NEAR_SIDE {
+            return None;
+        }
+        let column = edges.windows(2).position(|w| point.x >= x0 + w[0] && point.x < x0 + w[1]);
+        Some((table.range.start, row, column))
     }
 
-    /// Sideways scrolling (`dx` points, as the wheel or trackpad gives it) with the pointer at
-    /// `point`: over a table wider than the text column, it shows the next or the previous
-    /// column once a column's worth has come. False when no such table is there.
+    /// Sideways scrolling (`dx` points, as the wheel or trackpad gives it, momentum too) with
+    /// the pointer at `point`: over a table wider than the text column, the table follows it.
+    /// False when no such table is there.
     pub fn scroll_table(&self, view: &NSTextView, point: NSPoint, dx: f64) -> bool {
         let Some((start, _, _)) = self.table_at_point(view, point) else { return false };
         let Some(t) = self.ivars().styled.borrow().tables.iter().position(|t| t.range.start == start) else { return false };
         let Some(widths) = self.ivars().table_widths.borrow().get(&t).cloned() else { return false };
-        let first = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0);
-        let shown: f64 = widths[first.min(widths.len())..].iter().sum();
-        let (more_right, more_left) = (shown > text_column(view) + 0.5, first > 0);
-        if !more_right && !more_left {
+        let most = (widths.iter().sum::<f64>() - text_column(view)).max(0.0);
+        if most <= 0.0 {
             return false;
         }
-        let total = self.ivars().scroll_sideways.get() + dx;
-        let next = if total <= -SCROLL_COLUMN && more_right {
-            Some(first + 1)
-        } else if total >= SCROLL_COLUMN && more_left {
-            Some(first - 1)
-        } else {
-            None
-        };
-        self.ivars().scroll_sideways.set(if next.is_some() { 0.0 } else { total });
-        if let Some(next) = next {
+        let scroll = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0.0);
+        let next = (scroll - dx).clamp(0.0, most);
+        if (next - scroll).abs() > 0.01 {
+            // Only the rows in view now (a long table's every row would take tens of
+            // milliseconds a step); the others once the scrolling stops.
+            self.ivars().apply_within.set(viewport_range(view));
             self.scroll_table_to(view, t, next);
+            self.ivars().apply_within.set(None);
+            self.catch_up_later(view, t);
         }
         true
     }
 
-    fn scroll_table_to(&self, view: &NSTextView, t: usize, first: usize) {
-        self.ivars().table_scroll.borrow_mut().insert(t, first);
+    /// Sets table `t`'s rows out of view a moment after its last sideways scroll step.
+    fn catch_up_later(&self, view: &NSTextView, t: usize) {
+        self.ivars().stale_table.set(Some(t));
+        let generation = self.ivars().catch_up.get() + 1;
+        self.ivars().catch_up.set(generation);
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = dispatch2::MainThreadBound::new((self.retain(), view.retain()), mtm);
+        let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_millis(CATCH_UP_MS)).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            let (this, view) = target.get(mtm);
+            if this.ivars().catch_up.get() == generation {
+                this.catch_up_table(view);
+            }
+        });
+    }
+
+    /// The table whose rows out of view wait for its sideways scroll: all set now.
+    fn catch_up_table(&self, view: &NSTextView) {
+        if let Some(t) = self.ivars().stale_table.take() {
+            let scroll = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0.0);
+            self.scroll_table_to(view, t, scroll);
+        }
+    }
+
+    fn scroll_table_to(&self, view: &NSTextView, t: usize, scroll: f64) {
+        self.ivars().table_scroll.borrow_mut().insert(t, scroll);
         let range = self.ivars().styled.borrow().tables.get(t).map(|t| (t.range.start, t.range.end));
         if let (Some(storage), Some(range)) = (unsafe { view.textStorage() }, range) {
             self.restyle(&storage, (range.0, range.1.min(storage.length())));
         }
     }
 
-    /// The cursor in a cell of a column scrolled away, or past the text column: the table
-    /// scrolls to show it.
+    /// The cursor in a cell of a column scrolled out of view, or partly: the table scrolls to
+    /// show the column.
     fn show_cursor_column(&self, view: &NSTextView, at: usize) {
         let Some((t, _, column)) = cell_at(&self.ivars().styled.borrow(), at) else { return };
         let Some(widths) = self.ivars().table_widths.borrow().get(&t).cloned() else { return };
-        let first = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0);
+        let scroll = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0.0);
         let room = text_column(view);
-        let mut next = first.min(column);
-        while next < column && widths[next..=column].iter().sum::<f64>() > room {
-            next += 1;
-        }
-        if next != first {
+        let left: f64 = widths[..column.min(widths.len())].iter().sum();
+        let right = left + widths.get(column).copied().unwrap_or(0.0);
+        let next = if left < scroll {
+            left
+        } else if right > scroll + room {
+            (right - room).min(left)
+        } else {
+            scroll
+        };
+        if (next - scroll).abs() > 0.01 {
             self.scroll_table_to(view, t, next);
         }
     }
@@ -1309,15 +1412,25 @@ impl LivePreview {
         let edges = self.ivars().table_columns.borrow().get(&start).cloned()?;
         let last = table.rows.len().saturating_sub(1);
         let (left, width) = (origin.x + padding + edges.first()?, edges.last()? - edges.first()?);
-        // A wide table's controls stop where the text column does, as drawn: no add column bar
-        // while its right edge is cut.
-        let shown = width.min(text_column(view) + 2.0 * padding - edges.first()?);
-        let (width, cut) = (shown, shown < width - 0.5);
-        for (i, r) in table.rows.iter().enumerate() {
+        // As drawn: the row's handle and the add row bar along the part within the text column,
+        // no add column bar while the table's right edge is cut.
+        let (column_left, column_right) = (origin.x + padding, origin.x + padding + text_column(view));
+        let (shown_left, shown_right) = (left.max(column_left), (left + width).min(column_right));
+        let cut = left + width > column_right + 0.5;
+        layout.textViewportLayoutController().layoutViewport();
+        // Only the rows with controls: the pointer's (its handle, its part of the add column
+        // bar), the header (column handles), the last (the add row bar).
+        let pointed = table_row_at(&layout, &content, &styled, point.y - origin.y).filter(|&(at, _)| at == t).map(|(_, r)| r);
+        let mut wanted: Vec<usize> = [row, Some(0), Some(last), pointed].into_iter().flatten().collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        for i in wanted {
+            let r = &table.rows[i];
             let Some((top, bottom)) = row_band(&layout, &content, r.range.start) else { continue };
             let rect = NSRect::new(NSPoint::new(left, origin.y + top), NSSize::new(width, bottom - top));
+            let shown = NSRect::new(NSPoint::new(shown_left, origin.y + top), NSSize::new(shown_right - shown_left, bottom - top));
             let controls = TableControls { handle: row == Some(i), column_handle: if i == 0 { column } else { None }, add_row: i == last, add_column: !cut, ..TableControls::default() };
-            for (kind, c) in table_controls(rect, &edges, &controls) {
+            for (kind, c) in table_controls(rect, shown, &edges, &controls) {
                 let inside = point.x >= c.origin.x && point.x <= c.origin.x + c.size.width && point.y >= c.origin.y && point.y <= c.origin.y + c.size.height;
                 if inside {
                     return Some(match kind {
@@ -1534,9 +1647,14 @@ impl LivePreview {
             match control {
                 TableControl::RowHandle(t, from) => {
                     let Some(table) = styled.tables.get(t) else { return };
-                    let bands: Vec<(f64, f64)> = table.rows.iter().filter_map(|r| row_band(&layout, &content, r.range.start)).collect();
+                    layout.textViewportLayoutController().layoutViewport();
                     let y = point.y - origin.y;
-                    let to = bands.iter().position(|(top, bottom)| y >= *top && y < *bottom).unwrap_or(if bands.first().is_some_and(|b| y < b.0) { 0 } else { bands.len().saturating_sub(1) });
+                    let header_top = table.rows.first().and_then(|r| row_band(&layout, &content, r.range.start)).map_or(0.0, |b| b.0);
+                    let to = match table_row_at(&layout, &content, &styled, y) {
+                        Some((at, r)) if at == t => r,
+                        _ if y < header_top => 0,
+                        _ => table.rows.len().saturating_sub(1),
+                    };
                     TableAction::MoveRow(from, to)
                 }
                 TableControl::ColumnHandle(t, from) => {
@@ -1956,7 +2074,7 @@ impl LivePreview {
         }
         for (t, table) in styled.tables.iter().enumerate().filter(|(_, t)| t.range.start < to && t.range.end > from) {
             let Some(columns) = self.ivars().table_columns.borrow().get(&table.range.start).cloned() else { continue };
-            let scrolled = self.ivars().table_scroll.borrow().get(&t).is_some_and(|&first| first > 0);
+            let scrolled = self.ivars().table_scroll.borrow().get(&t).is_some_and(|&scroll| scroll > 0.0);
             let hover = self.ivars().hovered_table.get().filter(|h| h.0 == table.range.start);
             let last = table.rows.len().saturating_sub(1);
             for (i, _) in table.rows.iter().enumerate().filter(|(_, r)| (from..to).contains(&r.range.start)) {
@@ -2248,6 +2366,18 @@ fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
 }
 
+/// The text in the view's viewport (what TextKit lays out around what shows), as UTF-16
+/// offsets.
+fn viewport_range(view: &NSTextView) -> Option<(usize, usize)> {
+    let layout = view.textLayoutManager()?;
+    let content = layout.textContentManager()?;
+    let range = layout.textViewportLayoutController().viewportRange()?;
+    let start = content.documentRange().location();
+    let from = content.offsetFromLocation_toLocation(&start, &range.location()).max(0) as usize;
+    let to = content.offsetFromLocation_toLocation(&start, &range.endLocation()).max(0) as usize;
+    Some((from, to))
+}
+
 /// The table a control belongs to.
 fn control_table(control: TableControl) -> usize {
     match control {
@@ -2258,12 +2388,21 @@ fn control_table(control: TableControl) -> usize {
 /// The top and bottom of the row starting at `offset` (text container coordinates), without
 /// the empty line after the note's final line break.
 fn row_band(layout: &NSTextLayoutManager, content: &objc2_app_kit::NSTextContentManager, offset: usize) -> Option<(f64, f64)> {
-    // A restyle (the pointer coming over the table restyles it) leaves the rows to lay out.
-    layout.textViewportLayoutController().layoutViewport();
     let location = content.locationFromLocation_withOffset(&content.documentRange().location(), offset as isize)?;
     let fragment = layout.textLayoutFragmentForLocation(&location)?;
     let top = fragment.layoutFragmentFrame().origin.y;
     Some((top, top + crate::preview_fragment::row_height(&fragment)))
+}
+
+/// The table (its index) and row whose line is at height `y` (text container coordinates).
+fn table_row_at(layout: &NSTextLayoutManager, content: &objc2_app_kit::NSTextContentManager, styled: &Highlight, y: f64) -> Option<(usize, usize)> {
+    let fragment = layout.textLayoutFragmentForPosition(NSPoint::new(1.0, y))?;
+    let start = content.offsetFromLocation_toLocation(&content.documentRange().location(), &fragment.rangeInElement().location()).max(0) as usize;
+    let t = styled.tables.iter().position(|t| t.range.start <= start && start < t.range.end)?;
+    let row = styled.tables[t].rows.iter().position(|r| r.range.start == start)?;
+    // Not past the row's own lines (the note's last row also holds the empty line after it).
+    let (top, bottom) = row_band(layout, content, start)?;
+    (y >= top && y < bottom).then_some((t, row))
 }
 
 /// The table, row and cell whose text holds `index` (its end too).

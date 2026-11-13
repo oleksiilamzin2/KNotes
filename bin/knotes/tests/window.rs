@@ -1467,14 +1467,14 @@ fn an_image_on_the_last_line_shows_right_below_its_source() {
 
 const TABLE: &str = "Before\n\n| Name | Age |\n|:---|---:|\n| Ann | 3 |\n| Bartholomew | 42 |\n\nAfter";
 
-/// `range-x: x0-x1 …` of `KNOTES_PROBE_RANGE_X`, as pairs.
+/// `range-x: x0:x1 …` of `KNOTES_PROBE_RANGE_X`, as pairs.
 fn range_xs(out: &str) -> Vec<(f64, f64)> {
     out.lines()
         .find_map(|l| l.strip_prefix("range-x: "))
         .unwrap_or_else(|| panic!("{out}"))
         .split(' ')
         .map(|p| {
-            let (a, b) = p.split_once('-').unwrap();
+            let (a, b) = p.split_once(':').unwrap();
             (a.parse().unwrap(), b.parse().unwrap())
         })
         .collect()
@@ -1676,25 +1676,35 @@ fn dragging_a_row_handle_moves_the_row() {
 const WIDE_TABLE: &str = "| First column here | Second column heading text | Third column heading text | Fourth |\n|---|---|---|---|\n| a | b | c | d |\n\nAfter";
 
 #[test]
-fn a_wide_table_scrolls_sideways_by_columns_and_follows_the_cursor() {
+fn a_wide_table_scrolls_sideways_smoothly_and_follows_the_cursor() {
     let probe = |env: &[(&str, &str)]| {
         let mut all = vec![("KNOTES_PROBE_OPEN", "a.md")];
         all.extend_from_slice(env);
         probe_notes(&[("a.md", WIDE_TABLE)], &all).1
     };
-    // "First column here" at 2..19, "Second column heading text" at 22..48.
-    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_RANGE_X", "2,17;22,26")]);
+    // "First column here" at 2..19, "Second column heading text" at 22..48, "Fourth" at 79..85.
+    let ranges = "2,17;22,26;79,6";
+    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_RANGE_X", ranges)]);
     let before = range_xs(&out);
     let row = decorations(&out, "table-row")[0];
     let over = format!("{},{}", row.0 + 40.0, row.1 + row.3 / 2.0);
-    let scroll = format!("{over};-60");
-    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &scroll), ("KNOTES_PROBE_RANGE_X", "2,17;22,26")]);
-    let after = range_xs(&out);
-    assert!(after[0].1 - after[0].0 < 2.0, "the first column scrolled away: {after:?}");
-    assert!((after[1].0 - before[0].0).abs() < 1.0, "the second column where the first was: {before:?} {after:?}");
+    let scrolled = |dx: &str, extra: &str| {
+        let scroll = format!("{over};{dx}{extra}");
+        probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &scroll), ("KNOTES_PROBE_RANGE_X", ranges)])
+    };
+    let after = range_xs(&scrolled("-60", ""));
+    assert!((after[1].0 - (before[1].0 - 60.0)).abs() < 1.0, "the second column 60 points left: {before:?} {after:?}");
+    assert!((after[0].1 - (before[0].1 - 60.0)).abs() < 1.0, "the first column's end too: {after:?}");
+    assert!(after[0].0 >= row.0 - 0.5 && after[0].0 < row.0 + 10.0, "its start cut at the table's left edge: {after:?}");
+    // As far as it goes: the last column's text ends inside the text column.
+    let out = scrolled("-10000", "");
+    let end = range_xs(&out)[2].1;
+    let text: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).unwrap().split(' ').skip(1).map(|p| p.split('=').nth(1).unwrap().parse().unwrap()).collect();
+    let column_right = text[1] + text[0] - 5.0;
+    assert!(end < column_right && end > column_right - 30.0, "scrolled to the table's right edge: {end} {column_right}");
     // Back with the cursor put in the first column.
-    let out = probe(&[("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &format!("{scroll};cursor=5")), ("KNOTES_PROBE_RANGE_X", "2,17")]);
-    assert!(range_xs(&out)[0].1 - range_xs(&out)[0].0 > 50.0, "the cursor's column shows again: {out}");
+    let back = range_xs(&scrolled("-60", ";cursor=5"));
+    assert!((back[0].0 - before[0].0).abs() < 0.5, "the cursor's column shows again: {before:?} {back:?}");
 }
 
 #[test]
@@ -1727,4 +1737,26 @@ fn a_right_click_on_a_handle_or_a_cell_s_padding_offers_deleting() {
     let rows = decorations(&out, "table-row");
     let padding = format!("{},{}", rows[1].0 + 3.0, rows[1].1 + rows[1].3 / 2.0);
     assert!(context(&padding).contains("Видалити рядок"), "the nearest cell's actions");
+}
+
+#[test]
+fn rows_out_of_view_catch_up_with_a_sideways_scroll() {
+    let mut text = String::from("| First column here | Second column heading text | Third column heading text | Fourth |\n|---|---|---|---|\n");
+    for i in 0..80 {
+        text += &format!("| row {i} | b | c | d |\n");
+    }
+    text += "\nAfter";
+    let probe = |env: &[(&str, &str)]| {
+        let mut all = vec![("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "0")];
+        all.extend_from_slice(env);
+        probe_notes(&[("a.md", &text)], &all).1
+    };
+    let out = probe(&[]);
+    let row = decorations(&out, "table-row")[0];
+    let over = format!("{},{}", row.0 + 40.0, row.1 + row.3 / 2.0);
+    let scroll = format!("{over};-60");
+    let out = probe(&[("KNOTES_PROBE_TABLE_HOVER", &over), ("KNOTES_PROBE_TABLE_SCROLL", &scroll), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_DELAY_MS", "1000")]);
+    let rows = decorations(&out, "table-row");
+    assert!(rows.len() > 5, "{out}");
+    assert!(rows.iter().all(|r| (r.0 - (row.0 - 60.0)).abs() < 0.5), "every row in view at the end scrolled too: {rows:?} (from {})", row.0);
 }
