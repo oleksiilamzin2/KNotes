@@ -1778,3 +1778,26 @@ fn a_pdf_embed_shows_its_page_and_how_many_there_are() {
     assert!(captions[0].1 >= shown[0].1 + shown[0].3, "the caption under the page: {captions:?} {shown:?}");
     assert!(shown[1].1 > captions[0].1 + captions[0].3, "the next preview below the caption: {shown:?} {captions:?}");
 }
+
+#[test]
+fn a_click_on_a_pdf_preview_opens_the_pdf_in_place_of_the_note_and_back_returns() {
+    let notes = [("a.md", "Before\n![[doc.pdf#page=2]]\nAfter")];
+    // Character 7 keeps the preview's width: its middle is the preview's.
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "7")];
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &env);
+    assert!(out.contains("pdf-view: doc.pdf 2/3"), "{out}");
+    assert!(out.contains("note-title: doc.pdf"), "{out}");
+    let (_vault, out) = probe_images(&notes, &[("doc.pdf", PDF)], &[env[0], env[1], env[2], ("KNOTES_PROBE_AFTER_CLICK", "back")]);
+    assert!(out.contains("pdf-view: hidden") && out.contains("note: a.md"), "{out}");
+}
+
+#[test]
+fn a_link_to_a_pdf_opens_it_at_its_page() {
+    let (_vault, out) = probe_images(
+        // The cursor on another line: the link's markup hidden, a plain click follows it.
+        &[("a.md", "See [[doc.pdf#page=3]] here\n\nend")],
+        &[("doc.pdf", PDF)],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")],
+    );
+    assert!(out.contains("pdf-view: doc.pdf 3/3"), "{out}");
+}

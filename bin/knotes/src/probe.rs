@@ -892,6 +892,7 @@ fn report_note(window: &VaultWindow) {
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
+    println!("pdf-view: {}", window.describe_pdf());
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");
     }

@@ -27,6 +27,7 @@ use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
 use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
+use objc2_pdf_kit::{PDFDocument, PDFView};
 use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
@@ -93,6 +94,9 @@ pub struct VaultWindow {
     pub search_bar: SearchBar,
     /// Find in the open note (Cmd+F), over the note.
     pub find_bar: FindBar,
+    /// A PDF opened in place of the note (ADR 0022), and its vault path.
+    pdf_view: Retained<PDFView>,
+    pdf_path: RefCell<Option<String>>,
     /// The occurrences found in the note (UTF-16) and the one selected.
     find_matches: RefCell<Vec<(usize, usize)>>,
     find_current: Cell<Option<usize>>,
@@ -161,7 +165,7 @@ impl VaultWindow {
         let pointers = live_preview.clone();
         note_text.on_pointer(move |view, point| pointers.hover_table(view, point));
         let presses = live_preview.clone();
-        note_text.on_press(move |view, point| presses.press_table(view, point));
+        note_text.on_press(move |view, point| presses.press(view, point));
         let scrolls = live_preview.clone();
         note_text.on_scroll_sideways(move |view, point, dx| scrolls.scroll_table(view, point, dx));
         let menus = live_preview.clone();
@@ -177,6 +181,14 @@ impl VaultWindow {
         let note_vc = NSViewController::new(mtm);
         let find_bar = FindBar::new(mtm, note_scroll.clone());
         note_vc.setView(&find_bar.column);
+        // SAFETY: a new PDF view, on the main thread.
+        let pdf_view = unsafe { PDFView::new(mtm) };
+        pdf_view.setFrame(find_bar.column.bounds());
+        pdf_view.setAutoresizingMask(objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable);
+        pdf_view.setHidden(true);
+        // SAFETY: as above.
+        unsafe { pdf_view.setAutoScales(true) };
+        find_bar.column.addSubview(&pdf_view);
         let chat = chat_view::chat_view(mtm);
         let chat_vc = NSViewController::new(mtm);
         chat_vc.setView(&chat.view);
@@ -213,6 +225,8 @@ impl VaultWindow {
             note_text,
             search_bar,
             find_bar,
+            pdf_view,
+            pdf_path: RefCell::new(None),
             find_matches: RefCell::new(Vec::new()),
             find_current: Cell::new(None),
             live_preview,
@@ -676,6 +690,9 @@ impl VaultWindow {
                 }
             }
             probe::click_requested(&self.note_text);
+            if std::env::var("KNOTES_PROBE_AFTER_CLICK").as_deref() == Ok("back") {
+                self.navigate(false);
+            }
             println!("found-in-note: {}", self.live_preview.found_count());
             if std::env::var("KNOTES_PROBE_APPEARANCE").as_deref() == Ok("dark") {
                 // SAFETY: AppKit's appearance name constant lives for the whole process.
@@ -691,6 +708,11 @@ impl VaultWindow {
 
     /// Shows a note in the note column; `record` adds it to the back/forward history.
     pub fn open_note(&self, path: &str, record: bool) {
+        if FileKind::from_path(path) == FileKind::Pdf {
+            self.open_pdf(path, None, record);
+            return;
+        }
+        self.show_pdf(None);
         self.leave();
         self.completion.hide();
         let text = {
@@ -708,6 +730,59 @@ impl VaultWindow {
             self.find_text(&self.find_bar.text(), true);
         }
         self.update_navigation();
+    }
+
+    /// Opens the PDF at `path` in place of the note (ADR 0022), at page `page` (from 1).
+    pub fn open_pdf(&self, path: &str, page: Option<u32>, record: bool) {
+        self.leave();
+        self.completion.hide();
+        if self.find_bar.is_shown() {
+            self.close_find();
+        }
+        if record {
+            self.state.borrow_mut().history.visit(path);
+        }
+        *self.editing.borrow_mut() = None;
+        self.show_pdf(Some(path));
+        if let Some(page) = page.filter(|&p| p > 1)
+            // SAFETY: the view's document, on the main thread.
+            && let Some(document) = unsafe { self.pdf_view.document() }
+            && let Some(page) = unsafe { document.pageAtIndex(page as usize - 1) }
+        {
+            // SAFETY: a page of the view's document.
+            unsafe { self.pdf_view.goToPage(&page) };
+        }
+        self.update_navigation();
+    }
+
+    /// Shows the PDF at `path` in the note column, or the note again (`None`).
+    fn show_pdf(&self, path: Option<&str>) {
+        let document = path.and_then(|p| {
+            let file = self.vault()?.join(p);
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
+            // SAFETY: a PDF document read from a file URL.
+            unsafe { PDFDocument::initWithURL(<PDFDocument as objc2::AnyThread>::alloc(), &url) }
+        });
+        // SAFETY: the view's document, set on the main thread.
+        unsafe { self.pdf_view.setDocument(document.as_deref()) };
+        let shown = document.is_some();
+        self.pdf_view.setHidden(!shown);
+        if let Some(scroll) = self.note_text.enclosingScrollView() {
+            scroll.setHidden(shown);
+        }
+        *self.pdf_path.borrow_mut() = path.filter(|_| shown).map(str::to_owned);
+    }
+
+    /// `doc.pdf 2/3` for the PDF shown and its page, or `hidden` (probe mode).
+    pub fn describe_pdf(&self) -> String {
+        let Some(path) = self.pdf_path.borrow().clone() else { return "hidden".to_owned() };
+        // SAFETY: the view's document and page, on the main thread.
+        let (page, pages) = unsafe {
+            let document = self.pdf_view.document();
+            let page = self.pdf_view.currentPage().zip(document.as_ref()).map_or(0, |(p, d)| d.indexForPage(&p) + 1);
+            (page, document.map_or(0, |d| d.pageCount()))
+        };
+        format!("{path} {page}/{pages}")
     }
 
     /// Opened from a search of the notes' text: the words it found, highlighted, the first in
@@ -741,6 +816,11 @@ impl VaultWindow {
                 None => return,
             },
         };
+        if FileKind::from_path(&path) == FileKind::Pdf {
+            let page = link.subpath.as_deref().and_then(|s| s.strip_prefix("page=")).and_then(|p| p.parse().ok());
+            self.open_pdf(&path, page, true);
+            return;
+        }
         if path != source {
             self.open_note(&path, true);
             self.highlight_open_note();
@@ -1324,7 +1404,8 @@ impl VaultWindow {
         let state = self.state.borrow();
         self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
         drop(state);
-        let name = self.open_path().map(|p| knotes_app::title_of(&p).to_owned()).unwrap_or_default();
+        let pdf = self.pdf_path.borrow().clone();
+        let name = self.open_path().map(|p| knotes_app::title_of(&p).to_owned()).or(pdf).unwrap_or_default();
         self.toolbar_delegate.set_note_title(&name);
     }
 

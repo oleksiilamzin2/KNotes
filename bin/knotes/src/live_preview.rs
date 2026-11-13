@@ -1448,6 +1448,26 @@ impl LivePreview {
         None
     }
 
+    /// A mouse press at `point`: a table's control, or a PDF's preview (opened in place of the
+    /// note, ADR 0022). False when neither is there.
+    pub fn press(&self, view: &NSTextView, point: NSPoint) -> bool {
+        self.press_table(view, point) || self.open_pdf_at(view, point)
+    }
+
+    /// The PDF whose preview is at `point`, opened as a click on a link to it does.
+    fn open_pdf_at(&self, view: &NSTextView, point: NSPoint) -> bool {
+        let Some((line, rect, _)) = crate::preview_fragment::image_at(view, point) else { return false };
+        let inside = point.x >= rect.origin.x && point.x <= rect.origin.x + rect.size.width && point.y >= rect.origin.y && point.y <= rect.origin.y + rect.size.height;
+        let Some(storage) = (unsafe { view.textStorage() }) else { return false };
+        let run = self.ivars().styled.borrow().images.iter().find(|i| i.pdf && paragraph(&storage, ns(&i.range)).0 == line).cloned();
+        let (true, Some(run)) = (inside, run) else { return false };
+        let link = Link { embed: false, display: None, ..run.link };
+        if let Some(callback) = self.ivars().on_link.borrow().as_ref() {
+            callback(&link);
+        }
+        true
+    }
+
     /// A mouse press at `point`: an add bar adds at once; a handle followed by the mouse is a
     /// drag that moves its row or column, or else a click that opens its menu. False when no
     /// control is there.
