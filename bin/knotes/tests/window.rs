@@ -2336,3 +2336,17 @@ fn a_deleted_document_loses_its_tab_and_a_renamed_one_keeps_it() {
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_ACTION", "toolbar-rename=c")]);
     assert_eq!(sidebar_tabs(&out).0, "c", "{out}");
 }
+
+#[test]
+fn a_link_s_context_menu_opens_its_document_in_a_new_tab() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "See [[b]] or https://example.com here\n\nend").unwrap();
+    std::fs::write(vault.path().join("b.md"), "b").unwrap();
+    let home = tabs_home();
+    let menu = |at: &str| probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_LINK_MENU", at)]);
+    let out = menu("6");
+    assert!(out.contains("link-menu: Відкрити в новій вкладці\n"), "{out}");
+    assert!(menu("20").contains("link-menu: none\n"), "a web link: none");
+    let out = menu("6:open");
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()), "{out}");
+}

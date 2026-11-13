@@ -200,7 +200,10 @@ impl VaultWindow {
         let scrolls = live_preview.clone();
         note_text.on_scroll_sideways(move |view, point, dx| scrolls.scroll_table(view, point, dx));
         let menus = live_preview.clone();
-        note_text.on_context_menu(move |view, point, menu| menus.table_context_menu(view, point, menu));
+        note_text.on_context_menu(move |view, point, menu| {
+            let menu = menus.link_context_menu(view, point, menu);
+            menus.table_context_menu(view, point, menu)
+        });
         // Weak: the text view keeps its callbacks, and the text view is the live preview's.
         let preview = live_preview.clone();
         let text = objc2::rc::Weak::new(&*note_text);
@@ -423,6 +426,14 @@ impl VaultWindow {
         this.toolbar_delegate.on_sidebar_mode(move |mode| {
             if let Some(window) = weak_mode.upgrade() {
                 window.set_sidebar_mode(mode);
+            }
+        });
+        let weak_link_tab: Weak<Self> = Rc::downgrade(&this);
+        this.live_preview.on_link_new_tab(move |link| {
+            if let Some(window) = weak_link_tab.upgrade() {
+                window.new_tab_next.set(true);
+                window.follow_link(link);
+                window.new_tab_next.set(false);
             }
         });
         let weak_new_tab: Weak<Self> = Rc::downgrade(&this);
@@ -921,6 +932,9 @@ impl VaultWindow {
             }
             probe::click_requested(&self.note_text);
             probe::mouse_drag_requested(&self.note_text);
+            if let Ok(spec) = std::env::var("KNOTES_PROBE_LINK_MENU") {
+                self.live_preview.probe_link_menu(&spec);
+            }
             // `KNOTES_PROBE_NEW_TAB=b.md`: that note opened in a new tab, as the list's menu does.
             if let Ok(path) = std::env::var("KNOTES_PROBE_NEW_TAB") {
                 self.open_in_new_tab(&path);
