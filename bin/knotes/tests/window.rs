@@ -2101,3 +2101,17 @@ fn the_outline_of_a_pdf_highlights_the_bookmark_of_the_page_in_view() {
     let out = probe_outline(&notes, &[("doc.pdf", outlined)], &[env[0], env[1], env[2], ("KNOTES_PROBE_OUTLINE_CLICK", "Detail")]);
     assert_eq!(outline_current(&out), "Detail");
 }
+
+#[test]
+fn folds_in_the_outline_stay_as_the_note_is_edited() {
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_OUTLINE_FOLD", "B"), ("KNOTES_PROBE_TYPE", "\n## F")];
+    assert_eq!(outline_rows(&probe_outline(&[("a.md", HEADINGS)], &[], &env)), "A | ·B | ·D | E | ·F");
+}
+
+#[test]
+fn the_heading_in_view_folded_away_highlights_the_one_it_is_folded_under() {
+    let note = long_sections();
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_OUTLINE_CLICK", "B"), ("KNOTES_PROBE_OUTLINE_FOLD", "A")];
+    let out = probe_outline(&[("a.md", &note)], &[], &env);
+    assert_eq!((outline_rows(&out), outline_current(&out)), ("A | C".to_owned(), "A".to_owned()));
+}

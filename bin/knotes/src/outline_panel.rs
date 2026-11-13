@@ -24,6 +24,8 @@ pub struct SourceIvars {
     folded: RefCell<HashSet<String>>,
     /// Set while the panel folds, unfolds or selects rows itself.
     quiet: Cell<bool>,
+    /// The heading of the part in view.
+    current: Cell<Option<usize>>,
     /// Called with the heading clicked (index).
     on_choose: RefCell<Option<OnChoose>>,
 }
@@ -112,12 +114,43 @@ impl OutlineSource {
         let item = notification.userInfo().and_then(|info| info.objectForKey(ns_string!("NSObject")));
         let Some(i) = item.as_deref().and_then(index_of) else { return };
         let key = self.ivars().model.borrow().key(i);
-        let mut set = self.ivars().folded.borrow_mut();
-        if folded {
-            set.insert(key);
-        } else {
-            set.remove(&key);
+        {
+            let mut set = self.ivars().folded.borrow_mut();
+            if folded {
+                set.insert(key);
+            } else {
+                set.remove(&key);
+            }
         }
+        if let Some(outline) = notification.object().and_then(|o| o.downcast::<NSOutlineView>().ok()) {
+            self.select_current(&outline);
+        }
+    }
+
+    /// Highlights the heading of the part in view, or its nearest parent shown when it is
+    /// folded away, and scrolls its row into view.
+    fn select_current(&self, outline: &NSOutlineView) {
+        let mut at = self.ivars().current.get();
+        let row = loop {
+            let Some(i) = at else { break None };
+            // SAFETY: an item of this outline view.
+            let row = unsafe { outline.rowForItem(Some(&self.object(i))) };
+            if row >= 0 {
+                break Some(row);
+            }
+            at = self.ivars().model.borrow().parent(i);
+        };
+        self.ivars().quiet.set(true);
+        match row {
+            Some(row) if outline.selectedRow() != row => {
+                outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
+                outline.scrollRowToVisible(row);
+            }
+            Some(_) => {}
+            // SAFETY: no sender.
+            None => unsafe { outline.deselectAll(None) },
+        }
+        self.ivars().quiet.set(false);
     }
 }
 
@@ -142,6 +175,7 @@ impl OutlinePanel {
             objects: RefCell::new(Vec::new()),
             folded: RefCell::new(HashSet::new()),
             quiet: Cell::new(false),
+            current: Cell::new(None),
             on_choose: RefCell::new(None),
         });
         let source: Retained<OutlineSource> = unsafe { msg_send![super(source), init] };
@@ -229,28 +263,19 @@ impl OutlinePanel {
         self.source.ivars().model.borrow().current(top)
     }
 
-    /// Highlights heading `heading`, or its nearest parent shown when it is folded away, and
-    /// scrolls its row into view; nothing with `None`.
+    /// Highlights heading `heading` (or its nearest parent shown when it is folded away); nothing
+    /// with `None`.
     pub fn set_current(&self, heading: Option<usize>) {
-        let outline = &self.outline;
-        let mut at = heading;
-        let row = loop {
-            let Some(i) = at else { break None };
+        self.source.ivars().current.set(heading);
+        self.source.select_current(&self.outline);
+    }
+
+    /// Folds the heading titled `title`, as its disclosure button does (probe mode).
+    pub fn fold(&self, title: &str) {
+        let i = self.source.ivars().model.borrow().entries().iter().position(|e| e.title == title);
+        if let Some(i) = i {
             // SAFETY: an item of this outline view.
-            let row = unsafe { outline.rowForItem(Some(&self.source.object(i))) };
-            if row >= 0 {
-                break Some(row);
-            }
-            at = self.source.ivars().model.borrow().parent(i);
-        };
-        match row {
-            Some(row) if outline.selectedRow() != row => {
-                outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
-                outline.scrollRowToVisible(row);
-            }
-            Some(_) => {}
-            // SAFETY: no sender.
-            None => unsafe { outline.deselectAll(None) },
+            unsafe { self.outline.collapseItem(Some(&self.source.object(i))) };
         }
     }
 

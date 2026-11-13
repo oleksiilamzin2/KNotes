@@ -889,6 +889,9 @@ impl VaultWindow {
                 self.window.displayIfNeeded();
                 self.outline_panel.click(&title);
             }
+            if let Ok(title) = std::env::var("KNOTES_PROBE_OUTLINE_FOLD") {
+                self.outline_panel.fold(&title);
+            }
             if let Some(viewer) = self.pdf_view.borrow().as_ref() {
                 probe::pdf_mouse_requested(viewer);
                 probe::pdf_copy_requested(viewer);
