@@ -1038,6 +1038,7 @@ fn cmd_f_finds_in_the_note_and_cmd_shift_f_searches_the_notes() {
     // From the list, too: Cmd+F always finds in the open note.
     let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Знайти…")]);
     assert!(out.contains("find-bar: shown"), "{out}");
+    assert!(out.contains("find-dims-note: no"), "matches are highlighted without dimming the note: {out}");
     let (_vault, out) = probe_notes(&[("a.md", "text"), ("b.md", "more")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_MENU", "Пошук у нотатках")]);
     assert!(out.contains("search-row: shown") && out.contains("focus: search"), "{out}");
 }

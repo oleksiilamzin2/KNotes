@@ -501,6 +501,9 @@ impl VaultWindow {
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
             probe::menu_requested();
+            if let Ok(word) = std::env::var("KNOTES_PROBE_FIND") {
+                self.note_text.find_word(&word);
+            }
             probe::click_requested(&self.note_text);
             println!("found-in-note: {}", self.live_preview.found_count());
             if std::env::var("KNOTES_PROBE_APPEARANCE").as_deref() == Ok("dark") {

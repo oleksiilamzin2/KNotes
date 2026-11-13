@@ -684,6 +684,7 @@ fn report_note(window: &VaultWindow) {
     println!("focus: {}", if is(&*window.note_text as *const _ as *const u8) { "editor" } else if searching { "search" } else { "other" });
     if let Some(scroll) = window.note_text.enclosingScrollView() {
         println!("find-bar: {}", if objc2_app_kit::NSTextFinderBarContainer::isFindBarVisible(&*scroll) { "shown" } else { "hidden" });
+        println!("find-dims-note: {}", if window.note_text.finder_dims() { "yes" } else { "no" });
     }
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
