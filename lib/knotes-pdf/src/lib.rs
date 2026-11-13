@@ -51,6 +51,49 @@ pub fn page_text(file: &Path, index: usize) -> Option<PageText> {
     })
 }
 
+/// Where `query` is in the PDF at `file`, ignoring case: each page (index) and the
+/// characters there (indices into the page's text, as `PageText` counts them), in order.
+/// `None` when the PDF does not open or `cancelled` is set while it searches (a page at a
+/// time, its text let go after it).
+pub fn find_in_pdf(file: &Path, query: &str, cancelled: &std::sync::atomic::AtomicBool) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+    let needle: Vec<char> = query.chars().map(lower).collect();
+    let document = open(file)?;
+    let mut found = Vec::new();
+    if needle.is_empty() {
+        return Some(found);
+    }
+    // SAFETY: a document of its own, read on this thread only.
+    for index in 0..unsafe { document.pageCount() } {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        autoreleasepool(|_| {
+            // SAFETY: as above; the page is asked for within the count.
+            let Some(text) = (unsafe { document.pageAtIndex(index).and_then(|p| p.string()) }) else { return };
+            let chars: Vec<char> = text.to_string().chars().map(lower).collect();
+            let mut at = 0;
+            while at + needle.len() <= chars.len() {
+                if chars[at..at + needle.len()] == needle[..] {
+                    found.push((index, at..at + needle.len()));
+                    at += needle.len();
+                } else {
+                    at += 1;
+                }
+            }
+        });
+    }
+    Some(found)
+}
+
+/// A character in lower case, one for one (indices stay the text's).
+fn lower(c: char) -> char {
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(l), None) => l,
+        _ => c,
+    }
+}
+
 /// An entry of a PDF's outline (its bookmarks).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bookmark {
