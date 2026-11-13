@@ -16,6 +16,7 @@ mod outline;
 mod panel_mode;
 mod relink_plan;
 mod sidebar;
+mod tabs;
 mod tag_tree;
 
 pub use find_in_text::find_all;
@@ -34,4 +35,5 @@ pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListOption, ListSett
 pub use outline::{Outline, OutlineEntry, OutlinePlace};
 pub use panel_mode::PanelMode;
 pub use sidebar::{Sidebar, SidebarItem, SidebarMode};
+pub use tabs::{AfterClose, TabPlace, Tabs};
 pub use tag_tree::{TagNode, tag_tree};
