@@ -172,6 +172,9 @@ pub fn keys_requested(view: &objc2_app_kit::NSTextView) {
             "up" => sel!(moveUp:),
             "return" => sel!(insertNewline:),
             "tab" => sel!(insertTab:),
+            "backtab" => sel!(insertBacktab:),
+            "left" => sel!(moveLeft:),
+            "right" => sel!(moveRight:),
             "escape" => sel!(cancelOperation:),
             other => panic!("unknown probe key {other}"),
         };
@@ -856,6 +859,7 @@ fn report_note(window: &VaultWindow) {
     }
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
+    println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");
     }

@@ -9,8 +9,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use dispatch2::DispatchQueue;
+
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, Align, changed_region, highlight, set_image_width};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width};
 
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
@@ -118,6 +120,9 @@ pub struct Ivars {
     table_columns: RefCell<HashMap<usize, Rc<Vec<f64>>>>,
     /// The image the pointer is over (where its line starts): it shows its resize handle.
     hovered_image: Cell<Option<usize>>,
+    /// A table edit of the live preview's own is under way: not checked against the table's
+    /// structure.
+    table_editing: Cell<bool>,
     /// The note's text view, to draw an image once it is decoded.
     view: RefCell<objc2::rc::Weak<NSTextView>>,
     /// Where the view's top was when far images were last let go (text container
@@ -215,21 +220,28 @@ define_class!(
         /// Every edit is announced here (AppKit calls the single-range variant only when this one
         /// is missing). One range is applied to the Rust copy; several (Replace All) resync it.
         #[unsafe(method(textView:shouldChangeTextInRanges:replacementStrings:))]
-        fn should_change_text(&self, _view: &NSTextView, ranges: &NSArray<NSValue>, replacements: Option<&NSArray<NSString>>) -> bool {
+        fn should_change_text(&self, view: &NSTextView, ranges: &NSArray<NSValue>, replacements: Option<&NSArray<NSString>>) -> bool {
             let single = (ranges.count() == 1).then(|| ranges.objectAtIndex(0).get_range()).flatten();
-            let edit = single.map(|range| {
-                let text = replacements.filter(|r| r.count() == 1).map(|r| r.objectAtIndex(0).to_string()).unwrap_or_default();
-                let edit = Edit { location: range.location, removed: range.length, inserted: text.encode_utf16().count() };
-                *self.ivars().inserted.borrow_mut() = text;
-                edit
-            });
-            self.ivars().pending.set(edit);
-            true
+            let text = || replacements.filter(|r| r.count() == 1).map(|r| r.objectAtIndex(0).to_string()).unwrap_or_default();
+            let refused = single.is_some_and(|range| !self.ivars().table_editing.get() && !self.allow_table_edit(view, range, &text()));
+            if refused {
+                false
+            } else {
+                let edit = single.map(|range| {
+                    let text = text();
+                    let edit = Edit { location: range.location, removed: range.length, inserted: text.encode_utf16().count() };
+                    *self.ivars().inserted.borrow_mut() = text;
+                    edit
+                });
+                self.ivars().pending.set(edit);
+                true
+            }
         }
 
         #[unsafe(method(textViewDidChangeSelection:))]
         fn selection_did_change(&self, notification: &NSNotification) {
             if let Some(view) = notification.object().and_then(|o| o.downcast::<NSTextView>().ok()) {
+                self.keep_cursor_in_cells(&view);
                 self.reveal_cursor_paragraph(&view);
             }
             if let Some(callback) = self.ivars().on_cursor.borrow().as_ref() {
@@ -245,8 +257,8 @@ define_class!(
         }
 
         #[unsafe(method(textView:doCommandBySelector:))]
-        fn do_command(&self, _view: &NSTextView, command: Sel) -> bool {
-            self.ivars().on_command.borrow().as_ref().is_some_and(|callback| callback(command))
+        fn do_command(&self, view: &NSTextView, command: Sel) -> bool {
+            self.table_command(view, command) || self.ivars().on_command.borrow().as_ref().is_some_and(|callback| callback(command))
         }
     }
 );
@@ -298,6 +310,7 @@ impl LivePreview {
             resizing: Cell::new(None),
             table_columns: RefCell::new(HashMap::new()),
             hovered_image: Cell::new(None),
+            table_editing: Cell::new(false),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
             pending: Cell::new(None),
@@ -938,6 +951,153 @@ impl LivePreview {
         canvas.paint(table.delimiter.start..table.delimiter.end + 1, |p| p.para = folded);
     }
 
+    /// Whether an edit of `range` to `text` may go ahead as it is: anywhere outside tables, in a
+    /// cell's text, or over whole tables (ADR 0021). Inside a cell a `|` is written `\|` and a
+    /// line break a space; typed between cells it goes into the nearest one; deleting a hidden
+    /// pipe or space, or across cells, does nothing. Those changes are made right after.
+    fn allow_table_edit(&self, view: &NSTextView, range: NSRange, text: &str) -> bool {
+        let styled = self.ivars().styled.borrow();
+        let (start, end) = (range.location, range.location + range.length);
+        let Some(table) = styled.tables.iter().find(|t| start < t.range.end && (end > t.range.start || (start == end && start >= t.range.start))) else {
+            return true;
+        };
+        if start <= table.range.start && end >= table.range.end {
+            return true;
+        }
+        let in_cell = table.rows.iter().flat_map(|r| r.cells.iter()).any(|c| c.start <= start && end <= c.end);
+        let clean = cell_text(text);
+        if in_cell {
+            if clean != text {
+                self.edit_later(view, range, clean);
+                return false;
+            }
+            return true;
+        }
+        if range.length == 0
+            && !text.is_empty()
+            && let Some(at) = nearest_cell_edge(&styled, start)
+        {
+            self.edit_later(view, NSRange::new(at, 0), clean);
+        }
+        false
+    }
+
+    /// Replaces `range` with `text` once the edit being checked is over (changing the text from
+    /// inside that check would confuse the text view).
+    fn edit_later(&self, view: &NSTextView, range: NSRange, text: String) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = dispatch2::MainThreadBound::new((self.retain(), view.retain()), mtm);
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            let (this, view) = target.get(mtm);
+            this.ivars().table_editing.set(true);
+            // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+            unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(&text), range) };
+            this.ivars().table_editing.set(false);
+        });
+    }
+
+    /// Tab, Shift+Tab, Return and arrows with the cursor in a table cell (ADR 0021): to the next
+    /// or the previous cell, down a row, between rows and cells; Tab in the last cell and
+    /// Return in the last row add a row. False when the command is not the table's.
+    fn table_command(&self, view: &NSTextView, command: Sel) -> bool {
+        let selection = view.selectedRange();
+        if selection.length != 0 {
+            return false;
+        }
+        let at = selection.location;
+        let styled = self.ivars().styled.borrow();
+        let Some((t, row, column)) = cell_at(&styled, at) else { return false };
+        let table = &styled.tables[t];
+        let rows = table.rows.len();
+        let cell = &table.rows[row].cells[column];
+        // A row may lack cells at its end: its last one stands in.
+        let end_of = |r: usize, c: usize| table.rows.get(r).and_then(|row| row.cells.get(c).or(row.cells.last())).map(|c| c.end);
+        let next = if column + 1 < table.rows[row].cells.len() { Some((row, column + 1)) } else { (row + 1 < rows).then_some((row + 1, 0)) };
+        let previous = if column > 0 { Some((row, column - 1)) } else { row.checked_sub(1).map(|r| (r, table.rows[r].cells.len().saturating_sub(1))) };
+        let target = if command == sel!(insertTab:) {
+            match next {
+                Some((r, c)) => end_of(r, c),
+                None => {
+                    drop(styled);
+                    self.rewrite_table(view, t, |table| {
+                        table.insert_row(table.rows.len());
+                        (table.rows.len() - 1, 0)
+                    });
+                    return true;
+                }
+            }
+        } else if command == sel!(insertBacktab:) {
+            previous.and_then(|(r, c)| end_of(r, c)).or(Some(at))
+        } else if command == sel!(insertNewline:) {
+            if row + 1 < rows {
+                end_of(row + 1, column)
+            } else {
+                drop(styled);
+                self.rewrite_table(view, t, |table| {
+                    table.insert_row(table.rows.len());
+                    (table.rows.len() - 1, column)
+                });
+                return true;
+            }
+        } else if command == sel!(moveDown:) && row + 1 < rows {
+            end_of(row + 1, column)
+        } else if command == sel!(moveUp:) && row > 0 {
+            end_of(row - 1, column)
+        } else if command == sel!(moveRight:) && at == cell.end && next.is_some() {
+            next.and_then(|(r, c)| table.rows[r].cells.get(c)).map(|c| c.start)
+        } else if command == sel!(moveLeft:) && at == cell.start && previous.is_some() {
+            previous.and_then(|(r, c)| end_of(r, c))
+        } else {
+            return false;
+        };
+        drop(styled);
+        if let Some(target) = target {
+            view.setSelectedRange(NSRange::new(target, 0));
+            view.scrollRangeToVisible(NSRange::new(target, 0));
+        }
+        true
+    }
+
+    /// A cursor that landed between a table's cells (a click on a border or a cell's padding, an
+    /// arrow from the line above) moves into the nearest cell.
+    fn keep_cursor_in_cells(&self, view: &NSTextView) {
+        let selection = view.selectedRange();
+        if selection.length != 0 {
+            return;
+        }
+        let at = selection.location;
+        let edge = {
+            let styled = self.ivars().styled.borrow();
+            if cell_at(&styled, at).is_some() { None } else { nearest_cell_edge(&styled, at) }
+        };
+        if let Some(edge) = edge.filter(|&e| e != at) {
+            view.setSelectedRange(NSRange::new(edge, 0));
+        }
+    }
+
+    /// Rewrites table `t` (its index in the note) as `change` makes it, as one edit, and puts
+    /// the cursor at the end of the cell (row, column) `change` gives.
+    fn rewrite_table(&self, view: &NSTextView, t: usize, change: impl FnOnce(&mut TableText) -> (usize, usize)) {
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        let Some(range) = self.ivars().styled.borrow().tables.get(t).map(|t| t.range.clone()) else { return };
+        let source = storage.string().substringWithRange(ns(&range)).to_string();
+        let Some(mut table) = TableText::parse(&source) else { return };
+        let (row, column) = change(&mut table);
+        let mut new = table.write();
+        // At the note's end the table may have no final line break.
+        if !source.ends_with('\n') {
+            new.pop();
+        }
+        self.ivars().table_editing.set(true);
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&new), ns(&range)) };
+        self.ivars().table_editing.set(false);
+        let end = table.cell_offset(row, column) + table.rows[row][column].len();
+        let at = range.start + new[..end.min(new.len())].encode_utf16().count();
+        view.setSelectedRange(NSRange::new(at, 0));
+    }
+
     /// The vault the shown notes are in: images are read from it.
     pub fn set_vault(&self, root: PathBuf) {
         *self.ivars().vault.borrow_mut() = Some(root);
@@ -1557,6 +1717,39 @@ fn link_at(styled: &Highlight, index: usize) -> Option<&LinkRun> {
 /// The font each markup range takes when shown: that of the innermost run containing it.
 fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
+}
+
+/// The table, row and cell whose text holds `index` (its end too).
+fn cell_at(styled: &Highlight, index: usize) -> Option<(usize, usize, usize)> {
+    styled.tables.iter().enumerate().filter(|(_, t)| t.range.start <= index && index <= t.range.end).find_map(|(t, table)| {
+        table.rows.iter().enumerate().find_map(|(r, row)| row.cells.iter().position(|c| c.start <= index && index <= c.end).map(|c| (t, r, c)))
+    })
+}
+
+/// The nearest cell edge to `index` when it lies on a table's line outside its cells (on a
+/// hidden pipe or space, or the folded delimiter row).
+fn nearest_cell_edge(styled: &Highlight, index: usize) -> Option<usize> {
+    let table = styled.tables.iter().find(|t| t.range.start <= index && index < t.range.end)?;
+    if table.delimiter.start <= index && index <= table.delimiter.end {
+        return table.rows.first()?.cells.last().map(|c| c.end);
+    }
+    let row = table.rows.iter().find(|r| r.range.start <= index && index <= r.range.end)?;
+    row.cells.iter().flat_map(|c| [c.start, c.end]).min_by_key(|p| p.abs_diff(index))
+}
+
+/// `text` fit for a table cell: a `|` escaped, line breaks as spaces.
+fn cell_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut escaped = false;
+    for c in text.chars() {
+        match c {
+            '|' if !escaped => out.push_str("\\|"),
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(c),
+        }
+        escaped = c == '\\' && !escaped;
+    }
+    out
 }
 
 /// Width of `range` of `text` as `canvas` will show it: each run in its font, with its kerning.

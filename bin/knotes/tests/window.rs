@@ -22,11 +22,17 @@ fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("app starts");
+    // Read while the app runs: a report longer than the pipe's buffer would block it.
+    let mut stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut stdout, &mut out).unwrap();
+        out
+    });
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait().unwrap() {
-            let mut out = String::new();
-            std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+            let out = reader.join().unwrap();
             assert!(status.success(), "app failed: {out}");
             return out;
         }
@@ -1517,4 +1523,66 @@ fn a_table_wider_than_the_column_keeps_each_row_on_one_line() {
     let text_width: f64 = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).and_then(|l| l.split(' ').nth(1)).and_then(|w| w.strip_prefix("width=")).unwrap().parse().unwrap();
     assert!(rows[0].0 > text_width, "the table is wider than the column: {rows:?} {text_width}");
     assert!((rows[0].1 - rows[1].1).abs() < 0.5, "the header is one line, as a short row: {rows:?}");
+}
+
+/// The note's whole text (`text:` line), line breaks as ⏎.
+fn note_text(out: &str) -> &str {
+    out.lines().find_map(|l| l.strip_prefix("text: ")).unwrap_or_else(|| panic!("{out}"))
+}
+
+fn cursor(out: &str) -> usize {
+    out.lines().find_map(|l| l.strip_prefix("cursor: ")).and_then(|c| c.parse().ok()).unwrap_or_else(|| panic!("{out}"))
+}
+
+fn table_probe(env: &[(&str, &str)]) -> String {
+    let mut all = vec![("KNOTES_PROBE_OPEN", "a.md")];
+    all.extend_from_slice(env);
+    probe_notes(&[("a.md", TABLE)], &all).1
+}
+
+#[test]
+fn typing_in_a_cell_edits_it_and_a_pipe_is_escaped() {
+    let out = table_probe(&[("KNOTES_PROBE_TYPE", "x|"), ("KNOTES_PROBE_RANGE", "40,0")]);
+    assert!(note_text(&out).contains("| Annx\\| | 3 |"), "{out}");
+}
+
+#[test]
+fn the_table_s_hidden_pipes_and_spaces_cannot_be_deleted() {
+    let out = table_probe(&[("KNOTES_PROBE_TYPE", ""), ("KNOTES_PROBE_RANGE", "36,1")]);
+    assert!(note_text(&out).contains("⏎| Ann | 3 |⏎"), "{out}");
+}
+
+#[test]
+fn typing_between_cells_goes_into_the_nearest_one() {
+    let out = table_probe(&[("KNOTES_PROBE_TYPE", "x"), ("KNOTES_PROBE_RANGE", "41,0")]);
+    assert!(note_text(&out).contains("| Annx | 3 |"), "{out}");
+}
+
+#[test]
+fn tab_return_and_arrows_move_between_cells() {
+    // An empty insertion puts the cursor there before the keys (KNOTES_PROBE_CURSOR comes after).
+    let at = |cursor_at: &str, keys: &str| {
+        let range = format!("{cursor_at},0");
+        cursor(&table_probe(&[("KNOTES_PROBE_TYPE", ""), ("KNOTES_PROBE_RANGE", &range), ("KNOTES_PROBE_KEYS", keys)]))
+    };
+    assert_eq!(at("40", "tab"), 44, "Tab: to the end of the next cell");
+    assert_eq!(at("44", "backtab"), 40, "Shift+Tab: back");
+    assert_eq!(at("40", "return"), 60, "Return: the same column of the next row");
+    assert_eq!(at("14", "down"), 40, "down from the header skips the delimiter row");
+    assert_eq!(at("40", "up"), 14);
+    assert_eq!(at("40", "right"), 43, "right at a cell's end: the next cell's start");
+    assert_eq!(at("43", "left"), 40);
+}
+
+#[test]
+fn tab_in_the_last_cell_adds_a_row() {
+    let out = table_probe(&[("KNOTES_PROBE_TYPE", ""), ("KNOTES_PROBE_RANGE", "65,0"), ("KNOTES_PROBE_KEYS", "tab")]);
+    assert!(note_text(&out).contains("| Bartholomew | 42 |⏎|  |  |⏎⏎After"), "{out}");
+    assert_eq!(cursor(&out), 74, "in the new row's first cell: {out}");
+}
+
+#[test]
+fn a_cursor_between_cells_moves_into_the_nearest_one() {
+    assert_eq!(cursor(&table_probe(&[("KNOTES_PROBE_CURSOR", "41")])), 40, "on the hidden pipe after Ann");
+    assert_eq!(cursor(&table_probe(&[("KNOTES_PROBE_CURSOR", "28")])), 20, "on the folded delimiter row: the header's end");
 }
