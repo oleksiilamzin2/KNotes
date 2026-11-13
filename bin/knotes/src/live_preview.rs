@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, changed_region, highlight, set_image_width};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, Align, changed_region, highlight, set_image_width};
 
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PREVIEW_GAP, PreviewFragment, TASK_ROOM};
@@ -47,6 +47,11 @@ const CODE_INSET: f64 = 12.0;
 const FENCE_PADDING: f64 = 8.0;
 /// Narrowest an image is dragged to.
 const MIN_IMAGE_WIDTH: f64 = 16.0;
+/// A table cell's padding: beside its text, and above and below it.
+const TABLE_PAD: f64 = 10.0;
+const TABLE_VPAD: f64 = 5.0;
+/// Narrowest a table column's text is.
+const TABLE_MIN_COLUMN: f64 = 24.0;
 
 struct Look {
     body: Retained<NSFont>,
@@ -108,6 +113,9 @@ pub struct Ivars {
     column: Cell<f64>,
     /// The image being resized (where its source starts) and the width it shows at meanwhile.
     resizing: Cell<Option<(usize, f64)>>,
+    /// Each table's column edges (x from the text column's start; the right edge last), by
+    /// where the table starts, as last laid out.
+    table_columns: RefCell<HashMap<usize, Rc<Vec<f64>>>>,
     /// The image the pointer is over (where its line starts): it shows its resize handle.
     hovered_image: Cell<Option<usize>>,
     /// The note's text view, to draw an image once it is decoded.
@@ -288,6 +296,7 @@ impl LivePreview {
             bitmaps: RefCell::new(HashMap::new()),
             column: Cell::new(READABLE_WIDTH),
             resizing: Cell::new(None),
+            table_columns: RefCell::new(HashMap::new()),
             hovered_image: Cell::new(None),
             view: RefCell::new(objc2::rc::Weak::default()),
             images_checked_at: Cell::new(None),
@@ -432,6 +441,9 @@ impl LivePreview {
         for image in styled.images.iter().filter(|i| meets(&i.range)) {
             self.paint_image(&mut canvas, &mut palette, storage, image, overlaps(&image.range, revealed));
         }
+        for table in styled.tables.iter().filter(|t| meets(&t.range)) {
+            self.paint_table(&mut canvas, &mut palette, storage, table);
+        }
         self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region, revealed);
         look.paint.apply(storage, &canvas, &palette);
     }
@@ -444,11 +456,14 @@ impl LivePreview {
         let mut r = (region.0.min(total), region.1.min(total));
         loop {
             let para = paragraph(storage, NSRange::new(r.0, r.1 - r.0));
+            // A table's column widths come from all its rows.
             let grown = styled
                 .formulas
                 .iter()
-                .filter(|f| f.range.start < para.1 && f.range.end > para.0)
-                .fold(para, |g, f| (g.0.min(f.range.start), g.1.max(f.range.end.min(total))));
+                .map(|f| &f.range)
+                .chain(styled.tables.iter().map(|t| &t.range))
+                .filter(|r| r.start < para.1 && r.end > para.0)
+                .fold(para, |g, r| (g.0.min(r.start), g.1.max(r.end.min(total))));
             if grown == r {
                 return r;
             }
@@ -866,6 +881,63 @@ impl LivePreview {
         canvas.paint(f.range.start..f.range.start + 1, |p| p.kern = kern);
     }
 
+    /// A table as a grid (ADR 0021): each cell's text moved to its column by kerning on the
+    /// hidden pipes and spaces before it, columns as wide as their widest cell, the delimiter
+    /// row folded away, rows padded; the fragments draw the borders.
+    fn paint_table<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, table: &TableRun) {
+        let text = storage.string();
+        let columns = table.aligns.len().max(table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0));
+        let widths: Vec<Vec<f64>> = table.rows.iter().map(|row| row.cells.iter().map(|c| shown_width(canvas, palette, &text, c)).collect()).collect();
+        let mut column_widths = vec![TABLE_MIN_COLUMN; columns];
+        for row in &widths {
+            for (w, column) in row.iter().zip(column_widths.iter_mut()) {
+                *column = column.max(*w);
+            }
+        }
+        let mut edges = Vec::with_capacity(columns + 1);
+        let mut x = 0.0;
+        for w in &column_widths {
+            edges.push(x);
+            x += w + 2.0 * TABLE_PAD;
+        }
+        edges.push(x);
+        self.ivars().table_columns.borrow_mut().insert(table.range.start, Rc::new(edges.clone()));
+        for (row, widths) in table.rows.iter().zip(&widths) {
+            let (mut at, mut from, mut first_indent) = (0.0, row.range.start, 0.0);
+            for (j, (cell, width)) in row.cells.iter().zip(widths).enumerate() {
+                let room = column_widths[j] - width;
+                let offset = match table.aligns.get(j) {
+                    Some(Align::Center) => room / 2.0,
+                    Some(Align::Right) => room,
+                    _ => 0.0,
+                };
+                let target = edges[j] + TABLE_PAD + offset;
+                if cell.start > from {
+                    self.paint_hidden(canvas, palette, storage, &(from..cell.start), "table", target - at);
+                } else {
+                    // No pipe before the first cell: the line starts there.
+                    first_indent = target;
+                }
+                at = target + width;
+                from = cell.end;
+            }
+            if from < row.range.end {
+                self.paint_hidden(canvas, palette, storage, &(from..row.range.end), "table", 0.0);
+            }
+            // Padding above as a taller line (spacing before the document's first paragraph is
+            // dropped), below as spacing.
+            let para = palette.para(Para { first_indent, unwrapped: true, min_line: self.line_height() + TABLE_VPAD, spacing_after: TABLE_VPAD, ..Para::default() });
+            canvas.paint(row.range.start..row.range.end + 1, |p| p.para = para);
+        }
+        let hidden = palette.look(&self.ivars().look.hidden, &self.ivars().look.clear, "table");
+        canvas.paint(table.delimiter.clone(), |p| {
+            p.look = hidden;
+            p.kern = 0;
+        });
+        let folded = palette.para(Para { max_line: 0.01, ..Para::default() });
+        canvas.paint(table.delimiter.start..table.delimiter.end + 1, |p| p.para = folded);
+    }
+
     /// The vault the shown notes are in: images are read from it.
     pub fn set_vault(&self, root: PathBuf) {
         *self.ivars().vault.borrow_mut() = Some(root);
@@ -1140,7 +1212,7 @@ impl LivePreview {
     /// quote's bars and a code block's background.
     fn preview_marks(&self, layout: &NSTextLayoutManager, range: Option<&NSTextRange>) -> Vec<Mark> {
         let styled = self.ivars().styled.borrow();
-        let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty() && styled.code_blocks.is_empty()) else {
+        let (Some(range), false) = (range, styled.formulas.is_empty() && styled.runs.is_empty() && styled.code_blocks.is_empty() && styled.tables.is_empty()) else {
             return Vec::new();
         };
         let Some(content) = layout.textContentManager() else { return Vec::new() };
@@ -1203,6 +1275,12 @@ impl LivePreview {
             if callout.marker.start >= from && callout.marker.start < to && !overlaps(&callout.marker, revealed) {
                 let label = callout.title.is_empty().then(|| callout_name(&callout.kind));
                 marks.push(Mark::CalloutIcon { offset: callout.marker.start - from, centre: look.body.capHeight() / 2.0, colour, symbol, label, font: look.bold.clone() });
+            }
+        }
+        for table in styled.tables.iter().filter(|t| t.range.start < to && t.range.end > from) {
+            let Some(columns) = self.ivars().table_columns.borrow().get(&table.range.start).cloned() else { continue };
+            for (i, _) in table.rows.iter().enumerate().filter(|(_, r)| (from..to).contains(&r.range.start)) {
+                marks.push(Mark::TableRow { columns: Rc::clone(&columns), header: i == 0, top: i == 0 });
             }
         }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
@@ -1479,6 +1557,17 @@ fn link_at(styled: &Highlight, index: usize) -> Option<&LinkRun> {
 /// The font each markup range takes when shown: that of the innermost run containing it.
 fn markup_fonts(styled: &Highlight, look: &Look) -> Vec<Retained<NSFont>> {
     styled.markup_owners().into_iter().map(|owner| owner.map_or_else(|| look.body.clone(), |style| run_look(style, look).0.retain())).collect()
+}
+
+/// Width of `range` of `text` as `canvas` will show it: each run in its font, with its kerning.
+fn shown_width(canvas: &Canvas<Paint>, palette: &Palette, text: &NSString, range: &Range<usize>) -> f64 {
+    canvas
+        .runs_in(range.clone())
+        .map(|(run, paint)| {
+            let piece = text.substringWithRange(ns(&run));
+            text_width(&piece, palette.font_of(paint.look)) + palette.kern_of(paint.kern) * run.len() as f64
+        })
+        .sum()
 }
 
 /// Width of `text` laid out on one line in `font`.

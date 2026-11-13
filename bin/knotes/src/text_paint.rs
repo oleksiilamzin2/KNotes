@@ -39,12 +39,15 @@ pub struct Para {
     /// Tabs advance next to nothing (a list item's hidden indentation).
     pub hidden_tabs: bool,
     pub centred: bool,
+    /// The line runs on past the column instead of wrapping (a table row).
+    pub unwrapped: bool,
     pub min_line: f64,
     pub max_line: f64,
+    pub spacing_before: f64,
     pub spacing_after: f64,
 }
 
-type ParaKey = [u64; 7];
+type ParaKey = [u64; 9];
 
 impl Para {
     fn key(&self) -> ParaKey {
@@ -53,8 +56,10 @@ impl Para {
             self.head_indent.to_bits(),
             u64::from(self.hidden_tabs),
             u64::from(self.centred),
+            u64::from(self.unwrapped),
             self.min_line.to_bits(),
             self.max_line.to_bits(),
+            self.spacing_before.to_bits(),
             self.spacing_after.to_bits(),
         ]
     }
@@ -70,8 +75,12 @@ impl Para {
         if self.centred {
             style.setAlignment(NSTextAlignment::Center);
         }
+        if self.unwrapped {
+            style.setLineBreakMode(objc2_app_kit::NSLineBreakMode::ByClipping);
+        }
         style.setMinimumLineHeight(self.min_line);
         style.setMaximumLineHeight(self.max_line);
+        style.setParagraphSpacingBefore(self.spacing_before);
         style.setParagraphSpacing(self.spacing_after);
         Retained::into_super(style)
     }
@@ -141,6 +150,16 @@ impl<'a> Palette<'a> {
 
     pub fn para_of(&self, id: u16) -> Para {
         self.paras[usize::from(id)]
+    }
+
+    /// The font of look `id`.
+    pub fn font_of(&self, id: u16) -> &'a NSFont {
+        self.looks[usize::from(id & LOOK)].0
+    }
+
+    /// The points of kerning `id`.
+    pub fn kern_of(&self, id: u32) -> f64 {
+        self.kerns[id as usize]
     }
 }
 

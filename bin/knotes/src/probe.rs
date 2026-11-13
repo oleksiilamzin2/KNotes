@@ -106,6 +106,27 @@ pub fn image_hover_requested(view: &crate::note_view::NoteTextView) {
     }
 }
 
+/// `KNOTES_PROBE_RANGE_X=start,length;…`: where each range of the note's text starts and ends
+/// across (text view coordinates), as `range-x: x0-x1 …`.
+pub fn report_range_xs(view: &objc2_app_kit::NSTextView, ranges: &str) {
+    let Some(window) = view.window() else { return };
+    if let Some(layout) = view.textLayoutManager() {
+        layout.textViewportLayoutController().layoutViewport();
+    }
+    let xs: Vec<String> = ranges
+        .split(';')
+        .filter_map(|r| r.split_once(','))
+        .filter_map(|(a, b)| Some(objc2_foundation::NSRange::new(a.parse().ok()?, b.parse().ok()?)))
+        .map(|range| {
+            // SAFETY: the range lies inside the text; a null actual range is allowed.
+            let on_screen = unsafe { objc2_app_kit::NSTextInputClient::firstRectForCharacterRange_actualRange(view, range, std::ptr::null_mut()) };
+            let rect = view.convertRect_fromView(window.convertRectFromScreen(on_screen), None);
+            format!("{:.1}-{:.1}", rect.origin.x, rect.origin.x + rect.size.width)
+        })
+        .collect();
+    println!("range-x: {}", xs.join(" "));
+}
+
 /// `KNOTES_PROBE_RESIZE=line:width`: the image on the line starting at character `line`
 /// dragged to `width` points and let go.
 pub fn resize_requested() -> Option<(usize, f64)> {

@@ -620,6 +620,9 @@ impl VaultWindow {
             probe::paste_requested(&self.note_text);
             probe::image_edge_requested(&self.note_text);
             probe::image_hover_requested(&self.note_text);
+            if let Ok(ranges) = std::env::var("KNOTES_PROBE_RANGE_X") {
+                probe::report_range_xs(&self.note_text, &ranges);
+            }
             if let Ok(ranges) = std::env::var("KNOTES_PROBE_SPELLING") {
                 let answers: Vec<&str> = ranges
                     .split(';')

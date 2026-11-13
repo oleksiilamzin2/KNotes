@@ -1458,3 +1458,63 @@ fn an_image_on_the_last_line_shows_right_below_its_source() {
     assert_eq!(near.4, "preview");
     assert!(near.1 - away.1 < 30.0, "below the source's line, not the empty line after it: {away:?} {near:?}");
 }
+
+const TABLE: &str = "Before\n\n| Name | Age |\n|:---|---:|\n| Ann | 3 |\n| Bartholomew | 42 |\n\nAfter";
+
+/// `range-x: x0-x1 …` of `KNOTES_PROBE_RANGE_X`, as pairs.
+fn range_xs(out: &str) -> Vec<(f64, f64)> {
+    out.lines()
+        .find_map(|l| l.strip_prefix("range-x: "))
+        .unwrap_or_else(|| panic!("{out}"))
+        .split(' ')
+        .map(|p| {
+            let (a, b) = p.split_once('-').unwrap();
+            (a.parse().unwrap(), b.parse().unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn a_table_s_cells_line_up_in_columns_with_their_alignment() {
+    // Name, Ann, Bartholomew (left aligned); Age, 3, 42 (right aligned).
+    let ranges = "10,4;37,3;49,11;17,3;43,1;63,2";
+    let (_vault, out) = probe_notes(&[("a.md", TABLE)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_RANGE_X", ranges)]);
+    let x = range_xs(&out);
+    assert!((x[0].0 - x[1].0).abs() < 0.6 && (x[0].0 - x[2].0).abs() < 0.6, "the first column starts its cells together: {x:?}");
+    assert!((x[3].1 - x[4].1).abs() < 0.6 && (x[3].1 - x[5].1).abs() < 0.6, "the second column ends its cells together: {x:?}");
+    assert!(x[3].0 > x[2].1 + 10.0, "the second column comes after the widest first cell: {x:?}");
+    assert!(out.contains("[table]|"), "the pipes are hidden: {out}");
+}
+
+#[test]
+fn a_table_s_rows_draw_their_grid_and_the_delimiter_row_folds_away() {
+    let (_vault, out) = probe_notes(&[("a.md", TABLE)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "0")]);
+    let rows: Vec<(f64, f64, f64, f64, &str)> = out
+        .lines()
+        .filter_map(|l| l.strip_prefix("decoration: table-row "))
+        .map(|l| {
+            let p: Vec<&str> = l.split(' ').collect();
+            (p[0].parse().unwrap(), p[1].parse().unwrap(), p[2].parse().unwrap(), p[3].parse().unwrap(), p[4])
+        })
+        .collect();
+    assert_eq!(rows.iter().map(|r| r.4).collect::<Vec<_>>(), ["header", "body", "body"], "{out}");
+    assert!(rows.iter().all(|r| (r.2 - rows[0].2).abs() < 0.5 && (r.0 - rows[0].0).abs() < 0.5), "one width: {rows:?}");
+    assert!((rows[1].1 - (rows[0].1 + rows[0].3)).abs() < 1.5, "the first body row right under the header: {rows:?}");
+}
+
+#[test]
+fn a_table_wider_than_the_column_keeps_each_row_on_one_line() {
+    let wide = "| Name | A rather long heading for this column | Another long heading here |\n|---|---|---|\n| a | b | c |\n";
+    let (_vault, out) = probe_notes(&[("a.md", wide)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let rows: Vec<(f64, f64)> = out
+        .lines()
+        .filter_map(|l| l.strip_prefix("decoration: table-row "))
+        .map(|l| {
+            let p: Vec<f64> = l.split(' ').take(4).map(|v| v.parse().unwrap()).collect();
+            (p[2], p[3])
+        })
+        .collect();
+    let text_width: f64 = out.lines().find_map(|l| l.strip_prefix("text-layout: ")).and_then(|l| l.split(' ').nth(1)).and_then(|w| w.strip_prefix("width=")).unwrap().parse().unwrap();
+    assert!(rows[0].0 > text_width, "the table is wider than the column: {rows:?} {text_width}");
+    assert!((rows[0].1 - rows[1].1).abs() < 0.5, "the header is one line, as a short row: {rows:?}");
+}

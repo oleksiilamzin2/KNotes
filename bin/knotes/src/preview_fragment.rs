@@ -55,6 +55,10 @@ pub enum Mark {
     /// A callout's icon in the room of its hidden `[!kind]`, and its kind's name after it when
     /// no title is written.
     CalloutIcon { offset: usize, centre: f64, colour: Retained<NSColor>, symbol: &'static str, label: Option<String>, font: Retained<NSFont> },
+    /// A table row's grid across the paragraph: borders at `columns` (x of each column's left
+    /// edge from the text column's start, and the table's right edge last), the header's
+    /// background, the table's top border.
+    TableRow { columns: Rc<Vec<f64>>, header: bool, top: bool },
     /// An arrow after a link to a website, `shift` points from the location of character
     /// `offset` (in the room kerning keeps there).
     External { offset: usize, centre: f64, shift: f64 },
@@ -111,6 +115,7 @@ define_class!(
                         colour.colorWithAlphaComponent(0.1).setFill();
                         rounded(rect, CODE_CORNER, *top, *bottom).fill();
                     }
+                    Mark::TableRow { columns, header, top } => draw_table_row(rect, columns, *header, *top),
                     _ => {}
                 }
             }
@@ -146,7 +151,7 @@ define_class!(
                         NSBezierPath::bezierPathWithOvalInRect(rect).fill();
                     }
                     (Mark::Task { checked, .. }, _) => draw_task_box(rect, *checked),
-                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. }, _) => {}
+                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. }, _) => {}
                     (Mark::CalloutIcon { colour, symbol, label, font, .. }, _) => draw_callout_icon(rect, colour, symbol, label.as_deref(), font),
                     (Mark::External { .. }, _) => draw_external_arrow(rect),
                     (Mark::QuoteBar { .. }, _) => {
@@ -192,6 +197,15 @@ impl PreviewFragment {
             let frame = self.layoutFragmentFrame();
             return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, 0.0), NSSize::new(QUOTE_BAR, frame.size.height)));
         }
+        if let Mark::TableRow { columns, .. } = mark {
+            let frame = self.layoutFragmentFrame();
+            let (left, right) = (columns.first().copied().unwrap_or(0.0), columns.last().copied().unwrap_or(0.0));
+            // The note's last row also holds the empty line after its final line break.
+            let lines = self.textLineFragments();
+            let extra = lines.iter().last().filter(|l| lines.count() > 1 && l.characterRange().length == 0);
+            let height = extra.map_or(frame.size.height, |l| l.typographicBounds().origin.y);
+            return Some(NSRect::new(NSPoint::new(left - frame.origin.x, 0.0), NSSize::new(right - left, height)));
+        }
         if let Mark::CodeBackground { .. } | Mark::CalloutBox { .. } = mark {
             let frame = self.layoutFragmentFrame();
             let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
@@ -201,7 +215,7 @@ impl PreviewFragment {
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } | Mark::Image { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } => return None,
         };
         // A preview goes below the line its source ends on: the note's last paragraph also
         // holds the empty line after its final line break, below the room kept for the preview.
@@ -245,7 +259,7 @@ impl PreviewFragment {
                 let width = CALLOUT_ICON + label.as_deref().map_or(0.0, |l| 4.0 + label_width(l, font));
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - CALLOUT_ICON / 2.0), NSSize::new(width, CALLOUT_ICON))
             }
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } => return None,
         };
         Some(rect)
     }
@@ -283,6 +297,7 @@ impl PreviewFragment {
                     Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CalloutBox { .. } => format!("decoration: callout-box {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::TableRow { header, .. } => format!("decoration: table-row {x:.1} {y:.1} {w:.1} {h:.1} {}", if *header { "header" } else { "body" }),
                     Mark::CalloutIcon { .. } => format!("decoration: callout-icon {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::External { .. } => format!("decoration: external {x:.1} {y:.1} {w:.1} {h:.1}"),
                 })
@@ -331,6 +346,34 @@ pub fn describe_visible(view: &NSTextView) -> Vec<String> {
         at = next;
     }
     lines
+}
+
+/// A table row's grid in `rect` (the row across the table): the header's background, a border
+/// left of each column and right of the last, one under the row, and one over it at the top.
+fn draw_table_row(rect: NSRect, columns: &[f64], header: bool, top: bool) {
+    if header {
+        NSColor::quaternarySystemFillColor().setFill();
+        NSBezierPath::bezierPathWithRect(rect).fill();
+    }
+    let lines = NSBezierPath::bezierPath();
+    let left = columns.first().copied().unwrap_or(0.0);
+    let (x0, x1) = (rect.origin.x, rect.origin.x + rect.size.width);
+    let (y0, y1) = (rect.origin.y, rect.origin.y + rect.size.height);
+    // Half a point in: one-point lines on the edges, inside the row.
+    for x in columns.iter().map(|c| x0 + c - left) {
+        let x = x.clamp(x0 + 0.5, x1 - 0.5);
+        lines.moveToPoint(NSPoint::new(x, y0));
+        lines.lineToPoint(NSPoint::new(x, y1));
+    }
+    if top {
+        lines.moveToPoint(NSPoint::new(x0, y0 + 0.5));
+        lines.lineToPoint(NSPoint::new(x1, y0 + 0.5));
+    }
+    lines.moveToPoint(NSPoint::new(x0, y1 - 0.5));
+    lines.lineToPoint(NSPoint::new(x1, y1 - 0.5));
+    lines.setLineWidth(1.0);
+    NSColor::separatorColor().setStroke();
+    lines.stroke();
 }
 
 /// Where an image's resize handle is drawn: a pill inside its right edge, halfway down, in
