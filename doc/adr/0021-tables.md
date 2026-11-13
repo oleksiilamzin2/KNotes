@@ -55,7 +55,9 @@ TextKit 2 lays out no tables: `NSTextTable` blocks send a text view back to Text
   after the check (changing the text inside `shouldChangeText` would confuse the text view).
   A cursor that lands between cells moves into the nearest one.
 - Handles and add bars show with the pointer over the table (or near it); a handle clicked
-  opens its menu, dragged moves its row or column. In probe mode the menu is listed or an
+  opens its menu, dragged moves its row or column. A right click in a cell puts its row's and
+  column's actions first in the text's context menu (owner's request: deleting a row or a
+  column was hard to find behind the handles). In probe mode the menu is listed or an
   item chosen instead of shown.
 - A wide table scrolls by columns, not by points: kerning cannot move glyphs left of a line's
   start (a glyph's advance does not go below nothing), and shifting only the drawing would
