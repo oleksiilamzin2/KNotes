@@ -811,6 +811,11 @@ pub fn toolbar_rename_requested(window: &NSWindow) {
     unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(field.action().expect("field action"), field.target().as_deref(), Some(&field)) };
 }
 
+/// The line of `text` starting at UTF-16 offset `at`.
+fn first_line_at(text: &str, at: usize) -> String {
+    String::from_utf16_lossy(&text.encode_utf16().skip(at).take_while(|&u| u != u16::from(b'\n')).collect::<Vec<u16>>())
+}
+
 /// Physical footprint of this process (what Activity Monitor shows as Memory), in MB.
 fn footprint_mb() -> f64 {
     #[repr(C)]
@@ -1042,9 +1047,7 @@ fn report_note(window: &VaultWindow) {
         println!("note-visible: {:.1} {:.1}", shown.origin.y, shown.origin.y + shown.size.height);
     }
     if let Some(top) = window.note_top() {
-        let text = window.note_text.string().to_string();
-        let line: String = text.encode_utf16().skip(top).take_while(|&u| u != u16::from(b'\n')).collect::<Vec<u16>>().iter().map(|&u| char::from_u32(u32::from(u)).unwrap_or('?')).collect();
-        println!("note-top: {line}");
+        println!("note-top: {}", first_line_at(&window.note_text.string().to_string(), top));
     }
     let view = &window.note_text;
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
@@ -1098,6 +1101,15 @@ fn report_note(window: &VaultWindow) {
     if std::env::var("KNOTES_PROBE_PDF_WIDTH").is_ok() {
         println!("pdf-drawn: {}", window.pdf_drawn().join(" "));
     }
+    // `KNOTES_PROBE_TAB_TRIP=b.md`: that document's tab clicked, then the tab shown before.
+    if let Ok(other) = std::env::var("KNOTES_PROBE_TAB_TRIP") {
+        window.window.displayIfNeeded();
+        let top = window.note_top().map(|top| first_line_at(&window.note_text.string().to_string(), top));
+        println!("note-top-before-trip: {}", top.unwrap_or_default());
+        window.tab_trip(&other);
+        window.window.displayIfNeeded();
+    }
+    println!("pdf-top: {}", window.pdf_top_page().map(|p| p.to_string()).unwrap_or_default());
     println!("pdf-view: {}", window.describe_pdf());
     println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-texts-kept: {}", window.pdf_texts_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));

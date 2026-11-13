@@ -10,7 +10,7 @@ use std::time::Duration;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TagNode, parse_search,
+    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
@@ -982,13 +982,37 @@ impl VaultWindow {
         self.update_navigation();
     }
 
-    /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow.
-    fn show_tab(&self, path: &str) {
-        self.tabs.borrow_mut().open(path);
+    /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow. Gives
+    /// where the document was when its tab was last left.
+    fn show_tab(&self, path: &str) -> Option<TabPlace> {
+        let place = self.tabs.borrow_mut().open(path);
         if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
             self.rebuild_sidebar();
             self.highlight(&SidebarItem::Gap);
         }
+        place
+    }
+
+    /// The tab shown remembers where its document is, as it is left.
+    fn remember_place(&self) {
+        let place = if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            Some(TabPlace { top: viewer.place(), cursor: None })
+        } else if self.editing.borrow().is_some() {
+            let selection = self.note_text.selectedRange();
+            self.note_top().map(|top| TabPlace { top: (top, 0.0), cursor: Some((selection.location, selection.length)) })
+        } else {
+            None
+        };
+        if let Some(place) = place {
+            self.tabs.borrow_mut().remember(place);
+        }
+    }
+
+    /// `other`'s tab clicked, then the tab shown before (probe mode).
+    pub fn tab_trip(&self, other: &str) {
+        let Some(back) = self.tabs.borrow().current_path().map(str::to_owned) else { return };
+        self.select(SidebarItem::Tab(other.to_owned()));
+        self.select(SidebarItem::Tab(back));
     }
 
     /// Shows a note in the note column; `record` adds it to the back/forward history.
@@ -997,6 +1021,7 @@ impl VaultWindow {
             self.open_pdf(path, None, record);
             return;
         }
+        self.remember_place();
         self.show_pdf(None);
         self.leave();
         self.completion.hide();
@@ -1010,17 +1035,24 @@ impl VaultWindow {
         };
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
         self.live_preview.show(&self.note_text, path, &text);
+        // Where it was when its tab was left; words found by a search, below, win.
+        if let Some(place) = self.show_tab(path) {
+            self.scroll_note_to(place.top.0);
+            if let Some((at, length)) = place.cursor.filter(|(at, length)| at + length <= self.note_text.string().length()) {
+                self.note_text.setSelectedRange(NSRange::new(at, length));
+            }
+        }
         self.show_found_words(&text);
         if self.find_bar.is_shown() {
             self.find_text(&self.find_bar.text(), true);
         }
         self.refresh_outline();
-        self.show_tab(path);
         self.update_navigation();
     }
 
     /// Opens the PDF at `path` in place of the note (ADR 0022), at page `page` (from 1).
     pub fn open_pdf(&self, path: &str, page: Option<u32>, record: bool) {
+        self.remember_place();
         self.leave();
         self.completion.hide();
         if self.find_bar.is_shown() {
@@ -1036,8 +1068,12 @@ impl VaultWindow {
             self.window.layoutIfNeeded();
             viewer.go_to(page.unwrap_or(1).max(1) as usize - 1);
         }
+        // Where it was when its tab was left, unless a link names a page.
+        let place = self.show_tab(path);
+        if let (None, Some(place), Some(viewer)) = (page, place, self.pdf_view.borrow().as_ref()) {
+            viewer.show_place(place.top);
+        }
         self.refresh_outline();
-        self.show_tab(path);
         self.update_navigation();
     }
 

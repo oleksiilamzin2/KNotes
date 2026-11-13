@@ -571,6 +571,29 @@ impl PdfViewer {
         (page, fraction)
     }
 
+    /// Where the pages are: the page shown (index) and how far down it the top of the view is,
+    /// under the toolbar (a fraction; below nothing in the margin above it).
+    pub fn place(&self) -> (usize, f64) {
+        let ivars = self.pages.ivars();
+        let page = ivars.current.get();
+        let Some(f) = ivars.frames.borrow().get(page).copied() else { return (0, 0.0) };
+        let y = self.scroll_y() + self.scroll.contentInsets().top;
+        (page, (y - f.origin.y) / f.size.height)
+    }
+
+    /// Shows the pages where `place` says.
+    pub fn show_place(&self, (page, at): (usize, f64)) {
+        let ivars = self.pages.ivars();
+        if page >= ivars.frames.borrow().len() {
+            return;
+        }
+        ivars.jumped.set(true);
+        ivars.current.set(page);
+        self.scroll.layoutSubtreeIfNeeded();
+        self.pages.keep_at_top((page, at, true));
+        self.pages.follow();
+    }
+
     /// The page shown (from 1) and how many there are.
     pub fn page(&self) -> (usize, usize) {
         (self.pages.ivars().current.get() + 1, self.pages.ivars().sizes.len())

@@ -2252,3 +2252,26 @@ fn closing_the_tab_shown_shows_its_neighbour_and_closing_the_last_shows_nothing(
     assert_eq!(sidebar_tabs(&out), ("".to_owned(), "none".to_owned()));
     assert!(out.contains("note-title: \n") && out.contains("text: \n"), "{out}");
 }
+
+#[test]
+fn a_tab_brings_its_note_back_where_it_was() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    std::fs::write(vault.path().join("a.md"), long_sections()).unwrap();
+    // Scrolled to the end 300 ms in; then b's tab and a's again.
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "40"), ("KNOTES_PROBE_NOTE_SCROLL", "end-later"), ("KNOTES_PROBE_TAB_TRIP", "b.md")];
+    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    let before = out.lines().find_map(|l| l.strip_prefix("note-top-before-trip: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    assert_ne!(before, "# A", "scrolled: {out}");
+    assert_eq!(note_top(&out), before, "{out}");
+    assert!(out.contains("cursor: 40\n"), "{out}");
+}
+
+#[test]
+fn a_tab_brings_its_pdf_back_at_the_page_it_was_at() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    std::fs::write(vault.path().join("a.md"), "See [[long.pdf#page=15]] here\n\nend").unwrap();
+    std::fs::write(vault.path().join("long.pdf"), pdf_of(30)).unwrap();
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8"), ("KNOTES_PROBE_TAB_TRIP", "a.md")];
+    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    assert!(out.contains("pdf-view: long.pdf 15/30") && out.contains("pdf-top: 15\n"), "{out}");
+}
