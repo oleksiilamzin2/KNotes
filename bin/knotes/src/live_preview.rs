@@ -12,7 +12,7 @@ use std::sync::Arc;
 use dispatch2::DispatchQueue;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width};
+use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width, CodeRun, CodeToken, highlight_code, utf16_offsets};
 
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PDF_CAPTION, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
@@ -68,6 +68,11 @@ struct Look {
     bold: Retained<NSFont>,
     italic: Retained<NSFont>,
     mono: Retained<NSFont>,
+    /// Keywords in highlighted code, as Xcode sets them.
+    mono_bold: Retained<NSFont>,
+    /// Highlighted code's colours (ADR 0025), by `CodeToken`'s `code_look` index: Xcode's,
+    /// light and dark.
+    code_colors: Vec<Retained<NSColor>>,
     /// List numbers: digits of one width, so items' text lines up.
     digits: Retained<NSFont>,
     headings: Vec<Retained<NSFont>>,
@@ -186,6 +191,9 @@ pub struct Ivars {
     /// Each table's column widths, sideways scroll (its bits) and start, as last laid out (by its
     /// index), and whether a restyle changed any: then all of its rows are set again.
     table_layouts: RefCell<HashMap<usize, TableLayout>>,
+    /// Code blocks' tokens (UTF-16, from the code's start), by the hash of their language and
+    /// code: highlighted again only when they change.
+    code_tokens: RefCell<HashMap<u64, Rc<Vec<(Range<usize>, CodeToken)>>>>,
     tables_changed: Cell<bool>,
     /// The actions of the table menu being shown, by item tag, with the table's index.
     menu_actions: RefCell<Vec<(usize, TableAction)>>,
@@ -360,6 +368,8 @@ impl LivePreview {
             bold: NSFont::boldSystemFontOfSize(BODY_SIZE),
             italic: fonts.convertFont_toHaveTrait(&body, NSFontTraitMask::ItalicFontMask),
             mono: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.0),
+            mono_bold: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.4),
+            code_colors: CODE_COLORS.iter().map(|&(light, dark)| appearance_color(light, dark)).collect(),
             digits: NSFont::monospacedDigitSystemFontOfSize_weight(BODY_SIZE, 0.0),
             headings: HEADING_SIZES.iter().map(|&s| NSFont::boldSystemFontOfSize(s)).collect(),
             hidden: NSFont::systemFontOfSize(0.01),
@@ -410,6 +420,7 @@ impl LivePreview {
             table_scroll: RefCell::new(HashMap::new()),
             table_widths: RefCell::new(HashMap::new()),
             table_layouts: RefCell::new(HashMap::new()),
+            code_tokens: RefCell::new(HashMap::new()),
             apply_within: Cell::new(None),
             stale_table: Cell::new(None),
             catch_up: Cell::new(0),
@@ -708,6 +719,7 @@ impl LivePreview {
         self.forget_images();
         self.ivars().table_scroll.borrow_mut().clear();
         self.ivars().table_layouts.borrow_mut().clear();
+        self.ivars().code_tokens.borrow_mut().clear();
         *self.ivars().path.borrow_mut() = path.to_owned();
         // setString moves the selection, which reveals markup: the old note's ranges must not
         // be applied to the new text.
@@ -886,6 +898,42 @@ impl LivePreview {
                 canvas.paint(line.0..line.1, |p| p.para = folded);
             }
         }
+        // Its code coloured by kind when the fence names a language (ADR 0025).
+        if let Some(run) = styled.code_langs.iter().find(|c| c.block == *block) {
+            for (range, token) in self.code_tokens(storage, run).iter() {
+                let (font, name) = match token {
+                    CodeToken::Keyword => (&look.mono_bold, "code-keyword"),
+                    other => (&look.mono, code_token_name(*other)),
+                };
+                let id = palette.look(font, &look.code_colors[code_look(*token)], name);
+                canvas.paint(run.code.start + range.start..run.code.start + range.end, |p| p.look = id);
+            }
+        }
+    }
+
+    /// The tokens of a code block's code, from the cache or highlighted now.
+    fn code_tokens(&self, storage: &NSTextStorage, run: &CodeRun) -> Rc<Vec<(Range<usize>, CodeToken)>> {
+        let code = storage.string().substringWithRange(ns(&run.code)).to_string();
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (&run.language, &code).hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some(tokens) = self.ivars().code_tokens.borrow().get(&key) {
+            return Rc::clone(tokens);
+        }
+        let tokens = highlight_code(&run.language, &code).unwrap_or_default();
+        let bytes: Vec<usize> = tokens.iter().flat_map(|(r, _)| [r.start, r.end]).collect();
+        let units = utf16_offsets(&code, &bytes);
+        let tokens: Vec<(Range<usize>, CodeToken)> = tokens.iter().enumerate().map(|(i, (_, token))| (units[2 * i]..units[2 * i + 1], *token)).collect();
+        let tokens = Rc::new(tokens);
+        let mut cache = self.ivars().code_tokens.borrow_mut();
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.insert(key, Rc::clone(&tokens));
+        tokens
     }
 
     /// Hides the source in `range`, keeping `room` points for what the fragment draws there.
@@ -2451,6 +2499,68 @@ impl LivePreview {
         }
         parts.iter().map(|(name, piece)| format!("[{name}]{piece}")).collect::<Vec<_>>().join("|")
     }
+}
+
+/// Xcode's default colours (light, dark) for each kind of code, by `code_look`.
+const CODE_COLORS: [(u32, u32); 9] = [
+    (0x5D6C79, 0x6C7986), // comment
+    (0xC41A16, 0xFC6A5D), // string
+    (0x1C00CF, 0xD0BF69), // number
+    (0x9B2393, 0xFC5FA3), // keyword
+    (0x3900A0, 0xD0A8FF), // type
+    (0x6C36A9, 0xA167E6), // function
+    (0x326D74, 0x67B7A4), // constant
+    (0x643820, 0xFD8F3F), // preprocessor
+    (0x815F03, 0xBF8555), // attribute
+];
+
+/// A token kind's index in `CODE_COLORS`.
+fn code_look(token: CodeToken) -> usize {
+    match token {
+        CodeToken::Comment => 0,
+        CodeToken::String => 1,
+        CodeToken::Number => 2,
+        CodeToken::Keyword => 3,
+        CodeToken::Type => 4,
+        CodeToken::Function => 5,
+        CodeToken::Constant => 6,
+        CodeToken::Preprocessor => 7,
+        CodeToken::Attribute => 8,
+    }
+}
+
+/// A token kind's name in the style attribute (tests read it).
+fn code_token_name(token: CodeToken) -> &'static str {
+    match token {
+        CodeToken::Comment => "code-comment",
+        CodeToken::String => "code-string",
+        CodeToken::Number => "code-number",
+        CodeToken::Keyword => "code-keyword",
+        CodeToken::Type => "code-type",
+        CodeToken::Function => "code-function",
+        CodeToken::Constant => "code-constant",
+        CodeToken::Preprocessor => "code-preprocessor",
+        CodeToken::Attribute => "code-attribute",
+    }
+}
+
+/// A colour that is `light` (0xRRGGBB, sRGB) in the light appearance and `dark` in the dark
+/// one, following the view's appearance as system colours do.
+fn appearance_color(light: u32, dark: u32) -> Retained<NSColor> {
+    let srgb = |rgb: u32| NSColor::colorWithSRGBRed_green_blue_alpha(f64::from((rgb >> 16) & 0xFF) / 255.0, f64::from((rgb >> 8) & 0xFF) / 255.0, f64::from(rgb & 0xFF) / 255.0, 1.0);
+    let (light, dark) = (srgb(light), srgb(dark));
+    let provider = block2::RcBlock::new(move |appearance: std::ptr::NonNull<objc2_app_kit::NSAppearance>| -> std::ptr::NonNull<NSColor> {
+        // SAFETY: AppKit passes the appearance a colour is asked for.
+        let appearance = unsafe { appearance.as_ref() };
+        // SAFETY: AppKit's appearance name constants live for the whole process.
+        let (aqua, dark_aqua) = unsafe { (objc2_app_kit::NSAppearanceNameAqua, objc2_app_kit::NSAppearanceNameDarkAqua) };
+        let names = objc2_foundation::NSArray::from_slice(&[aqua, dark_aqua]);
+        let is_dark = appearance.bestMatchFromAppearancesWithNames(&names).is_some_and(|n| n.isEqualToString(dark_aqua));
+        // The colours live as long as the block, which the colour keeps.
+        std::ptr::NonNull::from(if is_dark { &*dark } else { &*light })
+    });
+    // SAFETY: the block returns one of two colours it keeps alive.
+    unsafe { NSColor::colorWithName_dynamicProvider(None, &provider) }
 }
 
 /// Width of the text column: the text container less its line padding.

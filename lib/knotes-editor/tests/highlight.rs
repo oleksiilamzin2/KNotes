@@ -318,3 +318,14 @@ fn pdf_embeds_alone_on_their_line_are_previews_of_their_page() {
     assert_eq!(pdfs, [("doc.pdf", true, None, None), ("Paper.PDF", true, Some(3), Some(300)), ("dir/scan.pdf", true, Some(2), None)]);
     assert!(!highlight("![[pic.png#page=2]]\n").images[0].pdf);
 }
+
+#[test]
+fn a_fenced_block_with_a_language_gives_it_and_its_code() {
+    let source = "Text\n```rust ignore\nfn a() {}\nlet b;\n```\n\n```\nplain\n```\n";
+    let h = knotes_editor::highlight(source);
+    assert_eq!(h.code_langs.len(), 1, "a block without a language has none");
+    let run = &h.code_langs[0];
+    assert_eq!(run.language, "rust ignore");
+    assert_eq!(&source[run.code.clone()], "fn a() {}\nlet b;\n");
+    assert_eq!(&source[run.block.clone()], "```rust ignore\nfn a() {}\nlet b;\n```");
+}

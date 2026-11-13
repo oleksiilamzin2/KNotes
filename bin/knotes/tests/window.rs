@@ -2391,3 +2391,14 @@ fn a_tab_s_cross_shows_only_with_the_pointer_over_its_row() {
     let out = probe_tabs(&vault, &home, &[two[0], two[1], ("KNOTES_PROBE_TAB_HOVER", "a.md:out")]);
     assert_eq!(tab_crosses(&out), "hidden hidden", "the pointer left");
 }
+
+#[test]
+fn code_in_a_block_with_a_language_is_coloured_by_kind() {
+    let note = "Intro\n\n```rust\nfn main() { let n = 42; } // done\n```\n\n```\nfn plain() {}\n```\n\nend";
+    let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let editor = out.lines().find_map(|l| l.strip_prefix("editor: ")).unwrap_or_else(|| panic!("{out}"));
+    for token in ["[code-keyword]fn", "[code-function]main", "[code-keyword]let", "[code-number]42", "[code-comment]// done"] {
+        assert!(editor.contains(token), "{token}: {editor}");
+    }
+    assert!(!editor.contains("[code-keyword]fn plain") && !editor.contains("[code-function]plain"), "no language, no colours: {editor}");
+}

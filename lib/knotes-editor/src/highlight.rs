@@ -53,6 +53,15 @@ pub struct FormulaRun {
     pub display: bool,
 }
 
+/// A fenced code block with a language: the block, the code between its fences (with the
+/// last code line's break) and the fence's info (```` ```rust ```` gives `rust`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeRun {
+    pub block: Range<usize>,
+    pub code: Range<usize>,
+    pub language: String,
+}
+
 /// A link and the source range it covers, brackets and destination included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkRun {
@@ -73,6 +82,8 @@ pub struct Highlight {
     pub formulas: Vec<FormulaRun>,
     /// Code blocks, fences included, sorted by start.
     pub code_blocks: Vec<Range<usize>>,
+    /// Fenced code blocks with a language (ADR 0025), sorted by start.
+    pub code_langs: Vec<CodeRun>,
     /// Obsidian callouts, sorted by start.
     pub callouts: Vec<CalloutRun>,
     /// Image embeds alone on their line (ADR 0020), sorted by start.
@@ -168,6 +179,7 @@ impl Highlight {
             .chain(self.links.iter().flat_map(|l| [l.range.start, l.range.end]))
             .chain(self.formulas.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.code_blocks.iter().flat_map(|c| [c.start, c.end]))
+            .chain(self.code_langs.iter().flat_map(|c| [c.block.start, c.block.end, c.code.start, c.code.end]))
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
             .chain(self.tables.iter().flat_map(|t| {
@@ -190,6 +202,11 @@ impl Highlight {
                 .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
                 .collect(),
             code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
+            code_langs: self
+                .code_langs
+                .iter()
+                .map(|c| CodeRun { block: map(c.block.start)..map(c.block.end), code: map(c.code.start)..map(c.code.end), language: c.language.clone() })
+                .collect(),
             callouts: self
                 .callouts
                 .iter()
@@ -324,8 +341,12 @@ pub fn highlight(source: &str) -> Highlight {
             Event::Start(Tag::CodeBlock(kind)) => {
                 let block = r.start..r.start + text.trim_end().len();
                 h.runs.push(Run { range: block.clone(), style: Style::CodeBlock });
-                if let CodeBlockKind::Fenced(_) = kind {
-                    fences(&mut h, source, block.clone());
+                if let CodeBlockKind::Fenced(info) = kind {
+                    let code = fences(&mut h, source, block.clone());
+                    let language = info.trim().to_owned();
+                    if !language.is_empty() {
+                        h.code_langs.push(CodeRun { block: block.clone(), code, language });
+                    }
                 }
                 h.code_blocks.push(block);
             }
@@ -390,18 +411,23 @@ fn image(source: &str, l: &LinkRun) -> Option<ImageRun> {
 
 /// Marks the opening fence line of a fenced code block at `block`, and its closing one: its
 /// last line, when that is a fence of the same character.
-fn fences(h: &mut Highlight, source: &str, block: Range<usize>) {
+/// Marks a fenced block's fence lines; gives the code between them.
+fn fences(h: &mut Highlight, source: &str, block: Range<usize>) -> Range<usize> {
     let text = &source[block.clone()];
     let open_end = text.find('\n').unwrap_or(text.len());
     h.runs.push(Run { range: block.start..block.start + open_end, style: Style::Fence });
     let fence = text.trim_start().as_bytes().first().copied().unwrap_or(b'`');
-    if let Some(n) = text.rfind('\n') {
+    let code_start = (block.start + open_end + 1).min(block.end);
+    let mut code_end = block.end;
+    if let Some(n) = text.rfind('\n').filter(|&n| n >= open_end) {
         let last = &text[n + 1..];
         let mark = last.trim_start();
         if mark.len() >= 3 && mark.bytes().all(|b| b == fence) {
             h.runs.push(Run { range: block.start + n + 1..block.end, style: Style::Fence });
+            code_end = block.start + n + 1;
         }
     }
+    code_start..code_end.max(code_start)
 }
 
 /// The callout a quote at `r` is, when its first line starts with `[!kind]` after its `>`.

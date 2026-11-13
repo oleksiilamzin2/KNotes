@@ -44,6 +44,8 @@ fn main() {
         // SAFETY: no other thread runs yet; RaTeX reads the variable on the first formula.
         unsafe { std::env::set_var("RATEX_UNICODE_FONT", FORMULA_TEXT_FONT) };
     }
+    // Code grammars read meanwhile (ADR 0025): the first code block need not wait.
+    std::thread::spawn(knotes_editor::load_code_grammars);
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
