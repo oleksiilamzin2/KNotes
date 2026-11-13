@@ -295,6 +295,16 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        let weak_title: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_note_title(move |name| {
+            if let Some(window) = weak_title.upgrade()
+                && let Some(open) = window.open_path()
+                && !window.rename_note(&open, &name)
+            {
+                // Declined or impossible: the toolbar shows the name the note kept.
+                window.update_navigation();
+            }
+        });
         this.toolbar_delegate.on_navigate(move |forward| {
             if let Some(window) = weak.upgrade() {
                 window.navigate(forward);
@@ -456,6 +466,7 @@ impl VaultWindow {
             probe::list_menu_requested(&self.list, &self.table);
             probe::drag_requested(&self.list, &self.table, &self.sidebar);
             probe::folder_rename_requested(&self.sidebar, &self.outline);
+            probe::toolbar_rename_requested(&self.window);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -1055,6 +1066,9 @@ impl VaultWindow {
     fn update_navigation(&self) {
         let state = self.state.borrow();
         self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
+        drop(state);
+        let name = self.open_path().map(|p| knotes_app::title_of(&p).to_owned()).unwrap_or_default();
+        self.toolbar_delegate.set_note_title(&name);
     }
 
     /// The open note and history availability, for probe mode.

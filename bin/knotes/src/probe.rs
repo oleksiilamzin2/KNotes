@@ -452,6 +452,27 @@ fn report_toolbar(window: &NSWindow) {
         })
         .collect();
     println!("toolbar: {}", names.join(", "));
+    if let Some(field) = note_title_field(window) {
+        println!("note-title: {}", field.stringValue());
+    }
+}
+
+/// The open note's name field in the toolbar.
+fn note_title_field(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit::NSTextField>> {
+    let id = NSString::from_str(crate::toolbar::NOTE_TITLE);
+    let item = window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?;
+    item.view()?.downcast::<objc2_app_kit::NSTextField>().ok()
+}
+
+/// `KNOTES_PROBE_ACTION=toolbar-rename=New name`: the name typed over the open note's in the
+/// toolbar and Return pressed.
+pub fn toolbar_rename_requested(window: &NSWindow) {
+    let Some(name) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("toolbar-rename=").map(str::to_owned)) else { return };
+    let Some(field) = note_title_field(window) else { return };
+    field.setStringValue(&NSString::from_str(&name));
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: the field's own target and action, sent as Return does.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(field.action().expect("field action"), field.target().as_deref(), Some(&field)) };
 }
 
 /// Physical footprint of this process (what Activity Monitor shows as Memory), in MB.

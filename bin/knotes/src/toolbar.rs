@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSImage, NSMenu, NSMenuToolbarItem, NSSearchField, NSSegmentedControl, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
@@ -13,6 +13,7 @@ use objc2_app_kit::{
     NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
 use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
+use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSFont, NSLineBreakMode, NSTextField, NSTextFieldDelegate, NSTextView};
 
 use knotes_app::{SearchMode, SidebarMode};
 
@@ -24,6 +25,8 @@ pub const SEARCH: &str = "knotes.search";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
 pub const NEW_NOTE: &str = "knotes.new-note";
 pub const HISTORY: &str = "knotes.history";
+/// The open note's name, edited in place to rename it (ADR 0019).
+pub const NOTE_TITLE: &str = "knotes.note-title";
 pub const CHAT: &str = "knotes.chat";
 
 type OnNavigate = Box<dyn Fn(bool)>;
@@ -43,6 +46,11 @@ pub struct Ivars {
     on_search: RefCell<Option<OnSearch>>,
     on_toggle_search: RefCell<Option<OnToggleSearch>>,
     on_search_mode: RefCell<Option<OnSearchMode>>,
+    /// Called with the name typed over the open note's.
+    on_note_title: RefCell<Option<OnSearch>>,
+    /// The open note's name field, once the toolbar has made it, and the name it shows.
+    note_title: RefCell<Option<Retained<NSTextField>>>,
+    note_title_state: RefCell<String>,
     /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
     sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     sidebar_mode_state: Cell<SidebarMode>,
@@ -61,6 +69,23 @@ define_class!(
     pub struct ToolbarDelegate;
 
     unsafe impl NSObjectProtocol for ToolbarDelegate {}
+
+    unsafe impl NSControlTextEditingDelegate for ToolbarDelegate {
+        /// Escape gives the name back.
+        #[unsafe(method(control:textView:doCommandBySelector:))]
+        fn do_command(&self, control: &NSControl, _view: &NSTextView, command: Sel) -> bool {
+            let cancel = command == sel!(cancelOperation:);
+            if cancel {
+                control.setStringValue(&NSString::from_str(&self.ivars().note_title_state.borrow()));
+                if let Some(window) = control.window() {
+                    window.makeFirstResponder(None);
+                }
+            }
+            cancel
+        }
+    }
+
+    unsafe impl NSTextFieldDelegate for ToolbarDelegate {}
 
     unsafe impl NSToolbarDelegate for ToolbarDelegate {
         #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
@@ -123,6 +148,21 @@ define_class!(
             }
         }
 
+        /// Return (or leaving the field) renames the open note when its name changed.
+        #[unsafe(method(noteTitleEdited:))]
+        fn note_title_edited(&self, sender: &NSTextField) {
+            let name = sender.stringValue().to_string();
+            let shown = self.ivars().note_title_state.borrow().clone();
+            if name.trim().is_empty() || name == shown {
+                sender.setStringValue(&NSString::from_str(&shown));
+            } else if let Some(callback) = self.ivars().on_note_title.borrow().as_ref() {
+                callback(name);
+            }
+            if let Some(window) = sender.window() {
+                window.makeFirstResponder(None);
+            }
+        }
+
         #[unsafe(method(navigate:))]
         fn navigate(&self, sender: &NSToolbarItemGroup) {
             let forward = sender.selectedIndex() == 1;
@@ -144,6 +184,9 @@ impl ToolbarDelegate {
             on_search: RefCell::new(None),
             on_toggle_search: RefCell::new(None),
             on_search_mode: RefCell::new(None),
+            on_note_title: RefCell::new(None),
+            note_title: RefCell::new(None),
+            note_title_state: RefCell::new(String::new()),
             sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
             sidebar_shown: Cell::new(true),
@@ -194,6 +237,22 @@ impl ToolbarDelegate {
     }
 
     /// Enables the back and forward segments.
+    pub fn on_note_title(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_note_title.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Shows the open note's name (empty and not editable without a note), unless it is being
+    /// edited.
+    pub fn set_note_title(&self, name: &str) {
+        *self.ivars().note_title_state.borrow_mut() = name.to_owned();
+        if let Some(field) = self.ivars().note_title.borrow().as_ref()
+            && field.currentEditor().is_none()
+        {
+            field.setStringValue(&NSString::from_str(name));
+            field.setEditable(!name.is_empty());
+        }
+    }
+
     pub fn set_history(&self, can_back: bool, can_forward: bool) {
         self.ivars().history_state.set((can_back, can_forward));
         if let Some(group) = self.ivars().history.borrow().as_ref() {
@@ -276,6 +335,35 @@ impl ToolbarDelegate {
                 *self.ivars().history.borrow_mut() = Some(group.clone());
                 Some(Retained::into_super(group))
             }
+            NOTE_TITLE => {
+                let field = NSTextField::new(mtm);
+                field.setBezeled(false);
+                field.setDrawsBackground(false);
+                field.setFont(Some(&NSFont::boldSystemFontOfSize(NSFont::systemFontSize())));
+                field.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+                if let Some(cell) = field.cell() {
+                    cell.setScrollable(true);
+                    cell.setUsesSingleLineMode(true);
+                    cell.setSendsActionOnEndEditing(true);
+                }
+                let name = self.ivars().note_title_state.borrow().clone();
+                field.setStringValue(&NSString::from_str(&name));
+                field.setEditable(!name.is_empty());
+                field.setToolTip(Some(&NSString::from_str(strings::NOTE_TITLE)));
+                field.widthAnchor().constraintGreaterThanOrEqualToConstant(60.0).setActive(true);
+                field.widthAnchor().constraintLessThanOrEqualToConstant(360.0).setActive(true);
+                // SAFETY: the delegate outlives the toolbar (it is its delegate) and takes the action.
+                unsafe {
+                    field.setTarget(Some(target));
+                    field.setAction(Some(sel!(noteTitleEdited:)));
+                    field.setDelegate(Some(ProtocolObject::from_ref(self)));
+                }
+                let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), id);
+                item.setView(Some(&field));
+                item.setLabel(&NSString::from_str(strings::NOTE_TITLE));
+                *self.ivars().note_title.borrow_mut() = Some(field);
+                Some(item)
+            }
             CHAT => {
                 let item = button(mtm, id, "brain", strings::CHAT);
                 // Up the responder chain to the split view controller.
@@ -310,6 +398,7 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         custom(LIST_SEPARATOR),
         custom(NEW_NOTE),
         custom(HISTORY),
+        custom(NOTE_TITLE),
         system[2].copy(),
         system[3].copy(),
         custom(CHAT),

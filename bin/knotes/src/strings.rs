@@ -83,3 +83,5 @@ pub const ROOT_FOLDER: &str = "/";
 pub fn move_question(note: &str) -> String {
     format!("Перемістити «{note}» в теку:")
 }
+/// The open note's name in the toolbar.
+pub const NOTE_TITLE: &str = "Назва нотатки";

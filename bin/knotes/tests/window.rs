@@ -110,7 +110,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), flexible-space, inspector-separator, chat"
+        "toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, chat"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -1054,4 +1054,14 @@ fn a_title_with_tags_and_links_names_the_file_by_its_words() {
     assert!(vault.path().join("Meeting about proj.md").exists(), "{out}");
     let runs = editor_runs(&out);
     assert!(runs.starts_with("[title]Meeting #work about |[hidden][[Project||[title]proj|[hidden]]]|"), "no tag or link look in the title: {runs}");
+}
+
+#[test]
+fn the_toolbar_shows_the_open_notes_name_and_renames_it() {
+    let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md")]);
+    assert!(out.contains("note-title: Old"), "{out}");
+    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(2), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
+    let (vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "toolbar-rename=From toolbar")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("From toolbar.md")).ok().as_deref(), Some("# From toolbar\n\ntext"), "{out}");
+    assert!(out.contains("note-title: From toolbar"), "{out}");
 }
