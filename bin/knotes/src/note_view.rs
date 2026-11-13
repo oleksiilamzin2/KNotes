@@ -1,6 +1,7 @@
 //! The note column's text view (live preview editing, ADR 0005, 0011): a TextKit 2
 //! `NSTextView` that lets the live preview take clicks on links first (ADR 0013), and shows a
-//! hand over what a click acts on.
+//! hand over what a click acts on, and that gives pasted or dropped images to the window
+//! (ADR 0020).
 
 use std::cell::RefCell;
 
@@ -10,7 +11,8 @@ use crate::quiet_scroll_view::QuietScrollView;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSCursor, NSEvent, NSEventModifierFlags, NSFont, NSResponder, NSScrollView, NSText, NSTextInputClient, NSTextView,
+    NSAutoresizingMaskOptions, NSCursor, NSDraggingInfo, NSEvent, NSEventModifierFlags, NSFont, NSPasteboard, NSResponder, NSScrollView, NSText,
+    NSTextInputClient, NSTextView,
     NSControl, NSMenuItem, NSTextFinderAction, NSTrackingArea, NSTrackingAreaOptions, NSValidatedUserInterfaceItem, NSView,
 };
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize};
@@ -22,6 +24,9 @@ type OnClick = Box<dyn Fn(&NSTextView, usize, bool) -> bool>;
 type OnHover = Box<dyn Fn(usize) -> bool>;
 /// Gets the find action Edit → Find… and its neighbours ask for.
 type OnFind = Box<dyn Fn(isize)>;
+/// Gets the pasteboard of a paste, or of a drop and the character index it falls at; true
+/// when it took what is there (the text view then pastes nothing).
+type OnPaste = Box<dyn Fn(&NSPasteboard, Option<usize>) -> bool>;
 
 #[derive(Default)]
 pub struct Ivars {
@@ -34,6 +39,7 @@ pub struct Ivars {
     /// Called with the find action (`NSTextFinderAction`) Edit → Find… and its neighbours ask
     /// for: the window's own find bar takes them.
     on_find: RefCell<Option<OnFind>>,
+    on_paste: RefCell<Option<OnPaste>>,
 }
 
 define_class!(
@@ -108,6 +114,22 @@ define_class!(
             }
         }
 
+        #[unsafe(method(paste:))]
+        fn paste(&self, sender: Option<&AnyObject>) {
+            if !self.offer_paste(&NSPasteboard::generalPasteboard(), None) {
+                // SAFETY: forwarding the same action to the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), paste: sender] };
+            }
+        }
+
+        #[unsafe(method(performDragOperation:))]
+        fn perform_drag_operation(&self, info: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+            let point = self.convertPoint_fromView(info.draggingLocation(), None);
+            let index = self.characterIndexForInsertionAtPoint(point);
+            // SAFETY: forwarding the same drag to the superclass implementation.
+            self.offer_paste(&info.draggingPasteboard(), Some(index)) || unsafe { msg_send![super(self), performDragOperation: info] }
+        }
+
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             if !self.offer_click(event) {
@@ -133,6 +155,15 @@ pub fn finder_tag(sender: Option<&AnyObject>) -> isize {
 impl NoteTextView {
     pub fn on_find(&self, callback: impl Fn(isize) + 'static) {
         *self.ivars().on_find.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_paste(&self, callback: impl Fn(&NSPasteboard, Option<usize>) -> bool + 'static) {
+        *self.ivars().on_paste.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Offers a paste or a drop (at character `at`) to the window first.
+    pub fn offer_paste(&self, pasteboard: &NSPasteboard, at: Option<usize>) -> bool {
+        self.ivars().on_paste.borrow().as_ref().is_some_and(|callback| callback(pasteboard, at))
     }
 
     pub fn on_click(&self, callback: impl Fn(&NSTextView, usize, bool) -> bool + 'static) {

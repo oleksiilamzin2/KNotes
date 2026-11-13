@@ -48,6 +48,37 @@ pub fn type_requested(view: &objc2_app_kit::NSTextView) {
     }
 }
 
+/// `KNOTES_PROBE_PASTE=file.png`: that image's data pasted into the note (with
+/// `KNOTES_PROBE_PASTE_TEXT=text` beside it); `KNOTES_PROBE_DROP=a.png,b.txt@index`: files
+/// dropped at character `index`. On a pasteboard of its own, never the user's.
+pub fn paste_requested(view: &crate::note_view::NoteTextView) {
+    use objc2::runtime::ProtocolObject;
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardWriting};
+    let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+    pasteboard.clearContents();
+    let at = if let Ok(file) = std::env::var("KNOTES_PROBE_PASTE") {
+        let bytes = std::fs::read(&file).expect("the probe's image");
+        // SAFETY: AppKit's pasteboard type constants live for the whole process.
+        unsafe { pasteboard.setData_forType(Some(&objc2_foundation::NSData::with_bytes(&bytes)), NSPasteboardTypePNG) };
+        if let Ok(text) = std::env::var("KNOTES_PROBE_PASTE_TEXT") {
+            // SAFETY: as above.
+            pasteboard.setString_forType(&NSString::from_str(&text), unsafe { NSPasteboardTypeString });
+        }
+        None
+    } else if let Ok(drop) = std::env::var("KNOTES_PROBE_DROP") {
+        let (files, at) = drop.rsplit_once('@').expect("files@index");
+        let urls: Vec<_> = files
+            .split(',')
+            .map(|f| ProtocolObject::<dyn NSPasteboardWriting>::from_retained(objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(f))))
+            .collect();
+        pasteboard.writeObjects(&objc2_foundation::NSArray::from_retained_slice(&urls));
+        at.parse().ok()
+    } else {
+        return;
+    };
+    println!("pasted-images: {}", if view.offer_paste(&pasteboard, at) { "yes" } else { "no" });
+}
+
 /// `KNOTES_PROBE_NOTE_SCROLL=end`: scrolls the note to its end, as the scroll wheel does.
 pub fn note_scroll_requested(view: &objc2_app_kit::NSTextView) {
     if std::env::var("KNOTES_PROBE_NOTE_SCROLL").as_deref() != Ok("end") {

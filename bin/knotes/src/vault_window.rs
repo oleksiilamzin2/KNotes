@@ -2,19 +2,19 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{Moves, Relinks, plan_relinks, 
+use knotes_app::{Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, SearchMode, Sidebar, SidebarItem, SidebarMode, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
-use knotes_core::{CatalogEntry, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
@@ -26,8 +26,8 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
-use objc2_foundation::{NSDate, NSDateFormatter, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
+use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextInputClient, NSViewController, NSWindow, NSWorkspace};
+use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSRange, NSString, NSURL};
 
 use crate::chat_view::{self, ChatView};
 use crate::collapse_observer::CollapseObserver;
@@ -284,6 +284,8 @@ impl VaultWindow {
             },
         );
         let weak: Weak<Self> = Rc::downgrade(&this);
+        let pastes: Weak<Self> = Rc::downgrade(&this);
+        this.note_text.on_paste(move |pasteboard, at| pastes.upgrade().is_some_and(|window| window.paste_images(pasteboard, at)));
         this.note_text.on_find(move |action| {
             if let Some(window) = weak.upgrade() {
                 window.find_action(action);
@@ -424,6 +426,51 @@ impl VaultWindow {
         self.outline.reloadData();
     }
 
+    /// Images pasted (Cmd+V) or dropped (at character `at`) into the open note: copied into
+    /// the attachments folder (one already in the vault stays where it is) and embedded where
+    /// the cursor is or the drop falls, each on a line of its own (ADR 0020). False when the
+    /// pasteboard brings no image: the text view pastes as usual.
+    pub fn paste_images(&self, pasteboard: &NSPasteboard, at: Option<usize>) -> bool {
+        let Some(vault) = self.state.borrow().vault.clone() else { return false };
+        let found = pasteboard_images(pasteboard, &vault);
+        if found.is_empty() {
+            return false;
+        }
+        let store = FsVault::new(&vault);
+        let paths: Vec<String> = found
+            .into_iter()
+            .filter_map(|image| match image {
+                PastedImage::InVault(path) => Some(path),
+                PastedImage::New { name, bytes } => store.add_attachment(&name, &bytes).inspect_err(|e| eprintln!("knotes: cannot add {name}: {e}")).ok(),
+            })
+            .collect();
+        if paths.is_empty() {
+            return true;
+        }
+        let view: &objc2_app_kit::NSTextView = &self.note_text;
+        let text = view.string();
+        if let Some(at) = at {
+            view.setSelectedRange(NSRange::new(at.min(text.length()), 0));
+        }
+        let selection = view.selectedRange();
+        let end = selection.location + selection.length;
+        let line_start = text.lineRangeForRange(NSRange::new(selection.location, 0)).location;
+        let after_line = text.lineRangeForRange(NSRange::new(end, 0));
+        let line_end = (after_line.location + after_line.length).max(end);
+        let before = text.substringWithRange(NSRange::new(line_start, selection.location - line_start)).to_string();
+        let after = text.substringWithRange(NSRange::new(end, line_end - end)).to_string();
+        let catalog = Arc::clone(&self.state.borrow().catalog);
+        let bare = |path: &str| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            !catalog.iter().any(|e| e.path != path && e.path.rsplit('/').next().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        };
+        let embeds = embed_images(&paths, &before, after.trim_end_matches(['\n', '\r']), bare);
+        let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&embeds), not_found) };
+        true
+    }
+
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
         self.live_preview.set_vault(vault.clone());
         let mut state = self.state.borrow_mut();
@@ -559,6 +606,7 @@ impl VaultWindow {
                 let at = if cursor == "end" { end } else { cursor.parse().unwrap_or(0).min(end) };
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(at, 0));
             }
+            probe::paste_requested(&self.note_text);
             probe::menu_requested();
             if std::env::var("KNOTES_PROBE_SHORTCUT_FOCUS").as_deref() == Ok("list") {
                 probe::shortcut_requested(&self.window, &self.table);
@@ -1544,6 +1592,61 @@ fn write(vault: &FsVault, editing: &mut Editing, text: &str) {
         Ok(()) => editing.document.saved(text),
         Err(e) => eprintln!("knotes: cannot save {}: {e}", editing.path),
     }
+}
+
+/// An image found on a pasteboard: a file already in the vault (its vault path), or one to
+/// add to the attachments folder.
+enum PastedImage {
+    InVault(String),
+    New { name: String, bytes: Vec<u8> },
+}
+
+/// The images a paste or a drop brings: image files (others are left), or else an image's
+/// data alone; none when text comes with it (a cell copied from a table carries its picture
+/// too, and the text is what is meant).
+fn pasteboard_images(pasteboard: &NSPasteboard, vault: &Path) -> Vec<PastedImage> {
+    // SAFETY: AppKit's pasteboard type constants live for the whole process.
+    let (file_url, string, png, tiff) = unsafe { (NSPasteboardTypeFileURL, NSPasteboardTypeString, NSPasteboardTypePNG, NSPasteboardTypeTIFF) };
+    let files: Vec<PathBuf> = pasteboard
+        .pasteboardItems()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let url = item.stringForType(file_url)?;
+                    NSURL::URLWithString(&url)?.path().map(|p| PathBuf::from(p.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !files.is_empty() {
+        let vaults = [vault.to_path_buf(), vault.canonicalize().unwrap_or_default()];
+        return files
+            .into_iter()
+            .filter(|f| f.to_str().is_some_and(|f| FileKind::from_path(f) == FileKind::Image))
+            .filter_map(|file| {
+                let inside = vaults.iter().find_map(|v| file.strip_prefix(v).ok().and_then(Path::to_str).map(str::to_owned));
+                match inside {
+                    Some(path) => Some(PastedImage::InVault(path)),
+                    None => Some(PastedImage::New { name: file.file_name()?.to_str()?.to_owned(), bytes: std::fs::read(&file).ok()? }),
+                }
+            })
+            .collect();
+    }
+    if pasteboard.stringForType(string).is_some() {
+        return Vec::new();
+    }
+    let bytes = pasteboard.dataForType(png).map(|d| d.to_vec()).or_else(|| {
+        let data = pasteboard.dataForType(tiff)?;
+        let rep = NSBitmapImageRep::imageRepWithData(&data)?;
+        // SAFETY: an empty properties dictionary is valid for PNG.
+        unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }.map(|d| d.to_vec())
+    });
+    let Some(bytes) = bytes else { return Vec::new() };
+    let formatter = NSDateFormatter::new();
+    formatter.setDateFormat(Some(&NSString::from_str("yyyyMMddHHmmss")));
+    let stamp = formatter.stringFromDate(&NSDate::now()).to_string();
+    vec![PastedImage::New { name: pasted_image_name(&stamp), bytes }]
 }
 
 /// Writes the disk version of `path` as "Name (конфлікт date time).md" next to it.

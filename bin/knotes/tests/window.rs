@@ -1260,3 +1260,63 @@ fn an_image_as_wide_as_the_column_takes_one_line() {
     let step = shown[1].1 - shown[0].1;
     assert!((step - (shown[0].3 + 12.0)).abs() < 1.5, "one line each, as tall as the image and its gaps: {step} {out}");
 }
+
+fn attachments(vault: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(vault.join(".knotes/attachments"))
+        .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_pasted_image_goes_to_the_attachments_and_shows_in_the_note() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pic-120x80.png");
+    let (vault, out) = probe_images(
+        &[("a.md", "Text")],
+        &[],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_PASTE", fixture), ("KNOTES_PROBE_DELAY_MS", "2500")],
+    );
+    let names = attachments(vault.path());
+    assert_eq!(names.len(), 1, "{out}");
+    assert!(names[0].starts_with("Pasted image 2") && names[0].ends_with(".png"), "{names:?}");
+    assert_eq!(std::fs::read(vault.path().join(".knotes/attachments").join(&names[0])).unwrap(), PIC);
+    assert!(out.contains(&format!("note: a.md | Text⏎![[{}]]", names[0])), "{out}");
+    assert_eq!(images(&out).len(), 1, "the image shows once indexed: {out}");
+}
+
+#[test]
+fn dropped_image_files_are_copied_and_embedded_where_they_fall() {
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("photo.png"), PIC).unwrap();
+    std::fs::write(source.path().join("notes.txt"), "x").unwrap();
+    let drop = format!("{},{}@0", source.path().join("photo.png").display(), source.path().join("notes.txt").display());
+    let (vault, out) = probe_images(&[("a.md", "Text")], &[], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_DROP", &drop)]);
+    assert_eq!(attachments(vault.path()), ["photo.png"], "{out}");
+    assert!(out.contains("note: a.md | ![[photo.png]]⏎Text"), "{out}");
+}
+
+#[test]
+fn an_image_dropped_from_the_vault_is_embedded_where_it_is() {
+    let vault_files = tempfile::tempdir().unwrap();
+    let vault_root = vault_files.path().canonicalize().unwrap();
+    std::fs::write(vault_root.join("a.md"), "Text").unwrap();
+    std::fs::create_dir(vault_root.join("att")).unwrap();
+    std::fs::write(vault_root.join("att/pic.png"), PIC).unwrap();
+    let drop = format!("{}@4", vault_root.join("att/pic.png").display());
+    let out = probe_env(&[&vault_root], None, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_DROP", &drop)]);
+    assert!(attachments(&vault_root).is_empty(), "nothing copied: {out}");
+    assert!(out.contains("note: a.md | Text⏎![[pic.png]]"), "{out}");
+}
+
+#[test]
+fn an_image_pasted_with_text_pastes_the_text() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pic-120x80.png");
+    let (vault, out) = probe_images(
+        &[("a.md", "Text")],
+        &[],
+        &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_PASTE", fixture), ("KNOTES_PROBE_PASTE_TEXT", "cell")],
+    );
+    assert!(attachments(vault.path()).is_empty(), "{out}");
+    assert!(out.contains("pasted-images: no"), "{out}");
+}
