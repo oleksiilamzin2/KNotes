@@ -57,3 +57,56 @@ Checked on 2026-11-14:
 - The Gemma Terms of Use notice has to ship with the app.
 - Core ML (the neural engine, cheaper on battery) can take llama.cpp's place behind the same
   trait if first indexing proves too heavy.
+
+## Built (2026-11-14)
+
+- `scripts/setup.sh` installs cmake through Homebrew and fetches the model into `models/`,
+  checking its SHA-256; `scripts/bundle.sh` refuses to build without it, puts `knotes-embed`
+  beside `knotes` and `knotes-mcp` and the model in Resources, and signs all three (the bundle
+  is 391 MB in debug).
+- `knotes-embed` (library): `Passage` (a query or a block, put in the model card's prompts),
+  `Vector` (the first 256 of 768, normalized, ×127 in `i8`), the `Embedder` trait, the helper's
+  line protocol and `ProcessEmbedder`, which starts the helper at the first request and again
+  when it has gone (once idle, or dead), with its stderr sent nowhere: llama.cpp's Metal logs
+  cannot be silenced, and errors come back in the protocol.
+- `knotes-llama`: `LlamaEmbedder` over `llama-cpp-2` 0.1.161 with Metal, every layer on the GPU,
+  up to 32 passages and 2048 tokens a decode. A context is made for each request: a context
+  kept for the process (the model leaked to give it a `'static` borrow) made Metal abort at exit,
+  finding buffers still held. `llama-cpp-2` asserts the model file is there in debug builds, so
+  the embedder checks first. `knotes-embed-helper` is the helper binary, `knotes-embed`: a JSON
+  line in, a JSON line out, gone after five idle minutes.
+- Measured on the development machine, an Apple M5 Pro (not the M1 the targets are set for,
+  whose GPU is several times smaller; to be measured there): loading the model 3.1 s the first
+  time (2.7 s of it compiling Metal's shaders), 0.2 s once macOS keeps them; about 420 blocks a
+  second (2.4 ms a block); a query 10 ms.
+- `NoteBlocks` (`knotes-core`, from the index's `blocks` table) gives a document's search blocks
+  as full-text search holds them, so vectors and full-text finds name the same blocks.
+  `MeaningSearch` is the search the tools take.
+- `knotes-vectors`: what a block is embedded as (the document's file name as title; its section's
+  heading before its text unless the text starts with it; the heading alone, not its whole path,
+  for now), a `Snapshot` searched by brute force, `VectorStore` and `update`. The vectors live in
+  `vectors.sqlite` beside the index rather than in it: written in the background, they never
+  wait on the indexer's lock. A row a document: its date when embedded, its blocks' places (JSON)
+  and their vectors; a store made another way (`EMBEDDING`) is emptied. `update` drops documents
+  gone and embeds those new or changed since, the newest first, 32 passages a request, stopping
+  between batches when told. `MeaningIndex` searches the store, read again when SQLite's
+  `data_version` says another connection wrote, looked at once every ten seconds at most.
+- The tools merge finds by meaning into search's by reciprocal rank fusion (k = 60), the first
+  find by words kept first; a block found both ways keeps how words found it, one found only by
+  meaning is `match: meaning`; documents kept from the AI are left out of both. A failing search
+  by meaning leaves search by words as it was.
+- The app: one `ProcessEmbedder` for the chat's tools and a thread that keeps the vault's
+  vectors up to its index, at once and every 15 s, pausing 20 ms after each batch for the
+  window's sake; another vault stops it. The probe never starts the model. The MCP server
+  searches the vectors Knotes keeps with a helper of its own; it does not embed.
+- The benchmark runs twice, by words alone and with meaning merged: by words 36 → 37 of 37
+  (MRR 0.81 → 0.87), by meaning 1 → 6 of 9 (MRR 0.06 → 0.50), all 37 → 43 of 46. Still missed:
+  "термін дії" and two wordings of October's electricity (the readings are dated `2026-10-01`).
+  Its floors now hold the run with meaning too.
+- In the app on the household vault: its 58 documents (100 blocks) embedded within seconds of
+  opening; through the MCP server "скільки світла спожили в жовтні" finds the meter readings,
+  "чим годувати кота" the cat's note, "vehicle oil change" the car's service log.
+
+Still to do: a set of 40–60 queries by meaning before calling the quality settled; the M1's
+numbers, and whether hours of first indexing on a large vault keep the window smooth; heading
+paths; the Gemma Terms of Use notice in the app.
