@@ -31,5 +31,12 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app" 2>/dev/null || true
+# A stable signature when the "Knotes Dev" certificate is in the keychain: macOS then knows each
+# build as the same app (the Keychain keeps its "Always Allow"); else ad hoc, new every build.
+identity=-
+if security find-identity -p codesigning 2>/dev/null | grep -q '"Knotes Dev"'; then
+  identity="Knotes Dev"
+fi
+codesign --force --sign "$identity" "$app/Contents/MacOS/knotes-mcp" 2>/dev/null || true
+codesign --force --sign "$identity" "$app" 2>/dev/null || true
 echo "$app"
