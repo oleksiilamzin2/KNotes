@@ -40,7 +40,7 @@ pub struct Turn {
 
 enum Job {
     Vault(PathBuf, PathBuf),
-    Turn(Turn),
+    Turn(Box<Turn>),
 }
 
 pub struct ChatWorker {
@@ -90,7 +90,7 @@ impl ChatWorker {
     }
 
     pub fn send(&self, turn: Turn) {
-        let _ = self.jobs.send(Job::Turn(turn));
+        let _ = self.jobs.send(Job::Turn(Box::new(turn)));
     }
 }
 
