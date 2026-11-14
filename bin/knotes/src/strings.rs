@@ -192,6 +192,8 @@ pub fn chat_effort(effort: &str) -> String {
         "medium" => "Звичайні роздуми",
         "high" => "Довгі роздуми",
         "xhigh" => "Найдовші роздуми",
+        "max" => "Максимальні роздуми",
+        "ultra" => "Ультра",
         other => other,
     }
     .to_string()
