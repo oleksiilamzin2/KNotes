@@ -4,7 +4,7 @@ use knotes_index::LinkTargets;
 use knotes_md::MarkdownParser;
 
 fn targets() -> LinkTargets {
-    LinkTargets::new(["Plan.md", "Docs/Report.md", "Other.md", "doc.pdf"].into_iter())
+    LinkTargets::new(["Plan.md", "Docs/Report.md", "Other.md", "doc.pdf"])
 }
 
 /// Each mention's line with the mention in brackets.
