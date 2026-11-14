@@ -12,4 +12,4 @@ pub use dates::{day_start, utc_minute};
 pub use specs::{ToolSpec, specs};
 pub use tool_error::ToolError;
 pub use tool_index::ToolIndex;
-pub use vault_tools::VaultTools;
+pub use vault_tools::{NO_AI_TAG, VaultTools};

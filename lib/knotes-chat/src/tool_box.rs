@@ -1,4 +1,4 @@
-use knotes_core::{DocumentPages, VaultReader};
+use knotes_core::{DocumentPages, FolderRulesStore, VaultReader};
 use knotes_tools::{ToolError, ToolIndex, ToolSpec, VaultTools};
 use serde_json::Value;
 
@@ -10,9 +10,13 @@ pub trait ToolBox {
     fn overview(&self) -> String {
         String::new()
     }
+    /// Whether the user keeps `path` from the AI (then it is not even named to the model).
+    fn excluded(&self, _path: &str) -> bool {
+        false
+    }
 }
 
-impl<I: ToolIndex, F: VaultReader, D: DocumentPages> ToolBox for VaultTools<I, F, D> {
+impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> ToolBox for VaultTools<I, F, D> {
     fn specs(&self) -> Vec<ToolSpec> {
         VaultTools::<I, F, D>::specs()
     }
@@ -23,5 +27,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> ToolBox for VaultTools<I, F
 
     fn overview(&self) -> String {
         VaultTools::overview(self)
+    }
+
+    fn excluded(&self, path: &str) -> bool {
+        VaultTools::excluded(self, path)
     }
 }

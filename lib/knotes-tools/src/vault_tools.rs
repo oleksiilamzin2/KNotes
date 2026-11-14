@@ -1,8 +1,9 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use knotes_core::{BlockHit, ContentQuery, DocumentPages, NoteParser, Span, TitleSearch, VaultReader, Within};
+use knotes_core::{BlockHit, ContentQuery, DocumentPages, FolderRulesStore, NoteParser, Span, TitleSearch, VaultReader, Within};
 use knotes_md::MarkdownParser;
 use knotes_search::TitleIndex;
 use serde_json::{Value, json};
@@ -14,6 +15,41 @@ use crate::{ToolError, ToolIndex, ToolSpec, day_start, specs, utc_minute};
 const FRAGMENT: usize = 400;
 /// A read stops past this many characters, at a block's or page's end.
 const READ_BUDGET: usize = 24_000;
+/// The tag that keeps a note from the AI (ADR 0004).
+pub const NO_AI_TAG: &str = "no-ai";
+
+/// What the user keeps from the AI: the notes tagged `#no-ai`, and the folders whose
+/// `.knotes.json` sets `ai` (paths composed).
+#[derive(Default)]
+struct Kept {
+    notes: HashSet<String>,
+    folders: HashMap<String, bool>,
+}
+
+impl Kept {
+    /// Whether `path` is kept: tagged, or under a folder whose nearest setting is `"ai": false`.
+    fn holds(&self, path: &str) -> bool {
+        let path = composed(path);
+        if self.notes.contains(&path) {
+            return true;
+        }
+        let mut folder = path.as_str();
+        loop {
+            folder = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
+            if let Some(&shared) = self.folders.get(folder) {
+                return !shared;
+            }
+            if folder.is_empty() {
+                return false;
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.notes.is_empty() && self.folders.values().all(|&shared| shared)
+    }
+}
+
 /// How many linked documents `related` gives each way.
 const RELATED: usize = 30;
 /// How deep search and title search page (offset and page together); past it, a narrower
@@ -31,12 +67,14 @@ pub struct VaultTools<I, F, D> {
     titles: RefCell<(Instant, TitleIndex)>,
     /// The vault in a few words, and when it was described.
     overview: RefCell<Option<(Instant, String)>>,
+    /// What the user keeps from the AI, and when it was looked up.
+    kept: RefCell<Option<(Instant, Rc<Kept>)>>,
 }
 
-impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
+impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultTools<I, F, D> {
     pub fn new(index: I, files: F, documents: D) -> Self {
         let titles = RefCell::new((Instant::now(), titles_of(&index)));
-        Self { index, files, documents, titles, overview: RefCell::new(None) }
+        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None) }
     }
 
     /// The tools' descriptions.
@@ -52,9 +90,66 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         {
             return text.clone();
         }
-        let text = describe(&self.index);
+        let kept = self.kept();
+        let text = describe(&self.index, &kept, &self.tag_counts(&kept));
         *self.overview.borrow_mut() = Some((Instant::now(), text.clone()));
         text
+    }
+
+    /// Whether the user keeps `path` from the AI: a note tagged `#no-ai`, or in a folder whose
+    /// `.knotes.json` says `"ai": false` (with its subfolders, unless one says `"ai": true`).
+    pub fn excluded(&self, path: &str) -> bool {
+        self.kept().holds(path)
+    }
+
+    /// What the user keeps from the AI, looked up again when older than `TITLES_LAST`.
+    fn kept(&self) -> Rc<Kept> {
+        if let Some((when, kept)) = self.kept.borrow().as_ref()
+            && when.elapsed() <= TITLES_LAST
+        {
+            return Rc::clone(kept);
+        }
+        let kept = Rc::new(self.look_up_kept());
+        *self.kept.borrow_mut() = Some((Instant::now(), Rc::clone(&kept)));
+        kept
+    }
+
+    fn look_up_kept(&self) -> Kept {
+        let notes = self.index.notes_with_tag(NO_AI_TAG).unwrap_or_default().iter().map(|p| composed(p)).collect();
+        let mut folders: BTreeSet<String> = BTreeSet::from([String::new()]);
+        for entry in self.index.catalog().unwrap_or_default() {
+            let mut path = entry.path.as_str();
+            while let Some((folder, _)) = path.rsplit_once('/') {
+                folders.insert(folder.to_string());
+                path = folder;
+            }
+        }
+        let list: Vec<&str> = folders.iter().map(String::as_str).collect();
+        let rules = self.files.read_rules(&list).unwrap_or_default();
+        let folders = rules
+            .into_iter()
+            .filter_map(|(folder, text)| Some((composed(&folder), serde_json::from_str::<Value>(&text).ok()?.get("ai")?.as_bool()?)))
+            .collect();
+        Kept { notes, folders }
+    }
+
+    /// The tags with how many shared notes have each (the marking tag left out).
+    fn tag_counts(&self, kept: &Kept) -> Vec<(String, usize)> {
+        let counts = self.index.tag_counts().unwrap_or_default().into_iter().filter(|(tag, _)| tag != NO_AI_TAG);
+        if kept.is_empty() {
+            return counts.collect();
+        }
+        counts
+            .filter_map(|(tag, _)| {
+                let shared = self.index.notes_with_tag(&tag).unwrap_or_default().iter().filter(|p| !kept.holds(p)).count();
+                (shared > 0).then_some((tag, shared))
+            })
+            .collect()
+    }
+
+    /// `Err(Excluded)` for a document the user keeps from the AI.
+    fn shared(&self, path: &str) -> Result<(), ToolError> {
+        if self.excluded(path) { Err(ToolError::Excluded(path.to_string())) } else { Ok(()) }
     }
 
     /// Runs tool `name` with `args` (a JSON object).
@@ -123,6 +218,8 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
                 hits.add("partial", find(&rest, Within::Note, None)?, Some(format!("missing:{word}")), false);
             }
         }
+        let kept = self.kept();
+        hits.0.retain(|(_, hit, via)| !kept.holds(&hit.path) && via.as_deref().is_none_or(|v| v.starts_with("missing:") || !kept.holds(v)));
         let (hits, next) = page(hits.0, offset, limit);
         let results: Vec<Value> = hits
             .into_iter()
@@ -142,10 +239,12 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     /// The documents with the words of their titles and aliases (composed, lower case), for
     /// the words of a query to name them.
     fn named(&self) -> Vec<(String, Vec<String>)> {
+        let kept = self.kept();
         self.index
             .catalog()
             .unwrap_or_default()
             .into_iter()
+            .filter(|entry| !kept.holds(&entry.path))
             .map(|entry| {
                 let mut names: Vec<String> = Vec::new();
                 for name in std::iter::once(title_of(&entry.path)).chain(entry.aliases) {
@@ -162,13 +261,16 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         if self.titles.borrow().0.elapsed() > TITLES_LAST {
             *self.titles.borrow_mut() = (Instant::now(), titles_of(&self.index));
         }
-        let (hits, next) = page(self.titles.borrow().1.search_titles(&query, offset + limit + 1), offset, limit);
+        let kept = self.kept();
+        let found: Vec<_> = self.titles.borrow().1.search_titles(&query, DEEPEST + 1).into_iter().filter(|h| !kept.holds(&h.path)).take(offset + limit + 1).collect();
+        let (hits, next) = page(found, offset, limit);
         let results: Vec<Value> = hits.into_iter().map(|h| json!({"path": h.path, "title": title_of(&h.path), "kind": kind_of(&h.path)})).collect();
         Ok(json!({"results": results, "next_offset": next}))
     }
 
     fn read_note(&self, args: &Value) -> Result<Value, ToolError> {
         let path = text_arg(args, "path")?;
+        self.shared(&path)?;
         if kind_of(&path) == "pdf" {
             return Err(ToolError::BadArguments(format!("{path} is a PDF: read it with read_pdf")));
         }
@@ -194,6 +296,7 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
 
     fn read_pdf(&self, args: &Value) -> Result<Value, ToolError> {
         let path = text_arg(args, "path")?;
+        self.shared(&path)?;
         let count = self.documents.page_count(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
         let from = count_arg(args, "from_page", 1, usize::MAX).max(1);
         let most = count_arg(args, "pages", 5, 10).max(1);
@@ -214,6 +317,7 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
 
     fn outline(&self, args: &Value) -> Result<Value, ToolError> {
         let path = text_arg(args, "path")?;
+        self.shared(&path)?;
         let headings: Vec<Value> = if kind_of(&path) == "pdf" {
             self.documents.page_count(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
             self.documents.outline(&path).into_iter().map(|(level, title, page)| json!({"level": level, "title": title, "page": page + 1})).collect()
@@ -226,9 +330,13 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
 
     fn links(&self, args: &Value) -> Result<Value, ToolError> {
         let path = text_arg(args, "path")?;
+        self.shared(&path)?;
+        let kept = self.kept();
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for back in self.index.backlinks(&path).map_err(failed)? {
-            *counts.entry(back.source).or_default() += 1;
+            if !kept.holds(&back.source) {
+                *counts.entry(back.source).or_default() += 1;
+            }
         }
         let backlinks: Vec<Value> = counts.into_iter().map(|(source, n)| json!({"path": source, "title": title_of(&source), "links": n})).collect();
         let outgoing: Vec<Value> = self
@@ -236,7 +344,7 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             .links_from(&path)
             .map_err(failed)?
             .into_iter()
-            .filter(|l| l.link.kind != knotes_core::LinkKind::External)
+            .filter(|l| l.link.kind != knotes_core::LinkKind::External && !l.resolved.as_deref().is_some_and(|p| kept.holds(p)))
             .map(|l| json!({"target": l.link.target, "path": l.resolved}))
             .collect();
         Ok(json!({"path": path, "backlinks": backlinks, "outgoing": outgoing}))
@@ -244,19 +352,22 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
 
     fn related(&self, args: &Value) -> Result<Value, ToolError> {
         let path = text_arg(args, "path")?;
+        self.shared(&path)?;
         let text = self.text_of(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
+        let kept = self.kept();
         let mut to: Vec<String> = Vec::new();
         for link in self.index.links_from(&path).map_err(failed)? {
             if let Some(target) = link.resolved
                 && target != path
                 && !to.contains(&target)
+                && !kept.holds(&target)
             {
                 to.push(target);
             }
         }
         let mut from: Vec<String> = Vec::new();
         for back in self.index.backlinks(&path).map_err(failed)? {
-            if back.source != path && !from.contains(&back.source) {
+            if back.source != path && !from.contains(&back.source) && !kept.holds(&back.source) {
                 from.push(back.source);
             }
         }
@@ -286,8 +397,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             "all" => true,
             _ => !done,
         };
+        let kept = self.kept();
         let mut rows = self.index.note_rows().map_err(failed)?;
-        rows.retain(|r| kind_of(&r.path) == "note");
+        rows.retain(|r| kind_of(&r.path) == "note" && !kept.holds(&r.path));
         if let Some(folder) = args.get("folder").and_then(Value::as_str).map(|f| composed(f.trim_matches('/'))).filter(|f| !f.is_empty()) {
             let prefix = format!("{folder}/");
             rows.retain(|r| composed(&r.path).starts_with(&prefix));
@@ -329,7 +441,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             }
         };
         let (after, before) = (day("changed_after")?, day("changed_before")?);
+        let kept = self.kept();
         let mut rows = self.index.note_rows().map_err(failed)?;
+        rows.retain(|r| !kept.holds(&r.path));
         let seconds = |ns: i64| ns.div_euclid(1_000_000_000);
         if let Some(after) = after {
             rows.retain(|r| seconds(r.mtime_ns) >= after);
@@ -357,16 +471,17 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     }
 
     fn list_tags(&self) -> Result<Value, ToolError> {
-        let mut counts = self.index.tag_counts().map_err(failed)?;
+        let mut counts = self.tag_counts(&self.kept());
         counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let tags: Vec<Value> = counts.into_iter().take(200).map(|(tag, count)| json!({"tag": tag, "count": count})).collect();
         Ok(json!({"tags": tags}))
     }
 }
 
-/// How `index`'s vault looks, in a few sentences.
-fn describe(index: &impl ToolIndex) -> String {
-    let catalog = index.catalog().unwrap_or_default();
+/// How `index`'s vault looks, in a few sentences: without what the user keeps from the AI,
+/// with the tags as `tags` counts them.
+fn describe(index: &impl ToolIndex, kept: &Kept, tags: &[(String, usize)]) -> String {
+    let catalog: Vec<_> = index.catalog().unwrap_or_default().into_iter().filter(|e| !kept.holds(&e.path)).collect();
     let pdfs = catalog.iter().filter(|e| kind_of(&e.path) == "pdf").count();
     let notes = catalog.len() - pdfs;
     let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
@@ -389,7 +504,7 @@ fn describe(index: &impl ToolIndex) -> String {
         text.push_str(&format!(" Top-level folders (files in each): {}{more}", sorted.join(", ")));
         text.push_str(&if top > 0 { format!("; {top} files at the top.") } else { ".".to_string() });
     }
-    let mut tags = index.tag_counts().unwrap_or_default();
+    let mut tags = tags.to_vec();
     tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     if !tags.is_empty() {
         let listed: Vec<String> = tags.iter().take(15).map(|(t, n)| format!("{t} ({n})")).collect();

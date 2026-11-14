@@ -94,3 +94,25 @@ fn without_a_vault_named_the_last_one_knotes_opened_is_served() {
     assert_eq!(answer["id"], 7);
     assert!(answer["result"]["content"][0]["text"].as_str().unwrap().contains("Boris.md"), "{answer}");
 }
+
+#[test]
+fn what_the_user_keeps_from_the_ai_external_agents_do_not_get_either() {
+    let (vault, home) = vault_and_home();
+    std::fs::create_dir_all(vault.path().join("Private")).unwrap();
+    std::fs::write(vault.path().join("Private/.knotes.json"), r#"{"ai": false}"#).unwrap();
+    std::fs::write(vault.path().join("Private/Bank.md"), "# Bank\n\nThe radar budget account.").unwrap();
+    let dir = knotes_session::index_dir(&home.path().join("Library/Application Support/Knotes"), vault.path());
+    let mut index = SqliteIndex::open(&dir).unwrap();
+    Indexer::new(FsVault::new(vault.path()), MarkdownParser::new()).sync(&mut index).unwrap();
+    let answers = talk(
+        vault.path(),
+        home.path(),
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "read_note", "arguments": {"path": "Private/Bank.md"}}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "search", "arguments": {"query": "budget"}}}),
+        ],
+    );
+    assert_eq!(answers[0]["result"]["isError"], true);
+    assert!(answers[0]["result"]["content"][0]["text"].as_str().unwrap().contains("not shared with the AI"), "{}", answers[0]);
+    assert!(!answers[1]["result"]["content"][0]["text"].as_str().unwrap().contains("Bank"), "{}", answers[1]);
+}

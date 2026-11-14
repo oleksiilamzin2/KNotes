@@ -45,6 +45,10 @@ impl ToolBox for Tools {
     fn overview(&self) -> String {
         "The vault: 1 note and 0 PDFs.".into()
     }
+
+    fn excluded(&self, path: &str) -> bool {
+        path.starts_with("Private/")
+    }
 }
 
 /// A stream of these events, as OpenAI sends them.
@@ -376,4 +380,12 @@ fn a_summary_brings_the_day_and_the_vault_up_to_date() {
     small.send(&mut items, &mut memory, "fourth?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
     assert_eq!(memory.preamble.as_deref(), Some("Today is Saturday, 2026-11-14 (UTC+02:00). The vault: 1 notes."));
     assert!(fake.body(1)["input"][0]["content"][0]["text"].as_str().unwrap().starts_with("Today is Saturday"));
+}
+
+#[test]
+fn a_document_kept_from_the_ai_is_not_named_to_it() {
+    let fake = Fake::answering(vec![reply(vec![message("ok")])]);
+    let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
+    send(&chat(&fake, &token), &mut items, "what is here?", Some("Private/Secret.md"), &tools).0.unwrap();
+    assert!(!fake.body(0).to_string().contains("Private/Secret.md"), "{}", fake.body(0)["input"]);
 }

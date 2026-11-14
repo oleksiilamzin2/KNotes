@@ -36,7 +36,8 @@ chat stage): whether function tools are allowed on this route, `store=false`,
 - No raw SQL tool. If SQL is ever exposed, only through a read-only connection with an
   authorizer, a row limit and a timeout.
 - Writes (create/update note) are proposals: the user sees a diff and confirms.
-- Notes or tags can be marked "exclude from AI"; search tools filter them out.
+- Notes or tags can be marked "exclude from AI"; search tools filter them out. (Built as the
+  `#no-ai` tag and folders' `"ai": false`, ADR 0027.)
 - The full conversation, including tool calls and results, is resent on each step;
   old large tool results are trimmed.
 

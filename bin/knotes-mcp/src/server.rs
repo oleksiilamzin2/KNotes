@@ -1,6 +1,6 @@
 //! MCP over JSON-RPC 2.0: one message a line in, one answer a line out (stdio transport).
 
-use knotes_core::{DocumentPages, VaultReader};
+use knotes_core::{DocumentPages, FolderRulesStore, VaultReader};
 use knotes_tools::{ToolIndex, VaultTools};
 use serde_json::{Value, json};
 
@@ -17,7 +17,7 @@ pub struct McpServer<I, F, D> {
     tools: VaultTools<I, F, D>,
 }
 
-impl<I: ToolIndex, F: VaultReader, D: DocumentPages> McpServer<I, F, D> {
+impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> McpServer<I, F, D> {
     pub fn new(tools: VaultTools<I, F, D>) -> Self {
         Self { tools }
     }

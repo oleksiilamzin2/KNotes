@@ -90,7 +90,7 @@ impl Chat<'_> {
     #[allow(clippy::too_many_arguments)]
     fn turn(&self, items: &mut Vec<Value>, memory: &mut Memory, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
         let before = items.len();
-        if let Some(path) = open {
+        if let Some(path) = open.filter(|p| !tools.excluded(p)) {
             let words = format!("The user has {path} open in Knotes; \"this note\", \"here\" and the like mean it.");
             items.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]}));
         }

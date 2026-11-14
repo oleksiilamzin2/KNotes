@@ -248,6 +248,15 @@ plan usage for open-source and local apps) on 2026-11-14:
   starts, kept with it and set anew only with a summary; and the history is sent as it is kept
   until the summary (cutting now happens only in what is summarized). OpenAI's count of the
   cached tokens is kept with the conversation and written in the test runs' answers.
+- What the user keeps from the AI (decided in ADR 0004, built 2026-11-14): a note tagged `#no-ai`
+  (in its text or frontmatter `tags`), and a folder whose `.knotes.json` says `"ai": false`, with
+  its subfolders unless one says `"ai": true` (the nearest folder's setting wins, as the other
+  folder rules). The tool layer enforces it, so the chat and the MCP server alike: search, title
+  search and the lists leave such documents out; reading one, its outline, links or related
+  notes answers that it is not shared with the AI; links to it and its tag counts are left out
+  of others' results; the vault's overview does not count it; the marking tag is not listed; a
+  document open in the window that is kept is not named to the model. Looked up again at most
+  every 10 s (the tags from the index, the folders' rules files read).
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand

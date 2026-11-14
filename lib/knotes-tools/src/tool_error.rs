@@ -11,6 +11,8 @@ pub enum ToolError {
     NotFound(String),
     /// The index or a file could not be read.
     Failed(String),
+    /// The user keeps this document from the AI (ADR 0004).
+    Excluded(String),
 }
 
 impl fmt::Display for ToolError {
@@ -20,6 +22,7 @@ impl fmt::Display for ToolError {
             Self::BadArguments(why) => write!(f, "bad arguments: {why}"),
             Self::NotFound(path) => write!(f, "no document {path} in the vault"),
             Self::Failed(why) => write!(f, "failed: {why}"),
+            Self::Excluded(path) => write!(f, "{path} is not shared with the AI: the user keeps it out"),
         }
     }
 }

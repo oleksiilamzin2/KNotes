@@ -325,3 +325,45 @@ fn a_note_comes_with_the_notes_linked_to_and_from_it() {
     let from = &related["linked_from"][0];
     assert_eq!((from["path"].as_str(), from["line"].as_str()), (Some("Boris.md"), Some("Works on [[Radar]]. #people")), "{related}");
 }
+
+/// A vault with what the user keeps from the AI: a folder (`"ai": false`, a subfolder taking it
+/// back with `"ai": true`) and a note tagged `#no-ai`.
+fn private() -> Vault {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Private/.knotes.json", r#"{"ai": false}"#);
+    write(dir.path(), "Private/Secret.md", "# Secret\n\nThe secret code is 1234. #money\n\n- [ ] change the code");
+    write(dir.path(), "Private/Shared/.knotes.json", r#"{"ai": true}"#);
+    write(dir.path(), "Private/Shared/Plan.md", "# Plan\n\nThe secret plan for May. #money");
+    write(dir.path(), "Diary.md", "# Diary\n\nMy secret diary. #no-ai\n\n- [ ] write more");
+    write(dir.path(), "Open.md", "# Open\n\nA secret? See [[Secret]], [[Diary]] and [[Plan]].");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    Vault { _dirs: (dir, idx), tools }
+}
+
+#[test]
+fn what_the_user_keeps_from_the_ai_no_tool_shows() {
+    let v = private();
+    let mut found = paths(&call(&v, "search", json!({"query": "secret"})), "results");
+    found.sort();
+    assert_eq!(found, ["Open.md", "Private/Shared/Plan.md"], "a folder kept out, its shared subfolder in, a #no-ai note out");
+    assert!(paths(&call(&v, "find_by_title", json!({"query": "secret"})), "results").is_empty());
+    for (tool, args) in [("read_note", json!({"path": "Private/Secret.md"})), ("outline", json!({"path": "Diary.md"})), ("links", json!({"path": "Diary.md"})), ("related", json!({"path": "Private/Secret.md"}))] {
+        let refused = v.tools.call(tool, &args);
+        assert!(matches!(refused, Err(knotes_tools::ToolError::Excluded(_))), "{tool}: {refused:?}");
+        assert!(refused.unwrap_err().to_string().contains("not shared with the AI"));
+    }
+    let mut listed = paths(&call(&v, "list_notes", json!({})), "notes");
+    listed.sort();
+    assert_eq!(listed, ["Open.md", "Private/Shared/Plan.md"]);
+    assert!(call(&v, "list_tasks", json!({}))["notes"].as_array().unwrap().is_empty(), "the kept notes' tasks too");
+    let links = call(&v, "links", json!({"path": "Open.md"}));
+    let outgoing: Vec<&str> = links["outgoing"].as_array().unwrap().iter().filter_map(|o| o["path"].as_str()).collect();
+    assert_eq!(outgoing, ["Private/Shared/Plan.md"], "links to kept notes are left out");
+    let related: Vec<String> = paths(&call(&v, "related", json!({"path": "Open.md"})), "links_to");
+    assert_eq!(related, ["Private/Shared/Plan.md"]);
+    let tags = call(&v, "list_tags", json!({}));
+    assert_eq!(tags["tags"], json!([{"tag": "money", "count": 1}]), "counted without the kept notes, the marking tag not shown: {tags}");
+    assert!(v.tools.overview().starts_with("The vault: 2 notes"), "{}", v.tools.overview());
+}
