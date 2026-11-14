@@ -17,8 +17,15 @@ use objc2_foundation::{NSAttributedString, NSDictionary, NSInteger, NSMutableAtt
 
 use crate::strings;
 
+/// Notes in a section past which they are listed folded (their lines made only when
+/// unfolded): a note linked from a thousand others listed every line at once.
+const FOLD_OVER: usize = 20;
+/// Notes a section lists before a row asking for the rest: unfolding a section of 1232 notes
+/// took AppKit 21 ms.
+const FIRST_NOTES: usize = 50;
+
 /// What the panel lists for a document.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Connections {
     /// Notes linking to it, each with its links (the lines around them).
     pub linked: Vec<(String, Vec<Mention>)>,
@@ -42,6 +49,8 @@ enum Row {
     Note { path: String, count: usize },
     Line { path: String, mention: Mention, section: Section },
     Out { label: String, resolved: Option<String> },
+    /// The notes of a section not listed yet, listed on a click.
+    More(Section, usize),
 }
 
 type OnOpen = Box<dyn Fn(String, Option<Range<usize>>)>;
@@ -59,6 +68,10 @@ pub struct SourceIvars {
     on_follow: RefCell<Option<OnFollow>>,
     /// An unlinked mention's button: made a link in its note.
     on_make_link: RefCell<Option<OnMakeLink>>,
+    /// Sections whose notes are all listed (their "Ще N…" clicked).
+    all_of: RefCell<Vec<Section>>,
+    /// Asked to list a section in full.
+    on_more: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 define_class!(
@@ -75,22 +88,49 @@ define_class!(
     unsafe impl NSOutlineViewDataSource for ConnectionsSource {
         #[unsafe(method(outlineView:numberOfChildrenOfItem:))]
         fn number_of_children(&self, _outline: &NSOutlineView, item: Option<&AnyObject>) -> NSInteger {
-            self.children_of(item.and_then(index_of)).len() as NSInteger
+            self.child_count(item.and_then(index_of)) as NSInteger
         }
 
         #[unsafe(method_id(outlineView:child:ofItem:))]
         fn child(&self, _outline: &NSOutlineView, index: NSInteger, item: Option<&AnyObject>) -> Retained<AnyObject> {
-            let child = self.children_of(item.and_then(index_of)).get(index as usize).copied().unwrap_or(0);
+            let child = self.child_at(item.and_then(index_of), index as usize).unwrap_or(0);
             self.object(child)
         }
 
         #[unsafe(method(outlineView:isItemExpandable:))]
         fn is_expandable(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
-            index_of(item).is_some_and(|i| !self.children_of(Some(i)).is_empty())
+            index_of(item).is_some_and(|i| self.child_count(Some(i)) > 0)
         }
     }
 
     unsafe impl NSOutlineViewDelegate for ConnectionsSource {
+        /// Heights worked out, not laid out row by row: a section, a note and a link take one
+        /// line; a mention's line takes as many as its text wraps to, three at most.
+        #[unsafe(method(outlineView:heightOfRowByItem:))]
+        fn row_height(&self, outline: &NSOutlineView, item: &AnyObject) -> f64 {
+            let Some(i) = index_of(item) else { return ROW_HEIGHT };
+            match self.ivars().rows.borrow().get(i) {
+                Some(Row::Line { mention, .. }) => {
+                    // The text's width: the column less the line's indentation and the button.
+                    // SAFETY: an item of this outline view.
+                    let level = unsafe { outline.levelForItem(Some(item)) }.max(0) as f64;
+                    let column = outline.tableColumns().firstObject().map_or(200.0, |c| c.width());
+                    let width = (column - level * outline.indentationPerLevel() - 30.0).max(40.0);
+                    line_height(mention, width)
+                }
+                _ => ROW_HEIGHT,
+            }
+        }
+
+        /// The panel's width changed: the mentions' lines wrap again.
+        #[unsafe(method(outlineViewColumnDidResize:))]
+        fn column_did_resize(&self, notification: &objc2_foundation::NSNotification) {
+            if let Some(outline) = notification.object().and_then(|o| o.downcast::<NSOutlineView>().ok()) {
+                let all = objc2_foundation::NSIndexSet::indexSetWithIndexesInRange(objc2_foundation::NSRange::new(0, outline.numberOfRows().max(0) as usize));
+                outline.noteHeightOfRowsWithIndexesChanged(&all);
+            }
+        }
+
         #[unsafe(method_id(outlineView:viewForTableColumn:item:))]
         fn view_for_item(&self, outline: &NSOutlineView, _column: Option<&NSTableColumn>, item: &AnyObject) -> Option<Retained<NSView>> {
             let row = index_of(item).and_then(|i| Some((i, self.ivars().rows.borrow().get(i).cloned()?)));
@@ -114,6 +154,12 @@ define_class!(
                         callback(label, resolved);
                     }
                 }
+                Row::More(section, _) => {
+                    self.ivars().all_of.borrow_mut().push(section);
+                    if let Some(callback) = self.ivars().on_more.borrow().as_ref() {
+                        callback();
+                    }
+                }
                 Row::Section(..) => {}
             }
         }
@@ -130,10 +176,19 @@ define_class!(
 );
 
 impl ConnectionsSource {
-    fn children_of(&self, of: Option<usize>) -> Vec<usize> {
+    /// How many rows are under row `of` (or at the top), not copying them: the outline view
+    /// asks once per row.
+    fn child_count(&self, of: Option<usize>) -> usize {
         match of {
-            Some(i) => self.ivars().children.borrow().get(i).cloned().unwrap_or_default(),
-            None => self.ivars().roots.borrow().clone(),
+            Some(i) => self.ivars().children.borrow().get(i).map_or(0, Vec::len),
+            None => self.ivars().roots.borrow().len(),
+        }
+    }
+
+    fn child_at(&self, of: Option<usize>, index: usize) -> Option<usize> {
+        match of {
+            Some(i) => self.ivars().children.borrow().get(i)?.get(index).copied(),
+            None => self.ivars().roots.borrow().get(index).copied(),
         }
     }
 
@@ -180,6 +235,10 @@ impl ConnectionsSource {
                     field.setTextColor(Some(&NSColor::tertiaryLabelColor()));
                 }
             }
+            Row::More(_, n) => {
+                field.setStringValue(&NSString::from_str(&strings::more_notes(*n)));
+                field.setTextColor(Some(&NSColor::linkColor()));
+            }
         }
         if let Some(button) = &button {
             // SAFETY: the source outlives the outline's cells (it is the outline's data source).
@@ -200,6 +259,21 @@ fn section_title(section: Section, count: usize) -> String {
         Section::Outgoing => strings::OUTGOING_LINKS,
     };
     format!("{title} · {count}")
+}
+
+/// A row of one line.
+const ROW_HEIGHT: f64 = 24.0;
+/// The space above and below a mention's line.
+const LINE_PADDING: f64 = 6.0;
+
+/// The height of a mention's line wrapped to `width`, three lines at most.
+fn line_height(mention: &Mention, width: f64) -> f64 {
+    let text = line_text(mention);
+    let font = NSFont::systemFontOfSize(NSFont::smallSystemFontSize() + 1.0);
+    let line = (font.ascender() - font.descender() + font.leading()).ceil();
+    let options = objc2_app_kit::NSStringDrawingOptions::UsesLineFragmentOrigin;
+    let tall = objc2_app_kit::NSAttributedStringNSExtendedStringDrawing::boundingRectWithSize_options_context(&*text, objc2_foundation::NSSize::new(width, f64::MAX), options, None).size.height.ceil();
+    tall.min(3.0 * line).max(line) + LINE_PADDING
 }
 
 /// A mention's line, the mention itself bold.
@@ -238,6 +312,8 @@ fn index_of(object: &AnyObject) -> Option<usize> {
 
 pub struct ConnectionsPanel {
     pub view: Retained<NSView>,
+    /// What it lists now.
+    shown: RefCell<Connections>,
     outline: Retained<NSOutlineView>,
     /// Kept alive here: the outline view holds its data source weakly.
     source: Retained<ConnectionsSource>,
@@ -253,12 +329,14 @@ impl ConnectionsPanel {
             on_open: RefCell::new(None),
             on_follow: RefCell::new(None),
             on_make_link: RefCell::new(None),
+            all_of: RefCell::new(Vec::new()),
+            on_more: RefCell::new(None),
         });
         let source: Retained<ConnectionsSource> = unsafe { msg_send![super(source), init] };
         let outline = NSOutlineView::new(mtm);
         outline.setStyle(NSTableViewStyle::Plain);
         outline.setHeaderView(None);
-        outline.setUsesAutomaticRowHeights(true);
+        outline.setUsesAutomaticRowHeights(false);
         outline.setBackgroundColor(&NSColor::clearColor());
         let column = NSTableColumn::initWithIdentifier(NSTableColumn::alloc(mtm), ns_string!("connection"));
         // As wide as the panel: the lines wrap in it, the buttons stay in view.
@@ -290,11 +368,29 @@ impl ConnectionsPanel {
         ] {
             c.setActive(true);
         }
-        Self { view, outline, source }
+        Self { view, shown: RefCell::new(Connections::default()), outline, source }
     }
 
-    /// Lists `connections`, every section and note unfolded.
+    /// The notes linking here and naming the document, with what is listed of its own links.
+    pub fn set_mentions(&self, linked: Vec<(String, Vec<Mention>)>, unlinked: Vec<(String, Vec<Mention>)>) {
+        let outgoing = self.shown.borrow().outgoing.clone();
+        self.show(Connections { linked, unlinked, outgoing });
+    }
+
+    /// The document's own links, with what is listed of the notes linking here.
+    pub fn set_outgoing(&self, outgoing: Vec<Outgoing>) {
+        let Connections { linked, unlinked, .. } = self.shown.borrow().clone();
+        self.show(Connections { linked, unlinked, outgoing });
+    }
+
+    /// Lists `connections`, sections unfolded and their notes too unless there are many; the
+    /// same list again changes nothing (the rows keep their folds and the scroll).
     pub fn show(&self, connections: Connections) {
+        if *self.shown.borrow() == connections {
+            return;
+        }
+        *self.shown.borrow_mut() = connections.clone();
+        let all_of = self.source.ivars().all_of.borrow().clone();
         let mut rows = Vec::new();
         let mut children: Vec<Vec<usize>> = Vec::new();
         let mut roots = Vec::new();
@@ -311,11 +407,15 @@ impl ConnectionsPanel {
         for (section, notes) in [(Section::Linked, &connections.linked), (Section::Unlinked, &connections.unlinked)] {
             let count = notes.iter().map(|(_, m)| m.len()).sum();
             let head = add(Row::Section(section, count), None, &mut rows, &mut children);
-            for (path, mentions) in notes {
+            let listed = if all_of.contains(&section) { notes.len() } else { notes.len().min(FIRST_NOTES) };
+            for (path, mentions) in &notes[..listed] {
                 let note = add(Row::Note { path: path.clone(), count: mentions.len() }, Some(head), &mut rows, &mut children);
                 for mention in mentions {
                     add(Row::Line { path: path.clone(), mention: mention.clone(), section }, Some(note), &mut rows, &mut children);
                 }
+            }
+            if listed < notes.len() {
+                add(Row::More(section, notes.len() - listed), Some(head), &mut rows, &mut children);
             }
         }
         let head = add(Row::Section(Section::Outgoing, connections.outgoing.len()), None, &mut rows, &mut children);
@@ -328,8 +428,25 @@ impl ConnectionsPanel {
         *ivars.children.borrow_mut() = children;
         *ivars.roots.borrow_mut() = roots;
         self.outline.reloadData();
-        // SAFETY: no item: every one, unfolded.
-        unsafe { self.outline.expandItem_expandChildren(None, true) };
+        let unfold: Vec<(usize, bool)> = {
+            let rows = ivars.rows.borrow();
+            let children = ivars.children.borrow();
+            ivars.roots.borrow().iter().map(|&head| (head, children[head].len() <= FOLD_OVER && !matches!(rows[head], Row::Section(Section::Outgoing, _)))).collect()
+        };
+        for (head, notes_too) in unfold {
+            // SAFETY: an item of this outline view.
+            unsafe { self.outline.expandItem_expandChildren(Some(&self.source.object(head)), notes_too) };
+        }
+    }
+
+    /// Called when a "Ще N…" row is clicked; the window lists the panel again (`list_again`).
+    pub fn on_more(&self, callback: impl Fn() + 'static) {
+        *self.source.ivars().on_more.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Lists the same connections again, the sections asked for in full.
+    pub fn relist(&self) {
+        self.list_again();
     }
 
     pub fn on_open(&self, callback: impl Fn(String, Option<Range<usize>>) + 'static) {
@@ -338,6 +455,17 @@ impl ConnectionsPanel {
 
     pub fn on_follow(&self, callback: impl Fn(String, Option<String>) + 'static) {
         *self.source.ivars().on_follow.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Another document: its sections are listed from their first notes again.
+    pub fn forget_more(&self) {
+        self.source.ivars().all_of.borrow_mut().clear();
+    }
+
+    /// A "Ще N…" row clicked: the list is made again, that section in full.
+    fn list_again(&self) {
+        let connections = std::mem::take(&mut *self.shown.borrow_mut());
+        self.show(connections);
     }
 
     pub fn on_make_link(&self, callback: impl Fn(String, Range<usize>) + 'static) {
@@ -360,6 +488,7 @@ impl ConnectionsPanel {
                         format!("·{}«{}»{}{arrow}", &l[..mention.mark.start], &l[mention.mark.clone()], &l[mention.mark.end..])
                     }
                     Row::Out { label, resolved } => if resolved.is_some() { label.clone() } else { format!("{label} ({})", strings::NOT_THERE) },
+                    Row::More(_, n) => strings::more_notes(*n),
                 })
             })
             .collect::<Vec<_>>()
@@ -408,47 +537,45 @@ impl ConnectionsPanel {
 const CELL_ID: &str = "ConnectionCell";
 const LINK_ID: &str = "make-link";
 
-/// A reused cell: a text of up to three lines, and a button that makes a mention a link.
+/// A reused cell: a text of up to three lines, and a button that makes a mention a link. Laid
+/// out by its frame, not constraints: creating the rows in view was most of listing a note.
 fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
+    use objc2_app_kit::NSAutoresizingMaskOptions as Mask;
     let id = NSString::from_str(CELL_ID);
     // SAFETY: reused views with this identifier are always cells made below.
     let reused = unsafe { outline.makeViewWithIdentifier_owner(&id, None) };
     if let Some(cell) = reused.and_then(|v| v.downcast::<NSTableCellView>().ok()) {
         return cell;
     }
-    let cell = NSTableCellView::new(mtm);
+    let frame = objc2_foundation::NSRect::new(objc2_foundation::NSPoint::new(0.0, 0.0), objc2_foundation::NSSize::new(200.0, ROW_HEIGHT));
+    let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), frame);
     cell.setIdentifier(Some(&id));
     let text = NSTextField::wrappingLabelWithString(ns_string!(""), mtm);
     text.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
     // The mention's own font and colour show (a label drops them otherwise).
     text.setAllowsEditingTextAttributes(true);
-    if let Some(cell) = text.cell() {
-        cell.setTruncatesLastVisibleLine(true);
+    if let Some(field_cell) = text.cell() {
+        field_cell.setTruncatesLastVisibleLine(true);
     }
-    text.setTranslatesAutoresizingMaskIntoConstraints(false);
-    let button = NSButton::new(mtm);
+    text.setFrame(objc2_foundation::NSRect::new(objc2_foundation::NSPoint::new(2.0, 3.0), objc2_foundation::NSSize::new(200.0 - 28.0, ROW_HEIGHT - 6.0)));
+    text.setAutoresizingMask(Mask::ViewWidthSizable | Mask::ViewHeightSizable);
+    let button = NSButton::initWithFrame(NSButton::alloc(mtm), objc2_foundation::NSRect::new(objc2_foundation::NSPoint::new(200.0 - 20.0, (ROW_HEIGHT - 16.0) / 2.0), objc2_foundation::NSSize::new(16.0, 16.0)));
     button.setBordered(false);
-    button.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("link"), Some(&NSString::from_str(strings::MAKE_LINK))).as_deref());
+    LINK_SYMBOL.with(|symbol| button.setImage(symbol.as_deref()));
     button.setToolTip(Some(&NSString::from_str(strings::MAKE_LINK)));
     button.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
     button.setIdentifier(Some(&NSString::from_str(LINK_ID)));
-    button.setTranslatesAutoresizingMaskIntoConstraints(false);
+    button.setAutoresizingMask(Mask::ViewMinXMargin | Mask::ViewMinYMargin | Mask::ViewMaxYMargin);
     cell.addSubview(&text);
     cell.addSubview(&button);
-    for c in [
-        text.leadingAnchor().constraintEqualToAnchor_constant(&cell.leadingAnchor(), 2.0),
-        text.topAnchor().constraintEqualToAnchor_constant(&cell.topAnchor(), 3.0),
-        text.bottomAnchor().constraintEqualToAnchor_constant(&cell.bottomAnchor(), -3.0),
-        text.trailingAnchor().constraintEqualToAnchor_constant(&button.leadingAnchor(), -4.0),
-        button.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
-        button.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
-        button.widthAnchor().constraintEqualToConstant(16.0),
-    ] {
-        c.setActive(true);
-    }
     // SAFETY: the cell's own text field.
     unsafe { cell.setTextField(Some(&text)) };
     cell
+}
+
+thread_local! {
+    /// The link symbol, looked up once.
+    static LINK_SYMBOL: Option<Retained<NSImage>> = NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("link"), Some(&NSString::from_str(strings::MAKE_LINK)));
 }
 
 /// A cell's button that makes a mention a link.

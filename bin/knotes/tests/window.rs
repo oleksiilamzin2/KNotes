@@ -2550,9 +2550,38 @@ fn a_click_on_a_line_in_the_connections_opens_its_note_at_the_link() {
 #[test]
 fn an_unlinked_mention_is_made_a_link_from_the_connections() {
     let (vault, home) = (links_vault(), links_home());
-    // The report waits for the index to take in the note changed.
+    // The button 500 ms in, once the connections are listed; the report waits for the index to
+    // take in the note changed.
     let env = [("KNOTES_PROBE_OPEN", "Plan.md"), ("KNOTES_PROBE_CONNECTION_LINK", "Idea"), ("KNOTES_PROBE_DELAY_MS", "2000")];
     let out = probe_env(&[vault.path()], Some(home.path()), &env);
     assert_eq!(std::fs::read_to_string(vault.path().join("Idea.md")).unwrap(), "A rough [[Plan|plan]] for later.");
     assert!(connections(&out).contains("[Згадки без посилань · 0]") && connections(&out).contains("Idea (1) | ·A rough «[[Plan|plan]]» for later."), "{out}");
+}
+
+#[test]
+fn many_notes_linking_here_are_listed_folded() {
+    let vault = links_vault();
+    for i in 0..25 {
+        std::fs::write(vault.path().join(format!("Ref {i:02}.md")), "Points at [[Plan]].").unwrap();
+    }
+    let home = links_home();
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Plan.md")]);
+    let rows = connections(&out);
+    assert!(rows.starts_with("[Посилання сюди · 28] | Daily (2) | Ref 00 (1) | Ref 01 (1)"), "folded: notes without their lines: {rows}");
+    assert!(!rows.contains("·Points at"), "{rows}");
+}
+
+#[test]
+fn past_fifty_notes_linking_here_the_rest_show_on_asking() {
+    let vault = links_vault();
+    for i in 0..60 {
+        std::fs::write(vault.path().join(format!("Ref {i:02}.md")), "Points at [[Plan]].").unwrap();
+    }
+    let home = links_home();
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Plan.md")]);
+    let rows = connections(&out);
+    assert!(rows.contains("Ref 48 (1) | Ще 12… | [Згадки без посилань"), "the first fifty, then the rest to ask for: {rows}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Plan.md"), ("KNOTES_PROBE_CONNECTION_CLICK", "Ще 12…")]);
+    let rows = connections(&out);
+    assert!(rows.contains("Ref 59 (1) | Week (1) | [Згадки без посилань") && !rows.contains("Ще "), "{rows}");
 }

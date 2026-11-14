@@ -115,8 +115,11 @@ pub struct VaultWindow {
     pub chat: ChatView,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
-    /// The connections of the document open, in the right panel (ADR 0026).
+    /// The connections of the document open, in the right panel (ADR 0026), the document they
+    /// are of, and the gathering under way (set to call it off).
     pub connections_panel: ConnectionsPanel,
+    connections_of: RefCell<Option<String>>,
+    connections_job: RefCell<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Said in the note column while no document is open.
     no_document: Retained<NSTextField>,
     /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
@@ -294,6 +297,8 @@ impl VaultWindow {
             chat,
             outline_panel,
             connections_panel,
+            connections_of: RefCell::new(None),
+            connections_job: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
             no_document,
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
@@ -363,6 +368,12 @@ impl VaultWindow {
         this.connections_panel.on_follow(move |label, resolved| {
             if let Some(window) = weak_follow.upgrade() {
                 window.follow_connection(&label, resolved);
+            }
+        });
+        let weak_more: Weak<Self> = Rc::downgrade(&this);
+        this.connections_panel.on_more(move || {
+            if let Some(window) = weak_more.upgrade() {
+                window.connections_panel.relist();
             }
         });
         let weak_make: Weak<Self> = Rc::downgrade(&this);
@@ -597,65 +608,75 @@ impl VaultWindow {
         self.refresh_connections();
     }
 
-    /// Lists the connections of the document open, when the panel shows them (ADR 0026): links
-    /// to it from the index, with their lines as the notes are now; notes the full-text index
-    /// finds its name in, checked in their text; its own links, as typed.
+    /// Lists the connections of the document open, when the panel shows them (ADR 0026): its
+    /// own links now, from the editor's text; the notes linking to it (from the index's
+    /// backlinks) and naming it (from a full-text search of its name), with their lines, once
+    /// gathered on another thread. Another document's list is cleared at once; the same
+    /// document's stays until the new one comes.
     fn refresh_connections(&self) {
         if self.panel_mode.get() != PanelMode::Links {
             return;
         }
+        self.connections_job.borrow().store(true, std::sync::atomic::Ordering::Relaxed);
         let document = self.pdf_path.borrow().clone().or_else(|| self.open_path());
-        let (Some(document), Some(links)) = (document, self.state.borrow().links.clone()) else {
+        let (vault, index_dir, links) = {
+            let state = self.state.borrow();
+            (state.vault.clone(), state.index_dir.clone(), state.links.clone())
+        };
+        let (Some(document), Some(vault), Some(index_dir), Some(links), Some(mtm)) = (document, vault, index_dir, links, MainThreadMarker::new()) else {
+            *self.connections_of.borrow_mut() = None;
             self.connections_panel.show(Connections::default());
             return;
         };
-        let parser = MarkdownParser::new();
+        let outgoing = self.outgoing_of(&document);
+        if self.connections_of.borrow().as_deref() != Some(document.as_str()) {
+            *self.connections_of.borrow_mut() = Some(document.clone());
+            self.connections_panel.forget_more();
+            self.connections_panel.show(Connections { outgoing, ..Connections::default() });
+        } else {
+            self.connections_panel.set_outgoing(outgoing);
+        }
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self.connections_job.borrow_mut() = std::sync::Arc::clone(&cancelled);
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
         let name = document_name(&document).to_owned();
-        let (sources, named) = {
-            let mut state = self.state.borrow_mut();
-            self.ensure_reader(&mut state);
-            let Some(reader) = state.reader.as_ref() else { return };
-            let mut sources: Vec<String> = knotes_core::LinkGraph::backlinks(reader, &document).unwrap_or_default().into_iter().map(|b| b.source).collect();
-            sources.dedup();
-            let query = knotes_core::ContentQuery { text: &name, within: knotes_core::Within::Note, prefixes: false, scope: None, limit: 200 };
-            let mut named: Vec<String> = knotes_core::ContentSearch::search(reader, &query).unwrap_or_default().into_iter().map(|h| h.path).filter(|p| *p != document).collect();
-            named.sort();
-            named.dedup();
-            (sources, named)
-        };
-        let mut linked = Vec::new();
-        for source in &sources {
-            let Some(text) = self.document_text(source) else { continue };
-            let mentions = knotes_app::backlink_mentions(&document, source, &text, &parser.parse(&text), &*links);
-            if !mentions.is_empty() {
-                linked.push((source.clone(), mentions));
-            }
-        }
-        let mut unlinked = Vec::new();
-        for source in &named {
-            let Some(text) = self.document_text(source) else { continue };
-            let mentions = knotes_app::unlinked_mentions(&name, &text, &parser.parse(&text));
-            if !mentions.is_empty() {
-                unlinked.push((source.clone(), mentions));
-            }
-        }
-        let outgoing = match self.open_path() {
-            Some(note) if note == document => {
-                let text = self.note_text.string().to_string();
-                knotes_app::outgoing_links(&note, &text, &parser.parse(&text), &*links)
-            }
-            _ => Vec::new(),
-        };
-        self.connections_panel.show(Connections { linked, unlinked, outgoing });
+        std::thread::spawn(move || {
+            let found = crate::connections_worker::gather(&vault, &index_dir, &document, &name, &links, &cancelled);
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                // A newer list asked for, or another document: this one is stale.
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if let (Some(window), Some((linked, unlinked))) = (target.get(mtm).upgrade(), found)
+                    && window.connections_of.borrow().as_deref() == Some(document.as_str())
+                {
+                    window.connections_panel.set_mentions(linked, unlinked);
+                }
+            });
+        });
     }
 
-    /// A note's text: the editor's for the note open (edits not saved yet included), the file
-    /// for others.
-    fn document_text(&self, path: &str) -> Option<String> {
-        if self.open_path().as_deref() == Some(path) {
-            return Some(self.note_text.string().to_string());
+    /// The document's own links (a note's, as typed): only they change as it is edited.
+    fn refresh_outgoing(&self) {
+        if self.panel_mode.get() != PanelMode::Links {
+            return;
         }
-        FsVault::new(&self.vault()?).read_text(path).ok()
+        if let Some(document) = self.connections_of.borrow().clone() {
+            self.connections_panel.set_outgoing(self.outgoing_of(&document));
+        }
+    }
+
+    /// The links of `document` when it is the note open, as the editor holds it.
+    fn outgoing_of(&self, document: &str) -> Vec<knotes_app::Outgoing> {
+        let Some(links) = self.state.borrow().links.clone() else { return Vec::new() };
+        match self.open_path() {
+            Some(note) if note == document => {
+                let text = self.note_text.string().to_string();
+                knotes_app::outgoing_links(&note, &text, &MarkdownParser::new().parse(&text), &*links)
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// A line in the connections clicked: its note opened in the tab shown, the link at
@@ -813,7 +834,9 @@ impl VaultWindow {
             let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
             if let Some(window) = target.get(mtm).upgrade() {
                 window.outline_due.set(false);
-                window.refresh_panel();
+                // Typing changes the outline and the note's own links, not who links to it.
+                window.refresh_outline();
+                window.refresh_outgoing();
             }
         });
     }
@@ -1143,20 +1166,14 @@ impl VaultWindow {
             if let Ok(title) = std::env::var("KNOTES_PROBE_OUTLINE_FOLD") {
                 self.outline_panel.fold(&title);
             }
-            if let Ok(line) = std::env::var("KNOTES_PROBE_CONNECTION_CLICK") {
-                self.window.displayIfNeeded();
-                self.connections_panel.click(&line);
-            }
-            if let Ok(note) = std::env::var("KNOTES_PROBE_CONNECTION_LINK") {
-                self.window.displayIfNeeded();
-                self.connections_panel.make_link(&note);
-            }
+
             if let Some(viewer) = self.pdf_view.borrow().as_ref() {
                 probe::pdf_mouse_requested(viewer);
                 probe::pdf_copy_requested(viewer);
             }
             if let Some(this) = self.this.borrow().upgrade() {
                 probe::pdf_width_requested(&this);
+                probe::connection_link_requested(&this);
             }
             if let Some(page) = std::env::var("KNOTES_PROBE_PDF_GO").ok().and_then(|p| p.parse().ok()) {
                 self.window.displayIfNeeded();

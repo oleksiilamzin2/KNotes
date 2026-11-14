@@ -385,6 +385,21 @@ fn report_tab_crosses(outline: &NSOutlineView) {
     println!("tab-crosses: {}", shown.join(" "));
 }
 
+/// `KNOTES_PROBE_CONNECTION_LINK=Note`: 500 ms in, once the connections are listed, a click on
+/// the button of the first unlinked mention in that note.
+pub fn connection_link_requested(window: &std::rc::Rc<VaultWindow>) {
+    let Ok(note) = std::env::var("KNOTES_PROBE_CONNECTION_LINK") else { return };
+    let target = dispatch2::MainThreadBound::new(std::rc::Rc::downgrade(window), window.window.mtm());
+    let when = DispatchTime::try_from(Duration::from_millis(500)).expect("short delay");
+    let _ = DispatchQueue::main().after(when, move || {
+        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+        if let Some(window) = target.get(mtm).upgrade() {
+            window.window.displayIfNeeded();
+            window.connections_panel.make_link(&note);
+        }
+    });
+}
+
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
 pub fn write_requested(window: &VaultWindow) {
     let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
@@ -851,6 +866,12 @@ pub fn toolbar_rename_requested(window: &NSWindow) {
 /// the report: `KNOTES_PROBE_TAB_CLOSE=a.md`, a click on the cross of that document's tab;
 /// `KNOTES_PROBE_TAB_TRIP=b.md`, that document's tab clicked, then the tab shown before.
 fn tabs_requested(window: &VaultWindow) {
+    // `KNOTES_PROBE_CONNECTION_CLICK=line`: a click on that line of the connections, listed by
+    // now (they are gathered on another thread).
+    if let Ok(line) = std::env::var("KNOTES_PROBE_CONNECTION_CLICK") {
+        window.window.displayIfNeeded();
+        window.connections_panel.click(&line);
+    }
     if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLOSE") {
         window.window.displayIfNeeded();
         tab_close_requested(&window.outline, &window.sidebar, &path);

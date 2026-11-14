@@ -28,6 +28,11 @@ pub const UNLINKED_MENTIONS: &str = "Згадки без посилань";
 pub const OUTGOING_LINKS: &str = "Вихідні";
 pub const NOT_THERE: &str = "немає";
 pub const MAKE_LINK: &str = "Зробити посиланням";
+
+/// `Ще 12…`: the notes of a connections section not listed yet.
+pub fn more_notes(n: usize) -> String {
+    format!("Ще {n}…")
+}
 pub const NO_HEADINGS: &str = "Немає заголовків";
 pub const NO_DOCUMENT: &str = "Немає відкритого документа";
 pub const FIND_SEARCHING: &str = "Пошук…";
