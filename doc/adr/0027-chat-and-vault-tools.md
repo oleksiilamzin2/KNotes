@@ -203,6 +203,15 @@ plan usage for open-source and local apps) on 2026-11-14:
   request's instructions end with the vault in a few words (notes and PDFs, top folders, most
   used tags, the script its titles are mostly in), refreshed at most every 10 s; the MCP server
   gives the same in its `initialize` instructions.
+- Search is measured without the model (`knotes-tools/tests/retrieval.rs`): 43 queries the model
+  wrote on the household vault (kept in `tests/home`, notes and PDFs), each with the documents
+  holding the answer, through the `search` tool; Recall@5 and MRR, apart for queries sharing words
+  with their documents and for those that do not ("by meaning"). First scores: by words 0.86 / 0.75
+  (misses: a word only in an alias or a file name, other forms of a word, other words), by meaning
+  0. The test fails if they drop; `KNOTES_RETRIEVAL_VAULT` and `KNOTES_RETRIEVAL_QUERIES` measure
+  another vault. Found on the way: macOS writes some file names decomposed (й as и + ˘); links
+  resolve (names are compared composed) but tools give paths as on disk, and `list_notes`'s
+  folder filter compares them as they are.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand

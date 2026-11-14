@@ -13,6 +13,8 @@ knotes-search.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+knotes-pdf.workspace = true
+unicode-normalization.workspace = true
 knotes-index.workspace = true
 knotes-indexer.workspace = true
 knotes-vault.workspace = true
