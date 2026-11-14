@@ -40,6 +40,14 @@ const KEPT_AROUND: usize = 2;
 /// How long the width stays put before the pages are drawn again for it.
 const REDRAW_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// How much one zoom step enlarges, and the zoom's bounds (as pinching allows).
+const ZOOM_STEP: f64 = 1.25;
+const ZOOM_MIN: f64 = 0.5;
+const ZOOM_MAX: f64 = 4.0;
+/// How far an arrow key scrolls, and how much of the screen space keeps in view.
+const ARROW_STEP: f64 = 40.0;
+const SCREEN_OVERLAP: f64 = 40.0;
+
 /// A place in the text: a page (index) and a caret on it.
 type Spot = (usize, usize);
 
@@ -109,6 +117,35 @@ define_class!(
         #[unsafe(method(acceptsFirstResponder))]
         fn accepts_first_responder(&self) -> bool {
             true
+        }
+
+        /// Keys move through the pages, as in Preview: space and Page Down a screen on (Shift and
+        /// Page Up back), the arrows up and down a little, left and right a page, Cmd+arrows,
+        /// Home and End to the first and last page.
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            if !self.key(event) {
+                // SAFETY: forwarding the same event to the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), keyDown: event] };
+            }
+        }
+
+        /// View > Zoom In (Cmd+=).
+        #[unsafe(method(zoomIn:))]
+        fn zoom_in(&self, _sender: Option<&AnyObject>) {
+            self.zoom_by(ZOOM_STEP);
+        }
+
+        /// View > Zoom Out (Cmd+-).
+        #[unsafe(method(zoomOut:))]
+        fn zoom_out(&self, _sender: Option<&AnyObject>) {
+            self.zoom_by(1.0 / ZOOM_STEP);
+        }
+
+        /// View > Actual Size (Cmd+0): the pages as wide as the column.
+        #[unsafe(method(zoomImageToActualSize:))]
+        fn zoom_actual(&self, _sender: Option<&AnyObject>) {
+            self.zoom_to(1.0);
         }
 
         /// A click puts the caret, a double click selects a word, a triple click a line; with
@@ -382,6 +419,74 @@ impl PdfPages {
         drop(stand_ins);
         drop(images);
         self.keep_texts();
+    }
+
+    /// A key that moves through the pages; false for others.
+    fn key(&self, event: &NSEvent) -> bool {
+        let Some(keys) = event.charactersIgnoringModifiers() else { return false };
+        let flags = event.modifierFlags();
+        let (shift, cmd) = (flags.contains(NSEventModifierFlags::Shift), flags.contains(NSEventModifierFlags::Command));
+        let screen = self.enclosingScrollView().map_or(400.0, |s| s.contentView().bounds().size.height - s.contentInsets().top - SCREEN_OVERLAP);
+        let last = self.ivars().frames.borrow().len().saturating_sub(1);
+        let current = self.ivars().current.get();
+        match keys.to_string().chars().next().map(u32::from) {
+            Some(0x20) => self.scroll_by(if shift { -screen } else { screen }),
+            Some(0xF72D) => self.scroll_by(screen),
+            Some(0xF72C) => self.scroll_by(-screen),
+            Some(0xF700) if cmd => self.show_page(0),
+            Some(0xF701) if cmd => self.show_page(last),
+            Some(0xF729) => self.show_page(0),
+            Some(0xF72B) => self.show_page(last),
+            Some(0xF700) => self.scroll_by(-ARROW_STEP),
+            Some(0xF701) => self.scroll_by(ARROW_STEP),
+            Some(0xF702) => self.show_page(current.saturating_sub(1)),
+            Some(0xF703) => self.show_page((current + 1).min(last)),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Scrolls the pages by `dy`, within them; the page at the top is the one shown again.
+    fn scroll_by(&self, dy: f64) {
+        let Some(scroll) = self.enclosingScrollView() else { return };
+        let clip = scroll.contentView();
+        let bounds = clip.bounds();
+        let lowest = -scroll.contentInsets().top;
+        let highest = (self.frame().size.height - bounds.size.height).max(lowest);
+        self.ivars().jumped.set(false);
+        clip.scrollToPoint(NSPoint::new(bounds.origin.x, (bounds.origin.y + dy).clamp(lowest, highest)));
+        scroll.reflectScrolledClipView(&clip);
+    }
+
+    /// Page `page` (index) at the top, as a jump to it.
+    fn show_page(&self, page: usize) {
+        let Some(frame) = self.ivars().frames.borrow().get(page).copied() else { return };
+        let Some(scroll) = self.enclosingScrollView() else { return };
+        self.ivars().jumped.set(true);
+        self.ivars().current.set(page);
+        let clip = scroll.contentView();
+        let highest = (self.frame().size.height - clip.bounds().size.height).max(-scroll.contentInsets().top);
+        clip.scrollToPoint(NSPoint::new(clip.bounds().origin.x, (frame.origin.y - MARGIN - scroll.contentInsets().top).min(highest)));
+        scroll.reflectScrolledClipView(&clip);
+        self.follow();
+    }
+
+    /// Zooms by `factor`, within the bounds, about the middle of the view.
+    fn zoom_by(&self, factor: f64) {
+        let current = self.enclosingScrollView().map_or(1.0, |s| s.magnification());
+        self.zoom_to(current * factor);
+    }
+
+    /// The pages at magnification `level` (1: as wide as the column), drawn again sharp for it.
+    fn zoom_to(&self, level: f64) {
+        let Some(scroll) = self.enclosingScrollView() else { return };
+        let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
+        let visible = self.visibleRect();
+        let centre = NSPoint::new(visible.origin.x + visible.size.width / 2.0, visible.origin.y + visible.size.height / 2.0);
+        scroll.setMagnification_centeredAtPoint(level, centre);
+        self.ivars().zoom.set(level.max(1.0));
+        self.redraw_all();
+        self.follow();
     }
 
     /// The page at `point` (the pages' coordinates; the nearest page between them) and the
@@ -658,6 +763,16 @@ impl PdfViewer {
             Some((page, _)) => format!("{}, the current on page {}", found.len(), page + 1),
             None => format!("{}", found.len()),
         }
+    }
+
+    /// The view taking the keys.
+    pub fn pages_view(&self) -> &NSView {
+        &self.pages
+    }
+
+    /// The magnification shown (probe mode).
+    pub fn magnification(&self) -> f64 {
+        self.scroll.magnification()
     }
 
     /// The page shown (from 1) and how many there are.

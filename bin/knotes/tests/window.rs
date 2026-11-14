@@ -2585,3 +2585,49 @@ fn past_fifty_notes_linking_here_the_rest_show_on_asking() {
     let rows = connections(&out);
     assert!(rows.contains("Ref 59 (1) | Week (1) | [Згадки без посилань") && !rows.contains("Ще "), "{rows}");
 }
+
+/// The 30-page PDF opened from a link, then `more` probe settings.
+fn long_pdf(more: &[(&str, &str)]) -> String {
+    let long = pdf_of(30);
+    let mut env = vec![("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    env.extend_from_slice(more);
+    probe_images(&[("a.md", "See [[long.pdf]] here\n\nend")], &[("long.pdf", &long)], &env).1
+}
+
+/// How far the PDF viewer is scrolled (`pdf-scroll:` line).
+fn pdf_scroll(out: &str) -> f64 {
+    out.lines().find_map(|l| l.strip_prefix("pdf-scroll: ")).unwrap_or_else(|| panic!("{out}")).parse().unwrap()
+}
+
+#[test]
+fn a_pdf_opened_from_a_note_takes_the_keys_and_arrows_turn_its_pages() {
+    let out = long_pdf(&[]);
+    assert!(out.contains("focus: pdf"), "opened from the note: the keys go to the PDF: {out}");
+    assert!(long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "right,right")]).contains("pdf-view: long.pdf 3/30"));
+    assert!(long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "right,right,left")]).contains("pdf-view: long.pdf 2/30"));
+    assert!(long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "cmd-down")]).contains("pdf-view: long.pdf 30/30"));
+    assert!(long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "end,home")]).contains("pdf-view: long.pdf 1/30"));
+}
+
+#[test]
+fn space_and_page_keys_scroll_a_pdf_by_a_screen_and_arrows_by_a_little() {
+    let top = pdf_scroll(&long_pdf(&[]));
+    let screen = pdf_scroll(&long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "space")])) - top;
+    assert!(screen > 300.0, "about a screen: {screen}");
+    assert!((pdf_scroll(&long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "pagedown")])) - top - screen).abs() < 1.0, "Page Down as space");
+    assert!((pdf_scroll(&long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "space,shift-space")])) - top).abs() < 1.0, "Shift+space back");
+    let little = pdf_scroll(&long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "down")])) - top;
+    assert!(little > 10.0 && little < 100.0, "an arrow: a little: {little}");
+}
+
+#[test]
+fn the_view_menu_zooms_a_pdf_in_out_and_back() {
+    let zoom = |steps: &str| {
+        let out = long_pdf(&[("KNOTES_PROBE_PDF_ZOOM", steps)]);
+        out.lines().find_map(|l| l.strip_prefix("pdf-zoom: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+    };
+    assert_eq!(zoom("in"), "1.25");
+    assert_eq!(zoom("in,in"), "1.56");
+    assert_eq!(zoom("out"), "0.80");
+    assert_eq!(zoom("in,in,actual"), "1.00");
+}

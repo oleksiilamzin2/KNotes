@@ -890,6 +890,51 @@ fn tabs_requested(window: &VaultWindow) {
             }
         }
     }
+    // `KNOTES_PROBE_PDF_KEYS=space,right,cmd-down`: those keys pressed in the PDF viewer.
+    if let (Ok(keys), Some(view)) = (std::env::var("KNOTES_PROBE_PDF_KEYS"), window.pdf_pages_view()) {
+        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
+        for key in keys.split(',') {
+            let (flags, name) = match key.split_once('-') {
+                Some(("cmd", name)) => (NSEventModifierFlags::Command, name),
+                Some(("shift", name)) => (NSEventModifierFlags::Shift, name),
+                _ => (NSEventModifierFlags::empty(), key),
+            };
+            let character = match name {
+                "space" => ' ',
+                "up" => '\u{F700}',
+                "down" => '\u{F701}',
+                "left" => '\u{F702}',
+                "right" => '\u{F703}',
+                "home" => '\u{F729}',
+                "end" => '\u{F72B}',
+                "pageup" => '\u{F72C}',
+                "pagedown" => '\u{F72D}',
+                _ => continue,
+            };
+            let text = NSString::from_str(&character.to_string());
+            let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                NSEventType::KeyDown, objc2_foundation::NSPoint::new(0.0, 0.0), flags, 0.0, window.window.windowNumber(), None, &text, &text, false, 0,
+            );
+            if let Some(event) = event {
+                NSResponder::keyDown(&view, &event);
+            }
+        }
+    }
+    // `KNOTES_PROBE_PDF_ZOOM=in,out,actual`: View's zoom items chosen, sent up the responder
+    // chain from the viewer as the menu sends them.
+    if let (Ok(steps), Some(view)) = (std::env::var("KNOTES_PROBE_PDF_ZOOM"), window.pdf_pages_view()) {
+        window.window.makeFirstResponder(Some(&view));
+        for step in steps.split(',') {
+            let action = match step {
+                "in" => objc2::sel!(zoomIn:),
+                "out" => objc2::sel!(zoomOut:),
+                "actual" => objc2::sel!(zoomImageToActualSize:),
+                _ => continue,
+            };
+            // SAFETY: an action the viewer implements, with no sender.
+            unsafe { NSApplication::sharedApplication(window.window.mtm()).sendAction_to_from(action, Some(&view), None) };
+        }
+    }
     // `KNOTES_PROBE_TAB_MENU=a.md` (or `a.md:close`, `a.md:others`): that tab's context menu,
     // its items printed (or one chosen).
     if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_MENU") {
@@ -1209,8 +1254,11 @@ fn report_note(window: &VaultWindow) {
             .and_then(|r| r.downcast_ref::<objc2_app_kit::NSTextView>().and_then(|t| t.delegate()))
             .is_some_and(|d| std::ptr::eq(&*d as *const _ as *const u8, field))
     };
+    let pdf = window.pdf_pages_view().is_some_and(|v| is(&*v as *const _ as *const u8));
     let focus = if is(&*window.note_text as *const _ as *const u8) {
         "editor"
+    } else if pdf {
+        "pdf"
     } else if editing(&*window.search_bar.field as *const _ as *const u8) {
         "search"
     } else if editing(&*window.find_bar.field as *const _ as *const u8) {
@@ -1250,6 +1298,10 @@ fn report_note(window: &VaultWindow) {
         println!("pdf-find-bar: {}", if over { "over the pages" } else { "under the pages" });
     }
     println!("pdf-view: {}", window.describe_pdf());
+    if let Some((scroll, zoom)) = window.pdf_scroll_and_zoom() {
+        println!("pdf-scroll: {scroll:.1}");
+        println!("pdf-zoom: {zoom:.2}");
+    }
     println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-texts-kept: {}", window.pdf_texts_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));
     println!("pdf-pages-kept: {}", window.pdf_pages_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));

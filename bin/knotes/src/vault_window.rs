@@ -127,6 +127,8 @@ pub struct VaultWindow {
     tabs_restored: Cell<bool>,
     /// The next document opened goes in a new tab (the list's menu asked for it).
     new_tab_next: Cell<bool>,
+    /// The next document is opened from the note (a link or a preview clicked in it).
+    from_note: Cell<bool>,
     /// What the right panel shows.
     panel_mode: Cell<PanelMode>,
     /// The document the outline shows (a note's or a PDF's path), and whether an edit's
@@ -303,6 +305,7 @@ impl VaultWindow {
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
             new_tab_next: Cell::new(false),
+            from_note: Cell::new(false),
             panel_mode: Cell::new(PanelMode::Ai),
             outline_of: RefCell::new(None),
             outline_due: Cell::new(false),
@@ -1404,9 +1407,15 @@ impl VaultWindow {
         if record {
             self.state.borrow_mut().history.visit(path);
         }
+        // Opened from the note (its view now hidden): the PDF takes the keys; from the list, the
+        // focus stays there.
+        let from_note = self.from_note.replace(false) || self.window.firstResponder().is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, &*self.note_text as *const _ as *const u8));
         *self.editing.borrow_mut() = None;
         self.show_pdf(Some(path));
         self.show_note_column();
+        if from_note && let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            self.window.makeFirstResponder(Some(viewer.pages_view()));
+        }
         if let Some(viewer) = self.pdf_view.borrow().as_ref() {
             // In its place in the window first, so the jump lands where it stays.
             self.window.layoutIfNeeded();
@@ -1511,7 +1520,10 @@ impl VaultWindow {
         };
         if FileKind::from_path(&path) == FileKind::Pdf {
             let page = link.subpath.as_deref().and_then(|s| s.strip_prefix("page=")).and_then(|p| p.parse().ok());
+            // From the note: the PDF takes the keys.
+            self.from_note.set(true);
             self.open_pdf(&path, page, true);
+            self.from_note.set(false);
             return;
         }
         if path != source {
@@ -1717,6 +1729,16 @@ impl VaultWindow {
             let frame = viewer.scroll.frame();
             viewer.scroll.setFrameSize(objc2_foundation::NSSize::new(width, frame.size.height));
         }
+    }
+
+    /// The PDF viewer's view taking the keys (probe mode).
+    pub fn pdf_pages_view(&self) -> Option<Retained<NSView>> {
+        self.pdf_view.borrow().as_ref().map(|v| objc2::Message::retain(v.pages_view()))
+    }
+
+    /// How far the PDF viewer is scrolled and its magnification (probe mode).
+    pub fn pdf_scroll_and_zoom(&self) -> Option<(f64, f64)> {
+        self.pdf_view.borrow().as_ref().map(|v| (v.scroll_y(), v.magnification()))
     }
 
     /// The page at the top of the PDF viewer, from 1 (probe mode).

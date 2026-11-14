@@ -80,6 +80,11 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
         Some(item(mtm, s::TOGGLE_SIDEBAR, sel!(toggleSidebar:), "s", cmd(NSEventModifierFlags::Control))),
         Some(item(mtm, s::TOGGLE_PANEL, sel!(toggleInspector:), "i", cmd(NSEventModifierFlags::Option))),
         None,
+        // A PDF's zoom (the viewer takes them when it has the focus).
+        Some(item(mtm, s::ZOOM_IN, sel!(zoomIn:), "=", cmd(none))),
+        Some(item(mtm, s::ZOOM_OUT, sel!(zoomOut:), "-", cmd(none))),
+        Some(item(mtm, s::ZOOM_ACTUAL, sel!(zoomImageToActualSize:), "0", cmd(none))),
+        None,
         Some(item(mtm, s::FULL_SCREEN, sel!(toggleFullScreen:), "f", cmd(NSEventModifierFlags::Control))),
     ]);
     let window_menu = submenu(mtm, &bar, s::MENU_WINDOW, &[
