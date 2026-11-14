@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use knotes_core::{ContentQuery, DocumentPages, NoteParser, TitleSearch, VaultReader, Within};
+use knotes_core::{BlockHit, ContentQuery, DocumentPages, NoteParser, Span, TitleSearch, VaultReader, Within};
 use knotes_md::MarkdownParser;
 use knotes_search::TitleIndex;
 use serde_json::{Value, json};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::{ToolError, ToolIndex, ToolSpec, day_start, specs, utc_minute};
 
@@ -74,27 +75,72 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         let (offset, limit) = paging(args, 10, 30);
         // One more than the page, to tell whether more follow.
         let wanted = offset + limit + 1;
-        let blocks = self.index.search(&ContentQuery { text: &query, within: Within::Block, prefixes: true, scope: None, limit: wanted }).map_err(failed)?;
-        let mut hits: Vec<(&str, _)> = blocks.into_iter().map(|hit| ("block", hit)).collect();
-        // Too few fragments hold every word: then the notes holding them across their blocks, each
-        // once, with its best block (a question's words are often spread over a note).
-        if hits.len() < wanted {
-            let notes = self.index.search(&ContentQuery { text: &query, within: Within::Note, prefixes: true, scope: None, limit: wanted }).map_err(failed)?;
-            for hit in notes {
-                if !hits.iter().any(|(_, h)| h.path == hit.path) {
-                    hits.push(("note", hit));
+        let find = |text: &str, within: Within, scope: Option<&[String]>| self.index.search(&ContentQuery { text, within, prefixes: true, scope, limit: wanted }).map_err(failed);
+        let mut hits = Hits::default();
+        // Fragments holding every word, then (while too few) ever looser ways: the notes holding
+        // them across their blocks; the documents whose title or aliases hold them; the same by
+        // the words' stems; the documents linked with one a word names, holding the other words.
+        hits.add("block", find(&query, Within::Block, None)?, None, true);
+        if hits.0.len() < wanted {
+            hits.add("note", find(&query, Within::Note, None)?, None, false);
+        }
+        let named = self.named();
+        if hits.0.len() < wanted {
+            let words: Vec<String> = query.split_whitespace().map(name_form).collect();
+            let titled: Vec<BlockHit> = named.iter().filter(|(_, names)| words.iter().all(|w| names.iter().any(|n| n.starts_with(w.as_str())))).map(|(path, _)| title_hit(path)).collect();
+            hits.add("title", titled, None, false);
+        }
+        let stemmed = stems(&query);
+        if hits.0.len() < wanted && stemmed != query {
+            hits.add("stem", find(&stemmed, Within::Block, None)?, None, false);
+            hits.add("stem", find(&stemmed, Within::Note, None)?, None, false);
+        }
+        let words: Vec<&str> = query.split_whitespace().collect();
+        if hits.0.len() < wanted && words.len() > 1 {
+            for (i, word) in words.iter().enumerate() {
+                let word = name_form(word);
+                if word.chars().count() < 3 {
+                    continue;
+                }
+                let rest = stems(&words.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, w)| *w).collect::<Vec<_>>().join(" "));
+                for (path, _) in named.iter().filter(|(_, names)| names.iter().any(|n| n.starts_with(word.as_str()))).take(5) {
+                    let mut near = vec![path.clone()];
+                    near.extend(self.index.links_from(path).unwrap_or_default().into_iter().filter_map(|l| l.resolved));
+                    near.extend(self.index.backlinks(path).unwrap_or_default().into_iter().map(|b| b.source));
+                    hits.add("linked", find(&rest, Within::Note, Some(&near))?, Some(path.clone()), false);
                 }
             }
         }
-        let (hits, next) = page(hits, offset, limit);
+        let (hits, next) = page(hits.0, offset, limit);
         let results: Vec<Value> = hits
             .into_iter()
-            .map(|(found, hit)| {
+            .map(|(found, hit, via)| {
                 let text = self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..hit.span.end as usize).map(cut)).unwrap_or_default();
-                json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found})
+                let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
+                if let Some(via) = via {
+                    result["via"] = json!(via);
+                }
+                result
             })
             .collect();
         Ok(json!({"results": results, "next_offset": next}))
+    }
+
+    /// The documents with the words of their titles and aliases (composed, lower case), for
+    /// the words of a query to name them.
+    fn named(&self) -> Vec<(String, Vec<String>)> {
+        self.index
+            .catalog()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| {
+                let mut names: Vec<String> = Vec::new();
+                for name in std::iter::once(title_of(&entry.path)).chain(entry.aliases) {
+                    names.extend(name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(name_form));
+                }
+                (entry.path, names)
+            })
+            .collect()
     }
 
     fn find_by_title(&self, args: &Value) -> Result<Value, ToolError> {
@@ -269,6 +315,46 @@ fn describe(index: &impl ToolIndex) -> String {
         text.push_str(&format!(" Its titles are mostly in {script}: search with words in the notes' language."));
     }
     text
+}
+
+/// Search hits as they are gathered: how each was found, the hit, and the document it was
+/// found through (`linked`).
+#[derive(Default)]
+struct Hits(Vec<(&'static str, BlockHit, Option<String>)>);
+
+impl Hits {
+    /// Adds `found` hits: every one (`all`), or only those of documents not there yet.
+    fn add(&mut self, how: &'static str, found: Vec<BlockHit>, via: Option<String>, all: bool) {
+        for hit in found {
+            if all || !self.0.iter().any(|(_, h, _)| h.path == hit.path) {
+                self.0.push((how, hit, via.clone()));
+            }
+        }
+    }
+}
+
+/// A document found by its title: its start, no fragment.
+fn title_hit(path: &str) -> BlockHit {
+    BlockHit { path: path.to_string(), ord: 0, span: Span { start: 0, end: 0 }, heading: None, score: 0.0 }
+}
+
+/// A word as names are compared: composed (macOS writes some file names decomposed), lower case.
+fn name_form(word: &str) -> String {
+    word.nfc().flat_map(char::to_lowercase).collect()
+}
+
+/// `query` with its longer Cyrillic words cut to their stems (two letters off a word of six or
+/// more), so other forms of a word match: "помилка" finds "помилок", "Софійка" finds "Софійці".
+fn stems(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|word| {
+            let n = word.chars().count();
+            let cyrillic = word.chars().all(|c| ('\u{400}'..='\u{4ff}').contains(&c) || c == '\'' || c == '’');
+            if n >= 6 && cyrillic { word.chars().take(n - 2).collect() } else { word.to_string() }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The index's documents' titles and aliases, to find them by.

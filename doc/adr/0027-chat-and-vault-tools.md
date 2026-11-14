@@ -212,6 +212,13 @@ plan usage for open-source and local apps) on 2026-11-14:
   another vault. Found on the way: macOS writes some file names decomposed (й as и + ˘); links
   resolve (names are compared composed) but tools give paths as on disk, and `list_notes`'s
   folder filter compares them as they are.
+- Search's looser finds, in order while too few: documents whose title or aliases hold every word
+  (`title`); the words' stems, two letters off Cyrillic words of six or more (`stem`: "помилка"
+  finds "помилок"); and for a word naming a document, the other words in the documents linked
+  to or from it (`linked`, `via` that document: "масло машин" finds the service log through the
+  car note's alias "Машина"). Titles are compared composed and in lower case. Search by words:
+  0.86 → 0.94 (33 of 35), MRR 0.75 → 0.82; what is left differs in its words ("день" / "Дні",
+  "штраф" / "компенсація").
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand

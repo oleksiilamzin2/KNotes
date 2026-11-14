@@ -15,7 +15,7 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "search",
-            description: "Search the text of the vault's notes and PDFs. Gives fragments (blocks) holding every word, best first (`match: block`), then documents holding every word across their blocks (`match: note`: read the document for the rest), each with its document, section heading and block number to read on from. When more follow, `next_offset` says where: pass it as `offset` for the next page (300 deep at most; past that, narrow the query).",
+            description: "Search the text of the vault's notes and PDFs. Gives fragments (blocks) holding every word, best first (`match: block`); then, while too few, looser finds: documents holding every word across their blocks (`note`), documents whose title or aliases hold them (`title`), the same by the words' stems (`stem`), and documents linked with one a word names (`linked`, with the document it was found `via`). Read a loose find's document for the rest. Each comes with its document, section heading and block number to read on from. When more follow, `next_offset` says where: pass it as `offset` for the next page (300 deep at most; past that, narrow the query).",
             parameters: json!({"type": "object", "properties": {
                 "query": {"type": "string", "description": "Words to find; each may be the start of a word."},
                 "limit": {"type": "integer", "description": "How many fragments, 10 by default, 30 at most."},

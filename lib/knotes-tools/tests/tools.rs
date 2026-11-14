@@ -234,3 +234,29 @@ fn the_vault_is_described_in_a_few_words_for_the_model() {
     let orchard = orchard(3).tools.overview();
     assert!(orchard.contains("Orchard (3)") && !orchard.contains("at the top"), "{orchard}");
 }
+
+/// A vault where words hide: in an alias, a title, another form of the word.
+fn hidden() -> Vault {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Car.md", "---\naliases: [Машина]\n---\n# Car\n\nSee [[Log]].");
+    write(dir.path(), "Log.md", "# Log\n\nOil changed in May.");
+    write(dir.path(), "Manuals/Boiler guide.md", "Scale on the heater: clean it.");
+    write(dir.path(), "Codes.md", "Код помилок E9: накип.");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    Vault { _dirs: (dir, idx), tools }
+}
+
+#[test]
+fn search_finds_words_hidden_in_titles_aliases_links_and_other_forms() {
+    let v = hidden();
+    let first = |query: &str| call(&v, "search", json!({"query": query}))["results"][0].clone();
+    let linked = first("oil машин");
+    assert_eq!((linked["path"].as_str(), linked["match"].as_str(), linked["via"].as_str()), (Some("Log.md"), Some("linked"), Some("Car.md")), "a word naming a note leads to the notes it links: {linked}");
+    let titled = first("boiler guide");
+    assert_eq!((titled["path"].as_str(), titled["match"].as_str()), (Some("Manuals/Boiler guide.md"), Some("title")), "{titled}");
+    let stem = first("помилка E9");
+    assert_eq!((stem["path"].as_str(), stem["match"].as_str()), (Some("Codes.md"), Some("stem")), "{stem}");
+    assert_eq!(first("oil changed")["match"], "block", "the words together still come first");
+}
