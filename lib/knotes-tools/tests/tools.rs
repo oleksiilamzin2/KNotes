@@ -62,7 +62,7 @@ fn call(vault: &Vault, name: &str, args: Value) -> Value {
 #[test]
 fn every_tool_is_described_with_a_json_schema() {
     let names: Vec<&str> = VaultTools::<SqliteIndex, FsVault, Pdfs>::specs().iter().map(|s| s.name).collect();
-    assert_eq!(names, ["search", "find_by_title", "read_note", "read_pdf", "outline", "links", "list_notes", "list_tags"]);
+    assert_eq!(names, ["search", "find_by_title", "read_note", "read_pdf", "outline", "links", "related", "list_notes", "list_tasks", "list_tags"]);
     for spec in VaultTools::<SqliteIndex, FsVault, Pdfs>::specs() {
         assert_eq!(spec.parameters["type"], "object", "{}", spec.name);
         assert!(!spec.description.is_empty());
@@ -281,4 +281,47 @@ fn a_query_missing_one_word_still_finds_the_rest_and_names_the_word() {
     let v = hidden();
     let partial = call(&v, "search", json!({"query": "oil changed yesterday"}))["results"][0].clone();
     assert_eq!((partial["path"].as_str(), partial["match"].as_str(), partial["missing"].as_str()), (Some("Log.md"), Some("partial"), Some("yesterday")), "{partial}");
+}
+
+/// A task as listed: its line, words and section.
+type Task = (u64, String, Option<String>);
+
+#[test]
+fn tasks_are_listed_by_note_with_their_line_and_section() {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Inbox/Buy.md", "# Buy\n\n- [ ] milk\n- [x] bread\n\n## Later\n\n- [ ] eggs");
+    write(dir.path(), "Plan.md", "Plan\n\n* [ ] call Bob\n1. [ ] book tickets");
+    write(dir.path(), "Done.md", "- [x] all done");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let v = Vault { tools: VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs), _dirs: (dir, idx) };
+    let open = call(&v, "list_tasks", json!({}));
+    let mut notes: Vec<(String, Vec<Task>)> = open["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| (n["path"].as_str().unwrap().to_string(), n["tasks"].as_array().unwrap().iter().map(|t| (t["line"].as_u64().unwrap(), t["text"].as_str().unwrap().to_string(), t["heading"].as_str().map(str::to_string))).collect()))
+        .collect();
+    notes.sort();
+    assert_eq!(notes, vec![
+        ("Inbox/Buy.md".to_string(), vec![(3, "milk".to_string(), Some("Buy".to_string())), (8, "eggs".to_string(), Some("Later".to_string()))]),
+        ("Plan.md".to_string(), vec![(3, "call Bob".to_string(), None), (4, "book tickets".to_string(), None)]),
+    ]);
+    assert_eq!(open["total"], 2);
+    let done = call(&v, "list_tasks", json!({"state": "done"}));
+    assert_eq!(done["total"], 2, "{done}");
+    let inbox = call(&v, "list_tasks", json!({"folder": "Inbox"}));
+    assert_eq!(inbox["notes"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_note_comes_with_the_notes_linked_to_and_from_it() {
+    let v = vault();
+    let related = call(&v, "related", json!({"path": "Projects/Radar.md"}));
+    assert!(related["text"].as_str().unwrap().contains("The radar project"), "{related}");
+    let to: Vec<&str> = related["links_to"].as_array().unwrap().iter().map(|n| n["path"].as_str().unwrap()).collect();
+    assert_eq!(to, ["Boris.md", "budget.pdf"]);
+    assert!(related["links_to"][0]["start"].as_str().unwrap().starts_with("Works on [[Radar]]"), "{related}");
+    let from = &related["linked_from"][0];
+    assert_eq!((from["path"].as_str(), from["line"].as_str()), (Some("Boris.md"), Some("Works on [[Radar]]. #people")), "{related}");
 }

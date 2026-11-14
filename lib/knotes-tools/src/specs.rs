@@ -60,6 +60,11 @@ pub fn specs() -> Vec<ToolSpec> {
             parameters: json!({"type": "object", "properties": {"path": path}, "required": ["path"], "additionalProperties": false}),
         },
         ToolSpec {
+            name: "related",
+            description: "A document with the notes it links to (each with how it starts) and the notes linking to it (each with the line that links), in one call: what is connected with a person, a project, a thing.",
+            parameters: json!({"type": "object", "properties": {"path": path}, "required": ["path"], "additionalProperties": false}),
+        },
+        ToolSpec {
             name: "list_notes",
             description: "List notes and PDFs, in a folder (with its subfolders), with a tag, or changed between two days, the most recently changed first or by name; each with when it last changed (UTC). Says how many there are in all (`total`) and, when more follow, where the next page starts (`next_offset`).",
             parameters: json!({"type": "object", "properties": {
@@ -69,6 +74,16 @@ pub fn specs() -> Vec<ToolSpec> {
                 "changed_before": {"type": "string", "description": "Only those changed on this day (YYYY-MM-DD, UTC) or earlier."},
                 "sort": {"type": "string", "enum": ["modified", "name"]},
                 "limit": {"type": "integer", "description": "30 by default, 100 at most."},
+                "offset": {"type": "integer", "description": "Where the page starts: a previous call's `next_offset`, 0 by default."}
+            }, "additionalProperties": false}),
+        },
+        ToolSpec {
+            name: "list_tasks",
+            description: "The vault's task items (`- [ ]` / `- [x]` lines), open ones by default, by note (the most recently changed first), each with its line, words and section heading; in a folder if given. For to-dos, plans and what is left to do. Says how many notes have them (`total`) and where the next page starts (`next_offset`).",
+            parameters: json!({"type": "object", "properties": {
+                "state": {"type": "string", "enum": ["open", "done", "all"], "description": "Open by default."},
+                "folder": {"type": "string", "description": "A folder's path in the vault."},
+                "limit": {"type": "integer", "description": "Notes per page, 30 by default, 100 at most."},
                 "offset": {"type": "integer", "description": "Where the page starts: a previous call's `next_offset`, 0 by default."}
             }, "additionalProperties": false}),
         },

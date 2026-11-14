@@ -14,6 +14,8 @@ use crate::{ToolError, ToolIndex, ToolSpec, day_start, specs, utc_minute};
 const FRAGMENT: usize = 400;
 /// A read stops past this many characters, at a block's or page's end.
 const READ_BUDGET: usize = 24_000;
+/// How many linked documents `related` gives each way.
+const RELATED: usize = 30;
 /// How deep search and title search page (offset and page together); past it, a narrower
 /// query does better.
 const DEEPEST: usize = 300;
@@ -64,7 +66,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             "read_pdf" => self.read_pdf(args),
             "outline" => self.outline(args),
             "links" => self.links(args),
+            "related" => self.related(args),
             "list_notes" => self.list_notes(args),
+            "list_tasks" => self.list_tasks(args),
             "list_tags" => self.list_tags(),
             _ => Err(ToolError::Unknown(name.to_owned())),
         }
@@ -238,6 +242,83 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         Ok(json!({"path": path, "backlinks": backlinks, "outgoing": outgoing}))
     }
 
+    fn related(&self, args: &Value) -> Result<Value, ToolError> {
+        let path = text_arg(args, "path")?;
+        let text = self.text_of(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
+        let mut to: Vec<String> = Vec::new();
+        for link in self.index.links_from(&path).map_err(failed)? {
+            if let Some(target) = link.resolved
+                && target != path
+                && !to.contains(&target)
+            {
+                to.push(target);
+            }
+        }
+        let mut from: Vec<String> = Vec::new();
+        for back in self.index.backlinks(&path).map_err(failed)? {
+            if back.source != path && !from.contains(&back.source) {
+                from.push(back.source);
+            }
+        }
+        let links_to: Vec<Value> = to
+            .iter()
+            .take(RELATED)
+            .map(|p| json!({"path": p, "title": title_of(p), "kind": kind_of(p), "start": self.text_of(p).map(|t| cut_to(&body_of(&t), 200)).unwrap_or_default()}))
+            .collect();
+        let title = composed(&title_of(&path)).to_lowercase();
+        let linked_from: Vec<Value> = from
+            .iter()
+            .take(RELATED)
+            .map(|p| {
+                let line = self.text_of(p).and_then(|t| t.lines().find(|l| composed(l).to_lowercase().contains(&title)).map(|l| cut_to(l.trim(), 300))).unwrap_or_default();
+                json!({"path": p, "title": title_of(p), "line": line})
+            })
+            .collect();
+        Ok(json!({"path": path, "title": title_of(&path), "text": cut_to(&body_of(&text), 600), "links_to": links_to, "linked_from": linked_from, "more_to": to.len().saturating_sub(RELATED), "more_from": from.len().saturating_sub(RELATED)}))
+    }
+
+    fn list_tasks(&self, args: &Value) -> Result<Value, ToolError> {
+        let offset = count_arg(args, "offset", 0, usize::MAX);
+        let limit = count_arg(args, "limit", 30, 100).max(1);
+        let state = args.get("state").and_then(Value::as_str).unwrap_or("open");
+        let wanted = |done: bool| match state {
+            "done" => done,
+            "all" => true,
+            _ => !done,
+        };
+        let mut rows = self.index.note_rows().map_err(failed)?;
+        rows.retain(|r| kind_of(&r.path) == "note");
+        if let Some(folder) = args.get("folder").and_then(Value::as_str).map(|f| composed(f.trim_matches('/'))).filter(|f| !f.is_empty()) {
+            let prefix = format!("{folder}/");
+            rows.retain(|r| composed(&r.path).starts_with(&prefix));
+        }
+        rows.sort_by_key(|r| std::cmp::Reverse(r.mtime_ns));
+        let mut notes = Vec::new();
+        for row in rows {
+            let Some(text) = self.text_of(&row.path) else { continue };
+            let tasks = tasks_in(&text, &wanted);
+            if !tasks.is_empty() {
+                notes.push(json!({"path": row.path, "title": title_of(&row.path), "modified": utc_minute(row.mtime_ns.div_euclid(1_000_000_000)), "tasks": tasks}));
+            }
+        }
+        let total = notes.len();
+        let next = (offset + limit < total).then_some(offset + limit);
+        let notes: Vec<Value> = notes.into_iter().skip(offset).take(limit).collect();
+        Ok(json!({"notes": notes, "total": total, "next_offset": next}))
+    }
+
+    /// A document's text: a note's as indexed (else from its file), a PDF's pages.
+    fn text_of(&self, path: &str) -> Option<String> {
+        if let Some(text) = self.index.note_text(path).ok().flatten() {
+            return Some(text);
+        }
+        if kind_of(path) == "pdf" {
+            let count = self.documents.page_count(path)?;
+            return Some((0..count.min(3)).filter_map(|p| self.documents.page_text(path, p)).collect::<Vec<_>>().join("\n"));
+        }
+        self.files.read_text(path).ok()
+    }
+
     fn list_notes(&self, args: &Value) -> Result<Value, ToolError> {
         let offset = count_arg(args, "offset", 0, usize::MAX);
         let limit = count_arg(args, "limit", 30, 100).max(1);
@@ -256,9 +337,10 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         if let Some(before) = before {
             rows.retain(|r| seconds(r.mtime_ns) < before + 86_400);
         }
-        if let Some(folder) = args.get("folder").and_then(Value::as_str).map(|f| f.trim_matches('/')).filter(|f| !f.is_empty()) {
+        // Compared composed: macOS writes some names decomposed.
+        if let Some(folder) = args.get("folder").and_then(Value::as_str).map(|f| composed(f.trim_matches('/'))).filter(|f| !f.is_empty()) {
             let prefix = format!("{folder}/");
-            rows.retain(|r| r.path.starts_with(&prefix));
+            rows.retain(|r| composed(&r.path).starts_with(&prefix));
         }
         if let Some(tag) = args.get("tag").and_then(Value::as_str).map(|t| t.trim_start_matches('#')).filter(|t| !t.is_empty()) {
             let tagged = self.index.notes_with_tag(tag).map_err(failed)?;
@@ -345,6 +427,63 @@ impl Hits {
 /// A document found by its title: its start, no fragment.
 fn title_hit(path: &str) -> BlockHit {
     BlockHit { path: path.to_string(), ord: 0, span: Span { start: 0, end: 0 }, heading: None, score: 0.0 }
+}
+
+/// `text` composed (macOS writes some file names decomposed).
+fn composed(text: &str) -> String {
+    text.nfc().collect()
+}
+
+/// A note's text without its frontmatter and its first heading line.
+fn body_of(text: &str) -> String {
+    let mut rest = text;
+    if let Some(after) = rest.strip_prefix("---\n")
+        && let Some(end) = after.find("\n---")
+    {
+        rest = after[end + 4..].trim_start_matches('\n');
+    }
+    let rest = rest.trim_start();
+    let rest = if rest.starts_with('#') { rest.split_once('\n').map_or("", |(_, r)| r) } else { rest };
+    rest.trim().to_string()
+}
+
+/// `text` cut at `most` characters.
+fn cut_to(text: &str, most: usize) -> String {
+    match text.char_indices().nth(most) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_owned(),
+    }
+}
+
+/// The task items (`- [ ]`, `* [x]`, `1. [ ]`) of `text` that `wanted` keeps (by whether they
+/// are done), each with its line (from 1), its words and the heading it is under.
+fn tasks_in(text: &str, wanted: &dyn Fn(bool) -> bool) -> Vec<Value> {
+    let mut heading: Option<String> = None;
+    let mut tasks = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(title) = trimmed.strip_prefix('#') {
+            heading = Some(title.trim_start_matches('#').trim().to_string());
+            continue;
+        }
+        let item = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+            .or_else(|| trimmed.split_once(". ").filter(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).map(|(_, rest)| rest));
+        let Some(item) = item else { continue };
+        let (done, words) = if let Some(words) = item.strip_prefix("[ ] ") {
+            (false, words)
+        } else if let Some(words) = item.strip_prefix("[x] ").or_else(|| item.strip_prefix("[X] ")) {
+            (true, words)
+        } else {
+            continue;
+        };
+        if wanted(done) {
+            tasks.push(json!({"line": i + 1, "text": words.trim(), "done": done, "heading": heading}));
+        }
+    }
+    tasks
 }
 
 /// A word as names are compared: composed (macOS writes some file names decomposed), lower case.

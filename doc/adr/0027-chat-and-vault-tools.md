@@ -227,6 +227,13 @@ plan usage for open-source and local apps) on 2026-11-14:
   one letter, and for three words or more looks last for documents holding all but one
   (`partial`, the word `missing`); the model is told that dates are often written in numbers and
   to prefer figures written in the notes to estimates. By words 33 → 36 of 37, MRR 0.77 → 0.81.
+- Two more tools, for the costliest questions: `list_tasks` (task items by note, open ones by
+  default, each with its line, words and section heading; by folder; paged), for "what is left to
+  do" (23–28 calls before); `related` (a document with how each note it links to starts and the
+  line of each note linking to it, 30 each way), for "what is connected with …" (3–5 calls). The
+  model is told of them, and to link to the section when it knows the heading
+  (`[[Projects/Radar#Budget]]`), which the window opens there. `list_notes`'s folder filter
+  compares paths composed.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand
