@@ -31,6 +31,9 @@ Knotes, a notes app, so the assistant can go on without it. Keep what matters fo
 facts found with the notes or PDFs they come from (as [[path]] links), the answers given, decisions, and what is still open. \
 Leave out greetings and the tools' raw output. Write in the language of the conversation, as short notes, at most 400 words.";
 
+/// A reply's output items, its input's tokens and how many of them came from the cache.
+type Reply = (Vec<Value>, Option<u64>, Option<u64>);
+
 /// The tools' namespace (the route takes function tools only in one).
 const NAMESPACE: &str = "vault";
 /// Replies with tool calls one turn may take before it gives up.
@@ -174,7 +177,7 @@ impl Chat<'_> {
 
     /// One streamed reply to `input`, with the vault's tools, its input's tokens and how many
     /// of them came from the cache.
-    fn respond(&self, input: &[Value], tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>, Option<u64>), ChatError> {
+    fn respond(&self, input: &[Value], tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<Reply, ChatError> {
         let functions: Vec<Value> = tools
             .specs()
             .into_iter()
@@ -199,7 +202,7 @@ impl Chat<'_> {
     /// network fails before a reply starts) and reads the streamed reply: its output items once
     /// it says it is complete, how many tokens its input took and how many came from the cache
     /// (OpenAI's counts).
-    fn request(&self, body: &Value, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>, Option<u64>), ChatError> {
+    fn request(&self, body: &Value, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<Reply, ChatError> {
         let request = HttpRequest {
             method: Method::Post,
             url: format!("{API}/responses"),
