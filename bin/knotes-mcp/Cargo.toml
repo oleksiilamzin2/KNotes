@@ -1,0 +1,21 @@
+[package]
+name = "knotes-mcp"
+description = "MCP server over a Knotes vault: the read-only vault tools for external agents (ADR 0027)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+knotes-tools.workspace = true
+knotes-index.workspace = true
+knotes-vault.workspace = true
+knotes-pdf.workspace = true
+knotes-session.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+knotes-indexer.workspace = true
+knotes-md.workspace = true
+tempfile.workspace = true

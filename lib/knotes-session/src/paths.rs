@@ -1,5 +1,11 @@
 use std::path::{Path, PathBuf};
 
+/// `~/Library/Application Support/Knotes`: the app's settings and its vaults' indexes.
+pub fn app_data_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    home.join("Library/Application Support/Knotes")
+}
+
 /// `app_data/vaults/<hash of the canonical vault path>`: the index lives outside the vault
 /// (ADR 0003), one folder per vault.
 pub fn index_dir(app_data: &Path, vault: &Path) -> PathBuf {

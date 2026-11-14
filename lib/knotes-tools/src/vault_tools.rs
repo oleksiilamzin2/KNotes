@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use knotes_core::{ContentQuery, DocumentPages, NoteParser, TitleSearch, VaultReader, Within};
 use knotes_md::MarkdownParser;
@@ -11,18 +13,21 @@ use crate::{ToolError, ToolIndex, ToolSpec, specs};
 const FRAGMENT: usize = 400;
 /// A read stops past this many characters, at a block's or page's end.
 const READ_BUDGET: usize = 24_000;
+/// How old the titles may get before they are listed again (notes come and go meanwhile).
+const TITLES_LAST: Duration = Duration::from_secs(10);
 
 /// The vault's read-only tools (ADR 0027) over its index, its files and its PDFs' pages.
 pub struct VaultTools<I, F, D> {
     index: I,
     files: F,
     documents: D,
-    titles: TitleIndex,
+    /// The titles to find documents by, and when they were listed.
+    titles: RefCell<(Instant, TitleIndex)>,
 }
 
 impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     pub fn new(index: I, files: F, documents: D) -> Self {
-        let titles = TitleIndex::new(index.catalog().unwrap_or_default().into_iter().map(|e| (e.path, e.aliases)));
+        let titles = RefCell::new((Instant::now(), titles_of(&index)));
         Self { index, files, documents, titles }
     }
 
@@ -63,7 +68,10 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     fn find_by_title(&self, args: &Value) -> Result<Value, ToolError> {
         let query = text_arg(args, "query")?;
         let limit = count_arg(args, "limit", 10, 30);
-        let results: Vec<Value> = self.titles.search_titles(&query, limit).into_iter().map(|h| json!({"path": h.path, "title": title_of(&h.path), "kind": kind_of(&h.path)})).collect();
+        if self.titles.borrow().0.elapsed() > TITLES_LAST {
+            *self.titles.borrow_mut() = (Instant::now(), titles_of(&self.index));
+        }
+        let results: Vec<Value> = self.titles.borrow().1.search_titles(&query, limit).into_iter().map(|h| json!({"path": h.path, "title": title_of(&h.path), "kind": kind_of(&h.path)})).collect();
         Ok(json!({"results": results}))
     }
 
@@ -163,6 +171,11 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         let tags: Vec<Value> = counts.into_iter().take(200).map(|(tag, count)| json!({"tag": tag, "count": count})).collect();
         Ok(json!({"tags": tags}))
     }
+}
+
+/// The index's documents' titles and aliases, to find them by.
+fn titles_of(index: &impl ToolIndex) -> TitleIndex {
+    TitleIndex::new(index.catalog().unwrap_or_default().into_iter().map(|e| (e.path, e.aliases)))
 }
 
 /// A required string argument.

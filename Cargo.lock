@@ -540,6 +540,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-mcp"
+version = "0.1.0"
+dependencies = [
+ "knotes-core",
+ "knotes-index",
+ "knotes-indexer",
+ "knotes-md",
+ "knotes-pdf",
+ "knotes-session",
+ "knotes-tools",
+ "knotes-vault",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "knotes-md"
 version = "0.1.0"
 dependencies = [

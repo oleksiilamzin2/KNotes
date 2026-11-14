@@ -9,6 +9,6 @@ mod snapshot;
 
 pub use app_settings::{AppSettings, SETTINGS_FILE};
 pub use lock::VaultLock;
-pub use paths::index_dir;
+pub use paths::{app_data_dir, index_dir};
 pub use session::{Event, VaultSession};
 pub use snapshot::Snapshot;

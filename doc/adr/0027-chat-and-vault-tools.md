@@ -67,3 +67,22 @@ plan usage for open-source and local apps) on 2026-11-14:
 - Usage counts against the owner's ChatGPT plan; the panel links to its usage settings.
 - Everything but the live sign-in and the model's answers is tested without the network: a
   transport trait stands in for OpenAI.
+
+## Built (2026-11-14): the tools and the MCP server
+
+- `knotes-core` reads a document's pages behind `DocumentPages` (page count, a page's text, its
+  outline); `knotes-pdf` does it with PDFKit.
+- `knotes-tools` gives eight tools, each with a JSON schema: `search` (notes' blocks and PDFs'
+  pages, a fragment of 400 characters at most with its heading and place), `find_by_title`
+  (titles and aliases, listed again when older than 10 s), `read_note` (blocks from a given
+  one, 60 at most), `read_pdf` (pages from a given one, 10 at most), `outline`, `links`
+  (backlinks by note, and the document's own links), `list_notes` (of a folder or a tag, by
+  name or date) and `list_tags`. A read stops at 24 000 characters, at a block's or page's end,
+  and says where to go on. Notes are read from their files, so as fresh as the disk; search,
+  titles, links and tags from the index, as fresh as Knotes left it.
+- `knotes-mcp [vault]` serves them over stdio (JSON-RPC 2.0, one message a line: `initialize`,
+  `ping`, `tools/list`, `tools/call`; a tool's result as JSON text, its failure with `isError`).
+  It opens the vault's index read-only beside a running Knotes, which keeps it up to date;
+  without a vault named, the last one Knotes opened. A vault Knotes never indexed is refused
+  with a message saying so. `scripts/bundle.sh` puts it in `Knotes.app/Contents/MacOS`. In the
+  50k vault, starting and answering a search takes about half a second.

@@ -261,8 +261,7 @@ fn remember_frame(window: &NSWindow) {
 }
 
 fn app_data() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join("Library/Application Support/Knotes")
+    knotes_session::app_data_dir()
 }
 
 /// Moves session events to the main thread with GCD (no polling timer, so an idle app sleeps).
