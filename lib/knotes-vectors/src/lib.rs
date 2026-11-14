@@ -6,10 +6,12 @@ mod embed_notes;
 mod meaning_index;
 mod passage_of;
 mod snapshot;
+mod update;
 mod vector_store;
 
 pub use embed_notes::embed_notes;
 pub use meaning_index::MeaningIndex;
 pub use passage_of::block_passage;
 pub use snapshot::Snapshot;
+pub use update::update;
 pub use vector_store::{VECTORS_FILE, VectorStore};

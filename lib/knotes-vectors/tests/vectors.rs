@@ -73,3 +73,33 @@ fn the_vault_s_blocks_are_embedded_and_searched_by_meaning() {
     let found = meaning.nearest("when to replace the anode", 1).unwrap();
     assert_eq!((found[0].path.as_str(), found[0].heading.as_deref()), ("Home/Boiler.md", Some("Boiler")));
 }
+
+fn index_notes(index: &mut SqliteIndex, notes: &[(&str, &str, i64)]) {
+    let parsed: Vec<_> = notes.iter().map(|(_, t, _)| MarkdownParser::new().parse(t)).collect();
+    let files: Vec<_> = notes.iter().map(|(p, _, m)| VaultFile { path: (*p).into(), kind: FileKind::Markdown, size: 1, mtime_ns: *m }).collect();
+    let changes: Vec<_> = files.iter().zip(notes).zip(&parsed).map(|((file, (_, text, _)), parsed)| IndexChange::Upsert { file, note: Some((text, parsed)) }).collect();
+    index.apply(&changes).unwrap();
+}
+
+#[test]
+fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
+    use std::sync::atomic::AtomicBool;
+    use knotes_vectors::{VectorStore, update};
+    let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    index_notes(&mut index, &[("Boiler.md", "Replace the anode.", 1), ("Garden.md", "Prune the roses.", 1)]);
+    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let go = AtomicBool::new(false);
+    assert_eq!(update(&index, &store, &Words, &go).unwrap(), 2);
+    assert_eq!(update(&index, &store, &Words, &go).unwrap(), 0, "nothing changed");
+    index_notes(&mut index, &[("Garden.md", "Prune the roses and the apple trees.", 2)]);
+    index.apply(&[IndexChange::Remove { path: "Boiler.md" }]).unwrap();
+    assert_eq!(update(&index, &store, &Words, &go).unwrap(), 1, "the changed one");
+    assert_eq!(store.dates().unwrap(), [("Garden.md".to_string(), 2)].into(), "the removed one gone");
+    let stop = AtomicBool::new(true);
+    index_notes(&mut index, &[("New.md", "Fresh.", 3)]);
+    assert_eq!(update(&index, &store, &Words, &stop).unwrap(), 0, "told to stop");
+
+    let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
+    assert_eq!(meaning.nearest("apple trees", 1).unwrap()[0].path, "Garden.md");
+}
