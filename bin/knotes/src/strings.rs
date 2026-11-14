@@ -181,6 +181,11 @@ pub const CHAT_CUT: &str = "Відповідь обірвалася.";
 pub const CHAT_DECLINED: &str = "Вхід скасовано в браузері.";
 pub const CHAT_PLAN_OFF: &str = "Використання плану ChatGPT не дозволено. Увійдіть знову й дозвольте його.";
 
+/// How full a conversation is: its size and where it is summarized, in thousands of tokens.
+pub fn chat_context(tokens: u64, limit: u64) -> String {
+    format!("Розмова: {} тис. з {} тис. токенів", tokens.div_ceil(1000), limit / 1000)
+}
+
 /// What a tool call shows in the conversation.
 pub fn chat_tool(name: &str, args: &serde_json::Value) -> String {
     let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string();

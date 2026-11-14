@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::Summary;
+use crate::{Memory, Summary};
 use crate::crypto::random_bytes;
 use crate::token_endpoint::now;
 
@@ -18,8 +18,8 @@ pub struct Conversation {
     /// When it last changed (seconds since 1970).
     pub updated: u64,
     pub items: Vec<Value>,
-    /// What the model gets in place of the conversation's first items once it grew long.
-    pub summary: Option<Summary>,
+    /// Its summary once it grew long, and its size when last sent.
+    pub memory: Memory,
 }
 
 /// What the panel shows of a conversation.
@@ -33,7 +33,7 @@ pub enum Shown {
 impl Conversation {
     pub fn new(model: &str) -> Self {
         let tail: String = random_bytes::<4>().iter().map(|b| format!("{b:02x}")).collect();
-        Self { id: format!("{:x}{tail}", now()), title: String::new(), model: model.to_string(), updated: now(), items: Vec::new(), summary: None }
+        Self { id: format!("{:x}{tail}", now()), title: String::new(), model: model.to_string(), updated: now(), items: Vec::new(), memory: Memory::default() }
     }
 
     /// Names an unnamed conversation by the first line of its first question.
@@ -69,8 +69,8 @@ impl Conversation {
     }
 
     pub(crate) fn to_json(&self) -> Value {
-        let summary = self.summary.as_ref().map(|s| json!({"covers": s.covers, "text": s.text}));
-        json!({"id": self.id, "title": self.title, "model": self.model, "updated": self.updated, "items": self.items, "summary": summary})
+        let summary = self.memory.summary.as_ref().map(|s| json!({"covers": s.covers, "text": s.text}));
+        json!({"id": self.id, "title": self.title, "model": self.model, "updated": self.updated, "items": self.items, "summary": summary, "tokens": self.memory.tokens})
     }
 
     pub(crate) fn from_json(value: &Value) -> Option<Self> {
@@ -80,7 +80,10 @@ impl Conversation {
             model: value["model"].as_str().unwrap_or_default().to_string(),
             updated: value["updated"].as_u64().unwrap_or(0),
             items: value["items"].as_array().cloned().unwrap_or_default(),
-            summary: value["summary"]["text"].as_str().map(|text| Summary { covers: value["summary"]["covers"].as_u64().unwrap_or(0) as usize, text: text.to_string() }),
+            memory: Memory {
+                summary: value["summary"]["text"].as_str().map(|text| Summary { covers: value["summary"]["covers"].as_u64().unwrap_or(0) as usize, text: text.to_string() }),
+                tokens: value["tokens"].as_u64(),
+            },
         })
     }
 }

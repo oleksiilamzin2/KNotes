@@ -31,7 +31,7 @@ pub use access_token::AccessToken;
 pub use chat::{Chat, ChatEvent, INSTRUCTIONS, SUMMARY_INSTRUCTIONS};
 pub use chat_error::ChatError;
 pub use chatgpt_account::ChatGptAccount;
-pub use context::{COMPACT_AT, KEEP_TURNS, Summary, context, estimate_tokens};
+pub use context::{KEEP_TURNS, Memory, PRICED_WINDOW, Summary, compact_at, context, estimate_tokens};
 pub use conversation::{Conversation, Shown};
 pub use conversations::{ConversationEntry, Conversations};
 pub use credential_store::CredentialStore;

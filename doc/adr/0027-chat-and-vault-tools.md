@@ -154,13 +154,23 @@ plan usage for open-source and local apps) on 2026-11-14:
   shows the sign-in.
 - Long conversations (the owner asked for compression): each request sends reasoning only from
   the turn under way, and tool results before the last two turns cut to 1 500 characters (the
-  model can call the tool again). Past about 60 000 tokens (estimated as the JSON's bytes over
-  four, a little over for Cyrillic), the turn first has the model summarize what lies before the
+  model can call the tool again). Past 90 % of the model's window, the window taken no larger
+  than 272 000 tokens, the turn first has the model summarize what lies before the
   last two turns (with the summary before, if any; tool results cut) in a request of its own,
   without tools; from then on the summary goes as a developer message in place of the items it
   covers. The conversation keeps every item and shows them all, with a line where the model's
   memory turns from the summary to the messages ("вище розмову стиснуто"); "Стискаю розмову…"
   shows while it summarizes. A summary made for a turn that then fails is kept.
+- The threshold, checked on 2026-11-14 (the owner asked to follow the newest models; first
+  60 000 was guessed): OpenAI's GPT-5.6 page gives a 1 050 000-token window, but "prompts with
+  >272K input tokens are priced at 2x input and 1.5x output for the full request"; Codex, on the
+  same ChatGPT plans, gives GPT-5.6 a 272K window and summarizes at 90 % of it (its
+  `auto_compact_token_limit`, read from its source by others). So: 90 % of the window the plan's
+  model list gives (`context_window`, when it does), never past 272K, which comes to 244 800
+  tokens. The conversation's size is OpenAI's count of the last request's input (its `usage`)
+  with what came back, kept with the conversation; an estimate (the JSON's bytes over four)
+  stands in before the first reply and after a summary. The "…" menu shows it ("Розмова: 45 тис.
+  з 244 тис. токенів").
 - A request OpenAI answers as unavailable (503), or that the network fails before a reply
   starts, is sent again after 1 s and then 4 s; then the turn says so. A usage limit is never
   tried again.

@@ -2653,7 +2653,7 @@ fn chat_reply(output: &[serde_json::Value]) -> serde_json::Value {
         }
         events.push(serde_json::json!({"type": "response.output_item.done", "item": item}));
     }
-    events.push(serde_json::json!({"type": "response.completed", "response": {"output": output}}));
+    events.push(serde_json::json!({"type": "response.completed", "response": {"output": output, "usage": {"input_tokens": 1000, "output_tokens": 5}}}));
     let body: String = events.iter().map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap())).collect();
     serde_json::json!({"status": 200, "body": body})
 }
@@ -2686,6 +2686,8 @@ fn a_question_streams_its_answer_with_the_tools_it_used_and_note_links() {
     assert!(out.contains("chat transcript: When does radar start?⏎⏎Пошук: radar⏎⏎Radar starts in May, see Radar.\n"), "{out}");
     assert!(out.contains("chat links: knotes-note:Radar\n"), "{out}");
     assert!(out.contains("chat bubbles: 1 | When does radar start?\n"), "the question stands apart from the answer: {out}");
+    let context = out.lines().find(|l| l.starts_with("chat context: ")).unwrap_or_default();
+    assert!(context.starts_with("chat context: 10") && context.ends_with(" of 244800"), "OpenAI's count, and 90 % of the 272K window: {context}");
     assert!(out.contains("chat conversations: When does radar start? | selected 0"), "{out}");
     assert!(out.contains("chat field: \n"), "{out}");
 }

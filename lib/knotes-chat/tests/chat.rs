@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use common::Fake;
-use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, Method, Model, Summary, ToolBox, list_models};
+use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, Memory, Method, Model, Summary, ToolBox, compact_at, list_models};
 use knotes_tools::{ToolError, ToolSpec};
 use serde_json::{Value, json};
 
@@ -68,13 +68,13 @@ fn reply(output: Vec<Value>) -> (u16, String) {
 }
 
 fn chat<'a>(fake: &'a Fake, token: &'a Token) -> Chat<'a> {
-    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO] }
+    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None) }
 }
 
 /// Sends `text` and gives the outcome with the events on the way.
 fn send(chat: &Chat, items: &mut Vec<Value>, text: &str, open: Option<&str>, tools: &Tools) -> (Result<(), ChatError>, Vec<ChatEvent>) {
     let mut events = Vec::new();
-    let result = chat.send(items, &mut None, text, open, tools, &AtomicBool::new(false), &mut |e| events.push(e));
+    let result = chat.send(items, &mut Memory::default(), text, open, tools, &AtomicBool::new(false), &mut |e| events.push(e));
     (result, events)
 }
 
@@ -183,17 +183,22 @@ fn a_stream_cut_short_or_called_off_leaves_the_conversation_as_it_was() {
     assert!(items.is_empty());
 
     let fake = Fake::answering(vec![reply(vec![message("never")])]);
-    let result = chat(&fake, &token).send(&mut items, &mut None, "hi", None, &tools, &AtomicBool::new(true), &mut |_| {});
+    let result = chat(&fake, &token).send(&mut items, &mut Memory::default(), "hi", None, &tools, &AtomicBool::new(true), &mut |_| {});
     assert_eq!(result, Err(ChatError::Cancelled));
     assert!(items.is_empty());
 }
 
 #[test]
 fn the_models_offered_are_those_listed() {
-    let models = json!({"models": [{"slug": "gpt-5.5", "display_name": "GPT-5.5", "visibility": "list"}, {"slug": "internal", "display_name": "x", "visibility": "hide"}]});
+    let models = json!({"models": [
+        {"slug": "gpt-5.6-terra", "display_name": "GPT-5.6 Terra", "visibility": "list", "context_window": 272_000},
+        {"slug": "gpt-5.5", "display_name": "GPT-5.5", "visibility": "list"},
+        {"slug": "internal", "display_name": "x", "visibility": "hide"},
+    ]});
     let fake = Fake::answering(vec![(200, models.to_string())]);
     let token = Token::default();
-    assert_eq!(list_models(&fake, &token), Ok(vec![Model { slug: "gpt-5.5".into(), name: "GPT-5.5".into() }]));
+    let terra = Model { slug: "gpt-5.6-terra".into(), name: "GPT-5.6 Terra".into(), context_window: Some(272_000) };
+    assert_eq!(list_models(&fake, &token), Ok(vec![terra, Model { slug: "gpt-5.5".into(), name: "GPT-5.5".into(), context_window: None }]));
     let request = &fake.sent.borrow()[0];
     assert_eq!((request.method, request.url.as_str()), (Method::Get, "https://api.openai.com/v1/models"));
     assert_eq!(fake.header(0, "Authorization"), "Bearer old");
@@ -239,12 +244,13 @@ fn a_long_conversation_has_its_older_part_summarized_and_sends_the_summary_with_
     // Without the summary even the cut results would not matter: the uncut last turn alone is long.
     let fake = Fake::answering(vec![reply(vec![message("Asked about first and second; found nothing.")]), reply(vec![message("fourth answer")])]);
     let (token, tools) = (Token::default(), Tools::default());
-    let mut summary = None;
+    let mut memory = Memory::default();
     let mut events = Vec::new();
-    let result = chat(&fake, &token).send(&mut items, &mut summary, "fourth?", None, &tools, &AtomicBool::new(false), &mut |e| events.push(e));
+    let small = Chat { compact_at: 60_000, ..chat(&fake, &token) };
+    let result = small.send(&mut items, &mut memory, "fourth?", None, &tools, &AtomicBool::new(false), &mut |e| events.push(e));
     assert_eq!(result, Ok(()));
     assert!(events.contains(&ChatEvent::Compacting), "{events:?}");
-    assert_eq!(summary, Some(Summary { covers: 10, text: "Asked about first and second; found nothing.".into() }), "the first two turns, the last two kept");
+    assert_eq!(memory.summary, Some(Summary { covers: 10, text: "Asked about first and second; found nothing.".into() }), "the first two turns, the last two kept");
 
     let asked = fake.body(0);
     assert!(asked.get("tools").is_none(), "summarizing calls no tools");
@@ -270,7 +276,44 @@ fn a_short_conversation_is_not_summarized() {
     }).collect();
     let fake = Fake::answering(vec![reply(vec![message("ok")])]);
     let (token, tools) = (Token::default(), Tools::default());
-    let mut summary = None;
-    chat(&fake, &token).send(&mut items, &mut summary, "second?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
-    assert_eq!((summary, fake.sent.borrow().len()), (None, 1));
+    let mut memory = Memory::default();
+    chat(&fake, &token).send(&mut items, &mut memory, "second?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert_eq!((memory.summary, fake.sent.borrow().len()), (None, 1));
+}
+
+/// A reply whose request OpenAI counted as `input_tokens`.
+fn counted(output: Vec<serde_json::Value>, input_tokens: u64) -> (u16, String) {
+    let (status, body) = reply(output);
+    let body = body.replace("\"response\":{\"id\":\"resp_1\",\"output\"", &format!("\"response\":{{\"id\":\"resp_1\",\"usage\":{{\"input_tokens\":{input_tokens},\"output_tokens\":5}},\"output\""));
+    assert!(body.contains("input_tokens"), "{body}");
+    (status, body)
+}
+
+#[test]
+fn the_conversation_s_size_is_openai_s_count_and_past_the_threshold_it_is_summarized() {
+    let (token, tools) = (Token::default(), Tools::default());
+    let fake = Fake::answering(vec![counted(vec![message("ok")], 1_234)]);
+    let mut items = Vec::new();
+    let mut memory = Memory::default();
+    chat(&fake, &token).send(&mut items, &mut memory, "hi", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    let size = memory.tokens.unwrap();
+    assert!((1_235..1_300).contains(&size), "the count of the request and the answer after it: {size}");
+
+    // Small items, but OpenAI counted the conversation past 90 % of the window: summarized.
+    let mut items: Vec<serde_json::Value> = ["first?", "second?"].iter().flat_map(|q| long_turn(q)).collect();
+    let mut memory = Memory { summary: None, tokens: Some(250_000) };
+    let fake = Fake::answering(vec![reply(vec![message("Summary.")]), counted(vec![message("third answer")], 40_000)]);
+    let mut events = Vec::new();
+    chat(&fake, &token).send(&mut items, &mut memory, "third?", None, &tools, &AtomicBool::new(false), &mut |e| events.push(e)).unwrap();
+    assert!(events.contains(&ChatEvent::Compacting), "{events:?}");
+    assert_eq!(memory.summary.as_ref().map(|s| s.covers), Some(5));
+    assert!(memory.tokens.is_some_and(|t| (40_000..40_100).contains(&t)), "{:?}", memory.tokens);
+}
+
+#[test]
+fn the_threshold_is_ninety_per_cent_of_the_window_up_to_where_requests_cost_double() {
+    assert_eq!(compact_at(None), 244_800);
+    assert_eq!(compact_at(Some(1_050_000)), 244_800);
+    assert_eq!(compact_at(Some(272_000)), 244_800);
+    assert_eq!(compact_at(Some(128_000)), 115_200);
 }

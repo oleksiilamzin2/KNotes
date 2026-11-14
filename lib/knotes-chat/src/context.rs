@@ -3,8 +3,25 @@
 
 use serde_json::{Value, json};
 
-/// Past this many tokens (estimated) a conversation's older part is summarized.
-pub const COMPACT_AT: usize = 60_000;
+/// The input past which a request costs twice as much (OpenAI's pricing of GPT-5.6 and its
+/// kin, whose windows reach 1 050 000): no conversation is let grow past it.
+pub const PRICED_WINDOW: u64 = 272_000;
+
+/// The size (tokens) past which a conversation's older part is summarized: 90 % of the
+/// model's window, as Codex does, the window taken no larger than `PRICED_WINDOW`; a model
+/// whose window is not known is taken to have that one.
+pub fn compact_at(context_window: Option<u64>) -> u64 {
+    context_window.unwrap_or(PRICED_WINDOW).min(PRICED_WINDOW) * 9 / 10
+}
+
+/// What a conversation remembers of its size: the summary standing in for its first items,
+/// and how many tokens it took when last sent (the last request's input as OpenAI counted it,
+/// with what came back); unknown before the first reply and after a summary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Memory {
+    pub summary: Option<Summary>,
+    pub tokens: Option<u64>,
+}
 /// The last turns sent whole, their tool results uncut (the one under way among them).
 pub const KEEP_TURNS: usize = 2;
 /// An older tool result past this many characters is cut.

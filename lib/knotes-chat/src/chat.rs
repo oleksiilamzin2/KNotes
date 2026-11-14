@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::authorized::{error_of, send_authorized};
-use crate::context::{COMPACT_AT, Summary, context, estimate_tokens, recent_start, transcript, turn_starts};
+use crate::context::{Memory, Summary, context, estimate_tokens, recent_start, transcript, turn_starts};
 use crate::{API, AccessToken, ChatError, HttpRequest, Method, SseEvents, ToolBox, Transport};
 
 /// What the model is told about itself and the tools.
@@ -38,46 +38,60 @@ pub enum ChatEvent {
 }
 
 /// One conversation's requests: the model, a key that lets OpenAI reuse the conversation's
-/// start from its cache, and how long to wait before sending again when OpenAI was
-/// unavailable or the network failed (one wait a try).
+/// start from its cache, how long to wait before sending again when OpenAI was unavailable or
+/// the network failed (one wait a try), and the size (tokens) past which the conversation's
+/// older part is summarized (`compact_at`).
 pub struct Chat<'a> {
     pub transport: &'a dyn Transport,
     pub token: &'a dyn AccessToken,
     pub model: String,
     pub cache_key: String,
     pub retry_after: Vec<Duration>,
+    pub compact_at: u64,
 }
 
 impl Chat<'_> {
     /// Sends the user's `text` (with the document they have open) after the conversation's
     /// `items`, runs the tools the model calls until it answers, and adds it all to `items`.
-    /// A conversation grown long gets its older part summarized first (`summary`, kept even if
-    /// the turn then fails: it covers only items from before it). A turn that fails or is
-    /// called off leaves `items` as they were.
+    /// A conversation grown past `compact_at` gets its older part summarized first (the summary
+    /// kept even if the turn then fails: it covers only items from before it); its size comes
+    /// from OpenAI's count of the last request when known, else from an estimate. A turn that
+    /// fails or is called off leaves `items` as they were.
     #[allow(clippy::too_many_arguments)]
-    pub fn send(&self, items: &mut Vec<Value>, summary: &mut Option<Summary>, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
-        let before = items.len();
-        let result = self.turn(items, summary, text, open, tools, cancel, on_event);
+    pub fn send(&self, items: &mut Vec<Value>, memory: &mut Memory, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
+        let (before, tokens, summary) = (items.len(), memory.tokens, memory.summary.clone());
+        let result = self.turn(items, memory, text, open, tools, cancel, on_event);
         if result.is_err() {
             items.truncate(before);
+            memory.tokens = if memory.summary == summary { tokens } else { None };
         }
         result
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn turn(&self, items: &mut Vec<Value>, summary: &mut Option<Summary>, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
+    fn turn(&self, items: &mut Vec<Value>, memory: &mut Memory, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
+        let before = items.len();
         if let Some(path) = open {
             let words = format!("The user has {path} open in Knotes; \"this note\", \"here\" and the like mean it.");
             items.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]}));
         }
         items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}));
-        if estimate_tokens(&context(items, summary.as_ref())) > COMPACT_AT {
-            self.compact(items, summary, cancel, on_event)?;
+        let size = match memory.tokens {
+            Some(tokens) => tokens + estimate_tokens(&items[before..]) as u64,
+            None => estimate_tokens(&context(items, memory.summary.as_ref())) as u64,
+        };
+        if size > self.compact_at {
+            self.compact(items, &mut memory.summary, cancel, on_event)?;
+            memory.tokens = None;
         }
         for _ in 0..MAX_STEPS {
-            let output = self.respond(&context(items, summary.as_ref()), tools, cancel, on_event)?;
+            let (output, input_tokens) = self.respond(&context(items, memory.summary.as_ref()), tools, cancel, on_event)?;
             let calls: Vec<Value> = output.iter().filter(|i| i["type"] == "function_call").cloned().collect();
-            items.extend(output.iter().filter_map(kept));
+            let kept: Vec<Value> = output.iter().filter_map(kept).collect();
+            if let Some(input_tokens) = input_tokens {
+                memory.tokens = Some(input_tokens + estimate_tokens(&kept) as u64);
+            }
+            items.extend(kept);
             if calls.is_empty() {
                 return Ok(());
             }
@@ -123,7 +137,7 @@ impl Chat<'_> {
             "store": false,
             "stream": true,
         });
-        let output = self.request(&body, cancel, &mut |_| {})?;
+        let (output, _) = self.request(&body, cancel, &mut |_| {})?;
         let words: String = output.iter().filter(|i| i["type"] == "message").filter_map(|i| i["content"].as_array()).flatten().filter_map(|c| c["text"].as_str()).collect();
         if words.trim().is_empty() {
             return Err(ChatError::Failed("the summary came back empty".into()));
@@ -132,8 +146,8 @@ impl Chat<'_> {
         Ok(())
     }
 
-    /// One streamed reply to `input`, with the vault's tools.
-    fn respond(&self, input: &[Value], tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<Vec<Value>, ChatError> {
+    /// One streamed reply to `input`, with the vault's tools, and its input's tokens.
+    fn respond(&self, input: &[Value], tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>), ChatError> {
         let functions: Vec<Value> = tools
             .specs()
             .into_iter()
@@ -156,8 +170,8 @@ impl Chat<'_> {
 
     /// Sends `body` to the Responses API (again after a wait, while OpenAI is unavailable or the
     /// network fails before a reply starts) and reads the streamed reply: its output items once
-    /// it says it is complete.
-    fn request(&self, body: &Value, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<Vec<Value>, ChatError> {
+    /// it says it is complete, and how many tokens its input took (OpenAI's count).
+    fn request(&self, body: &Value, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>), ChatError> {
         let request = HttpRequest {
             method: Method::Post,
             url: format!("{API}/responses"),
@@ -187,7 +201,7 @@ impl Chat<'_> {
                 "response.output_item.done" => done.push(data["item"].clone()),
                 "response.completed" => {
                     let output = data["response"]["output"].as_array().filter(|o| !o.is_empty()).cloned();
-                    return Ok(output.unwrap_or(done));
+                    return Ok((output.unwrap_or(done), data["response"]["usage"]["input_tokens"].as_u64()));
                 }
                 "response.failed" => return Err(ChatError::from_openai(&data["response"]["error"], 0)),
                 "response.incomplete" => {

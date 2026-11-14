@@ -7,15 +7,15 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use knotes_chat::{Chat, ChatError, ChatEvent, ChatGptAccount, CredentialStore, HttpRequest, HttpResponse, Summary, Transport};
+use knotes_chat::{Chat, ChatError, ChatEvent, ChatGptAccount, CredentialStore, HttpRequest, HttpResponse, Memory, Transport};
 use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
 use knotes_tools::VaultTools;
 use knotes_vault::FsVault;
 use serde_json::{Value, json};
 
-/// Called with the conversation's items and summary after a turn, and how it went.
-pub type TurnDone = Box<dyn FnOnce(Vec<Value>, Option<Summary>, Result<(), ChatError>) + Send>;
+/// Called with the conversation's items and memory after a turn, and how it went.
+pub type TurnDone = Box<dyn FnOnce(Vec<Value>, Memory, Result<(), ChatError>) + Send>;
 
 /// Waits before sending again while OpenAI is unavailable or the network fails.
 const RETRY_AFTER: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
@@ -25,7 +25,9 @@ pub type Account = ChatGptAccount<Box<dyn Transport + Send + Sync>, Box<dyn Cred
 /// One turn to run: the conversation so far and the question, and where to say what happens.
 pub struct Turn {
     pub items: Vec<Value>,
-    pub summary: Option<Summary>,
+    pub memory: Memory,
+    /// The size (tokens) past which the conversation's older part is summarized.
+    pub compact_at: u64,
     pub text: String,
     pub open: Option<String>,
     pub model: String,
@@ -66,15 +68,15 @@ impl ChatWorker {
                                 tools = SqliteIndex::open_reader(dir).ok().map(|index| VaultTools::new(index, FsVault::new(root), PdfTexts::new(root)));
                             }
                             let mut items = std::mem::take(&mut turn.items);
-                            let mut summary = turn.summary.take();
+                            let mut memory = std::mem::take(&mut turn.memory);
                             let result = match &tools {
                                 None => Err(ChatError::Failed("the vault's index is not ready yet".into())),
                                 Some(tools) => {
-                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec() };
-                                    chat.send(&mut items, &mut summary, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)
+                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at };
+                                    chat.send(&mut items, &mut memory, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)
                                 }
                             };
-                            (turn.done)(items, summary, result);
+                            (turn.done)(items, memory, result);
                         }
                     }
                 }

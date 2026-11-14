@@ -9,6 +9,8 @@ pub struct Model {
     pub slug: String,
     /// What the user sees.
     pub name: String,
+    /// How many tokens a request may take, when the list says.
+    pub context_window: Option<u64>,
 }
 
 /// The models the user's plan offers (those listed, not hidden).
@@ -28,7 +30,8 @@ pub fn list_models(transport: &dyn Transport, token: &dyn AccessToken) -> Result
         .filter_map(|m| {
             let slug = m.get("slug")?.as_str()?.to_string();
             let name = m.get("display_name").and_then(Value::as_str).unwrap_or(&slug).to_string();
-            Some(Model { slug, name })
+            let context_window = m.get("context_window").or_else(|| m.get("max_context_window")).and_then(Value::as_u64);
+            Some(Model { slug, name, context_window })
         })
         .collect())
 }

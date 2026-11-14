@@ -785,6 +785,9 @@ impl ChatPanel {
             item.setEnabled(action.is_some());
             menu.addItem(&item);
         };
+        if let Some(size) = self.context_words() {
+            item(&size, None);
+        }
         item(strings::CHAT_DELETE, (!self.state.borrow().current.items.is_empty()).then_some(sel!(deleteConversation:)));
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         if let Some(email) = self.account.email() {
@@ -793,6 +796,13 @@ impl ChatPanel {
         item(strings::CHAT_SIGN_OUT, Some(sel!(signOut:)));
         menu.setAutoenablesItems(false);
         menu.popUpMenuPositioningItem_atLocation_inView(None, NSPoint::new(0.0, button.bounds().size.height + 4.0), Some(button));
+    }
+
+    /// How full the conversation is, for the menu: "Розмова: 45 тис. з 245 тис. токенів".
+    fn context_words(&self) -> Option<String> {
+        let state = self.state.borrow();
+        let tokens = state.current.memory.tokens?;
+        Some(strings::chat_context(tokens, compact_at_for(&state.models, &state.model)))
     }
 
     // The document offered.
@@ -855,7 +865,8 @@ impl ChatPanel {
             let events = Arc::clone(&target);
             Turn {
                 items: state.current.items.clone(),
-                summary: state.current.summary.clone(),
+                memory: state.current.memory.clone(),
+                compact_at: compact_at_for(&state.models, &state.model),
                 text,
                 open: state.document.clone().filter(|_| state.document_on),
                 model: state.model.clone(),
@@ -870,11 +881,11 @@ impl ChatPanel {
                         }
                     });
                 }),
-                done: Box::new(move |items, summary, result| {
+                done: Box::new(move |items, memory, result| {
                     DispatchQueue::main().exec_async(move || {
                         let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
                         if let Some(panel) = target.get(mtm).upgrade() {
-                            panel.turn_done(items, summary, result);
+                            panel.turn_done(items, memory, result);
                         }
                     });
                 }),
@@ -901,13 +912,13 @@ impl ChatPanel {
         self.render_later();
     }
 
-    fn turn_done(&self, items: Vec<serde_json::Value>, summary: Option<knotes_chat::Summary>, result: Result<(), ChatError>) {
+    fn turn_done(&self, items: Vec<serde_json::Value>, memory: knotes_chat::Memory, result: Result<(), ChatError>) {
         let question = {
             let mut state = self.state.borrow_mut();
             let turn = state.turn.take();
             // A summary made for a turn that then failed still covers items from before it.
-            if summary != state.current.summary {
-                state.current.summary = summary;
+            if memory != state.current.memory {
+                state.current.memory = memory;
                 if result.is_err()
                     && let Some(conversations) = &state.conversations
                     && let Err(e) = conversations.save(&state.current)
@@ -971,7 +982,7 @@ impl ChatPanel {
         let text = NSMutableAttributedString::new();
         let state = self.state.borrow();
         let mut blocks: Vec<(Retained<NSAttributedString>, Block)> = Vec::new();
-        let covers = state.current.summary.as_ref().map_or(0, |s| s.covers);
+        let covers = state.current.memory.summary.as_ref().map_or(0, |s| s.covers);
         for (i, shown) in state.current.shown_at() {
             // Where the model's memory of the conversation turns from the summary to the messages.
             if covers > 0 && i >= covers && !blocks.is_empty() && !blocks.iter().any(|(_, kind)| matches!(kind, Block::Divider)) {
@@ -1057,6 +1068,8 @@ impl ChatPanel {
             lines.push(format!("chat links: {}", links.join(", ")));
         }
         lines.push(format!("chat field: {}", self.composer.string()));
+        let tokens = state.current.memory.tokens.map_or("unknown".to_string(), |t| t.to_string());
+        lines.push(format!("chat context: {tokens} of {}", compact_at_for(&state.models, &state.model)));
         let focused = self.view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r, &**self.composer as &objc2_app_kit::NSResponder));
         lines.push(format!("chat field focused: {}", if focused { "yes" } else { "no" }));
         lines
@@ -1163,6 +1176,11 @@ fn account() -> Account {
     let transport: Box<dyn Transport + Send + Sync> = Box::new(UreqTransport::default());
     let store: Box<dyn CredentialStore + Send + Sync> = if crate::probe::enabled() { Box::new(MemoryStore::default()) } else { Box::new(KeychainStore) };
     Account::new(transport, store)
+}
+
+/// Where the conversation is summarized for `model` (its window from the plan's list).
+fn compact_at_for(models: &[Model], model: &str) -> u64 {
+    knotes_chat::compact_at(models.iter().find(|m| m.slug == model).and_then(|m| m.context_window))
 }
 
 fn now() -> u64 {
