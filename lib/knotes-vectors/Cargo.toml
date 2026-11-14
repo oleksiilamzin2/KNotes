@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 knotes-core.workspace = true
 knotes-embed.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 knotes-index.workspace = true
