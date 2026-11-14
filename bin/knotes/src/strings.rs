@@ -123,6 +123,7 @@ pub const FIND: &str = "Знайти…";
 pub const FIND_NEXT: &str = "Знайти далі";
 pub const FIND_PREVIOUS: &str = "Знайти попереднє";
 pub const SEARCH_NOTES: &str = "Пошук у нотатках";
+pub const ASK_AI: &str = "Запитати ШІ";
 /// The find bar over the note.
 pub const FIND_PLACEHOLDER: &str = "Знайти в нотатці";
 pub const FIND_DONE: &str = "Готово";

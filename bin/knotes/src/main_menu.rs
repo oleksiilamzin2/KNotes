@@ -79,6 +79,7 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     submenu(mtm, &bar, s::MENU_VIEW, &[
         Some(item(mtm, s::TOGGLE_SIDEBAR, sel!(toggleSidebar:), "s", cmd(NSEventModifierFlags::Control))),
         Some(item(mtm, s::TOGGLE_PANEL, sel!(toggleInspector:), "i", cmd(NSEventModifierFlags::Option))),
+        Some(item(mtm, s::ASK_AI, sel!(askAI:), "l", cmd(none))),
         None,
         // A PDF's zoom (the viewer takes them when it has the focus).
         Some(item(mtm, s::ZOOM_IN, sel!(zoomIn:), "=", cmd(none))),
@@ -106,6 +107,11 @@ pub fn describe(app: &NSApplication) -> (String, String) {
 /// `Title ⇧⌘K | …` of the Edit menu's items, for probe mode.
 pub fn describe_edit(app: &NSApplication) -> String {
     app.mainMenu().and_then(|bar| bar.itemArray().iter().nth(2)).and_then(|i| i.submenu()).map(|m| shortcuts(&m)).unwrap_or_default()
+}
+
+/// The View menu's items with their shortcuts (probe line).
+pub fn describe_view(app: &NSApplication) -> String {
+    app.mainMenu().and_then(|bar| bar.itemArray().iter().nth(3)).and_then(|i| i.submenu()).map(|m| shortcuts(&m)).unwrap_or_default()
 }
 
 fn shortcuts(menu: &NSMenu) -> String {

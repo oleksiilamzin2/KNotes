@@ -165,5 +165,9 @@ plan usage for open-source and local apps) on 2026-11-14:
   starts, is sent again after 1 s and then 4 s; then the turn says so. A usage limit is never
   tried again.
 - While the model thinks before its first words, "Думає…".
+- An answer's code blocks sit on a grey card (each line's fragment draws its part, rounded at the
+  block's first and last lines; the text keeps its line breaks, so copying it gives the code).
+- View → "Запитати ШІ" (Cmd+L) unfolds the right panel if folded, switches it to the chat and
+  puts the cursor in the question field.
 - The probe signs in with a script of OpenAI's answers (`KNOTES_PROBE_CHAT`) and tokens in
   memory; without it the probe is signed out and never reads the Keychain.

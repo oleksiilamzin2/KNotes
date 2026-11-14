@@ -903,6 +903,10 @@ fn tabs_requested(window: &VaultWindow) {
     if std::env::var_os("KNOTES_PROBE_CHAT_CLICK_LINK").is_some() {
         window.chat.probe_click_note_link();
     }
+    // `KNOTES_PROBE_ASK_AI=1`: View → Ask the AI (Cmd+L).
+    if std::env::var_os("KNOTES_PROBE_ASK_AI").is_some() {
+        window.ask_ai();
+    }
     // `KNOTES_PROBE_CONNECTION_CLICK=line`: a click on that line of the connections, listed by
     // now (they are gathered on another thread).
     if let Ok(line) = std::env::var("KNOTES_PROBE_CONNECTION_CLICK") {
@@ -1087,6 +1091,7 @@ fn report(window: &NSWindow) {
     println!("menu: {menus}");
     println!("file-menu: {file}");
     println!("edit-menu: {}", crate::main_menu::describe_edit(&NSApplication::sharedApplication(window.mtm())));
+    println!("view-menu: {}", crate::main_menu::describe_view(&NSApplication::sharedApplication(window.mtm())));
     println!("title: {}", window.title());
     println!("subtitle: {}", window.subtitle());
     let frame = window.frame();

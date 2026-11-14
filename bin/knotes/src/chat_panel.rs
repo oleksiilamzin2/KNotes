@@ -24,7 +24,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
-use crate::chat_bubble::{CARD_INDENT, ChatBubble, QUESTION, is_question};
+use crate::chat_bubble::{CARD_INDENT, CODE, Card, ChatBubble, QUESTION, card_of};
 use crate::chat_worker::{Account, ChatWorker, ScriptTransport, Turn};
 use crate::strings;
 
@@ -64,8 +64,8 @@ define_class!(
         #[unsafe(method_id(textLayoutManager:textLayoutFragmentForLocation:inTextElement:))]
         fn fragment_for(&self, _layout: &NSTextLayoutManager, _location: &ProtocolObject<dyn NSTextLocation>, element: &NSTextElement) -> Retained<NSTextLayoutFragment> {
             let range = element.elementRange();
-            if is_question(element) {
-                Retained::into_super(ChatBubble::new(element, range.as_deref()))
+            if let Some(card) = card_of(element) {
+                Retained::into_super(ChatBubble::new(element, range.as_deref(), card))
             } else {
                 NSTextLayoutFragment::initWithTextElement_range(NSTextLayoutFragment::alloc(), element, range.as_deref())
             }
@@ -514,6 +514,13 @@ impl ChatPanel {
             state.document_on = true;
         }
         self.show_document();
+    }
+
+    /// The question field takes the keys (when signed in).
+    pub fn focus(&self) {
+        if let (true, Some(window)) = (self.account.is_signed_in(), self.view.window()) {
+            window.makeFirstResponder(Some(&self.composer));
+        }
     }
 
     fn mtm(&self) -> MainThreadMarker {
@@ -1033,12 +1040,25 @@ impl ChatPanel {
         let shown = unsafe { self.transcript.textStorage() }.map(|s| s.string().to_string()).unwrap_or_default();
         lines.push(format!("chat transcript: {}", shown.replace('\n', "⏎")));
         let cards = crate::chat_bubble::cards(&self.transcript);
-        lines.push(format!("chat bubbles: {}{}", cards.len(), cards.iter().map(|c| format!(" | {c}")).collect::<String>()));
+        let questions: Vec<&String> = cards.iter().filter(|(card, _)| *card == Card::Question).map(|(_, text)| text).collect();
+        lines.push(format!("chat bubbles: {}{}", questions.len(), questions.iter().map(|c| format!(" | {c}")).collect::<String>()));
+        let code: Vec<String> = cards
+            .iter()
+            .filter_map(|(card, text)| match card {
+                Card::Code { top, bottom } => Some(format!("{}{text}{}", if *top { "[" } else { "" }, if *bottom { "]" } else { "" })),
+                Card::Question => None,
+            })
+            .collect();
+        if !code.is_empty() {
+            lines.push(format!("chat code: {}", code.join(" ")));
+        }
         let links = self.transcript_links();
         if !links.is_empty() {
             lines.push(format!("chat links: {}", links.join(", ")));
         }
         lines.push(format!("chat field: {}", self.composer.string()));
+        let focused = self.view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r, &**self.composer as &objc2_app_kit::NSResponder));
+        lines.push(format!("chat field focused: {}", if focused { "yes" } else { "no" }));
         lines
     }
 
@@ -1261,11 +1281,31 @@ fn run_text(run: &Run) -> Retained<NSAttributedString> {
         body_font()
     };
     let colour = if style.quote { NSColor::secondaryLabelColor() } else { NSColor::labelColor() };
+    if style.code_block {
+        return code_block_text(&run.text, &font);
+    }
     let link = run.link.as_ref().map(|l| match l {
         RunLink::Note(target) => format!("{NOTE_LINK}{target}"),
         RunLink::Web(url) => format!("{WEB_LINK}{url}"),
     });
     piece(&run.text, &font, &colour, link.as_deref())
+}
+
+/// An answer's code block, marked for its card and inset from the card's sides.
+fn code_block_text(code: &str, font: &NSFont) -> Retained<NSAttributedString> {
+    let paragraph = NSMutableParagraphStyle::new();
+    paragraph.setFirstLineHeadIndent(CARD_INDENT);
+    paragraph.setHeadIndent(CARD_INDENT);
+    paragraph.setTailIndent(-CARD_INDENT);
+    let paragraph: Retained<AnyObject> = Retained::into_super(Retained::into_super(Retained::into_super(paragraph)));
+    // SAFETY: AppKit's attribute names with values of their kinds, and the card's own marker.
+    unsafe {
+        let marker = NSString::from_str(CODE);
+        let keys = [objc2_app_kit::NSFontAttributeName, objc2_app_kit::NSForegroundColorAttributeName, objc2_app_kit::NSParagraphStyleAttributeName, &*marker];
+        let values = [any(font), any(&*NSColor::labelColor()), paragraph, any(&*marker)];
+        let attributes = NSDictionary::from_retained_objects(&keys, &values);
+        NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &NSString::from_str(code), Some(&attributes))
+    }
 }
 
 fn error_text(error: &ChatError) -> Retained<NSAttributedString> {

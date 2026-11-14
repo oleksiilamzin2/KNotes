@@ -767,7 +767,7 @@ fn draw_external_arrow(rect: NSRect) {
 }
 
 /// `rect` with its top and/or bottom corners rounded.
-fn rounded(rect: NSRect, radius: f64, top: bool, bottom: bool) -> Retained<NSBezierPath> {
+pub(crate) fn rounded(rect: NSRect, radius: f64, top: bool, bottom: bool) -> Retained<NSBezierPath> {
     let (x0, y0) = (rect.origin.x, rect.origin.y);
     let (x1, y1) = (x0 + rect.size.width, y0 + rect.size.height);
     let (rt, rb) = (if top { radius } else { 0.0 }, if bottom { radius } else { 0.0 });

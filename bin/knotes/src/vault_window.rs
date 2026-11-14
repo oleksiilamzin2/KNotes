@@ -867,6 +867,18 @@ impl VaultWindow {
     }
 
     /// Called when the user flips the AI/outline switch (the app saves the choice).
+    /// The right panel shown (unfolded if folded away) with the chat, its question field
+    /// focused (View → Ask the AI, Cmd+L).
+    pub fn ask_ai(&self) {
+        if self.panel_item.isCollapsed() {
+            self.panel_item.setCollapsed(false);
+        }
+        if self.panel_mode.get() != PanelMode::Ai {
+            self.set_panel_mode(PanelMode::Ai);
+        }
+        self.chat.focus();
+    }
+
     pub fn on_panel_mode(&self, callback: impl Fn(PanelMode) + 'static) {
         let weak = self.this.borrow().clone();
         self.toolbar_delegate.on_panel_mode(move |mode| {

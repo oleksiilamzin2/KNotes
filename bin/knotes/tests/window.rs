@@ -2783,3 +2783,32 @@ fn where_a_long_conversation_was_summarized_for_the_model_is_marked() {
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script)]);
     assert!(out.contains("chat transcript: Q1⏎⏎A1⏎⏎— вище розмову стиснуто: ШІ пам'ятає її коротко —⏎⏎Q2⏎⏎A2\n"), "{out}");
 }
+
+#[test]
+fn ask_the_ai_shows_the_chat_and_focuses_its_question_field() {
+    let (home, vault, script_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(vault.path().join("Boris.md"), "# Boris").unwrap();
+    let script = chat_script(script_dir.path(), &[]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_ACTION", "panel=outline")]);
+    assert!(out.contains("panel: outline"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script)]);
+    assert!(out.contains("chat field focused: no"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_ASK_AI", "1")]);
+    assert!(out.contains("panel: ai, shows chat"), "{out}");
+    assert!(out.contains("chat field focused: yes"), "{out}");
+}
+
+#[test]
+fn the_view_menu_asks_the_ai_with_cmd_l() {
+    let out = probe();
+    assert!(out.contains("Запитати ШІ ⌘L"), "{out}");
+}
+
+#[test]
+fn code_in_an_answer_sits_on_a_card_of_its_own() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &[chat_reply(&[chat_message("Run:\n\n```sh\nls\npwd\n```\n\nThen `cd` back.")])]);
+    let (_vault, out) = probe_notes(&[("Boris.md", "# Boris")], &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "How?"), ("KNOTES_PROBE_DELAY_MS", "2000")]);
+    assert!(out.contains("chat transcript: How?⏎⏎Run:⏎⏎ls⏎pwd⏎⏎Then cd back.\n"), "code keeps its line breaks: {out}");
+    assert!(out.contains("chat code: [ls pwd]\n"), "one card, rounded at its first and last lines: {out}");
+}

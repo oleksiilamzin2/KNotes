@@ -153,6 +153,14 @@ define_class!(
             }
         }
 
+        /// View → Ask the AI: the chat shown, its question field focused.
+        #[unsafe(method(askAI:))]
+        fn ask_ai(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.ask_ai();
+            }
+        }
+
         /// File → Save: writes the unsaved notes of all windows (autosave would in 2 s anyway).
         #[unsafe(method(saveDocument:))]
         fn save_document(&self, _sender: Option<&AnyObject>) {
