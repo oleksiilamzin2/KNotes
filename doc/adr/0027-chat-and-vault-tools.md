@@ -86,3 +86,21 @@ plan usage for open-source and local apps) on 2026-11-14:
   without a vault named, the last one Knotes opened. A vault Knotes never indexed is refused
   with a message saying so. `scripts/bundle.sh` puts it in `Knotes.app/Contents/MacOS`. In the
   50k vault, starting and answering a search takes about half a second.
+
+## Built (2026-11-14): the chat's requests
+
+- `knotes-chat` sends a turn: the document open as a developer message, the user's text,
+  the tools in a `vault` namespace, `include: ["reasoning.encrypted_content"]`, the
+  conversation's id as `prompt_cache_key`, `store: false`, `stream: true`. It shows the reply's
+  text as it streams, runs the tools the model calls and sends their output back, until a reply
+  without calls (16 at most). A reply counts once `response.completed` comes; `response.failed`,
+  `response.incomplete`, an `error` event or a stream cut short fail the turn, which leaves the
+  conversation as it was; so does stopping it.
+- The conversation keeps the items to send back: messages as their text, function calls, and
+  reasoning sealed for sending back, all without the ids the server keeps nothing for.
+- A 401 renews the token once and sends again. Errors are sorted by what to do: the usage limit,
+  unavailable for now, sign in again, not eligible, unsupported (with the parameter), others
+  with their code and message.
+- The models are `GET /v1/models`' `models` with `visibility: "list"` (`slug`, `display_name`).
+- HTTP is `ureq` over the system's TLS and trusted roots (Security framework, no TLS library
+  compiled in); a test over the network, left out by default, checks it reaches OpenAI.

@@ -1,0 +1,13 @@
+[package]
+name = "knotes-chat"
+description = "The chat with an OpenAI model on the owner's ChatGPT plan, over the vault's tools (ADR 0027)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+knotes-tools.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
