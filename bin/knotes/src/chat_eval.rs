@@ -46,11 +46,11 @@ struct Log {
     last: Instant,
 }
 
-/// The turns asking `questions` with `model`, writing to `out` (begun with a heading naming
-/// `model_name`).
-pub fn turns(questions: Vec<Question>, model: &str, model_name: &str, compact_at: u64, out: &Path) -> std::io::Result<Vec<Turn>> {
+/// The turns asking `questions` with `model` reasoning as hard as `effort` (its own default when
+/// none), writing to `out` (begun with a heading naming `model_name` and `effort_name`).
+pub fn turns(questions: Vec<Question>, model: &str, model_name: &str, effort: Option<String>, effort_name: &str, compact_at: u64, out: &Path) -> std::io::Result<Vec<Turn>> {
     let mut file = File::create(out)?;
-    writeln!(file, "# Перевірка ШІ: {} питань, модель {model_name}\n", questions.len())?;
+    writeln!(file, "# Перевірка ШІ: {} питань, модель {model_name}, {effort_name}\n", questions.len())?;
     let log = Arc::new(Mutex::new(Log { file, total: questions.len(), done: 0, last: Instant::now() }));
     Ok(questions
         .into_iter()
@@ -65,6 +65,7 @@ pub fn turns(questions: Vec<Question>, model: &str, model_name: &str, compact_at
                 text: q.question.clone(),
                 open: q.open.clone(),
                 model: model.to_string(),
+                effort: effort.clone(),
                 cache_key: format!("eval-{}", q.id),
                 cancel: Arc::new(AtomicBool::new(false)),
                 on_event: Box::new(move |event| {

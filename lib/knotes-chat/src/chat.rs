@@ -64,6 +64,9 @@ pub struct Chat<'a> {
     pub compact_at: u64,
     /// The local day, as the model is told it ("Saturday, 2026-11-14 (UTC+02:00)").
     pub today: String,
+    /// How hard the model reasons over the user's questions (`reasoning.effort`); none, its own
+    /// default. Summaries are left at the default.
+    pub effort: Option<String>,
 }
 
 impl Chat<'_> {
@@ -183,7 +186,7 @@ impl Chat<'_> {
             .into_iter()
             .map(|s| json!({"type": "function", "name": s.name, "description": s.description, "parameters": s.parameters, "strict": false}))
             .collect();
-        let body = json!({
+        let mut body = json!({
             "model": self.model,
             "instructions": INSTRUCTIONS,
             "input": input,
@@ -195,6 +198,9 @@ impl Chat<'_> {
             "store": false,
             "stream": true,
         });
+        if let Some(effort) = &self.effort {
+            body["reasoning"] = json!({"effort": effort});
+        }
         self.request(&body, cancel, on_event)
     }
 

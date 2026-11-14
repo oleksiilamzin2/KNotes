@@ -417,6 +417,16 @@ fn an_outside_change_to_an_edited_note_keeps_both_versions() {
 }
 
 /// A vault with the given notes, probed with `env`.
+/// The app run on `notes` with `home` as HOME: settings one launch writes, the next reads.
+fn probe_notes_at_home(notes: &[(&str, &str)], env: &[(&str, &str)], home: &std::path::Path) -> (tempfile::TempDir, String) {
+    let vault = tempfile::tempdir().unwrap();
+    for (path, text) in notes {
+        std::fs::write(vault.path().join(path), text).unwrap();
+    }
+    let out = probe_env(&[vault.path()], Some(home), env);
+    (vault, out)
+}
+
 fn probe_notes(notes: &[(&str, &str)], env: &[(&str, &str)]) -> (tempfile::TempDir, String) {
     let vault = tempfile::tempdir().unwrap();
     for (path, text) in notes {
@@ -2682,7 +2692,7 @@ fn a_question_streams_its_answer_with_the_tools_it_used_and_note_links() {
         &[("Radar.md", "# Radar\n\nStarts in May."), ("Boris.md", "# Boris")],
         &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "When does radar start?"), ("KNOTES_PROBE_DELAY_MS", "2500")],
     );
-    assert!(out.contains("chat: signed in | model: Probe Model | document: Boris  ✕ | Використовується план ChatGPT"), "{out}");
+    assert!(out.contains("chat: signed in | model: Probe Model | effort: Звичайні роздуми | document: Boris  ✕ | Використовується план ChatGPT"), "the model's own effort: {out}");
     assert!(out.contains("chat transcript: When does radar start?⏎⏎Пошук: radar⏎⏎Radar starts in May, see Radar.\n"), "{out}");
     assert!(out.contains("chat links: knotes-note:Radar\n"), "{out}");
     assert!(out.contains("chat bubbles: 1 | When does radar start?\n"), "the question stands apart from the answer: {out}");
@@ -2690,6 +2700,18 @@ fn a_question_streams_its_answer_with_the_tools_it_used_and_note_links() {
     assert!(context.starts_with("chat context: 10") && context.ends_with(" of 244800"), "OpenAI's count, and 90 % of the 272K window: {context}");
     assert!(out.contains("chat conversations: When does radar start? | selected 0"), "{out}");
     assert!(out.contains("chat field: \n"), "{out}");
+}
+
+#[test]
+fn the_effort_chosen_is_shown_and_kept_for_the_next_launch() {
+    let (home, script_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let script = chat_script(script_dir.path(), &radar_answers());
+    let notes = [("Radar.md", "# Radar\n\nStarts in May.")];
+    let chosen = [("KNOTES_PROBE_CHAT", script.as_str()), ("KNOTES_PROBE_CHAT_EFFORT", "high"), ("KNOTES_PROBE_DELAY_MS", "1500")];
+    let (_vault, out) = probe_notes_at_home(&notes, &chosen, home.path());
+    assert!(out.contains("| effort: Довгі роздуми |"), "{out}");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_CHAT", script.as_str()), ("KNOTES_PROBE_DELAY_MS", "1500")], home.path());
+    assert!(out.contains("| effort: Довгі роздуми |"), "kept: {out}");
 }
 
 #[test]

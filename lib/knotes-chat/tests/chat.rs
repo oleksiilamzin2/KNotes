@@ -76,7 +76,7 @@ fn reply(output: Vec<Value>) -> (u16, String) {
 }
 
 fn chat<'a>(fake: &'a Fake, token: &'a Token) -> Chat<'a> {
-    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None), today: "Saturday, 2026-11-14 (UTC+02:00)".into() }
+    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None), today: "Saturday, 2026-11-14 (UTC+02:00)".into(), effort: None }
 }
 
 /// Sends `text` and gives the outcome with the events on the way.
@@ -111,6 +111,7 @@ fn a_reply_streams_its_text_and_joins_the_conversation() {
     assert!(instructions.contains("Search a date first as the user says it") && instructions.contains("2026-11-18") && instructions.contains("Prefer figures written in the notes"), "{instructions}");
     assert!(instructions.contains("it sees only checkbox items"), "{instructions}");
     assert!(instructions.contains("[[Projects/Radar#Budget]]") && instructions.contains("list_tasks") && instructions.contains("related"), "{instructions}");
+    assert!(body.get("reasoning").is_none(), "no effort chosen: the model's own");
     for field in ["temperature", "max_output_tokens", "previous_response_id", "truncation", "metadata"] {
         assert!(body.get(field).is_none(), "{field} is not allowed on this route");
     }
@@ -207,14 +208,19 @@ fn a_stream_cut_short_or_called_off_leaves_the_conversation_as_it_was() {
 #[test]
 fn the_models_offered_are_those_listed() {
     let models = json!({"models": [
-        {"slug": "gpt-5.6-terra", "display_name": "GPT-5.6 Terra", "visibility": "list", "context_window": 272_000},
+        {"slug": "gpt-5.6-terra", "display_name": "GPT-5.6 Terra", "visibility": "list", "context_window": 272_000,
+         "default_reasoning_level": "low",
+         "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}, {"effort": "medium", "description": "Balanced"}, {"effort": "xhigh", "description": "Deepest"}]},
         {"slug": "gpt-5.5", "display_name": "GPT-5.5", "visibility": "list"},
         {"slug": "internal", "display_name": "x", "visibility": "hide"},
     ]});
     let fake = Fake::answering(vec![(200, models.to_string())]);
     let token = Token::default();
-    let terra = Model { slug: "gpt-5.6-terra".into(), name: "GPT-5.6 Terra".into(), context_window: Some(272_000) };
-    assert_eq!(list_models(&fake, &token), Ok(vec![terra, Model { slug: "gpt-5.5".into(), name: "GPT-5.5".into(), context_window: None }]));
+    let levels = |l: &[&str]| l.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+    let terra = Model { slug: "gpt-5.6-terra".into(), name: "GPT-5.6 Terra".into(), context_window: Some(272_000), efforts: levels(&["low", "medium", "xhigh"]), default_effort: "low".into() };
+    // A model the list says nothing of how it reasons gets the levels every reasoning model takes.
+    let plain = Model { slug: "gpt-5.5".into(), name: "GPT-5.5".into(), context_window: None, efforts: levels(&["low", "medium", "high"]), default_effort: "medium".into() };
+    assert_eq!(list_models(&fake, &token), Ok(vec![terra, plain]));
     let request = &fake.sent.borrow()[0];
     assert_eq!((request.method, request.url.as_str()), (Method::Get, "https://api.openai.com/v1/models"));
     assert_eq!(fake.header(0, "Authorization"), "Bearer old");
@@ -388,4 +394,13 @@ fn a_document_kept_from_the_ai_is_not_named_to_it() {
     let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
     send(&chat(&fake, &token), &mut items, "what is here?", Some("Private/Secret.md"), &tools).0.unwrap();
     assert!(!fake.body(0).to_string().contains("Private/Secret.md"), "{}", fake.body(0)["input"]);
+}
+
+#[test]
+fn the_effort_chosen_goes_with_each_request() {
+    let fake = Fake::answering(vec![reply(vec![message("ok")])]);
+    let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
+    let chat = Chat { effort: Some("low".into()), ..chat(&fake, &token) };
+    assert_eq!(send(&chat, &mut items, "hi", None, &tools).0, Ok(()));
+    assert_eq!(fake.body(0)["reasoning"], json!({"effort": "low"}));
 }

@@ -31,6 +31,8 @@ pub struct Turn {
     pub text: String,
     pub open: Option<String>,
     pub model: String,
+    /// How hard the model reasons; none, its own default.
+    pub effort: Option<String>,
     pub cache_key: String,
     pub cancel: Arc<AtomicBool>,
     pub on_event: Box<dyn FnMut(ChatEvent) + Send>,
@@ -72,7 +74,7 @@ impl ChatWorker {
                             let result = match &tools {
                                 None => Err(ChatError::Failed("the vault's index is not ready yet".into())),
                                 Some(tools) => {
-                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today() };
+                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today(), effort: turn.effort.clone() };
                                     chat.send(&mut items, &mut memory, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)
                                 }
                             };

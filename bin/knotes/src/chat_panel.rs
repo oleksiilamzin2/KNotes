@@ -137,6 +137,13 @@ define_class!(
             }
         }
 
+        #[unsafe(method(chooseEffort:))]
+        fn choose_effort(&self, sender: &NSPopUpButton) {
+            if let Some(panel) = self.panel() {
+                panel.choose_effort_at(sender.indexOfSelectedItem());
+            }
+        }
+
         #[unsafe(method(toggleDocument:))]
         fn toggle_document(&self, _sender: Option<&AnyObject>) {
             if let Some(panel) = self.panel() {
@@ -236,6 +243,8 @@ struct State {
     document_on: bool,
     models: Vec<Model>,
     model: String,
+    /// How hard the model is asked to reason; none, its own default.
+    effort: Option<String>,
     turn: Option<Asking>,
     /// What went wrong in the last turn.
     error: Option<ChatError>,
@@ -258,6 +267,7 @@ pub struct ChatPanel {
     send_button: Retained<NSButton>,
     document_chip: Retained<NSButton>,
     model_popup: Retained<NSPopUpButton>,
+    effort_popup: Retained<NSPopUpButton>,
     field_frame: Retained<ComposerFrame>,
     target: Retained<ChatTarget>,
     state: RefCell<State>,
@@ -385,6 +395,16 @@ impl ChatPanel {
             model_popup.setTarget(Some(&target));
             model_popup.setAction(Some(sel!(chooseModel:)));
         }
+        let effort_popup = NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
+        effort_popup.setBordered(false);
+        effort_popup.setControlSize(NSControlSize::Small);
+        effort_popup.setFont(Some(&NSFont::systemFontOfSize(NSFont::smallSystemFontSize())));
+        effort_popup.setToolTip(Some(&NSString::from_str(strings::CHAT_EFFORT_TIP)));
+        // SAFETY: the target outlives the control.
+        unsafe {
+            effort_popup.setTarget(Some(&target));
+            effort_popup.setAction(Some(sel!(chooseEffort:)));
+        }
         let plan = NSTextField::labelWithString(&NSString::from_str(strings::CHAT_PLAN), mtm);
         plan.setFont(Some(&NSFont::systemFontOfSize(NSFont::smallSystemFontSize())));
         plan.setTextColor(Some(&NSColor::secondaryLabelColor()));
@@ -395,7 +415,7 @@ impl ChatPanel {
         manage.setFont(Some(&NSFont::systemFontOfSize(NSFont::smallSystemFontSize())));
         manage.setContentTintColor(Some(&NSColor::linkColor()));
 
-        for v in [&*conversations_popup as &NSView, &new_button, &more_button, &transcript_scroll, &field_box, &document_chip, &model_popup, &plan, &manage] {
+        for v in [&*conversations_popup as &NSView, &new_button, &more_button, &transcript_scroll, &field_box, &document_chip, &effort_popup, &model_popup, &plan, &manage] {
             add(&signed_in, v);
         }
         let guide = signed_in.safeAreaLayoutGuide();
@@ -417,7 +437,9 @@ impl ChatPanel {
             model_popup.trailingAnchor().constraintEqualToAnchor_constant(&signed_in.trailingAnchor(), -8.0),
             model_popup.bottomAnchor().constraintEqualToAnchor_constant(&plan.topAnchor(), -4.0),
             document_chip.leadingAnchor().constraintEqualToAnchor_constant(&signed_in.leadingAnchor(), 12.0),
-            document_chip.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&model_popup.leadingAnchor(), -8.0),
+            effort_popup.trailingAnchor().constraintEqualToAnchor_constant(&model_popup.leadingAnchor(), -2.0),
+            effort_popup.centerYAnchor().constraintEqualToAnchor(&model_popup.centerYAnchor()),
+            document_chip.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&effort_popup.leadingAnchor(), -8.0),
             document_chip.centerYAnchor().constraintEqualToAnchor(&model_popup.centerYAnchor()),
             plan.leadingAnchor().constraintEqualToAnchor_constant(&signed_in.leadingAnchor(), 12.0),
             plan.bottomAnchor().constraintEqualToAnchor_constant(&signed_in.bottomAnchor(), -10.0),
@@ -439,6 +461,7 @@ impl ChatPanel {
 
         let settings = AppSettings::load(&app_data);
         let model = settings.chat_model.unwrap_or_default();
+        let effort = settings.chat_effort;
         let state = State {
             registration: Registration::load(&app_data),
             conversations: None,
@@ -448,6 +471,7 @@ impl ChatPanel {
             document_on: true,
             models: Vec::new(),
             model,
+            effort,
             turn: None,
             error: None,
             sign_in: None,
@@ -468,6 +492,7 @@ impl ChatPanel {
             send_button,
             document_chip,
             model_popup,
+            effort_popup,
             field_frame,
             target,
             state: RefCell::new(state),
@@ -519,7 +544,9 @@ impl ChatPanel {
         let out = std::env::var("KNOTES_CHAT_EVAL_OUT").unwrap_or_else(|_| format!("{questions}.answers.md"));
         let name = state.models.iter().find(|m| m.slug == state.model).map_or(state.model.clone(), |m| m.name.clone());
         let compact_at = compact_at_for(&state.models, &state.model);
-        match crate::chat_eval::turns(crate::chat_eval::questions(std::path::Path::new(&questions)), &state.model, &name, compact_at, std::path::Path::new(&out)) {
+        let effort = effort_for(&state.models, &state.model, state.effort.as_ref());
+        let effort_name = shown_effort(&state.models, &state.model, effort.as_deref());
+        match crate::chat_eval::turns(crate::chat_eval::questions(std::path::Path::new(&questions)), &state.model, &name, effort, &effort_name, compact_at, std::path::Path::new(&out)) {
             Ok(turns) => turns.into_iter().for_each(|turn| self.worker.send(turn)),
             Err(e) => eprintln!("knotes: cannot start the test questions: {e}"),
         }
@@ -696,6 +723,7 @@ impl ChatPanel {
                 state.model = models.first().map(|m| m.slug.clone()).unwrap_or_default();
             }
             state.models = models;
+            state.effort = effort_for(&state.models, &state.model, state.effort.as_ref());
         }
         self.show_models();
         self.maybe_start_eval();
@@ -710,6 +738,43 @@ impl ChatPanel {
         if let Some(i) = state.models.iter().position(|m| m.slug == state.model) {
             self.model_popup.selectItemAtIndex(i as isize);
         }
+        drop(state);
+        self.show_efforts();
+    }
+
+    /// The efforts the model takes, the one it will be asked for chosen.
+    fn show_efforts(&self) {
+        let state = self.state.borrow();
+        self.effort_popup.removeAllItems();
+        let Some(model) = state.models.iter().find(|m| m.slug == state.model) else { return };
+        for effort in &model.efforts {
+            self.effort_popup.addItemWithTitle(&NSString::from_str(&strings::chat_effort(effort)));
+        }
+        let chosen = state.effort.as_ref().unwrap_or(&model.default_effort);
+        if let Some(i) = model.efforts.iter().position(|e| e == chosen) {
+            self.effort_popup.selectItemAtIndex(i as isize);
+        }
+    }
+
+    fn choose_effort_at(&self, index: isize) {
+        let effort = {
+            let state = self.state.borrow();
+            let Some(model) = state.models.iter().find(|m| m.slug == state.model) else { return };
+            let Some(effort) = usize::try_from(index).ok().and_then(|i| model.efforts.get(i)) else { return };
+            effort.clone()
+        };
+        self.set_effort(effort);
+    }
+
+    /// `effort` asked for from now on, and kept for the next launch.
+    fn set_effort(&self, effort: String) {
+        self.state.borrow_mut().effort = Some(effort.clone());
+        self.show_efforts();
+        let mut settings = AppSettings::load(&self.app_data);
+        settings.chat_effort = Some(effort);
+        if let Err(e) = settings.save(&self.app_data) {
+            eprintln!("knotes: cannot save settings: {e}");
+        }
     }
 
     fn choose_model(&self, index: isize) {
@@ -717,8 +782,11 @@ impl ChatPanel {
             let mut state = self.state.borrow_mut();
             let Some(model) = usize::try_from(index).ok().and_then(|i| state.models.get(i)).map(|m| m.slug.clone()) else { return };
             state.model = model.clone();
+            // An effort the new model does not take gives way to its own.
+            state.effort = effort_for(&state.models, &state.model, state.effort.as_ref());
             model
         };
+        self.show_efforts();
         let mut settings = AppSettings::load(&self.app_data);
         settings.chat_model = Some(slug);
         if let Err(e) = settings.save(&self.app_data) {
@@ -893,6 +961,7 @@ impl ChatPanel {
                 text,
                 open: state.document.clone().filter(|_| state.document_on),
                 model: state.model.clone(),
+                effort: effort_for(&state.models, &state.model, state.effort.as_ref()),
                 cache_key: state.current.id.clone(),
                 cancel,
                 on_event: Box::new(move |event| {
@@ -1064,7 +1133,8 @@ impl ChatPanel {
         if self.account.is_signed_in() {
             let model = state.models.iter().find(|m| m.slug == state.model).map_or(state.model.as_str(), |m| m.name.as_str());
             let chip = if self.document_chip.isHidden() { String::new() } else { self.document_chip.title().to_string() };
-            lines.push(format!("chat: signed in | model: {model} | document: {chip} | {}", strings::CHAT_PLAN));
+            let effort = self.effort_popup.titleOfSelectedItem().map(|t| t.to_string()).unwrap_or_default();
+            lines.push(format!("chat: signed in | model: {model} | effort: {effort} | document: {chip} | {}", strings::CHAT_PLAN));
         } else {
             lines.push(format!("chat: signed out | {} | {}", self.sign_in_button.title(), self.sign_in_status.stringValue()));
         }
@@ -1161,6 +1231,11 @@ impl ChatPanel {
         }
     }
 
+    /// Probe: `effort` chosen in its menu.
+    pub fn probe_choose_effort(&self, effort: &str) {
+        self.set_effort(effort.to_string());
+    }
+
     /// Probe: the document chip clicked.
     pub fn probe_toggle_document(&self) {
         self.toggle_document();
@@ -1199,6 +1274,21 @@ fn account() -> Account {
     let transport: Box<dyn Transport + Send + Sync> = Box::new(UreqTransport::default());
     let store: Box<dyn CredentialStore + Send + Sync> = if crate::probe::enabled() { Box::new(MemoryStore::default()) } else { Box::new(KeychainStore) };
     Account::new(transport, store)
+}
+
+/// The effort to ask `model` for: the one `chosen` if the model takes it (or while the list of
+/// models is not in yet), else none, so the model reasons as it does by default.
+fn effort_for(models: &[Model], model: &str, chosen: Option<&String>) -> Option<String> {
+    match models.iter().find(|m| m.slug == model) {
+        Some(m) => chosen.filter(|e| m.efforts.contains(e)).cloned(),
+        None => chosen.cloned(),
+    }
+}
+
+/// What the effort `model` is asked for is called: its own default when none.
+fn shown_effort(models: &[Model], model: &str, effort: Option<&str>) -> String {
+    let default = models.iter().find(|m| m.slug == model).map(|m| m.default_effort.as_str());
+    effort.or(default).map_or_else(|| "типові роздуми".to_string(), strings::chat_effort)
 }
 
 /// Where the conversation is summarized for `model` (its window from the plan's list).

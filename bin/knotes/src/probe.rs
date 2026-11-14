@@ -387,10 +387,13 @@ fn report_tab_crosses(outline: &NSOutlineView) {
 
 /// `KNOTES_PROBE_CHAT_SEND=first|second`: those questions asked in the chat, 600 ms apart (with
 /// `KNOTES_PROBE_CHAT` naming OpenAI's answers); `KNOTES_PROBE_CHAT_TOGGLE_DOC=1` crosses out
-/// the document offered first.
+/// the document offered first; `KNOTES_PROBE_CHAT_EFFORT=high` chooses that effort.
 pub fn chat_requested(chat: &std::rc::Rc<crate::chat_panel::ChatPanel>) {
     if std::env::var_os("KNOTES_PROBE_CHAT_TOGGLE_DOC").is_some() {
         chat.probe_toggle_document();
+    }
+    if let Ok(effort) = std::env::var("KNOTES_PROBE_CHAT_EFFORT") {
+        chat.probe_choose_effort(&effort);
     }
     let Ok(questions) = std::env::var("KNOTES_PROBE_CHAT_SEND") else { return };
     for (i, question) in questions.split('|').map(str::to_owned).enumerate() {

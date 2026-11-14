@@ -181,6 +181,22 @@ pub const CHAT_CUT: &str = "Відповідь обірвалася.";
 pub const CHAT_DECLINED: &str = "Вхід скасовано в браузері.";
 pub const CHAT_PLAN_OFF: &str = "Використання плану ChatGPT не дозволено. Увійдіть знову й дозвольте його.";
 
+pub const CHAT_EFFORT_TIP: &str = "Скільки модель міркує перед відповіддю: довше — ретельніше, але повільніше й більше з ліміту плану";
+
+/// What the menu calls a reasoning effort; one it does not know, as it is.
+pub fn chat_effort(effort: &str) -> String {
+    match effort {
+        "none" => "Без роздумів",
+        "minimal" => "Мінімальні роздуми",
+        "low" => "Короткі роздуми",
+        "medium" => "Звичайні роздуми",
+        "high" => "Довгі роздуми",
+        "xhigh" => "Найдовші роздуми",
+        other => other,
+    }
+    .to_string()
+}
+
 /// How full a conversation is: its size and where it is summarized, in thousands of tokens.
 pub fn chat_context(tokens: u64, limit: u64) -> String {
     format!("Розмова: {} тис. з {} тис. токенів", tokens.div_ceil(1000), limit / 1000)

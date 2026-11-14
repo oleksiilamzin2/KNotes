@@ -109,6 +109,14 @@ plan usage for open-source and local apps) on 2026-11-14:
   unavailable for now, sign in again, not eligible, unsupported (with the parameter), others
   with their code and message.
 - The models are `GET /v1/models`' `models` with `visibility: "list"` (`slug`, `display_name`).
+- How hard the model reasons is the user's to choose, in a menu beside the model's: the efforts
+  the list gives each model (`supported_reasoning_levels`, their `effort`, and
+  `default_reasoning_level`, the shape Codex's list has), or low, medium and high, medium first,
+  for a model it says nothing of. The choice is kept in the settings like the model, sent as
+  `reasoning.effort` with each request of a turn (none until one is chosen: the model's own),
+  and gives way to the new model's default when that model does not take it. Summaries keep
+  the default. A run of the test questions uses the effort chosen and names it in its heading,
+  so a lower effort can be measured against the default before it is recommended.
 - HTTP is `ureq` over the system's TLS and trusted roots (Security framework, no TLS library
   compiled in); a test over the network, left out by default, checks it reaches OpenAI.
 
