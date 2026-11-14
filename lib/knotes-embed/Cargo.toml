@@ -1,0 +1,13 @@
+[package]
+name = "knotes-embed"
+description = "Text to vectors for search by meaning, and the client of the helper process that makes them (ADR 0028)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

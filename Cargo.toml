@@ -32,6 +32,7 @@ knotes-session = { path = "lib/knotes-session" }
 knotes-editor = { path = "lib/knotes-editor" }
 knotes-pdf = { path = "lib/knotes-pdf" }
 knotes-tools = { path = "lib/knotes-tools" }
+knotes-embed = { path = "lib/knotes-embed" }
 knotes-chat = { path = "lib/knotes-chat" }
 ureq = { version = "3.5.2", default-features = false, features = ["native-tls-no-default"] }
 security-framework = { version = "3.7.0", default-features = false }
