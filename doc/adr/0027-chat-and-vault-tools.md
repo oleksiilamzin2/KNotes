@@ -227,6 +227,11 @@ plan usage for open-source and local apps) on 2026-11-14:
   one letter, and for three words or more looks last for documents holding all but one
   (`partial`, the word `missing`); the model is told that dates are often written in numbers and
   to prefer figures written in the notes to estimates. By words 33 → 36 of 37, MRR 0.77 → 0.81.
+- Tried and left out: Snowball's Ukrainian stemmer (`snowball_stemmers_rs`) in place of the cut,
+  taking the shorter of its stem and the cut. The benchmark did not move (36 of 37, MRR 0.81):
+  search matches word starts in the index's unstemmed text, and Snowball's stems of one word's
+  forms differ in their starts as much as the cut's do ("помилка" → "помилк", "помилок" →
+  "помил"). It would help only with the index stemmed too (an FTS5 tokenizer of our own).
 - Two more tools, for the costliest questions: `list_tasks` (task items by note, open ones by
   default, each with its line, words and section heading; by folder; paged), for "what is left to
   do" (23–28 calls before); `related` (a document with how each note it links to starts and the
