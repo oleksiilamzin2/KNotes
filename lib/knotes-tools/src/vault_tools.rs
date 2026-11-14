@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use knotes_core::{BlockHit, ContentQuery, DocumentPages, FolderRulesStore, NoteParser, Span, TitleSearch, VaultReader, Within};
+use knotes_core::{BlockHit, ContentQuery, DocumentPages, FolderRulesStore, MeaningSearch, NoteParser, Span, TitleSearch, VaultReader, Within};
 use knotes_md::MarkdownParser;
 use knotes_search::TitleIndex;
 use serde_json::{Value, json};
@@ -69,12 +69,20 @@ pub struct VaultTools<I, F, D> {
     overview: RefCell<Option<(Instant, String)>>,
     /// What the user keeps from the AI, and when it was looked up.
     kept: RefCell<Option<(Instant, Rc<Kept>)>>,
+    /// Search by meaning, merged into search's finds when there (ADR 0028).
+    meaning: Option<Box<dyn MeaningSearch>>,
 }
 
 impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultTools<I, F, D> {
     pub fn new(index: I, files: F, documents: D) -> Self {
         let titles = RefCell::new((Instant::now(), titles_of(&index)));
-        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None) }
+        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None), meaning: None }
+    }
+
+    /// Search finds blocks by meaning too, merged with those by words (ADR 0028).
+    pub fn with_meaning(mut self, meaning: Box<dyn MeaningSearch>) -> Self {
+        self.meaning = Some(meaning);
+        self
     }
 
     /// The tools' descriptions.
@@ -170,7 +178,8 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn search(&self, args: &Value) -> Result<Value, ToolError> {
-        let query = without_question_words(&text_arg(args, "query")?);
+        let asked = text_arg(args, "query")?;
+        let query = without_question_words(&asked);
         let (offset, limit) = paging(args, 10, 30);
         // One more than the page, to tell whether more follow.
         let wanted = offset + limit + 1;
@@ -217,6 +226,11 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 let rest = stems(&words.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, w)| *w).collect::<Vec<_>>().join(" "));
                 hits.add("partial", find(&rest, Within::Note, None)?, Some(format!("missing:{word}")), false);
             }
+        }
+        // Finds by meaning beside them, the two lists merged; a failing search by meaning (its
+        // helper gone, no model) leaves search by words as it is.
+        if let Some(near) = self.meaning.as_ref().and_then(|m| m.nearest(&asked, wanted).ok()) {
+            hits.0 = merged(std::mem::take(&mut hits.0), near);
         }
         let kept = self.kept();
         hits.0.retain(|(_, hit, via)| !kept.holds(&hit.path) && via.as_deref().is_none_or(|v| v.starts_with("missing:") || !kept.holds(v)));
@@ -530,8 +544,11 @@ fn describe(index: &impl ToolIndex, kept: &Kept, tags: &[(String, usize)]) -> St
 
 /// Search hits as they are gathered: how each was found, the hit, and the document it was
 /// found through (`linked`).
+/// A find: how it was found, the block, and the document it came through or the word it lacks.
+type Find = (&'static str, BlockHit, Option<String>);
+
 #[derive(Default)]
-struct Hits(Vec<(&'static str, BlockHit, Option<String>)>);
+struct Hits(Vec<Find>);
 
 impl Hits {
     /// Adds `found` hits: every one (`all`), or only those of documents not there yet.
@@ -542,6 +559,36 @@ impl Hits {
             }
         }
     }
+}
+
+/// Finds by words and by meaning in one list, by reciprocal rank fusion (k = 60): a block's
+/// score is the sum of 1 / (60 + its rank) in each list it is in, so one both lists rank high
+/// comes first. The first find by words stays first, an exact match never pushed down by
+/// meaning. A block in both keeps how words found it; one found only by meaning is `meaning`.
+fn merged(words: Vec<Find>, meaning: Vec<BlockHit>) -> Vec<Find> {
+    const K: f64 = 60.0;
+    let mut found: Vec<(Find, f64)> = Vec::new();
+    let mut add = |entry: Find, rank: usize| {
+        let score = 1.0 / (K + rank as f64 + 1.0);
+        match found.iter_mut().find(|(e, _)| e.1.path == entry.1.path && e.1.ord == entry.1.ord) {
+            Some((_, total)) => *total += score,
+            None => found.push((entry, score)),
+        }
+    };
+    let first = words.first().map(|(_, hit, _)| (hit.path.clone(), hit.ord));
+    for (rank, entry) in words.into_iter().enumerate() {
+        add(entry, rank);
+    }
+    for (rank, hit) in meaning.into_iter().enumerate() {
+        add(("meaning", hit, None), rank);
+    }
+    for (entry, score) in &mut found {
+        if first.as_ref().is_some_and(|(path, ord)| entry.1.path == *path && entry.1.ord == *ord) {
+            *score = f64::INFINITY;
+        }
+    }
+    found.sort_by(|a, b| b.1.total_cmp(&a.1));
+    found.into_iter().map(|(entry, _)| entry).collect()
 }
 
 /// A document found by its title: its start, no fragment.

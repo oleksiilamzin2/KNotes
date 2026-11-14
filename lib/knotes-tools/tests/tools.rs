@@ -380,3 +380,38 @@ fn found_and_read_notes_say_when_they_last_changed() {
     let read = call(&v, "read_note", json!({"path": "Orchard/Apple 03.md"}));
     assert_eq!(read["modified"], "2026-01-04T01:00Z");
 }
+
+/// Search by meaning as a list given beforehand, or failing.
+struct Near(Option<Vec<(&'static str, u32)>>);
+
+impl knotes_core::MeaningSearch for Near {
+    fn nearest(&self, _query: &str, limit: usize) -> Result<Vec<knotes_core::BlockHit>, knotes_core::BoxError> {
+        let hits = self.0.as_ref().ok_or("the helper is gone")?;
+        Ok(hits.iter().take(limit).map(|(path, ord)| knotes_core::BlockHit { path: path.to_string(), ord: *ord, span: knotes_core::Span { start: 0, end: 0 }, heading: None, score: 0.0 }).collect())
+    }
+}
+
+fn with_meaning(near: Near) -> Vault {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Fruit/Apple.md", "Apple trees bloom in May.");
+    write(dir.path(), "Fruit/Pear.md", "Pears ripen in September.");
+    write(dir.path(), "Diary.md", "Picked fruit for the jam. #no-ai");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs).with_meaning(Box::new(near));
+    Vault { _dirs: (dir, idx), tools }
+}
+
+#[test]
+fn finds_by_meaning_join_those_by_words_which_keep_the_lead() {
+    let v = with_meaning(Near(Some(vec![("Fruit/Pear.md", 0), ("Diary.md", 0), ("Fruit/Apple.md", 0)])));
+    let found = call(&v, "search", json!({"query": "apple"}));
+    let results: Vec<(&str, &str)> = found["results"].as_array().unwrap().iter().map(|r| (r["path"].as_str().unwrap(), r["match"].as_str().unwrap())).collect();
+    assert_eq!(results, [("Fruit/Apple.md", "block"), ("Fruit/Pear.md", "meaning")], "the find by words first, once; the note kept from the AI never");
+}
+
+#[test]
+fn search_goes_on_by_words_when_search_by_meaning_fails() {
+    let v = with_meaning(Near(None));
+    assert_eq!(paths(&call(&v, "search", json!({"query": "apple"})), "results"), ["Fruit/Apple.md"]);
+}
