@@ -79,7 +79,7 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "list_tasks",
-            description: "The vault's task items (`- [ ]` / `- [x]` lines), open ones by default, by note (the most recently changed first), each with its line, words and section heading; in a folder if given. For to-dos, plans and what is left to do. Says how many notes have them (`total`) and where the next page starts (`next_offset`).",
+            description: "The vault's task items (`- [ ]` / `- [x]` lines), open ones by default, by note (the most recently changed first), each with its line, words and section heading; in a folder if given. For to-dos and what is left to do; only checkbox items: plans and appointments written as plain text are not here. Says how many notes have them (`total`) and where the next page starts (`next_offset`).",
             parameters: json!({"type": "object", "properties": {
                 "state": {"type": "string", "enum": ["open", "done", "all"], "description": "Open by default."},
                 "folder": {"type": "string", "description": "A folder's path in the vault."},

@@ -103,7 +103,8 @@ fn a_reply_streams_its_text_and_joins_the_conversation() {
     assert!(instructions.contains("Knotes") && instructions.contains("next_offset"), "{instructions}");
     assert!(instructions.contains("stem") && instructions.contains("пральна"), "the model searches by stems: {instructions}");
     assert!(instructions.contains("language the notes are written in") && instructions.contains("notes disagree") && instructions.contains("ask which note"), "{instructions}");
-    assert!(instructions.contains("2026-10-01") && instructions.contains("Prefer figures written in the notes"), "{instructions}");
+    assert!(instructions.contains("Search a date first as the user says it") && instructions.contains("2026-11-18") && instructions.contains("Prefer figures written in the notes"), "{instructions}");
+    assert!(instructions.contains("it sees only checkbox items"), "{instructions}");
     assert!(instructions.contains("[[Projects/Radar#Budget]]") && instructions.contains("list_tasks") && instructions.contains("related"), "{instructions}");
     let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     assert!(instructions.ends_with(&format!("Today is {} (UTC). The vault: 1 note and 0 PDFs.", &knotes_tools::utc_minute(today)[..10])), "the model knows the day and the vault: {instructions}");

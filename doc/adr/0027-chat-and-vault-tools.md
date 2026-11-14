@@ -234,6 +234,12 @@ plan usage for open-source and local apps) on 2026-11-14:
   model is told of them, and to link to the section when it knows the heading
   (`[[Projects/Radar#Budget]]`), which the window opens there. `list_notes`'s folder filter
   compares paths composed.
+- With the two tools, the 30 questions took 90 tool calls (106 at best before) and 369 s: "what is
+  left to do" one call and 16 s instead of 23–28 and about 55 s, "what is connected with Василь" two.
+  But that answer kept to checkbox items and missed plans written as plain text in the diary, and
+  the hint on dates in numbers sent "who comes on 18 November" through four numeric forms before
+  "18 листопада". So the model is told that `list_tasks` sees only checkboxes (and to read the
+  recent notes for what is coming up), and to search a date first as the user says it.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand
