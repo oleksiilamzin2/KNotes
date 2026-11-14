@@ -20,10 +20,11 @@ use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAlert, NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSControlSize, NSEvent, NSEventModifierFlags, NSFont, NSFontWeightRegular, NSFontWeightSemibold, NSImage, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSMenuItem,
-    NSMutableParagraphStyle, NSPopUpButton, NSStackView, NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSTitlePosition, NSUserInterfaceLayoutOrientation, NSView, NSWorkspace,
+    NSMutableParagraphStyle, NSPopUpButton, NSStackView, NSTextDelegate, NSTextElement, NSTextField, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextView, NSTextViewDelegate, NSTitlePosition, NSUserInterfaceLayoutOrientation, NSView, NSWorkspace,
 };
 use objc2_foundation::{NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
+use crate::chat_bubble::{CARD_INDENT, ChatBubble, QUESTION, is_question};
 use crate::chat_worker::{Account, ChatWorker, ScriptTransport, Turn};
 use crate::strings;
 
@@ -54,6 +55,19 @@ define_class!(
         fn text_did_change(&self, _notification: &NSNotification) {
             if let Some(panel) = self.panel() {
                 panel.composer_changed();
+            }
+        }
+    }
+
+    unsafe impl NSTextLayoutManagerDelegate for ChatTarget {
+        /// A question's paragraph in the conversation gets a fragment that draws its card.
+        #[unsafe(method_id(textLayoutManager:textLayoutFragmentForLocation:inTextElement:))]
+        fn fragment_for(&self, _layout: &NSTextLayoutManager, _location: &ProtocolObject<dyn NSTextLocation>, element: &NSTextElement) -> Retained<NSTextLayoutFragment> {
+            let range = element.elementRange();
+            if is_question(element) {
+                Retained::into_super(ChatBubble::new(element, range.as_deref()))
+            } else {
+                NSTextLayoutFragment::initWithTextElement_range(NSTextLayoutFragment::alloc(), element, range.as_deref())
             }
         }
     }
@@ -307,6 +321,9 @@ impl ChatPanel {
         transcript.setDrawsBackground(false);
         transcript.setTextContainerInset(NSSize::new(10.0, 8.0));
         transcript.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+        if let Some(layout) = transcript.textLayoutManager() {
+            layout.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+        }
 
         let field_box = NSBox::new(mtm);
         field_box.setBoxType(NSBoxType::Custom);
@@ -932,28 +949,31 @@ impl ChatPanel {
         self.render_due.set(false);
         let text = NSMutableAttributedString::new();
         let state = self.state.borrow();
-        // Each block, and whether it is a tool's line (those follow each other line by line).
-        let mut blocks: Vec<(Retained<NSAttributedString>, bool)> = Vec::new();
+        let mut blocks: Vec<(Retained<NSAttributedString>, Block)> = Vec::new();
         for shown in state.current.shown() {
             blocks.push(match shown {
-                Shown::User(question) => (question_text(&question), false),
-                Shown::Assistant(answer) => (answer_text(&answer), false),
-                Shown::Tool { name, arguments } => (tool_text(&strings::chat_tool(&name, &arguments)), true),
+                Shown::User(question) => (question_text(&question), Block::Question),
+                Shown::Assistant(answer) => (answer_text(&answer), Block::Other),
+                Shown::Tool { name, arguments } => (tool_text(&strings::chat_tool(&name, &arguments)), Block::Tool),
             });
         }
         if let Some(turn) = &state.turn {
-            blocks.push((question_text(&turn.question), false));
+            blocks.push((question_text(&turn.question), Block::Question));
             for (name, arguments) in &turn.tools {
-                blocks.push((tool_text(&strings::chat_tool(name, arguments)), true));
+                blocks.push((tool_text(&strings::chat_tool(name, arguments)), Block::Tool));
             }
-            blocks.push(if turn.reply.is_empty() { (tool_text(strings::CHAT_THINKING), true) } else { (answer_text(&turn.reply), false) });
+            blocks.push(if turn.reply.is_empty() { (tool_text(strings::CHAT_THINKING), Block::Tool) } else { (answer_text(&turn.reply), Block::Other) });
         }
         if let Some(error) = &state.error {
-            blocks.push((error_text(error), false));
+            blocks.push((error_text(error), Block::Other));
         }
-        for (i, (block, tool)) in blocks.iter().enumerate() {
+        for (i, (block, kind)) in blocks.iter().enumerate() {
             if i > 0 {
-                let between = if *tool && blocks[i - 1].1 { "\n" } else { "\n\n" };
+                // A question ends its own paragraph; tools' lines follow each other line by line.
+                let between = match (blocks[i - 1].1, kind) {
+                    (Block::Question, _) | (Block::Tool, Block::Tool) => "\n",
+                    _ => "\n\n",
+                };
                 text.appendAttributedString(&piece(between, &body_font(), &NSColor::labelColor(), None));
             }
             text.appendAttributedString(block);
@@ -990,6 +1010,8 @@ impl ChatPanel {
         // SAFETY: the transcript's own storage.
         let shown = unsafe { self.transcript.textStorage() }.map(|s| s.string().to_string()).unwrap_or_default();
         lines.push(format!("chat transcript: {}", shown.replace('\n', "⏎")));
+        let cards = crate::chat_bubble::cards(&self.transcript);
+        lines.push(format!("chat bubbles: {}{}", cards.len(), cards.iter().map(|c| format!(" | {c}")).collect::<String>()));
         let links = self.transcript_links();
         if !links.is_empty() {
             lines.push(format!("chat links: {}", links.join(", ")));
@@ -1160,10 +1182,32 @@ fn piece(text: &str, font: &NSFont, colour: &NSColor, link: Option<&str>) -> Ret
     }
 }
 
+/// A block of the conversation, as it is set apart from the next.
+#[derive(Clone, Copy)]
+enum Block {
+    Question,
+    Tool,
+    Other,
+}
+
+/// The user's question as one paragraph (its line breaks kept as line separators) marked for
+/// its card, inset from the card's sides, its own paragraph's end included.
 fn question_text(question: &str) -> Retained<NSAttributedString> {
-    // SAFETY: a font weight constant.
-    let font = NSFont::systemFontOfSize_weight(NSFont::systemFontSize(), unsafe { NSFontWeightSemibold });
-    piece(question, &font, &NSColor::labelColor(), None)
+    let paragraph = NSMutableParagraphStyle::new();
+    paragraph.setFirstLineHeadIndent(CARD_INDENT);
+    paragraph.setHeadIndent(CARD_INDENT);
+    paragraph.setTailIndent(-CARD_INDENT);
+    paragraph.setLineSpacing(1.5);
+    let paragraph: Retained<AnyObject> = Retained::into_super(Retained::into_super(Retained::into_super(paragraph)));
+    let text = format!("{}\n", question.trim().replace("\r\n", "\n").replace('\n', "\u{2028}"));
+    // SAFETY: AppKit's attribute names with values of their kinds, and the card's own marker.
+    unsafe {
+        let marker = NSString::from_str(QUESTION);
+        let keys = [objc2_app_kit::NSFontAttributeName, objc2_app_kit::NSForegroundColorAttributeName, objc2_app_kit::NSParagraphStyleAttributeName, &*marker];
+        let values = [any(&*body_font()), any(&*NSColor::labelColor()), paragraph, any(&*marker)];
+        let attributes = NSDictionary::from_retained_objects(&keys, &values);
+        NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &NSString::from_str(&text), Some(&attributes))
+    }
 }
 
 fn tool_text(words: &str) -> Retained<NSAttributedString> {

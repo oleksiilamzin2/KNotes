@@ -2685,6 +2685,7 @@ fn a_question_streams_its_answer_with_the_tools_it_used_and_note_links() {
     assert!(out.contains("chat: signed in | model: Probe Model | document: Boris  ✕ | Використовується план ChatGPT"), "{out}");
     assert!(out.contains("chat transcript: When does radar start?⏎⏎Пошук: radar⏎⏎Radar starts in May, see Radar.\n"), "{out}");
     assert!(out.contains("chat links: knotes-note:Radar\n"), "{out}");
+    assert!(out.contains("chat bubbles: 1 | When does radar start?\n"), "the question stands apart from the answer: {out}");
     assert!(out.contains("chat conversations: When does radar start? | selected 0"), "{out}");
     assert!(out.contains("chat field: \n"), "{out}");
 }
@@ -2741,6 +2742,7 @@ fn conversations_are_kept_per_vault_and_listed_after_a_relaunch() {
     };
     let out = env(&[("KNOTES_PROBE_CHAT_SEND", "First?|And then?"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
     assert!(out.contains("chat transcript: First?⏎⏎First answer.⏎⏎And then?⏎⏎Second answer.\n"), "{out}");
+    assert!(out.contains("chat bubbles: 2 | First? | And then?\n"), "{out}");
 
     let out = env(&[]);
     assert!(out.contains("chat conversations: First? | selected 0"), "{out}");

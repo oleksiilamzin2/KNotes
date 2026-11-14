@@ -140,8 +140,11 @@ plan usage for open-source and local apps) on 2026-11-14:
   under it the document open as a chip (a click crosses it out, a second offers it again; another
   document is offered anew), the model (from the plan's list, the last chosen kept in the
   settings), and "Використовується план ChatGPT" with "Керувати" opening ChatGPT's usage settings.
-- The conversation shows the questions, a dim line for each tool the model called ("Пошук:
-  radar", "Читаю Radar.md"), and the answers set from their Markdown (bold, italic, code,
+- The conversation shows the questions, each on a tinted rounded card across the column (the
+  owner asked to tell their words from the chat's; the card is drawn by the question paragraph's
+  own TextKit 2 fragment, so the conversation stays one text, selectable across), a dim line for
+  each tool the model called ("Пошук: radar", "Читаю Radar.md"), and the answers set from their
+  Markdown (bold, italic, code,
   headings, lists), redrawn at most every 50 ms while they stream. A wiki link in an answer opens
   its note or PDF (at its heading or page) in the window; a link to nothing opens nothing; web
   links open in the browser.
