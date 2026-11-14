@@ -2753,3 +2753,12 @@ fn conversations_are_kept_per_vault_and_listed_after_a_relaunch() {
     let out = env(&[("KNOTES_PROBE_CHAT_NEW", "1"), ("KNOTES_PROBE_CHAT_CHOOSE", "1")]);
     assert!(out.contains("chat conversations: First? | selected 0"), "{out}");
 }
+
+#[test]
+fn every_point_of_the_question_field_takes_a_click() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &[]);
+    let (_vault, out) = probe_notes(&[("Boris.md", "# Boris")], &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_FIELD_CLICKS", "1")]);
+    let line = out.lines().find(|l| l.starts_with("chat field clicks:")).unwrap_or_else(|| panic!("{out}"));
+    assert!(line.contains("text 55, button 1, missed [] | text height 66"), "{line}");
+}

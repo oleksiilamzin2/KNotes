@@ -761,6 +761,10 @@ pub fn schedule(with_sidebar: bool) {
                 for line in window.chat.probe_lines() {
                     println!("{line}");
                 }
+                if std::env::var_os("KNOTES_PROBE_CHAT_FIELD_CLICKS").is_some() {
+                    window.window.displayIfNeeded();
+                    println!("{}", window.chat.probe_field_clicks());
+                }
                 if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("scroll-bench") {
                     scroll_bench(&window.table);
                 }

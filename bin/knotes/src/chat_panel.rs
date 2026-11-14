@@ -30,6 +30,8 @@ use crate::strings;
 /// Where a link in the conversation goes, as its attribute keeps it.
 const NOTE_LINK: &str = "knotes-note:";
 const WEB_LINK: &str = "knotes-web:";
+/// The question field's height, about three lines.
+const COMPOSER_HEIGHT: f64 = 66.0;
 
 type OnOpenLink = Box<dyn Fn(String)>;
 
@@ -156,6 +158,37 @@ define_class!(
     }
 );
 
+define_class!(
+    /// The question field's frame: a click anywhere in it, but on the send button or a
+    /// scroller, goes to the text (its margins, the placeholder, the space above the button).
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesComposerFrame"]
+    pub struct ComposerFrame;
+
+    impl ComposerFrame {
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
+            // SAFETY: NSView's own hit test.
+            let hit: Option<Retained<NSView>> = unsafe { msg_send![super(self), hitTest: point] };
+            let keep = hit.as_ref().is_none_or(|view| view.downcast_ref::<NSTextView>().is_some() || view.downcast_ref::<NSButton>().is_some() || view.downcast_ref::<objc2_app_kit::NSScroller>().is_some());
+            if keep { hit } else { self.text_view() }
+        }
+    }
+);
+
+impl ComposerFrame {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        // SAFETY: NSView's init.
+        unsafe { msg_send![Self::alloc(mtm), init] }
+    }
+
+    /// The question's text view, in the frame's scroll view.
+    fn text_view(&self) -> Option<Retained<NSView>> {
+        self.subviews().iter().find_map(|v| v.downcast::<objc2_app_kit::NSScrollView>().ok()).and_then(|scroll| scroll.documentView())
+    }
+}
+
 impl ChatTarget {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(TargetIvars { panel: RefCell::new(Weak::new()) });
@@ -209,6 +242,7 @@ pub struct ChatPanel {
     send_button: Retained<NSButton>,
     document_chip: Retained<NSButton>,
     model_popup: Retained<NSPopUpButton>,
+    field_frame: Retained<ComposerFrame>,
     target: Retained<ChatTarget>,
     state: RefCell<State>,
     render_due: Cell<bool>,
@@ -282,6 +316,8 @@ impl ChatPanel {
         field_box.setBorderColor(&NSColor::separatorColor());
         field_box.setFillColor(&NSColor::textBackgroundColor());
         field_box.setContentViewMargins(NSSize::ZERO);
+        let field_frame = ComposerFrame::new(mtm);
+        field_box.setContentView(Some(&field_frame));
         let composer_scroll = NSTextView::scrollableTextView(mtm);
         composer_scroll.setDrawsBackground(false);
         let composer = composer_scroll.documentView().and_then(|v| v.downcast::<NSTextView>().ok()).expect("a scrollable text view holds a text view");
@@ -289,20 +325,24 @@ impl ChatPanel {
         composer.setDrawsBackground(false);
         composer.setFont(Some(&NSFont::systemFontOfSize(NSFont::systemFontSize())));
         composer.setTextContainerInset(NSSize::new(4.0, 6.0));
+        // As tall as its scroll view even while empty: a click under the first line is a click
+        // in the text, not in the empty clip view below it.
+        composer.setMinSize(NSSize::new(0.0, COMPOSER_HEIGHT));
+        composer.setFrameSize(NSSize::new(0.0, COMPOSER_HEIGHT));
         composer.setDelegate(Some(ProtocolObject::from_ref(&*target)));
         let placeholder = NSTextField::labelWithString(&NSString::from_str(strings::ASK_NOTES), mtm);
         placeholder.setTextColor(Some(&NSColor::placeholderTextColor()));
         let send_button = symbol_button("arrow.up.circle.fill", "", &target, sel!(send:), mtm);
-        let field = field_box.contentView().expect("a box has a content view");
+        let field: &NSView = &field_frame;
         for v in [&*composer_scroll as &NSView, &placeholder, &send_button] {
-            add(&field, v);
+            add(field, v);
         }
         activate(&[
             composer_scroll.topAnchor().constraintEqualToAnchor_constant(&field.topAnchor(), 2.0),
             composer_scroll.bottomAnchor().constraintEqualToAnchor_constant(&field.bottomAnchor(), -2.0),
             composer_scroll.leadingAnchor().constraintEqualToAnchor_constant(&field.leadingAnchor(), 4.0),
             composer_scroll.trailingAnchor().constraintEqualToAnchor_constant(&send_button.leadingAnchor(), -2.0),
-            composer_scroll.heightAnchor().constraintEqualToConstant(66.0),
+            composer_scroll.heightAnchor().constraintEqualToConstant(COMPOSER_HEIGHT),
             placeholder.topAnchor().constraintEqualToAnchor_constant(&field.topAnchor(), 8.0),
             placeholder.leadingAnchor().constraintEqualToAnchor_constant(&field.leadingAnchor(), 13.0),
             send_button.trailingAnchor().constraintEqualToAnchor_constant(&field.trailingAnchor(), -6.0),
@@ -407,6 +447,7 @@ impl ChatPanel {
             send_button,
             document_chip,
             model_popup,
+            field_frame,
             target,
             state: RefCell::new(state),
             render_due: Cell::new(false),
@@ -973,6 +1014,37 @@ impl ChatPanel {
             at = (range.location + range.length).max(at + 1);
         }
         links
+    }
+
+    /// Probe: where clicks over the question field land, on a grid of points across it: in the
+    /// text, on the send button, or elsewhere (missed).
+    pub fn probe_field_clicks(&self) -> String {
+        let frame = &self.field_frame;
+        // SAFETY: the frame is in the view hierarchy the panel built.
+        let Some(parent) = (unsafe { frame.superview() }) else { return "no field".into() };
+        let size = frame.bounds().size;
+        // SAFETY: the box is in the panel's view hierarchy.
+        let grand = unsafe { parent.superview() };
+        let (mut text, mut button, mut missed) = (0, 0, Vec::new());
+        let mut points: Vec<NSPoint> = Vec::new();
+        for i in 0..=10 {
+            for j in 0..=4 {
+                let local = NSPoint::new(size.width * f64::from(i) / 10.0, size.height * f64::from(j) / 4.0);
+                points.push(NSPoint::new(local.x.clamp(1.0, size.width - 1.0), local.y.clamp(1.0, size.height - 1.0)));
+            }
+        }
+        // And the send button's centre.
+        let b = self.send_button.frame();
+        points.push(NSPoint::new(b.origin.x + b.size.width / 2.0, b.origin.y + b.size.height / 2.0));
+        for local in points {
+            // A hit test takes a point in the coordinates of the view's superview.
+            match parent.hitTest(frame.convertPoint_toView(local, grand.as_deref())) {
+                Some(view) if std::ptr::eq(&*view, &**self.composer as &NSView) => text += 1,
+                Some(view) if std::ptr::eq(&*view, &**self.send_button as &NSView) => button += 1,
+                other => missed.push(format!("{:.0},{:.0}={}", local.x, local.y, other.map(|v| v.class().name().to_string_lossy().into_owned()).unwrap_or_default())),
+            }
+        }
+        format!("chat field clicks: text {text}, button {button}, missed [{}] | text height {:.0}", missed.join(" "), self.composer.frame().size.height)
     }
 
     /// Probe: asks `question` as if typed and sent.
