@@ -6,6 +6,10 @@ use serde_json::Value;
 pub trait ToolBox {
     fn specs(&self) -> Vec<ToolSpec>;
     fn call(&self, name: &str, args: &Value) -> Result<Value, ToolError>;
+    /// What the model is told about the vault before it calls them.
+    fn overview(&self) -> String {
+        String::new()
+    }
 }
 
 impl<I: ToolIndex, F: VaultReader, D: DocumentPages> ToolBox for VaultTools<I, F, D> {
@@ -15,5 +19,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> ToolBox for VaultTools<I, F
 
     fn call(&self, name: &str, args: &Value) -> Result<Value, ToolError> {
         VaultTools::call(self, name, args)
+    }
+
+    fn overview(&self) -> String {
+        VaultTools::overview(self)
     }
 }

@@ -161,7 +161,7 @@ impl Chat<'_> {
             .collect();
         let body = json!({
             "model": self.model,
-            "instructions": format!("{INSTRUCTIONS} Today is {} (UTC).", &knotes_tools::utc_minute(crate::token_endpoint::now() as i64)[..10]),
+            "instructions": format!("{INSTRUCTIONS} Today is {} (UTC). {}", &knotes_tools::utc_minute(crate::token_endpoint::now() as i64)[..10], tools.overview()).trim_end().to_string(),
             "input": input,
             "tools": [{"type": "namespace", "name": NAMESPACE, "description": "Read the user's Knotes vault.", "tools": functions}],
             "tool_choice": "auto",

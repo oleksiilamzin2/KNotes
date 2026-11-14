@@ -26,17 +26,32 @@ pub struct VaultTools<I, F, D> {
     documents: D,
     /// The titles to find documents by, and when they were listed.
     titles: RefCell<(Instant, TitleIndex)>,
+    /// The vault in a few words, and when it was described.
+    overview: RefCell<Option<(Instant, String)>>,
 }
 
 impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     pub fn new(index: I, files: F, documents: D) -> Self {
         let titles = RefCell::new((Instant::now(), titles_of(&index)));
-        Self { index, files, documents, titles }
+        Self { index, files, documents, titles, overview: RefCell::new(None) }
     }
 
     /// The tools' descriptions.
     pub fn specs() -> Vec<ToolSpec> {
         specs()
+    }
+
+    /// The vault in a few words, for the model: how many notes and PDFs, its top folders and
+    /// tags, and the script its titles are mostly in (so it searches in the notes' language).
+    pub fn overview(&self) -> String {
+        if let Some((when, text)) = self.overview.borrow().as_ref()
+            && when.elapsed() <= TITLES_LAST
+        {
+            return text.clone();
+        }
+        let text = describe(&self.index);
+        *self.overview.borrow_mut() = Some((Instant::now(), text.clone()));
+        text
     }
 
     /// Runs tool `name` with `args` (a JSON object).
@@ -210,6 +225,50 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         let tags: Vec<Value> = counts.into_iter().take(200).map(|(tag, count)| json!({"tag": tag, "count": count})).collect();
         Ok(json!({"tags": tags}))
     }
+}
+
+/// How `index`'s vault looks, in a few sentences.
+fn describe(index: &impl ToolIndex) -> String {
+    let catalog = index.catalog().unwrap_or_default();
+    let pdfs = catalog.iter().filter(|e| kind_of(&e.path) == "pdf").count();
+    let notes = catalog.len() - pdfs;
+    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut text = format!("The vault: {} and {}.", plural(notes, "note", "notes"), plural(pdfs, "PDF", "PDFs"));
+    let mut folders: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut top = 0;
+    for entry in &catalog {
+        match entry.path.split_once('/') {
+            Some((folder, _)) => *folders.entry(folder).or_default() += 1,
+            None => top += 1,
+        }
+    }
+    if !folders.is_empty() {
+        let mut folders: Vec<(&str, usize)> = folders.into_iter().collect();
+        folders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let listed: Vec<String> = folders.iter().take(25).map(|(f, n)| format!("{f} ({n})")).collect();
+        let more = if folders.len() > 25 { format!(" and {} more", folders.len() - 25) } else { String::new() };
+        let mut sorted = listed.clone();
+        sorted.sort();
+        text.push_str(&format!(" Top-level folders (files in each): {}{more}", sorted.join(", ")));
+        text.push_str(&if top > 0 { format!("; {top} files at the top.") } else { ".".to_string() });
+    }
+    let mut tags = index.tag_counts().unwrap_or_default();
+    tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    if !tags.is_empty() {
+        let listed: Vec<String> = tags.iter().take(15).map(|(t, n)| format!("{t} ({n})")).collect();
+        text.push_str(&format!(" Most used tags: {}.", listed.join(", ")));
+    }
+    let cyrillic = catalog.iter().filter(|e| title_of(&e.path).chars().any(|c| ('\u{400}'..='\u{4ff}').contains(&c))).count();
+    let script = match catalog.len() {
+        0 => None,
+        n if cyrillic * 2 > n => Some("Cyrillic script (Ukrainian or Russian)"),
+        n if cyrillic * 5 < n => Some("Latin script"),
+        _ => Some("both Cyrillic and Latin scripts"),
+    };
+    if let Some(script) = script {
+        text.push_str(&format!(" Its titles are mostly in {script}: search with words in the notes' language."));
+    }
+    text
 }
 
 /// The index's documents' titles and aliases, to find them by.

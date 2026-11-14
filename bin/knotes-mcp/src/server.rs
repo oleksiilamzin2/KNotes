@@ -46,7 +46,7 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> McpServer<I, F, D> {
                         "protocolVersion": version,
                         "capabilities": {"tools": {"listChanged": false}},
                         "serverInfo": {"name": "knotes", "title": "Knotes", "version": env!("CARGO_PKG_VERSION")},
-                        "instructions": "Read-only tools over the user's Knotes vault (Markdown notes and PDFs): search it, read notes by block and PDFs by page, follow links."
+                        "instructions": format!("Read-only tools over the user's Knotes vault (Markdown notes and PDFs): search it, read notes by block and PDFs by page, follow links. Search matches the starts of words, so search by stems. {}", self.tools.overview()).trim_end()
                     }),
                 )
             }

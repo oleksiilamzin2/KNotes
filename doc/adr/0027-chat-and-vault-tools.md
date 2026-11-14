@@ -198,6 +198,11 @@ plan usage for open-source and local apps) on 2026-11-14:
   documents holding every word across their blocks (`match: note`) when too few fragments hold
   them all, and the model is told to search in the notes' language, to point out notes that
   disagree, and to ask which note "this" means when none is open.
+- A repeat of 9 of them: 43 tool calls instead of 52 ("this" now asked about), but an English
+  question still searched in English: the model did not know the vault's language. So each
+  request's instructions end with the vault in a few words (notes and PDFs, top folders, most
+  used tags, the script its titles are mostly in), refreshed at most every 10 s; the MCP server
+  gives the same in its `initialize` instructions.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand

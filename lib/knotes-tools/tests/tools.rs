@@ -222,3 +222,15 @@ fn words_spread_over_a_note_still_find_it_after_the_fragments_holding_them_all()
     let paths: Vec<&str> = together["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap()).collect();
     assert_eq!(paths.iter().filter(|p| **p == "Projects/Radar.md").count(), 1, "a note found by a fragment is not listed again: {paths:?}");
 }
+
+#[test]
+fn the_vault_is_described_in_a_few_words_for_the_model() {
+    let v = vault();
+    let overview = v.tools.overview();
+    assert!(overview.starts_with("The vault: 3 notes and 1 PDF."), "{overview}");
+    assert!(overview.contains("Top-level folders (files in each): Inbox (1), Projects (1); 2 files at the top."), "{overview}");
+    assert!(overview.contains("Most used tags: work (2), people (1)."), "{overview}");
+    assert!(overview.contains("titles are mostly in Latin script"), "{overview}");
+    let orchard = orchard(3).tools.overview();
+    assert!(orchard.contains("Orchard (3)") && !orchard.contains("at the top"), "{orchard}");
+}

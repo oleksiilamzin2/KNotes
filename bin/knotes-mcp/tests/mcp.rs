@@ -48,6 +48,7 @@ fn the_server_introduces_itself_and_lists_the_vault_tools() {
     assert_eq!(answers[0]["result"]["serverInfo"]["name"], "knotes");
     assert_eq!(answers[0]["result"]["protocolVersion"], "2025-06-18");
     assert!(answers[0]["result"]["capabilities"]["tools"].is_object());
+    assert!(answers[0]["result"]["instructions"].as_str().unwrap().ends_with("The vault: 2 notes and 0 PDFs. Its titles are mostly in Latin script: search with words in the notes' language."), "{}", answers[0]);
     let tools = answers[1]["result"]["tools"].as_array().unwrap();
     assert!(tools.iter().any(|t| t["name"] == "search" && t["inputSchema"]["type"] == "object"), "{tools:?}");
 }
