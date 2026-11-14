@@ -20,9 +20,10 @@ use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
 /// The household vault's scores (2026-11-14: by words 30 of 35, all 30 of 43; with titles, stems
-/// and links 33 of 35 and 33 of 43): a change to search may raise them, never lower them.
-const WORDS_RECALL: f64 = 0.94;
-const ALL_RECALL: f64 = 0.76;
+/// and links 33 of 35 and 33 of 43; with three wordings the model wrote next, 33 of 37 and 33 of
+/// 46): a change to search may raise them, never lower them.
+const WORDS_RECALL: f64 = 0.89;
+const ALL_RECALL: f64 = 0.71;
 
 struct Query {
     text: String,
