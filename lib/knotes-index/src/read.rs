@@ -157,3 +157,16 @@ impl NoteRows for SqliteIndex {
         Ok(st.query_row([path], |r| r.get(0)).optional()?)
     }
 }
+
+impl knotes_core::NoteBlocks for SqliteIndex {
+    fn note_blocks(&self, path: &str) -> Result<Vec<knotes_core::BlockHit>, BoxError> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT b.ord, b.start, b.end, h.text FROM blocks b JOIN files f ON f.id = b.file_id \
+             LEFT JOIN headings h ON h.file_id = b.file_id AND h.ord = b.heading_ord WHERE f.path = ?1 ORDER BY b.ord",
+        )?;
+        let rows = st.query_map([path], |r| {
+            Ok(knotes_core::BlockHit { path: path.to_string(), ord: r.get(0)?, span: knotes_core::Span { start: r.get(1)?, end: r.get(2)? }, heading: r.get(3)?, score: 0.0 })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
