@@ -29,6 +29,8 @@ knotes-search.workspace = true
 knotes-pdf.workspace = true
 knotes-chat.workspace = true
 knotes-tools.workspace = true
+knotes-embed.workspace = true
+knotes-vectors.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

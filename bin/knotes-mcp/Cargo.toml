@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 knotes-core.workspace = true
 knotes-tools.workspace = true
+knotes-embed.workspace = true
+knotes-vectors.workspace = true
 knotes-index.workspace = true
 knotes-vault.workspace = true
 knotes-pdf.workspace = true

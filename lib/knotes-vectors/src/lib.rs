@@ -15,3 +15,7 @@ pub use passage_of::block_passage;
 pub use snapshot::Snapshot;
 pub use update::update;
 pub use vector_store::{VECTORS_FILE, VectorStore};
+
+/// How the vectors are made, kept with them: another model, width or text for a block, and the
+/// store is embedded again.
+pub const EMBEDDING: &str = "embeddinggemma-300M-Q8_0, first 256, title and heading › block, v1";

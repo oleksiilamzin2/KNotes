@@ -6,10 +6,13 @@ mod server;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
-use knotes_session::{AppSettings, app_data_dir, index_dir};
+use knotes_embed::ProcessEmbedder;
+use knotes_session::{AppSettings, app_data_dir, embedder_files, index_dir};
+use knotes_vectors::{MeaningIndex, VectorStore};
 use knotes_tools::VaultTools;
 use knotes_vault::FsVault;
 
@@ -28,7 +31,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let server = McpServer::new(VaultTools::new(index, FsVault::new(&vault), PdfTexts::new(&vault)));
+    let mut tools = VaultTools::new(index, FsVault::new(&vault), PdfTexts::new(&vault));
+    // Search by meaning over the vectors Knotes keeps (ADR 0028), with a helper of its own.
+    if let (Some((helper, model)), Ok(store)) = (std::env::current_exe().ok().and_then(|exe| embedder_files(&exe)), VectorStore::open_reader(&index_dir(&app_data, &vault))) {
+        tools = tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::new(ProcessEmbedder::new(helper, model)), store)));
+    }
+    let server = McpServer::new(tools);
     let mut out = std::io::stdout().lock();
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
