@@ -208,3 +208,17 @@ fn a_long_read_says_where_to_go_on() {
     let pdf = call(&v, "read_pdf", json!({"path": "budget.pdf", "pages": 1}));
     assert_eq!(pdf["next_page"], 2, "{pdf}");
 }
+
+#[test]
+fn words_spread_over_a_note_still_find_it_after_the_fragments_holding_them_all() {
+    let v = vault();
+    let spread = call(&v, "search", json!({"query": "radar Anna"}));
+    let results = spread["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{spread}");
+    assert_eq!((results[0]["path"].as_str(), results[0]["match"].as_str()), (Some("Projects/Radar.md"), Some("note")), "{spread}");
+
+    let together = call(&v, "search", json!({"query": "radar project"}));
+    assert_eq!(together["results"][0]["match"], "block", "{together}");
+    let paths: Vec<&str> = together["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap()).collect();
+    assert_eq!(paths.iter().filter(|p| **p == "Projects/Radar.md").count(), 1, "a note found by a fragment is not listed again: {paths:?}");
+}

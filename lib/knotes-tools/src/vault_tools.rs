@@ -58,13 +58,25 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
         let query = text_arg(args, "query")?;
         let (offset, limit) = paging(args, 10, 30);
         // One more than the page, to tell whether more follow.
-        let hits = self.index.search(&ContentQuery { text: &query, within: Within::Block, prefixes: true, scope: None, limit: offset + limit + 1 }).map_err(failed)?;
+        let wanted = offset + limit + 1;
+        let blocks = self.index.search(&ContentQuery { text: &query, within: Within::Block, prefixes: true, scope: None, limit: wanted }).map_err(failed)?;
+        let mut hits: Vec<(&str, _)> = blocks.into_iter().map(|hit| ("block", hit)).collect();
+        // Too few fragments hold every word: then the notes holding them across their blocks, each
+        // once, with its best block (a question's words are often spread over a note).
+        if hits.len() < wanted {
+            let notes = self.index.search(&ContentQuery { text: &query, within: Within::Note, prefixes: true, scope: None, limit: wanted }).map_err(failed)?;
+            for hit in notes {
+                if !hits.iter().any(|(_, h)| h.path == hit.path) {
+                    hits.push(("note", hit));
+                }
+            }
+        }
         let (hits, next) = page(hits, offset, limit);
         let results: Vec<Value> = hits
             .into_iter()
-            .map(|hit| {
+            .map(|(found, hit)| {
                 let text = self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..hit.span.end as usize).map(cut)).unwrap_or_default();
-                json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text})
+                json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found})
             })
             .collect();
         Ok(json!({"results": results, "next_offset": next}))

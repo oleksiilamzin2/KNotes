@@ -190,6 +190,14 @@ plan usage for open-source and local apps) on 2026-11-14:
   ("прал" finds пралка and пральна), and to try stems, other words, title search and lists
   before saying the vault lacks something; and to look through every note a question about
   several notes or a period needs.
+- First run of the household vault's 30 questions (2026-11-14, GPT-5.6 Terra): 27 right, 2 partly
+  (a disagreement between a note and a contract not pointed out; a missing passport not named),
+  1 weak ("what is written here" with nothing open). No made-up answers, sources linked. About
+  4.8 tool calls a question, mostly searches finding nothing: a search's words had to stand in
+  one block, and an English question searched a Ukrainian vault in English. So search goes on to
+  documents holding every word across their blocks (`match: note`) when too few fragments hold
+  them all, and the model is told to search in the notes' language, to point out notes that
+  disagree, and to ask which note "this" means when none is open.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand
