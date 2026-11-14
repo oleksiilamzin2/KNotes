@@ -249,9 +249,14 @@ plan usage for open-source and local apps) on 2026-11-14:
   until the summary. OpenAI's count of the cached tokens is kept with the conversation and
   written in the test runs' answers. Measured right after on two questions with 2 and 17 tool
   calls: the Sign in with ChatGPT route reported 0 cached tokens, even for requests within one
-  answer that began exactly as the one before. So the history is sent unchanged only once a
-  conversation has seen cached tokens; until then old tool results are cut and past reasoning
-  left out, as before, to send fewer tokens.
+  answer that began exactly as the one before. A conversation in the app then reported 1 536
+  cached of 11 363 and of 16 334: the start every request shares (tools, instructions), not the
+  history. And the same question asked twice in a row with the same cache key, the requests
+  byte for byte the same, got 1 536 and then 0 cached: the route caches neither a conversation's
+  history nor a repeated request (likely served by different machines whatever the key), which
+  no change on Knotes's side can fix. So the history is sent unchanged only when OpenAI cached at
+  least half of a request (the cache covering the history); otherwise old tool results are cut
+  and past reasoning left out, as before, to send fewer tokens.
 - What the user keeps from the AI (decided in ADR 0004, built 2026-11-14): a note tagged `#no-ai`
   (in its text or frontmatter `tags`), and a folder whose `.knotes.json` says `"ai": false`, with
   its subfolders unless one says `"ai": true` (the nearest folder's setting wins, as the other

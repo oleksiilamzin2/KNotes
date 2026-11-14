@@ -43,10 +43,11 @@ pub struct Summary {
 }
 
 /// The items to send for `items`: the preamble and the summary (developer messages), then the
-/// items the summary does not cover. As they are once OpenAI has said it cached part of this
-/// conversation; until then (the Sign in with ChatGPT route reported no cached tokens on
-/// 2026-11-14) reasoning only from the last turn, and tool results before the last
-/// `KEEP_TURNS` turns cut short.
+/// items the summary does not cover. As they are once OpenAI has cached at least half of a
+/// request of this conversation (the cache then covers its history); else reasoning only from
+/// the last turn, and tool results before the last `KEEP_TURNS` turns cut short. (On 2026-11-14
+/// the Sign in with ChatGPT route cached at most the start every request shares, tools and
+/// instructions, never a conversation's history, not even a request sent again unchanged.)
 pub fn context(items: &[Value], memory: &Memory) -> Vec<Value> {
     let from = memory.summary.as_ref().map_or(0, |s| s.covers.min(items.len()));
     let developer = |words: &str| json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]});
@@ -57,7 +58,7 @@ pub fn context(items: &[Value], memory: &Memory) -> Vec<Value> {
     if let Some(summary) = &memory.summary {
         out.push(developer(&format!("A summary of this conversation's earlier part (its messages are left out):\n{}", summary.text)));
     }
-    if memory.cached.is_some_and(|c| c > 0) {
+    if memory.cached.is_some_and(|c| c > 0 && memory.tokens.is_some_and(|t| c * 2 >= t)) {
         out.extend(items[from..].iter().cloned());
         return out;
     }

@@ -20,7 +20,7 @@ fn turn(question: &str, result: &str) -> Vec<Value> {
 fn where_openai_caches_a_conversation_it_is_sent_as_it_is_kept() {
     let long = "x".repeat(5_000);
     let items: Vec<Value> = [turn("one", &long), turn("two", &long), turn("three", &long)].concat();
-    let caching = Memory { cached: Some(4_000), ..Memory::default() };
+    let caching = Memory { cached: Some(4_000), tokens: Some(5_000), ..Memory::default() };
     assert_eq!(context(&items, &caching), items, "nothing cut, no reasoning left out: each request starts as the one before did, so the cache covers it");
 }
 
@@ -28,7 +28,9 @@ fn where_openai_caches_a_conversation_it_is_sent_as_it_is_kept() {
 fn where_nothing_is_cached_old_results_are_cut_and_past_reasoning_left_out() {
     let long = "x".repeat(5_000);
     let items: Vec<Value> = [turn("one", &long), turn("two", &long), turn("three", &long)].concat();
-    for memory in [Memory::default(), Memory { cached: Some(0), ..Memory::default() }] {
+    // The route's own start (tools, instructions) cached, the history not: still cut.
+    let start_only = Memory { cached: Some(1_536), tokens: Some(16_334), ..Memory::default() };
+    for memory in [Memory::default(), Memory { cached: Some(0), ..Memory::default() }, start_only] {
         let sent = context(&items, &memory);
         let reasoning: Vec<&Value> = sent.iter().filter(|i| i["type"] == "reasoning").collect();
         assert_eq!(reasoning, vec![&json!({"type": "reasoning", "encrypted_content": "sealed three"})], "only the turn under way's");
@@ -40,7 +42,7 @@ fn where_nothing_is_cached_old_results_are_cut_and_past_reasoning_left_out() {
 #[test]
 fn the_day_and_the_vault_come_first_then_the_summary_in_place_of_what_it_covers() {
     let items: Vec<Value> = [turn("one", "r"), turn("two", "r"), turn("three", "r")].concat();
-    let memory = Memory { preamble: Some("Today is Saturday.".into()), summary: Some(Summary { covers: 6, text: "Asked one.".into() }), cached: Some(100), ..Memory::default() };
+    let memory = Memory { preamble: Some("Today is Saturday.".into()), summary: Some(Summary { covers: 6, text: "Asked one.".into() }), cached: Some(100), tokens: Some(150) };
     let sent = context(&items, &memory);
     assert_eq!(sent[0], json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Today is Saturday."}]}));
     assert!(sent[1]["content"][0]["text"].as_str().unwrap().ends_with("Asked one."));
