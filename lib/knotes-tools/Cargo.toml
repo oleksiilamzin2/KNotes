@@ -1,0 +1,19 @@
+[package]
+name = "knotes-tools"
+description = "Read-only tools over a Knotes vault, for the chat and the MCP server (ADR 0027)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-core.workspace = true
+knotes-md.workspace = true
+knotes-search.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+knotes-index.workspace = true
+knotes-indexer.workspace = true
+knotes-vault.workspace = true
+tempfile.workspace = true

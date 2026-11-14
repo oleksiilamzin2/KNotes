@@ -597,6 +597,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-tools"
+version = "0.1.0"
+dependencies = [
+ "knotes-core",
+ "knotes-index",
+ "knotes-indexer",
+ "knotes-md",
+ "knotes-search",
+ "knotes-vault",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "knotes-vault"
 version = "0.1.0"
 dependencies = [
