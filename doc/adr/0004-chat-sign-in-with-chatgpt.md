@@ -1,6 +1,8 @@
 # 0004. Chat through Sign in with ChatGPT and local function tools
 
-Status: accepted, 2026-11-12 (details to verify before the chat stage)
+Status: accepted, 2026-11-12; the open points checked on 2026-11-14 in ADR 0027 (function
+tools work in namespaces; `store:false` and streaming are required; `previous_response_id`
+is not supported)
 
 ## Context
 
