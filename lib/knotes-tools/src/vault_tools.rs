@@ -150,7 +150,7 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             rows.retain(|r| tagged.contains(&r.path));
         }
         match args.get("sort").and_then(Value::as_str) {
-            Some("name") => rows.sort_by(|a, b| title_of(&a.path).to_lowercase().cmp(&title_of(&b.path).to_lowercase())),
+            Some("name") => rows.sort_by_key(|r| title_of(&r.path).to_lowercase()),
             _ => rows.sort_by_key(|r| std::cmp::Reverse(r.mtime_ns)),
         }
         let notes: Vec<Value> = rows.into_iter().take(limit).map(|r| json!({"path": r.path, "title": title_of(&r.path), "kind": kind_of(&r.path), "modified_unix": r.mtime_ns / 1_000_000_000})).collect();
