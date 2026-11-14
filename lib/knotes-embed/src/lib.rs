@@ -5,10 +5,12 @@
 mod embed_error;
 mod embedder;
 mod passage;
+mod process_embedder;
 pub mod protocol;
 mod vector;
 
 pub use embed_error::EmbedError;
 pub use embedder::Embedder;
 pub use passage::Passage;
+pub use process_embedder::ProcessEmbedder;
 pub use vector::{DIMS, Vector, quantize, similarity};
