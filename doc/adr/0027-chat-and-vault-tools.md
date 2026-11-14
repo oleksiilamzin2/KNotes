@@ -126,3 +126,28 @@ plan usage for open-source and local apps) on 2026-11-14:
   the tokens (the registration stays, for signing in again).
 - SHA-256 comes from CommonCrypto and random bytes from the Security framework; base64url and
   form encoding are a few lines here: no crates for them.
+
+## Built (2026-11-14): the panel
+
+- Signed out, the "ШІ" segment says what the chat is (an OpenAI model on the owner's ChatGPT
+  plan; the fragments it finds go to OpenAI with the conversation) above "Continue with
+  ChatGPT"; while the browser is out it says so, with a button that calls the sign-in off.
+  Declined, plan not allowed and other failures are said under the button. The first sign-in
+  shows the notice OpenAI asks for once ("Ви використовуєте свій план ChatGPT").
+- Signed in: the conversations as a list at the top (a new one, not saved yet, first), a
+  button for a new conversation and a menu (delete it; the account; sign out); the conversation;
+  the question field (Return sends, Shift-Return a new line; the button stops a turn under way);
+  under it the document open as a chip (a click crosses it out, a second offers it again; another
+  document is offered anew), the model (from the plan's list, the last chosen kept in the
+  settings), and "Використовується план ChatGPT" with "Керувати" opening ChatGPT's usage settings.
+- The conversation shows the questions, a dim line for each tool the model called ("Пошук:
+  radar", "Читаю Radar.md"), and the answers set from their Markdown (bold, italic, code,
+  headings, lists), redrawn at most every 50 ms while they stream. A wiki link in an answer opens
+  its note or PDF (at its heading or page) in the window; a link to nothing opens nothing; web
+  links open in the browser.
+- A turn runs on the chat's own thread with a reader of the index of its own; a finished turn
+  saves the conversation (named by its first question). A failed one says why (the usage limit
+  with a "Керувати використанням" link) and puts the question back in the field; "sign in again"
+  shows the sign-in.
+- The probe signs in with a script of OpenAI's answers (`KNOTES_PROBE_CHAT`) and tokens in
+  memory; without it the probe is signed out and never reads the Keychain.

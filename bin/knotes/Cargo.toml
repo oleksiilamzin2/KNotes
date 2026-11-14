@@ -27,8 +27,10 @@ knotes-editor.workspace = true
 knotes-vault.workspace = true
 knotes-search.workspace = true
 knotes-pdf.workspace = true
+knotes-chat.workspace = true
+knotes-tools.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 knotes-synth.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true

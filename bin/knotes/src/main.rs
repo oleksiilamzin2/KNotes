@@ -1,7 +1,8 @@
 //! Knotes: the AppKit app (ADR 0002, 0010).
 
 mod app_delegate;
-mod chat_view;
+mod chat_panel;
+mod chat_worker;
 mod collapse_observer;
 mod connections_panel;
 mod connections_worker;

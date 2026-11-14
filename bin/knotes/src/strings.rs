@@ -151,3 +151,50 @@ pub const TABLE_SORT_DOWN: &str = "Сортувати за спаданням";
 pub fn pdf_page(page: usize, pages: usize) -> String {
     format!("сторінка {page} з {pages}")
 }
+
+// The chat (ADR 0027). OpenAI asks for "Continue with ChatGPT" as the sign-in button.
+pub const CHAT_SIGN_IN: &str = "Continue with ChatGPT";
+pub const CHAT_EXPLAINED: &str = "Відповідає модель OpenAI на вашому плані ChatGPT. Фрагменти нотаток, які вона знаходить, надсилаються в OpenAI разом із розмовою.";
+pub const CHAT_WAITING: &str = "Завершіть вхід у браузері…";
+pub const CHAT_CANCEL: &str = "Скасувати";
+pub const CHAT_NEW: &str = "Нова розмова";
+pub const CHAT_UNTITLED: &str = "Без назви";
+pub const CHAT_DELETE: &str = "Видалити розмову";
+pub const CHAT_SIGN_OUT: &str = "Вийти з ChatGPT";
+pub const CHAT_PLAN: &str = "Використовується план ChatGPT";
+pub const CHAT_MANAGE: &str = "Керувати";
+pub const CHAT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
+pub const CHAT_WELCOME: &str = "Ви використовуєте свій план ChatGPT";
+pub const CHAT_WELCOME_EXPLAINED: &str = "Запити чату в Knotes витрачають використання вашого плану ChatGPT. Переглянути й обмежити його можна в налаштуваннях ChatGPT.";
+pub const CHAT_GOT_IT: &str = "Зрозуміло";
+pub const CHAT_THINKING: &str = "…";
+pub const CHAT_STOPPED: &str = "Зупинено.";
+pub const CHAT_USAGE_LIMIT: &str = "Ліміт використання плану ChatGPT вичерпано.";
+pub const CHAT_MANAGE_USAGE: &str = "Керувати використанням";
+pub const CHAT_UNAVAILABLE: &str = "ChatGPT зараз недоступний, спробуйте пізніше.";
+pub const CHAT_SIGN_IN_AGAIN: &str = "Потрібно увійти знову.";
+pub const CHAT_NOT_ELIGIBLE: &str = "План ChatGPT недоступний для цього акаунта";
+pub const CHAT_CUT: &str = "Відповідь обірвалася.";
+pub const CHAT_DECLINED: &str = "Вхід скасовано в браузері.";
+pub const CHAT_PLAN_OFF: &str = "Використання плану ChatGPT не дозволено. Увійдіть знову й дозвольте його.";
+
+/// What a tool call shows in the conversation.
+pub fn chat_tool(name: &str, args: &serde_json::Value) -> String {
+    let arg = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    match name {
+        "search" => format!("Пошук: {}", arg("query")),
+        "find_by_title" => format!("Пошук назви: {}", arg("query")),
+        "read_note" => format!("Читаю {}", arg("path")),
+        "read_pdf" => match args.get("from_page").and_then(|v| v.as_u64()) {
+            Some(page) => format!("Читаю {}, с. {page}", arg("path")),
+            None => format!("Читаю {}", arg("path")),
+        },
+        "outline" => format!("Зміст {}", arg("path")),
+        "links" => format!("Зв'язки {}", arg("path")),
+        "list_notes" if !arg("tag").is_empty() => format!("Нотатки з тегом #{}", arg("tag").trim_start_matches('#')),
+        "list_notes" if !arg("folder").is_empty() => format!("Нотатки теки {}", arg("folder")),
+        "list_notes" => "Список нотаток".to_string(),
+        "list_tags" => "Теги".to_string(),
+        other => other.to_string(),
+    }
+}

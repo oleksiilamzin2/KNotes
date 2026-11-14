@@ -31,7 +31,7 @@ use crate::pdf_viewer::PdfViewer;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSPoint, NSRange, NSString, NSURL};
 use objc2_app_kit::NSTextElementProvider;
 
-use crate::chat_view::{self, ChatView};
+use crate::chat_panel::ChatPanel;
 use crate::collapse_observer::CollapseObserver;
 use crate::connections_panel::{Connections, ConnectionsPanel};
 use crate::outline_panel::OutlinePanel;
@@ -112,7 +112,8 @@ pub struct VaultWindow {
     find_current: Cell<Option<usize>>,
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
-    pub chat: ChatView,
+    /// The chat with the model (ADR 0027), in the right panel.
+    pub chat: Rc<ChatPanel>,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
     /// The connections of the document open, in the right panel (ADR 0026), the document they
@@ -237,7 +238,7 @@ impl VaultWindow {
         find_bar.column.addSubview(&no_document);
         no_document.centerXAnchor().constraintEqualToAnchor(&find_bar.column.centerXAnchor()).setActive(true);
         no_document.centerYAnchor().constraintEqualToAnchor(&find_bar.column.centerYAnchor()).setActive(true);
-        let chat = chat_view::chat_view(mtm);
+        let chat = ChatPanel::new(mtm, knotes_session::app_data_dir());
         let outline_panel = OutlinePanel::new(mtm);
         let connections_panel = ConnectionsPanel::new(mtm);
         let panel = NSView::new(mtm);
@@ -361,6 +362,12 @@ impl VaultWindow {
         *this.panel_observer.borrow_mut() = Some(CollapseObserver::watch(mtm, &this.panel_item, move |collapsed| toolbar.set_panel_shown(!collapsed)));
         *this.this.borrow_mut() = Rc::downgrade(&this);
         this.show_note_column();
+        let weak_chat: Weak<Self> = Rc::downgrade(&this);
+        this.chat.on_open_link(move |target| {
+            if let Some(window) = weak_chat.upgrade() {
+                window.open_chat_link(&target);
+            }
+        });
         let weak_open: Weak<Self> = Rc::downgrade(&this);
         this.connections_panel.on_open(move |path, range| {
             if let Some(window) = weak_open.upgrade() {
@@ -607,6 +614,7 @@ impl VaultWindow {
 
     /// The right panel's outline or connections for the document open.
     fn refresh_panel(&self) {
+        self.chat.set_document(self.pdf_path.borrow().clone().or_else(|| self.open_path()));
         self.refresh_outline();
         self.refresh_connections();
     }
@@ -935,6 +943,7 @@ impl VaultWindow {
 
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
         self.live_preview.set_vault(vault.clone());
+        self.chat.set_vault(vault.clone(), index_dir.clone());
         let mut state = self.state.borrow_mut();
         state.vault = Some(vault);
         state.index_dir = Some(index_dir);
@@ -1196,6 +1205,7 @@ impl VaultWindow {
                 println!("hover: {}", if self.live_preview.clickable(at) { "hand" } else { "text" });
             }
             probe::note_scroll_requested(&self.note_text);
+            probe::chat_requested(&self.chat);
             probe::schedule(true);
         }
     }
@@ -1531,6 +1541,32 @@ impl VaultWindow {
             self.highlight_open_note();
         }
         if let Some(subpath) = &link.subpath {
+            let text = self.note_text.string().to_string();
+            if let Some(at) = subpath_offset(&text, subpath) {
+                self.note_text.move_to_top(utf16_offsets(&text, &[at])[0]);
+            }
+        }
+    }
+
+    /// A link in a chat answer (`Projects/Radar`, `budget.pdf#page=3`): the note or PDF it
+    /// resolves to opened, at its heading or page. A link to nothing opens nothing (unlike a
+    /// note's links, which make the note).
+    fn open_chat_link(&self, target: &str) {
+        let (path, subpath) = match target.split_once('#') {
+            Some((path, subpath)) => (path, Some(subpath.to_owned())),
+            None => (target, None),
+        };
+        let Some(links) = self.state.borrow().links.clone() else { return };
+        let source = self.open_path().unwrap_or_default();
+        let Some(resolved) = links.resolve(LinkKind::Wiki, path, &source) else { return };
+        if FileKind::from_path(&resolved) == FileKind::Pdf {
+            let page = subpath.as_deref().and_then(|s| s.strip_prefix("page=")).and_then(|p| p.parse().ok());
+            self.open_pdf(&resolved, page, true);
+            return;
+        }
+        self.open_note(&resolved, true);
+        self.highlight_open_note();
+        if let Some(subpath) = &subpath {
             let text = self.note_text.string().to_string();
             if let Some(at) = subpath_offset(&text, subpath) {
                 self.note_text.move_to_top(utf16_offsets(&text, &[at])[0]);
@@ -2600,7 +2636,7 @@ impl VaultWindow {
 
 /// The name a document shows: a note's without `.md`, a PDF's without `.pdf`, neither with its
 /// folder.
-fn document_name(path: &str) -> &str {
+pub(crate) fn document_name(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
     [".md", ".pdf"].iter().find_map(|ext| name.len().checked_sub(ext.len()).filter(|&at| name[at..].eq_ignore_ascii_case(ext)).map(|at| &name[..at])).unwrap_or(name)
 }

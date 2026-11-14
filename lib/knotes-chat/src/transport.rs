@@ -27,3 +27,9 @@ pub trait Transport {
     /// Fails only when no response came (no network, a timeout).
     fn send(&self, request: &HttpRequest) -> Result<HttpResponse, ChatError>;
 }
+
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, ChatError> {
+        (**self).send(request)
+    }
+}

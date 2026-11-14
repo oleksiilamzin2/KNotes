@@ -190,9 +190,9 @@ fn clicking_notes_opens_them_and_back_returns() {
 }
 
 #[test]
-fn chat_column_has_title_and_question_field() {
+fn the_chat_asks_to_sign_in_with_chatgpt_first() {
     let out = probe();
-    assert!(out.contains("chat: Чат | Запитайте свої нотатки…"), "{out}");
+    assert!(out.contains("chat: signed out | Continue with ChatGPT | \n"), "{out}");
 }
 
 #[test]
@@ -2642,4 +2642,114 @@ fn a_pdf_shows_its_page_and_page_count_as_it_moves_then_hides_them() {
     assert_eq!(page_label(&long_pdf(&[])), "сторінка 1 з 30 (shown)", "on opening");
     assert_eq!(page_label(&long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "right,right")])), "сторінка 3 з 30 (shown)");
     assert!(page_label(&long_pdf(&[("KNOTES_PROBE_DELAY_MS", "2500")])).ends_with("(hidden)"), "a moment after the last move");
+}
+
+/// OpenAI's streamed reply with `output`, as the chat's probe transport plays it.
+fn chat_reply(output: &[serde_json::Value]) -> serde_json::Value {
+    let mut events = Vec::new();
+    for item in output {
+        if let Some(text) = item["content"][0]["text"].as_str() {
+            events.push(serde_json::json!({"type": "response.output_text.delta", "delta": text}));
+        }
+        events.push(serde_json::json!({"type": "response.output_item.done", "item": item}));
+    }
+    events.push(serde_json::json!({"type": "response.completed", "response": {"output": output}}));
+    let body: String = events.iter().map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap())).collect();
+    serde_json::json!({"status": 200, "body": body})
+}
+
+fn chat_message(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]})
+}
+
+/// A file of OpenAI's answers for the chat, kept with the vault's temporary folder.
+fn chat_script(dir: &std::path::Path, answers: &[serde_json::Value]) -> String {
+    let path = dir.join("chat-script.json");
+    std::fs::write(&path, serde_json::Value::Array(answers.to_vec()).to_string()).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+fn radar_answers() -> Vec<serde_json::Value> {
+    let call = serde_json::json!({"type": "function_call", "call_id": "c1", "name": "search", "arguments": "{\"query\":\"radar\"}"});
+    vec![chat_reply(&[call]), chat_reply(&[chat_message("Radar starts in **May**, see [[Radar]].")])]
+}
+
+#[test]
+fn a_question_streams_its_answer_with_the_tools_it_used_and_note_links() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &radar_answers());
+    let (_vault, out) = probe_notes(
+        &[("Radar.md", "# Radar\n\nStarts in May."), ("Boris.md", "# Boris")],
+        &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "When does radar start?"), ("KNOTES_PROBE_DELAY_MS", "2500")],
+    );
+    assert!(out.contains("chat: signed in | model: Probe Model | document: Boris  ✕ | Використовується план ChatGPT"), "{out}");
+    assert!(out.contains("chat transcript: When does radar start?⏎⏎Пошук: radar⏎⏎Radar starts in May, see Radar.\n"), "{out}");
+    assert!(out.contains("chat links: knotes-note:Radar\n"), "{out}");
+    assert!(out.contains("chat conversations: When does radar start? | selected 0"), "{out}");
+    assert!(out.contains("chat field: \n"), "{out}");
+}
+
+#[test]
+fn a_note_link_in_an_answer_opens_the_note() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &radar_answers());
+    let (_vault, out) = probe_notes(
+        &[("Radar.md", "# Radar\n\nStarts in May."), ("Boris.md", "# Boris")],
+        &[
+            ("KNOTES_PROBE_OPEN", "Boris.md"),
+            ("KNOTES_PROBE_CHAT", &script),
+            ("KNOTES_PROBE_CHAT_SEND", "When does radar start?"),
+            ("KNOTES_PROBE_CHAT_CLICK_LINK", "1"),
+            ("KNOTES_PROBE_DELAY_MS", "2500"),
+        ],
+    );
+    assert!(out.contains("note: Radar.md | # Radar⏎⏎Starts in May."), "{out}");
+}
+
+#[test]
+fn the_document_offered_to_the_chat_can_be_crossed_out() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &[]);
+    let (_vault, out) = probe_notes(&[("Boris.md", "# Boris")], &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_TOGGLE_DOC", "1")]);
+    assert!(out.contains("| document: + Boris |"), "{out}");
+}
+
+#[test]
+fn a_usage_limit_is_said_with_a_link_to_manage_usage_and_the_question_kept() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let limit = serde_json::json!({"status": 429, "body": serde_json::json!({"error": {"code": "subscription_sharing_usage_limit_exceeded", "message": "limit"}}).to_string()});
+    let script = chat_script(script_dir.path(), &[limit]);
+    let (_vault, out) = probe_notes(
+        &[("Boris.md", "# Boris")],
+        &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "When?"), ("KNOTES_PROBE_DELAY_MS", "2000")],
+    );
+    assert!(out.contains("chat transcript: Ліміт використання плану ChatGPT вичерпано. Керувати використанням\n"), "{out}");
+    assert!(out.contains("chat links: knotes-web:https://chatgpt.com/settings/usage"), "{out}");
+    assert!(out.contains("chat field: When?\n"), "{out}");
+    assert!(out.contains("chat conversations: Нова розмова | selected 0"), "{out}");
+}
+
+#[test]
+fn conversations_are_kept_per_vault_and_listed_after_a_relaunch() {
+    let (home, vault, script_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(vault.path().join("Boris.md"), "# Boris").unwrap();
+    let script = chat_script(script_dir.path(), &[chat_reply(&[chat_message("First answer.")]), chat_reply(&[chat_message("Second answer.")])]);
+    let env = |extra: &[(&'static str, &'static str)]| {
+        let mut env = vec![("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", script.as_str())];
+        env.extend_from_slice(extra);
+        probe_env(&[vault.path()], Some(home.path()), &env)
+    };
+    let out = env(&[("KNOTES_PROBE_CHAT_SEND", "First?|And then?"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
+    assert!(out.contains("chat transcript: First?⏎⏎First answer.⏎⏎And then?⏎⏎Second answer.\n"), "{out}");
+
+    let out = env(&[]);
+    assert!(out.contains("chat conversations: First? | selected 0"), "{out}");
+    assert!(out.contains("chat transcript: First?⏎⏎First answer.⏎⏎And then?⏎⏎Second answer.\n"), "{out}");
+
+    let out = env(&[("KNOTES_PROBE_CHAT_NEW", "1")]);
+    assert!(out.contains("chat conversations: Нова розмова, First? | selected 0"), "{out}");
+    assert!(out.contains("chat transcript: \n"), "{out}");
+
+    let out = env(&[("KNOTES_PROBE_CHAT_NEW", "1"), ("KNOTES_PROBE_CHAT_CHOOSE", "1")]);
+    assert!(out.contains("chat conversations: First? | selected 0"), "{out}");
 }

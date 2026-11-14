@@ -12,6 +12,7 @@ fn settings_round_trip_through_the_app_data_folder() {
         last_vault: Some(PathBuf::from("/Users/me/Notes")),
         panel_mode: PanelMode::Outline,
         window_frame: Some([40, 60, 1200, 800]),
+        chat_model: Some("gpt-5.5".into()),
     };
     settings.save(data.path()).unwrap();
     assert_eq!(AppSettings::load(data.path()), settings);

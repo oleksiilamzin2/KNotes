@@ -385,6 +385,26 @@ fn report_tab_crosses(outline: &NSOutlineView) {
     println!("tab-crosses: {}", shown.join(" "));
 }
 
+/// `KNOTES_PROBE_CHAT_SEND=first|second`: those questions asked in the chat, 600 ms apart (with
+/// `KNOTES_PROBE_CHAT` naming OpenAI's answers); `KNOTES_PROBE_CHAT_TOGGLE_DOC=1` crosses out
+/// the document offered first.
+pub fn chat_requested(chat: &std::rc::Rc<crate::chat_panel::ChatPanel>) {
+    if std::env::var_os("KNOTES_PROBE_CHAT_TOGGLE_DOC").is_some() {
+        chat.probe_toggle_document();
+    }
+    let Ok(questions) = std::env::var("KNOTES_PROBE_CHAT_SEND") else { return };
+    for (i, question) in questions.split('|').map(str::to_owned).enumerate() {
+        let target = dispatch2::MainThreadBound::new(std::rc::Rc::downgrade(chat), MainThreadMarker::new().expect("main thread"));
+        let when = DispatchTime::try_from(Duration::from_millis(600 * i as u64)).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(chat) = target.get(mtm).upgrade() {
+                chat.probe_send(&question);
+            }
+        });
+    }
+}
+
 /// `KNOTES_PROBE_CONNECTION_LINK=Note`: 500 ms in, once the connections are listed, a click on
 /// the button of the first unlinked mention in that note.
 pub fn connection_link_requested(window: &std::rc::Rc<VaultWindow>) {
@@ -738,8 +758,9 @@ pub fn schedule(with_sidebar: bool) {
             if let Some(window) = w.borrow().as_ref() {
                 tabs_requested(window);
                 report(&window.window);
-                let placeholder = window.chat.question.placeholderString().map(|p| p.to_string()).unwrap_or_default();
-                println!("chat: {} | {placeholder}", window.chat.title.stringValue());
+                for line in window.chat.probe_lines() {
+                    println!("{line}");
+                }
                 if std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("scroll-bench") {
                     scroll_bench(&window.table);
                 }
@@ -866,6 +887,18 @@ pub fn toolbar_rename_requested(window: &NSWindow) {
 /// the report: `KNOTES_PROBE_TAB_CLOSE=a.md`, a click on the cross of that document's tab;
 /// `KNOTES_PROBE_TAB_TRIP=b.md`, that document's tab clicked, then the tab shown before.
 fn tabs_requested(window: &VaultWindow) {
+    // The chat, before the report: `KNOTES_PROBE_CHAT_NEW=1` starts a new conversation,
+    // `KNOTES_PROBE_CHAT_CHOOSE=1` chooses the list's second, `KNOTES_PROBE_CHAT_CLICK_LINK=1`
+    // clicks the first note link in the conversation.
+    if std::env::var_os("KNOTES_PROBE_CHAT_NEW").is_some() {
+        window.chat.probe_new_conversation();
+    }
+    if let Some(index) = std::env::var("KNOTES_PROBE_CHAT_CHOOSE").ok().and_then(|i| i.parse().ok()) {
+        window.chat.probe_choose_conversation(index);
+    }
+    if std::env::var_os("KNOTES_PROBE_CHAT_CLICK_LINK").is_some() {
+        window.chat.probe_click_note_link();
+    }
     // `KNOTES_PROBE_CONNECTION_CLICK=line`: a click on that line of the connections, listed by
     // now (they are gathered on another thread).
     if let Ok(line) = std::env::var("KNOTES_PROBE_CONNECTION_CLICK") {

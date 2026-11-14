@@ -19,6 +19,8 @@ pub struct AppSettings {
     /// Where the window was and how big (x, y, width, height in screen points), to open it
     /// there again.
     pub window_frame: Option<[i64; 4]>,
+    /// The model the chat asks (its slug), as last chosen.
+    pub chat_model: Option<String>,
 }
 
 impl AppSettings {
@@ -33,6 +35,7 @@ impl AppSettings {
                 let n: Vec<i64> = v.iter().filter_map(Value::as_i64).collect();
                 <[i64; 4]>::try_from(n).ok()
             }),
+            chat_model: value.get("chatModel").and_then(Value::as_str).map(str::to_string),
         }
     }
 
@@ -43,6 +46,7 @@ impl AppSettings {
             "lastVault": self.last_vault.as_ref().map(|p| p.to_string_lossy()),
             "panel": self.panel_mode.key(),
             "windowFrame": self.window_frame,
+            "chatModel": self.chat_model,
         });
         let tmp = app_data.join(format!("{SETTINGS_FILE}.tmp"));
         fs::write(&tmp, serde_json::to_string_pretty(&value).map_err(io::Error::other)? + "\n")?;
