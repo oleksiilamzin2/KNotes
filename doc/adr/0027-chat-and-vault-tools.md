@@ -219,6 +219,14 @@ plan usage for open-source and local apps) on 2026-11-14:
   car note's alias "Машина"). Titles are compared composed and in lower case. Search by words:
   0.86 → 0.94 (33 of 35), MRR 0.75 → 0.82; what is left differs in its words ("день" / "Дні",
   "штраф" / "компенсація").
+- A run of the 30 questions after that: 111 tool calls (106 before), 28 right: fewer steps where
+  search had failed (the service log 5 → 2), more where the model worded a query anew ("Марка
+  гурток коли" with its question word): one run cannot tell 5–10 % apart. The model's new
+  wordings went into the benchmark (by words 33 of 37). Then search leaves question and function
+  words out (Ukrainian, Russian, English) unless nothing else is left, cuts five-letter words by
+  one letter, and for three words or more looks last for documents holding all but one
+  (`partial`, the word `missing`); the model is told that dates are often written in numbers and
+  to prefer figures written in the notes to estimates. By words 33 → 36 of 37, MRR 0.77 → 0.81.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand

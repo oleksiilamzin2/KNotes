@@ -260,3 +260,25 @@ fn search_finds_words_hidden_in_titles_aliases_links_and_other_forms() {
     assert_eq!((stem["path"].as_str(), stem["match"].as_str()), (Some("Codes.md"), Some("stem")), "{stem}");
     assert_eq!(first("oil changed")["match"], "block", "the words together still come first");
 }
+
+#[test]
+fn question_words_are_left_out_and_short_words_cut_to_their_stems() {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Марко.md", "# Марко\n\n## Гуртки\n\nФутбол у вівторок.");
+    write(dir.path(), "Log.md", "Oil changed in May.");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let v = Vault { tools: VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs), _dirs: (dir, idx) };
+    let first = |query: &str| call(&v, "search", json!({"query": query}))["results"][0].clone();
+    assert_eq!(first("when was oil changed")["match"], "block", "\"when\" and \"was\" are left out");
+    let marko = first("Марка гурток коли");
+    assert_eq!((marko["path"].as_str(), marko["match"].as_str()), (Some("Марко.md"), Some("stem")), "{marko}");
+    assert!(call(&v, "search", json!({"query": "коли"}))["results"].as_array().unwrap().is_empty(), "a query of question words alone is searched as it is");
+}
+
+#[test]
+fn a_query_missing_one_word_still_finds_the_rest_and_names_the_word() {
+    let v = hidden();
+    let partial = call(&v, "search", json!({"query": "oil changed yesterday"}))["results"][0].clone();
+    assert_eq!((partial["path"].as_str(), partial["match"].as_str(), partial["missing"].as_str()), (Some("Log.md"), Some("partial"), Some("yesterday")), "{partial}");
+}

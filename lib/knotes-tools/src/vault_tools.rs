@@ -71,7 +71,7 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     }
 
     fn search(&self, args: &Value) -> Result<Value, ToolError> {
-        let query = text_arg(args, "query")?;
+        let query = without_question_words(&text_arg(args, "query")?);
         let (offset, limit) = paging(args, 10, 30);
         // One more than the page, to tell whether more follow.
         let wanted = offset + limit + 1;
@@ -111,14 +111,23 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
                 }
             }
         }
+        // Last, for three words or more: all but one of them (by their stems), the one left out
+        // named (`partial`, `missing`): a word in another form or another word altogether.
+        if hits.0.len() < wanted && words.len() > 2 {
+            for (i, word) in words.iter().enumerate() {
+                let rest = stems(&words.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, w)| *w).collect::<Vec<_>>().join(" "));
+                hits.add("partial", find(&rest, Within::Note, None)?, Some(format!("missing:{word}")), false);
+            }
+        }
         let (hits, next) = page(hits.0, offset, limit);
         let results: Vec<Value> = hits
             .into_iter()
             .map(|(found, hit, via)| {
                 let text = self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..hit.span.end as usize).map(cut)).unwrap_or_default();
                 let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
-                if let Some(via) = via {
-                    result["via"] = json!(via);
+                // A partial find names the word it lacks; a linked one, the document it came through.
+                if let Some((key, value)) = via.as_deref().map(|v| v.strip_prefix("missing:").map_or(("via", v), |w| ("missing", w))) {
+                    result[key] = json!(value);
                 }
                 result
             })
@@ -344,17 +353,39 @@ fn name_form(word: &str) -> String {
 }
 
 /// `query` with its longer Cyrillic words cut to their stems (two letters off a word of six or
-/// more), so other forms of a word match: "помилка" finds "помилок", "Софійка" finds "Софійці".
+/// more, one off a word of five), so other forms of a word match: "помилка" finds "помилок",
+/// "Софійка" finds "Софійці", "Марка" finds "Марко".
 fn stems(query: &str) -> String {
     query
         .split_whitespace()
         .map(|word| {
             let n = word.chars().count();
             let cyrillic = word.chars().all(|c| ('\u{400}'..='\u{4ff}').contains(&c) || c == '\'' || c == '’');
-            if n >= 6 && cyrillic { word.chars().take(n - 2).collect() } else { word.to_string() }
+            let off = match n {
+                _ if !cyrillic => 0,
+                5 => 1,
+                n if n >= 6 => 2,
+                _ => 0,
+            };
+            word.chars().take(n - off).collect::<String>()
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Question and function words (Ukrainian, Russian, English): no note holds a question's "when".
+const QUESTION_WORDS: &[&str] = &[
+    "коли", "що", "як", "де", "куди", "звідки", "хто", "чому", "навіщо", "скільки", "який", "яка", "яке", "які", "якого", "якій", "яких", "чи", "та", "але", "або",
+    "для", "про", "від", "при", "це", "цей", "ця", "ці", "той", "так", "ще", "вже", "мій", "моя", "моє", "мої", "наш", "наша", "наше", "наші", "мені", "мене", "ми",
+    "був", "була", "було", "були", "буде", "когда", "что", "как", "где", "кто", "почему", "зачем", "сколько", "какой", "какая", "какое", "какие", "или", "это",
+    "мой", "мне", "меня", "был", "была", "было", "when", "what", "how", "where", "who", "why", "which", "the", "is", "are", "was", "were", "of", "to", "in", "on",
+    "for", "and", "or", "do", "does", "did", "my", "our",
+];
+
+/// `query` without its question and function words, unless it holds nothing else.
+fn without_question_words(query: &str) -> String {
+    let kept: Vec<&str> = query.split_whitespace().filter(|w| !QUESTION_WORDS.contains(&name_form(w).as_str())).collect();
+    if kept.is_empty() { query.to_string() } else { kept.join(" ") }
 }
 
 /// The index's documents' titles and aliases, to find them by.
