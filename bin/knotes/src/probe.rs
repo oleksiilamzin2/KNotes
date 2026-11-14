@@ -1037,6 +1037,7 @@ fn report_list_separator(window: &NSWindow) {
 fn report_panel(window: &VaultWindow) {
     let hidden = panel_switch(&window.window).is_some_and(|g| g.isHidden());
     println!("panel: {}", if hidden { "hidden".to_owned() } else { window.describe_panel() });
+    println!("connections: {}", window.connections_panel.describe());
     let (rows, empty) = window.outline_panel.describe();
     println!("outline: {rows}");
     println!("outline-current: {}", window.outline_panel.current_title().unwrap_or_else(|| "none".to_owned()));
@@ -1066,6 +1067,7 @@ pub fn panel_requested(window: &NSWindow) {
     let index = match action.as_deref() {
         Ok("panel=ai") => 0,
         Ok("panel=outline") => 1,
+        Ok("panel=links") => 2,
         _ => return,
     };
     let Some(group) = panel_switch(window) else { return };
@@ -1162,6 +1164,8 @@ fn report_note(window: &VaultWindow) {
         let shown = scroll.contentView().bounds();
         println!("note-visible: {:.1} {:.1}", shown.origin.y, shown.origin.y + shown.size.height);
     }
+    let selection = window.note_text.selectedRange();
+    println!("selection: {} {}", selection.location, selection.length);
     if let Some(top) = window.note_top() {
         println!("note-top: {}", first_line_at(&window.note_text.string().to_string(), top));
     }

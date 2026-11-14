@@ -118,7 +118,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(2), panel"
+        "toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(3), panel"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -2497,4 +2497,62 @@ fn a_pdf_opened_from_a_search_shows_the_page_its_words_are_on() {
     assert_eq!(pdf_found(&out), "1, the current on page 25", "the word highlighted");
     assert!(out.contains("find-bar: shown") && out.contains("find-field: 25\n") && out.contains("find: 1 з 1\n"), "Cmd+F's bar with the word: {out}");
     assert!(!out.contains("focus: find"), "the focus stays where it was (arrows through the results): {out}");
+}
+
+/// A HOME whose settings show the connections in the right panel.
+fn links_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"panel": "links"}"#).unwrap();
+    home
+}
+
+/// A vault where `Plan.md` is linked from two notes, named in a third, and links out itself.
+fn links_vault() -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    let write = |p: &str, t: &str| std::fs::write(vault.path().join(p), t).unwrap();
+    write("Plan.md", "# Plan\n\nSee [[Other]] and [[Missing note]].");
+    write("Daily.md", "Today: [[Plan]] is due.\nAnd [[Plan|the plan]] again.");
+    write("Week.md", "Week starts. [[Plan]]");
+    write("Idea.md", "A rough plan for later.");
+    write("Other.md", "other");
+    vault
+}
+
+/// The connections panel's rows (`connections:` line).
+fn connections(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("connections: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn the_connections_list_links_here_unlinked_mentions_and_outgoing_links() {
+    let (vault, home) = (links_vault(), links_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Plan.md")]);
+    assert!(out.contains("panel: links, shows links"), "{out}");
+    assert_eq!(
+        connections(&out),
+        "[Посилання сюди · 3] | Daily (2) | ·Today: «[[Plan]]» is due. | ·And «[[Plan|the plan]]» again. | Week (1) | ·Week starts. «[[Plan]]» \
+         | [Згадки без посилань · 1] | Idea (1) | ·A rough «plan» for later. ↗ \
+         | [Вихідні · 2] | Other | Missing note (немає)"
+    );
+}
+
+#[test]
+fn a_click_on_a_line_in_the_connections_opens_its_note_at_the_link() {
+    let (vault, home) = (links_vault(), links_home());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Plan.md"), ("KNOTES_PROBE_CONNECTION_CLICK", "And «[[Plan|the plan]]» again.")]);
+    assert!(out.contains("note: Daily.md"), "{out}");
+    let at = "Today: [[Plan]] is due.\nAnd ".encode_utf16().count();
+    assert!(out.contains(&format!("selection: {at} {}", "[[Plan|the plan]]".encode_utf16().count())), "the link selected: {out}");
+}
+
+#[test]
+fn an_unlinked_mention_is_made_a_link_from_the_connections() {
+    let (vault, home) = (links_vault(), links_home());
+    // The report waits for the index to take in the note changed.
+    let env = [("KNOTES_PROBE_OPEN", "Plan.md"), ("KNOTES_PROBE_CONNECTION_LINK", "Idea"), ("KNOTES_PROBE_DELAY_MS", "2000")];
+    let out = probe_env(&[vault.path()], Some(home.path()), &env);
+    assert_eq!(std::fs::read_to_string(vault.path().join("Idea.md")).unwrap(), "A rough [[Plan|plan]] for later.");
+    assert!(connections(&out).contains("[Згадки без посилань · 0]") && connections(&out).contains("Idea (1) | ·A rough «[[Plan|plan]]» for later."), "{out}");
 }

@@ -140,7 +140,11 @@ define_class!(
 
         #[unsafe(method(panelMode:))]
         fn panel_mode_chosen(&self, sender: &NSToolbarItemGroup) {
-            let mode = if sender.selectedIndex() == 1 { PanelMode::Outline } else { PanelMode::Ai };
+            let mode = match sender.selectedIndex() {
+                1 => PanelMode::Outline,
+                2 => PanelMode::Links,
+                _ => PanelMode::Ai,
+            };
             self.ivars().panel_mode_state.set(mode);
             if let Some(callback) = self.ivars().on_panel_mode.borrow().as_ref() {
                 callback(mode);
@@ -418,8 +422,8 @@ impl ToolbarDelegate {
                 Some(item)
             }
             PANEL_MODE => {
-                let images = NSArray::from_retained_slice(&[symbol("brain", strings::AI)?, symbol("list.bullet.indent", strings::OUTLINE)?]);
-                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::AI), NSString::from_str(strings::OUTLINE)]);
+                let images = NSArray::from_retained_slice(&[symbol("brain", strings::AI)?, symbol("list.bullet.indent", strings::OUTLINE)?, symbol("link", strings::CONNECTIONS)?]);
+                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::AI), NSString::from_str(strings::OUTLINE), NSString::from_str(strings::CONNECTIONS)]);
                 let group = unsafe {
                     NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
                         id,
@@ -431,7 +435,7 @@ impl ToolbarDelegate {
                         mtm,
                     )
                 };
-                for (item, tip) in group.subitems().iter().zip([strings::AI, strings::OUTLINE]) {
+                for (item, tip) in group.subitems().iter().zip([strings::AI, strings::OUTLINE, strings::CONNECTIONS]) {
                     item.setToolTip(Some(&NSString::from_str(tip)));
                 }
                 group.setSelectedIndex(panel_index(self.ivars().panel_mode_state.get()));
@@ -572,6 +576,7 @@ fn panel_index(mode: PanelMode) -> isize {
     match mode {
         PanelMode::Ai => 0,
         PanelMode::Outline => 1,
+        PanelMode::Links => 2,
     }
 }
 

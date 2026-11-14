@@ -33,6 +33,7 @@ use objc2_app_kit::NSTextElementProvider;
 
 use crate::chat_view::{self, ChatView};
 use crate::collapse_observer::CollapseObserver;
+use crate::connections_panel::{Connections, ConnectionsPanel};
 use crate::outline_panel::OutlinePanel;
 use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
@@ -114,6 +115,8 @@ pub struct VaultWindow {
     pub chat: ChatView,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
+    /// The connections of the document open, in the right panel (ADR 0026).
+    pub connections_panel: ConnectionsPanel,
     /// Said in the note column while no document is open.
     no_document: Retained<NSTextField>,
     /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
@@ -231,8 +234,9 @@ impl VaultWindow {
         no_document.centerYAnchor().constraintEqualToAnchor(&find_bar.column.centerYAnchor()).setActive(true);
         let chat = chat_view::chat_view(mtm);
         let outline_panel = OutlinePanel::new(mtm);
+        let connections_panel = ConnectionsPanel::new(mtm);
         let panel = NSView::new(mtm);
-        for view in [&chat.view, &outline_panel.view] {
+        for view in [&chat.view, &outline_panel.view, &connections_panel.view] {
             view.setTranslatesAutoresizingMaskIntoConstraints(false);
             panel.addSubview(view);
             for c in [
@@ -245,6 +249,7 @@ impl VaultWindow {
             }
         }
         outline_panel.view.setHidden(true);
+        connections_panel.view.setHidden(true);
         let chat_vc = NSViewController::new(mtm);
         chat_vc.setView(&panel);
         let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc, &chat_vc);
@@ -288,6 +293,7 @@ impl VaultWindow {
             live_preview,
             chat,
             outline_panel,
+            connections_panel,
             no_document,
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
@@ -347,6 +353,24 @@ impl VaultWindow {
         *this.panel_observer.borrow_mut() = Some(CollapseObserver::watch(mtm, &this.panel_item, move |collapsed| toolbar.set_panel_shown(!collapsed)));
         *this.this.borrow_mut() = Rc::downgrade(&this);
         this.show_note_column();
+        let weak_open: Weak<Self> = Rc::downgrade(&this);
+        this.connections_panel.on_open(move |path, range| {
+            if let Some(window) = weak_open.upgrade() {
+                window.open_connection(&path, range);
+            }
+        });
+        let weak_follow: Weak<Self> = Rc::downgrade(&this);
+        this.connections_panel.on_follow(move |label, resolved| {
+            if let Some(window) = weak_follow.upgrade() {
+                window.follow_connection(&label, resolved);
+            }
+        });
+        let weak_make: Weak<Self> = Rc::downgrade(&this);
+        this.connections_panel.on_make_link(move |source, range| {
+            if let Some(window) = weak_make.upgrade() {
+                window.make_connection_link(&source, range);
+            }
+        });
         let weak: Weak<Self> = Rc::downgrade(&this);
         this.outline_panel.on_choose(move |heading| {
             if let Some(window) = weak.upgrade() {
@@ -563,7 +587,126 @@ impl VaultWindow {
         self.panel_mode.set(mode);
         self.chat.view.setHidden(mode != PanelMode::Ai);
         self.outline_panel.view.setHidden(mode != PanelMode::Outline);
+        self.connections_panel.view.setHidden(mode != PanelMode::Links);
+        self.refresh_panel();
+    }
+
+    /// The right panel's outline or connections for the document open.
+    fn refresh_panel(&self) {
         self.refresh_outline();
+        self.refresh_connections();
+    }
+
+    /// Lists the connections of the document open, when the panel shows them (ADR 0026): links
+    /// to it from the index, with their lines as the notes are now; notes the full-text index
+    /// finds its name in, checked in their text; its own links, as typed.
+    fn refresh_connections(&self) {
+        if self.panel_mode.get() != PanelMode::Links {
+            return;
+        }
+        let document = self.pdf_path.borrow().clone().or_else(|| self.open_path());
+        let (Some(document), Some(links)) = (document, self.state.borrow().links.clone()) else {
+            self.connections_panel.show(Connections::default());
+            return;
+        };
+        let parser = MarkdownParser::new();
+        let name = document_name(&document).to_owned();
+        let (sources, named) = {
+            let mut state = self.state.borrow_mut();
+            self.ensure_reader(&mut state);
+            let Some(reader) = state.reader.as_ref() else { return };
+            let mut sources: Vec<String> = knotes_core::LinkGraph::backlinks(reader, &document).unwrap_or_default().into_iter().map(|b| b.source).collect();
+            sources.dedup();
+            let query = knotes_core::ContentQuery { text: &name, within: knotes_core::Within::Note, prefixes: false, scope: None, limit: 200 };
+            let mut named: Vec<String> = knotes_core::ContentSearch::search(reader, &query).unwrap_or_default().into_iter().map(|h| h.path).filter(|p| *p != document).collect();
+            named.sort();
+            named.dedup();
+            (sources, named)
+        };
+        let mut linked = Vec::new();
+        for source in &sources {
+            let Some(text) = self.document_text(source) else { continue };
+            let mentions = knotes_app::backlink_mentions(&document, source, &text, &parser.parse(&text), &*links);
+            if !mentions.is_empty() {
+                linked.push((source.clone(), mentions));
+            }
+        }
+        let mut unlinked = Vec::new();
+        for source in &named {
+            let Some(text) = self.document_text(source) else { continue };
+            let mentions = knotes_app::unlinked_mentions(&name, &text, &parser.parse(&text));
+            if !mentions.is_empty() {
+                unlinked.push((source.clone(), mentions));
+            }
+        }
+        let outgoing = match self.open_path() {
+            Some(note) if note == document => {
+                let text = self.note_text.string().to_string();
+                knotes_app::outgoing_links(&note, &text, &parser.parse(&text), &*links)
+            }
+            _ => Vec::new(),
+        };
+        self.connections_panel.show(Connections { linked, unlinked, outgoing });
+    }
+
+    /// A note's text: the editor's for the note open (edits not saved yet included), the file
+    /// for others.
+    fn document_text(&self, path: &str) -> Option<String> {
+        if self.open_path().as_deref() == Some(path) {
+            return Some(self.note_text.string().to_string());
+        }
+        FsVault::new(&self.vault()?).read_text(path).ok()
+    }
+
+    /// A line in the connections clicked: its note opened in the tab shown, the link at
+    /// `range` (bytes) selected, in view and pointed at.
+    fn open_connection(&self, path: &str, range: Option<std::ops::Range<usize>>) {
+        self.open_note(path, true);
+        let Some(range) = range else { return };
+        let text = self.note_text.string().to_string();
+        if range.end > text.len() || !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
+            return;
+        }
+        let units = utf16_offsets(&text, &[range.start, range.end]);
+        let selected = NSRange::new(units[0], units[1] - units[0]);
+        self.note_text.setSelectedRange(selected);
+        self.note_text.scrollRangeToVisible(selected);
+        self.note_text.showFindIndicatorForRange(selected);
+    }
+
+    /// An outgoing link in the connections clicked: its note opened, or made when it is not
+    /// there yet, as a click on the link does.
+    fn follow_connection(&self, label: &str, resolved: Option<String>) {
+        match resolved {
+            Some(path) => self.open_note(&path, true),
+            None => self.follow_link(&Link {
+                kind: LinkKind::Wiki,
+                embed: false,
+                target: label.to_owned(),
+                subpath: None,
+                display: None,
+                span: knotes_core::Span { start: 0, end: 0 },
+            }),
+        }
+    }
+
+    /// An unlinked mention's button: the mention at `range` (bytes) in the note at `source`
+    /// made a link to the document open, its words kept as the link's text.
+    fn make_connection_link(&self, source: &str, range: std::ops::Range<usize>) {
+        let document = self.pdf_path.borrow().clone().or_else(|| self.open_path());
+        let (Some(document), Some(vault), Some(links)) = (document, self.vault(), self.state.borrow().links.clone()) else { return };
+        let files = FsVault::new(&vault);
+        let Ok(text) = files.read_text(source) else { return };
+        // The note changed since: nothing is made.
+        let name = document_name(&document);
+        if !text.get(range.clone()).is_some_and(|words| words.eq_ignore_ascii_case(name) || words.to_lowercase() == name.to_lowercase()) {
+            return;
+        }
+        let new = knotes_app::make_link(&text, range, &links.link_text(&document, source));
+        if let Err(e) = files.write_note(source, &new) {
+            eprintln!("knotes: cannot make a link in {source}: {e}");
+        }
+        self.refresh_connections();
     }
 
     /// Lists the headings of the document open in the outline, when the panel shows it.
@@ -660,7 +803,7 @@ impl VaultWindow {
 
     /// An edit: the outline is listed again once typing pauses briefly (typing stays as fast).
     fn outline_later(&self) {
-        if self.panel_mode.get() != PanelMode::Outline || self.outline_due.replace(true) {
+        if self.panel_mode.get() == PanelMode::Ai || self.outline_due.replace(true) {
             return;
         }
         let Some(mtm) = MainThreadMarker::new() else { return };
@@ -670,14 +813,22 @@ impl VaultWindow {
             let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
             if let Some(window) = target.get(mtm).upgrade() {
                 window.outline_due.set(false);
-                window.refresh_outline();
+                window.refresh_panel();
             }
         });
     }
 
     /// What the right panel shows, and the view showing (probe mode).
     pub fn describe_panel(&self) -> String {
-        let shows = if !self.chat.view.isHidden() { "chat" } else if !self.outline_panel.view.isHidden() { "outline" } else { "nothing" };
+        let shows = if !self.chat.view.isHidden() {
+            "chat"
+        } else if !self.outline_panel.view.isHidden() {
+            "outline"
+        } else if !self.connections_panel.view.isHidden() {
+            "links"
+        } else {
+            "nothing"
+        };
         format!("{}, shows {shows}", self.panel_mode.get().key())
     }
 
@@ -840,6 +991,8 @@ impl VaultWindow {
         if !self.tabs_restored.replace(true) {
             self.restore_tabs();
         }
+        // Other notes changed: links to the document open may have come or gone.
+        self.refresh_connections();
         let mut selection = self.state.borrow().selection.clone();
         if !self.exists(&selection) {
             selection = SidebarItem::AllNotes;
@@ -990,6 +1143,14 @@ impl VaultWindow {
             if let Ok(title) = std::env::var("KNOTES_PROBE_OUTLINE_FOLD") {
                 self.outline_panel.fold(&title);
             }
+            if let Ok(line) = std::env::var("KNOTES_PROBE_CONNECTION_CLICK") {
+                self.window.displayIfNeeded();
+                self.connections_panel.click(&line);
+            }
+            if let Ok(note) = std::env::var("KNOTES_PROBE_CONNECTION_LINK") {
+                self.window.displayIfNeeded();
+                self.connections_panel.make_link(&note);
+            }
             if let Some(viewer) = self.pdf_view.borrow().as_ref() {
                 probe::pdf_mouse_requested(viewer);
                 probe::pdf_copy_requested(viewer);
@@ -1097,7 +1258,7 @@ impl VaultWindow {
         self.show_pdf(None);
         self.live_preview.show(&self.note_text, "", "");
         self.show_note_column();
-        self.refresh_outline();
+        self.refresh_panel();
         self.update_navigation();
     }
 
@@ -1211,7 +1372,7 @@ impl VaultWindow {
             self.find_text(&self.find_bar.text(), true);
         }
         self.find_search_word();
-        self.refresh_outline();
+        self.refresh_panel();
         self.update_navigation();
     }
 
@@ -1244,7 +1405,7 @@ impl VaultWindow {
         if page.is_none() {
             self.find_search_word();
         }
-        self.refresh_outline();
+        self.refresh_panel();
         self.update_navigation();
     }
 
@@ -1806,7 +1967,7 @@ impl VaultWindow {
                 self.window.layoutIfNeeded();
                 viewer.go_to(page.saturating_sub(1));
             }
-            self.refresh_outline();
+            self.refresh_panel();
         }
         self.update_navigation();
         true
