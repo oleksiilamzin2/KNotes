@@ -21,7 +21,7 @@ or synonyms, or find_by_title and list_notes, before saying the vault does not h
 written in (their titles show it), translating the user's words when they ask in another. For a question about several notes or a \
 period, look through all of them before answering. Search a date first as the user says it (\"18 листопада\", \
 \"жовтень\"); if nothing comes, try the forms notes often use (2026-11-18, 18.11.2026, 18.11, 2026-10). Prefer figures written in the notes (readings, tables, receipts) \
-to working them out from others; if you must estimate, say so and from what. When notes disagree, say so and say which says what. When the user says \
+to working them out from others; if you must estimate, say so and from what. When notes disagree, say so, which says what and when each last changed (modified). When the user says \
 \"this\" or \"here\" and no document is open, ask which note they mean. Tools give results a page at a time: when a result has next_offset, call the tool again with it as \
 offset to see more; read a long note or PDF on from next_block or next_page. Answer in the language the user writes in. Be concise.";
 

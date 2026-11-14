@@ -24,3 +24,13 @@ fn rows_have_mtime_and_snippet_for_notes_and_pdfs_only() {
         [NoteRow { path: "a.md".into(), mtime_ns: 42, snippet: "First line of the body.".into() }, NoteRow { path: "b.pdf".into(), mtime_ns: 7, snippet: String::new() }]
     );
 }
+
+#[test]
+fn a_file_s_mtime_is_looked_up_by_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    let note = VaultFile { path: "a.md".into(), kind: FileKind::Markdown, size: 1, mtime_ns: 42 };
+    let pdf = VaultFile { path: "b.pdf".into(), kind: FileKind::Pdf, size: 1, mtime_ns: 7 };
+    index.apply(&[IndexChange::Upsert { file: &note, note: None }, IndexChange::Upsert { file: &pdf, note: None }]).unwrap();
+    assert_eq!((index.modified("a.md").unwrap(), index.modified("b.pdf").unwrap(), index.modified("none.md").unwrap()), (Some(42), Some(7), None));
+}

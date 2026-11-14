@@ -151,4 +151,9 @@ impl NoteRows for SqliteIndex {
         let rows = st.query_map([], |r| Ok(NoteRow { path: r.get(0)?, mtime_ns: r.get(1)?, snippet: r.get(2)? }))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+
+    fn modified(&self, path: &str) -> Result<Option<i64>, BoxError> {
+        let mut st = self.conn.prepare_cached("SELECT mtime_ns FROM files WHERE path = ?1")?;
+        Ok(st.query_row([path], |r| r.get(0)).optional()?)
+    }
 }

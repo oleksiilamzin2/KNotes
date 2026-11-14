@@ -225,7 +225,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             .into_iter()
             .map(|(found, hit, via)| {
                 let text = self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..hit.span.end as usize).map(cut)).unwrap_or_default();
-                let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
+                let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "modified": self.modified(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
                 // A partial find names the word it lacks; a linked one, the document it came through.
                 if let Some((key, value)) = via.as_deref().map(|v| v.strip_prefix("missing:").map_or(("via", v), |w| ("missing", w))) {
                     result[key] = json!(value);
@@ -268,6 +268,11 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         Ok(json!({"results": results, "next_offset": next}))
     }
 
+    /// When the document at `path` last changed, to the minute in UTC, if it is indexed.
+    fn modified(&self, path: &str) -> Option<String> {
+        self.index.modified(path).ok().flatten().map(|ns| utc_minute(ns.div_euclid(1_000_000_000)))
+    }
+
     fn read_note(&self, args: &Value) -> Result<Value, ToolError> {
         let path = text_arg(args, "path")?;
         self.shared(&path)?;
@@ -291,7 +296,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         }
         let next = from + blocks.len();
         let next = (next < parsed.blocks.len()).then_some(next);
-        Ok(json!({"path": path, "title": title_of(&path), "total_blocks": parsed.blocks.len(), "blocks": blocks, "next_block": next}))
+        Ok(json!({"path": path, "title": title_of(&path), "modified": self.modified(&path), "total_blocks": parsed.blocks.len(), "blocks": blocks, "next_block": next}))
     }
 
     fn read_pdf(&self, args: &Value) -> Result<Value, ToolError> {

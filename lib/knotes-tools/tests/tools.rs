@@ -367,3 +367,16 @@ fn what_the_user_keeps_from_the_ai_no_tool_shows() {
     assert_eq!(tags["tags"], json!([{"tag": "money", "count": 1}]), "counted without the kept notes, the marking tag not shown: {tags}");
     assert!(v.tools.overview().starts_with("The vault: 2 notes"), "{}", v.tools.overview());
 }
+
+#[test]
+fn found_and_read_notes_say_when_they_last_changed() {
+    let v = orchard(5);
+    let day = |path: &str| format!("2026-01-{:02}T01:00Z", path["Orchard/Apple ".len()..][..2].parse::<u32>().unwrap() + 1);
+    let found = call(&v, "search", json!({"query": "apple tree"}));
+    for result in found["results"].as_array().unwrap() {
+        let path = result["path"].as_str().unwrap();
+        assert_eq!(result["modified"], day(path), "{path}");
+    }
+    let read = call(&v, "read_note", json!({"path": "Orchard/Apple 03.md"}));
+    assert_eq!(read["modified"], "2026-01-04T01:00Z");
+}
