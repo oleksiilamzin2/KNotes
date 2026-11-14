@@ -858,6 +858,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-vectors"
+version = "0.1.0"
+dependencies = [
+ "knotes-core",
+ "knotes-embed",
+ "knotes-index",
+ "knotes-md",
+ "tempfile",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
