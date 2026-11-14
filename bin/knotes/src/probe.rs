@@ -1298,6 +1298,9 @@ fn report_note(window: &VaultWindow) {
         println!("pdf-find-bar: {}", if over { "over the pages" } else { "under the pages" });
     }
     println!("pdf-view: {}", window.describe_pdf());
+    if let Some(label) = window.pdf_page_label() {
+        println!("pdf-page-label: {label}");
+    }
     if let Some((scroll, zoom)) = window.pdf_scroll_and_zoom() {
         println!("pdf-scroll: {scroll:.1}");
         println!("pdf-zoom: {zoom:.2}");

@@ -2631,3 +2631,15 @@ fn the_view_menu_zooms_a_pdf_in_out_and_back() {
     assert_eq!(zoom("out"), "0.80");
     assert_eq!(zoom("in,in,actual"), "1.00");
 }
+
+/// The PDF viewer's page label and whether it shows (`pdf-page-label:` line).
+fn page_label(out: &str) -> String {
+    out.lines().find_map(|l| l.strip_prefix("pdf-page-label: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+}
+
+#[test]
+fn a_pdf_shows_its_page_and_page_count_as_it_moves_then_hides_them() {
+    assert_eq!(page_label(&long_pdf(&[])), "сторінка 1 з 30 (shown)", "on opening");
+    assert_eq!(page_label(&long_pdf(&[("KNOTES_PROBE_PDF_KEYS", "right,right")])), "сторінка 3 з 30 (shown)");
+    assert!(page_label(&long_pdf(&[("KNOTES_PROBE_DELAY_MS", "2500")])).ends_with("(hidden)"), "a moment after the last move");
+}

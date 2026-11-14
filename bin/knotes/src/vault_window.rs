@@ -1736,6 +1736,11 @@ impl VaultWindow {
         self.pdf_view.borrow().as_ref().map(|v| objc2::Message::retain(v.pages_view()))
     }
 
+    /// The PDF viewer's page label and whether it shows (probe mode).
+    pub fn pdf_page_label(&self) -> Option<String> {
+        self.pdf_view.borrow().as_ref().map(PdfViewer::describe_page_label)
+    }
+
     /// How far the PDF viewer is scrolled and its magnification (probe mode).
     pub fn pdf_scroll_and_zoom(&self) -> Option<(f64, f64)> {
         self.pdf_view.borrow().as_ref().map(|v| (v.scroll_y(), v.magnification()))

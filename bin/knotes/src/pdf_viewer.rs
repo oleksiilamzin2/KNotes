@@ -24,7 +24,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use knotes_pdf::PageText;
 use objc2_app_kit::{
     NSAffineTransformNSAppKitAdditions, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSCompositingOperation, NSCursor, NSEvent, NSEventModifierFlags, NSImage, NSMenu, NSMenuItem, NSPasteboard,
-    NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder, NSScrollView, NSScrollViewDidEndLiveMagnifyNotification, NSView, NSViewBoundsDidChangeNotification,
+    NSPasteboardTypeString, NSRectFillUsingOperation, NSResponder, NSScrollView, NSScrollViewDidEndLiveMagnifyNotification, NSTextField, NSView, NSViewBoundsDidChangeNotification,
 };
 use objc2_foundation::{NSAffineTransform, NSNotification, NSNotificationCenter, NSObject, NSPoint, NSRect, NSSize, NSString, NSZeroRect};
 
@@ -39,6 +39,13 @@ const GAP: f64 = 12.0;
 const KEPT_AROUND: usize = 2;
 /// How long the width stays put before the pages are drawn again for it.
 const REDRAW_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The page label's padding (sideways, up and down) and its distance from the bottom.
+const LABEL_PADDING: (f64, f64) = (10.0, 4.0);
+const LABEL_BOTTOM: f64 = 14.0;
+
+/// How long the page label stays after the pages stop moving.
+const PAGE_LABEL_SHOWS: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// How much one zoom step enlarges, and the zoom's bounds (as pinching allows).
 const ZOOM_STEP: f64 = 1.25;
@@ -82,6 +89,10 @@ pub struct PagesIvars {
     /// The places found by Cmd+F (page, characters), in order, and the current one.
     found: RefCell<Vec<(usize, Range<usize>)>>,
     found_current: Cell<Option<usize>>,
+    /// "сторінка 3 з 12" over the pages while they move, and its hiding's count (a later move
+    /// puts it off).
+    page_label: RefCell<Option<Retained<NSView>>>,
+    label_shows: Cell<u64>,
 }
 
 define_class!(
@@ -368,9 +379,48 @@ impl PdfPages {
             canvas.setNeedsDisplay(true);
         }
         self.track();
+        self.show_page_label();
         if let Some(callback) = self.ivars().on_scroll.borrow().as_ref() {
             callback();
         }
+    }
+
+    /// Shows the page shown and how many there are, and hides them a moment after the last
+    /// move (as Preview does).
+    fn show_page_label(&self) {
+        let Some(label) = self.ivars().page_label.borrow().clone() else { return };
+        let text = strings::pdf_page(self.ivars().current.get() + 1, self.ivars().sizes.len());
+        if let Some(field) = label.subviews().firstObject().and_then(|v| v.downcast::<NSTextField>().ok()) {
+            if field.stringValue().to_string() != text {
+                field.setStringValue(&NSString::from_str(&text));
+            }
+            // Sized to the text, at the bottom in the middle (the scroll view lays out its views
+            // by frame, not constraints).
+            field.sizeToFit();
+            let size = field.frame().size;
+            field.setFrameOrigin(NSPoint::new(LABEL_PADDING.0, LABEL_PADDING.1));
+            let (width, height, flipped) = self.enclosingScrollView().map_or((0.0, 0.0, false), |s| (s.frame().size.width, s.frame().size.height, s.isFlipped()));
+            let plate = NSSize::new(size.width + 2.0 * LABEL_PADDING.0, size.height + 2.0 * LABEL_PADDING.1);
+            // The scroll view counts from its top.
+            let y = if flipped { height - LABEL_BOTTOM - plate.height } else { LABEL_BOTTOM };
+            label.setFrame(NSRect::new(NSPoint::new(((width - plate.width) / 2.0).round(), y), plate));
+        }
+        label.setHidden(false);
+        label.setAlphaValue(1.0);
+        let shows = self.ivars().label_shows.get() + 1;
+        self.ivars().label_shows.set(shows);
+        let target = dispatch2::MainThreadBound::new(objc2::rc::Weak::new(self), self.mtm());
+        let when = dispatch2::DispatchTime::try_from(PAGE_LABEL_SHOWS).expect("short delay");
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            let Some(this) = target.get(mtm).load() else { return };
+            if this.ivars().label_shows.get() == shows
+                && let Some(label) = this.ivars().page_label.borrow().as_ref()
+            {
+                // Faded out.
+                objc2_app_kit::NSAnimatablePropertyContainer::animator(&**label).setAlphaValue(0.0);
+            }
+        });
     }
 
     /// Chooses the page shown (unless one was jumped to) and keeps drawn that page, two
@@ -633,6 +683,8 @@ impl PdfViewer {
             resizes: Cell::new(0),
             found: RefCell::new(Vec::new()),
             found_current: Cell::new(None),
+            page_label: RefCell::new(None),
+            label_shows: Cell::new(0),
         };
         let width = scroll.contentSize().width;
         let start = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 0.0));
@@ -645,6 +697,8 @@ impl PdfViewer {
         pages.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         pages.setFrameSize(NSSize::new(width, 0.0));
         scroll.setDocumentView(Some(&pages));
+        let label = page_label(mtm, &scroll);
+        *pages.ivars().page_label.borrow_mut() = Some(label);
         let clip = scroll.contentView();
         clip.setPostsBoundsChangedNotifications(true);
         let observer: &AnyObject = pages.as_ref();
@@ -765,6 +819,14 @@ impl PdfViewer {
         }
     }
 
+    /// The page label's text and whether it shows (probe mode).
+    pub fn describe_page_label(&self) -> String {
+        let label = self.pages.ivars().page_label.borrow().clone();
+        let text = label.as_ref().and_then(|l| l.subviews().firstObject()).and_then(|v| v.downcast::<NSTextField>().ok()).map(|f| f.stringValue().to_string()).unwrap_or_default();
+        let shown = label.is_some_and(|l| !l.isHidden() && l.alphaValue() > 0.5);
+        format!("{text} ({})", if shown { "shown" } else { "hidden" })
+    }
+
     /// The view taking the keys.
     pub fn pages_view(&self) -> &NSView {
         &self.pages
@@ -834,6 +896,30 @@ impl Drop for PdfViewer {
         self.pages.let_all_go();
         self.scroll.removeFromSuperview();
     }
+}
+
+/// The page label: a small rounded plate at the bottom of the viewer, over the pages, placed
+/// as it shows.
+fn page_label(mtm: MainThreadMarker, scroll: &NSScrollView) -> Retained<NSView> {
+    let text = NSTextField::labelWithString(&NSString::new(), mtm);
+    text.setFont(Some(&objc2_app_kit::NSFont::systemFontOfSize(objc2_app_kit::NSFont::smallSystemFontSize())));
+    text.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    let plate = NSView::new(mtm);
+    plate.setWantsLayer(true);
+    if let Some(layer) = plate.layer() {
+        layer.setBackgroundColor(Some(&NSColor::windowBackgroundColor().colorWithAlphaComponent(0.9).CGColor()));
+        layer.setCornerRadius(8.0);
+        layer.setBorderWidth(0.5);
+        layer.setBorderColor(Some(&NSColor::separatorColor().CGColor()));
+    }
+    plate.addSubview(&text);
+    plate.setHidden(true);
+    // Stays at the bottom in the middle as the viewer resizes (the scroll view counts from its
+    // top: the space above the plate is what gives).
+    let above = if scroll.isFlipped() { NSAutoresizingMaskOptions::ViewMinYMargin } else { NSAutoresizingMaskOptions::ViewMaxYMargin };
+    plate.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMaxXMargin | above);
+    scroll.addSubview(&plate);
+    plate
 }
 
 fn intersects(a: NSRect, b: NSRect) -> bool {
