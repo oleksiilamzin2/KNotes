@@ -14,6 +14,9 @@ serde_json.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
+knotes-embed.workspace = true
+knotes-llama.workspace = true
+knotes-vectors.workspace = true
 knotes-pdf.workspace = true
 knotes-index.workspace = true
 knotes-indexer.workspace = true

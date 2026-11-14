@@ -5,16 +5,22 @@
 //! words with their documents: search by words is not expected to find them; they measure what
 //! search by meaning would add.
 //!
+//! Run twice: by words alone, then with search by meaning (EmbeddingGemma, ADR 0028; the model
+//! comes from `scripts/setup.sh`) merged in.
+//!
 //! `cargo test -p knotes-tools --test retrieval -- --nocapture` prints the report. Another vault:
 //! `KNOTES_RETRIEVAL_VAULT=… KNOTES_RETRIEVAL_QUERIES=….json` (then nothing is asserted).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use knotes_index::SqliteIndex;
 use knotes_indexer::Indexer;
 use knotes_md::MarkdownParser;
 use knotes_pdf::PdfTexts;
-use knotes_tools::VaultTools;
+use knotes_llama::LlamaEmbedder;
+use knotes_tools::{ToolIndex, VaultTools};
+use knotes_vectors::{MeaningIndex, embed_notes};
 use knotes_vault::FsVault;
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
@@ -25,6 +31,10 @@ use unicode_normalization::UnicodeNormalization;
 /// of 46): a change to search may raise them, never lower them.
 const WORDS_RECALL: f64 = 0.97;
 const ALL_RECALL: f64 = 0.80;
+/// With search by meaning merged in (2026-11-14, EmbeddingGemma Q8_0 over 100 blocks): by words
+/// 37 of 37, by meaning 6 of 9 (1 of 9 by words alone), all 43 of 46.
+const MEANING_RECALL: f64 = 0.66;
+const ALL_WITH_MEANING: f64 = 0.93;
 
 struct Query {
     text: String,
@@ -58,6 +68,48 @@ impl Score {
     }
 }
 
+/// What a run of the queries found.
+struct Run {
+    all: Score,
+    words: Score,
+    meaning: Score,
+    missed: Vec<String>,
+}
+
+impl Run {
+    fn print(&self, name: &str) {
+        println!("{name}:");
+        println!("  {}", self.all.line("all"));
+        println!("  {}", self.words.line("by words"));
+        println!("  {}", self.meaning.line("by meaning"));
+        println!("  Not in the first five:\n{}", self.missed.join("\n"));
+    }
+}
+
+fn run<I: ToolIndex>(tools: &VaultTools<I, FsVault, PdfTexts>, queries: &[Query]) -> Run {
+    let mut run = Run { all: Score::default(), words: Score::default(), meaning: Score::default(), missed: Vec::new() };
+    for query in queries {
+        let found = tools.call("search", &json!({"query": query.text, "limit": 10})).unwrap();
+        let mut paths: Vec<String> = Vec::new();
+        for result in found["results"].as_array().unwrap() {
+            // Files macOS names keep their letters decomposed (й as и + ˘): compared composed.
+            let path: String = result["path"].as_str().unwrap().nfc().collect();
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        let rank = paths.iter().position(|p| query.expected.contains(p)).map(|i| i + 1);
+        run.all.add(rank);
+        if query.by_meaning { run.meaning.add(rank) } else { run.words.add(rank) }
+        if !rank.is_some_and(|r| r <= 5) {
+            let kind = if query.by_meaning { "meaning" } else { "words" };
+            let got = if paths.is_empty() { "nothing".to_string() } else { paths.iter().take(3).cloned().collect::<Vec<_>>().join(", ") };
+            run.missed.push(format!("    [{kind}] \"{}\" → {got}", query.text));
+        }
+    }
+    run
+}
+
 #[test]
 fn search_finds_what_the_model_looked_for() {
     let home = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/home");
@@ -69,37 +121,27 @@ fn search_finds_what_the_model_looked_for() {
     let index_dir = tempfile::tempdir().unwrap();
     let mut index = SqliteIndex::open(index_dir.path()).unwrap();
     Indexer::with_documents(FsVault::new(&vault), MarkdownParser::new(), PdfTexts::new(&vault)).sync(&mut index).unwrap();
-    let tools = VaultTools::new(SqliteIndex::open_reader(index_dir.path()).unwrap(), FsVault::new(&vault), PdfTexts::new(&vault));
+    let tools = || VaultTools::new(SqliteIndex::open_reader(index_dir.path()).unwrap(), FsVault::new(&vault), PdfTexts::new(&vault));
 
-    let (mut words, mut meaning, mut all) = (Score::default(), Score::default(), Score::default());
-    let mut missed = Vec::new();
-    for query in &queries {
-        let found = tools.call("search", &json!({"query": query.text, "limit": 10})).unwrap();
-        let mut paths: Vec<String> = Vec::new();
-        for result in found["results"].as_array().unwrap() {
-            // Files macOS names keep their letters decomposed (й as и + ˘): compared composed.
-            let path: String = result["path"].as_str().unwrap().nfc().collect();
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
-        }
-        let rank = paths.iter().position(|p| query.expected.contains(p)).map(|i| i + 1);
-        all.add(rank);
-        if query.by_meaning { meaning.add(rank) } else { words.add(rank) }
-        if !rank.is_some_and(|r| r <= 5) {
-            let kind = if query.by_meaning { "meaning" } else { "words" };
-            let got = if paths.is_empty() { "nothing".to_string() } else { paths.iter().take(3).cloned().collect::<Vec<_>>().join(", ") };
-            missed.push(format!("  [{kind}] \"{}\" → {got}", query.text));
-        }
-    }
     println!("Retrieval on {} ({} queries)", vault.display(), queries.len());
-    println!("{}", all.line("all"));
-    println!("{}", words.line("by words"));
-    println!("{}", meaning.line("by meaning"));
-    println!("Not in the first five:\n{}", missed.join("\n"));
+    let by_words = run(&tools(), &queries);
+    by_words.print("By words");
+
+    let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/embeddinggemma-300M-Q8_0.gguf");
+    assert!(model.exists(), "no model at {}: run scripts/setup.sh", model.display());
+    let embedder = Arc::new(LlamaEmbedder::load(&model).unwrap());
+    let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder).unwrap();
+    println!("({} blocks embedded)", snapshot.len());
+    let with_meaning = run(&tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot))), &queries);
+    with_meaning.print("With meaning");
+
     if own.is_none() {
-        assert!(words.recall() >= WORDS_RECALL, "search by words got worse: {}", words.line("by words"));
-        assert!(all.recall() >= ALL_RECALL, "search got worse: {}", all.line("all"));
+        for (name, run) in [("by words", &by_words), ("with meaning", &with_meaning)] {
+            assert!(run.words.recall() >= WORDS_RECALL, "search by words got worse {name}: {}", run.words.line("by words"));
+            assert!(run.all.recall() >= ALL_RECALL, "search got worse {name}: {}", run.all.line("all"));
+        }
+        assert!(with_meaning.meaning.recall() >= MEANING_RECALL, "search by meaning got worse: {}", with_meaning.meaning.line("by meaning"));
+        assert!(with_meaning.all.recall() >= ALL_WITH_MEANING, "search with meaning got worse: {}", with_meaning.all.line("all"));
     }
 }
 

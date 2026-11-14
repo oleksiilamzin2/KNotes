@@ -836,12 +836,15 @@ name = "knotes-tools"
 version = "0.1.0"
 dependencies = [
  "knotes-core",
+ "knotes-embed",
  "knotes-index",
  "knotes-indexer",
+ "knotes-llama",
  "knotes-md",
  "knotes-pdf",
  "knotes-search",
  "knotes-vault",
+ "knotes-vectors",
  "serde_json",
  "tempfile",
  "unicode-normalization",
