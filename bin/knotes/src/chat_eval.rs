@@ -95,7 +95,8 @@ pub fn turns(questions: Vec<Question>, model: &str, model_name: &str, compact_at
                     }
                     entry.push_str(&format!("**Очікується:** {}\n\n", q.expected));
                     entry.push_str(&format!("**Інструменти ({}):** {}\n\n", tools.len(), if tools.is_empty() { "—".to_string() } else { tools.join("; ") }));
-                    entry.push_str(&format!("**Токени:** {} · {seconds:.1} с\n\n", memory.tokens.map_or("?".to_string(), |t| t.to_string())));
+                    let cached = memory.cached.map_or(String::new(), |c| format!(" (з кешу {c})"));
+                    entry.push_str(&format!("**Токени:** {}{cached} · {seconds:.1} с\n\n", memory.tokens.map_or("?".to_string(), |t| t.to_string())));
                     entry.push_str(&format!("**Відповідь:**\n\n{answer}\n\n"));
                     if log.done == log.total {
                         entry.push_str(&format!("---\n\nГотово: {} з {}\n", log.done, log.total));

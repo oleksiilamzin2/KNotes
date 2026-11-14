@@ -59,6 +59,8 @@ pub struct Chat<'a> {
     pub cache_key: String,
     pub retry_after: Vec<Duration>,
     pub compact_at: u64,
+    /// The local day, as the model is told it ("Saturday, 2026-11-14 (UTC+02:00)").
+    pub today: String,
 }
 
 impl Chat<'_> {
@@ -71,6 +73,9 @@ impl Chat<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn send(&self, items: &mut Vec<Value>, memory: &mut Memory, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
         let (before, tokens, summary) = (items.len(), memory.tokens, memory.summary.clone());
+        if memory.preamble.is_none() {
+            memory.preamble = Some(self.preamble(tools));
+        }
         let result = self.turn(items, memory, text, open, tools, cancel, on_event);
         if result.is_err() {
             items.truncate(before);
@@ -89,14 +94,19 @@ impl Chat<'_> {
         items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}));
         let size = match memory.tokens {
             Some(tokens) => tokens + estimate_tokens(&items[before..]) as u64,
-            None => estimate_tokens(&context(items, memory.summary.as_ref())) as u64,
+            None => estimate_tokens(&context(items, memory)) as u64,
         };
         if size > self.compact_at {
             self.compact(items, &mut memory.summary, cancel, on_event)?;
+            // The cached start is gone with the summary anyway: the day and the vault anew.
+            memory.preamble = Some(self.preamble(tools));
             memory.tokens = None;
         }
         for _ in 0..MAX_STEPS {
-            let (output, input_tokens) = self.respond(&context(items, memory.summary.as_ref()), tools, cancel, on_event)?;
+            let (output, input_tokens, cached) = self.respond(&context(items, memory), tools, cancel, on_event)?;
+            if cached.is_some() {
+                memory.cached = cached;
+            }
             let calls: Vec<Value> = output.iter().filter(|i| i["type"] == "function_call").cloned().collect();
             let kept: Vec<Value> = output.iter().filter_map(kept).collect();
             if let Some(input_tokens) = input_tokens {
@@ -148,7 +158,7 @@ impl Chat<'_> {
             "store": false,
             "stream": true,
         });
-        let (output, _) = self.request(&body, cancel, &mut |_| {})?;
+        let (output, _, _) = self.request(&body, cancel, &mut |_| {})?;
         let words: String = output.iter().filter(|i| i["type"] == "message").filter_map(|i| i["content"].as_array()).flatten().filter_map(|c| c["text"].as_str()).collect();
         if words.trim().is_empty() {
             return Err(ChatError::Failed("the summary came back empty".into()));
@@ -157,8 +167,14 @@ impl Chat<'_> {
         Ok(())
     }
 
-    /// One streamed reply to `input`, with the vault's tools, and its input's tokens.
-    fn respond(&self, input: &[Value], tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>), ChatError> {
+    /// What the model is told of the day and the vault, set once a conversation.
+    fn preamble(&self, tools: &dyn ToolBox) -> String {
+        format!("Today is {}. {}", self.today, tools.overview()).trim_end().to_string()
+    }
+
+    /// One streamed reply to `input`, with the vault's tools, its input's tokens and how many
+    /// of them came from the cache.
+    fn respond(&self, input: &[Value], tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>, Option<u64>), ChatError> {
         let functions: Vec<Value> = tools
             .specs()
             .into_iter()
@@ -166,7 +182,7 @@ impl Chat<'_> {
             .collect();
         let body = json!({
             "model": self.model,
-            "instructions": format!("{INSTRUCTIONS} Today is {} (UTC). {}", &knotes_tools::utc_minute(crate::token_endpoint::now() as i64)[..10], tools.overview()).trim_end().to_string(),
+            "instructions": INSTRUCTIONS,
             "input": input,
             "tools": [{"type": "namespace", "name": NAMESPACE, "description": "Read the user's Knotes vault.", "tools": functions}],
             "tool_choice": "auto",
@@ -181,8 +197,9 @@ impl Chat<'_> {
 
     /// Sends `body` to the Responses API (again after a wait, while OpenAI is unavailable or the
     /// network fails before a reply starts) and reads the streamed reply: its output items once
-    /// it says it is complete, and how many tokens its input took (OpenAI's count).
-    fn request(&self, body: &Value, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>), ChatError> {
+    /// it says it is complete, how many tokens its input took and how many came from the cache
+    /// (OpenAI's counts).
+    fn request(&self, body: &Value, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(Vec<Value>, Option<u64>, Option<u64>), ChatError> {
         let request = HttpRequest {
             method: Method::Post,
             url: format!("{API}/responses"),
@@ -212,7 +229,8 @@ impl Chat<'_> {
                 "response.output_item.done" => done.push(data["item"].clone()),
                 "response.completed" => {
                     let output = data["response"]["output"].as_array().filter(|o| !o.is_empty()).cloned();
-                    return Ok((output.unwrap_or(done), data["response"]["usage"]["input_tokens"].as_u64()));
+                    let usage = &data["response"]["usage"];
+                    return Ok((output.unwrap_or(done), usage["input_tokens"].as_u64(), usage["input_tokens_details"]["cached_tokens"].as_u64()));
                 }
                 "response.failed" => return Err(ChatError::from_openai(&data["response"]["error"], 0)),
                 "response.incomplete" => {

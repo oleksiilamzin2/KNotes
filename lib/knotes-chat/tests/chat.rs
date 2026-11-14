@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use common::Fake;
-use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, Memory, Method, Model, Summary, ToolBox, compact_at, list_models};
+use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, INSTRUCTIONS, Memory, Method, Model, Summary, ToolBox, compact_at, list_models};
 use knotes_tools::{ToolError, ToolSpec};
 use serde_json::{Value, json};
 
@@ -72,7 +72,7 @@ fn reply(output: Vec<Value>) -> (u16, String) {
 }
 
 fn chat<'a>(fake: &'a Fake, token: &'a Token) -> Chat<'a> {
-    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None) }
+    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None), today: "Saturday, 2026-11-14 (UTC+02:00)".into() }
 }
 
 /// Sends `text` and gives the outcome with the events on the way.
@@ -100,14 +100,13 @@ fn a_reply_streams_its_text_and_joins_the_conversation() {
     assert_eq!((&body["store"], &body["stream"], &body["model"]), (&json!(false), &json!(true), &json!("gpt-5.5")));
     assert_eq!(body["prompt_cache_key"], "conversation-1");
     let instructions = body["instructions"].as_str().unwrap();
+    assert_eq!(instructions, INSTRUCTIONS, "nothing that changes goes in the instructions: they head every request's cached prefix");
     assert!(instructions.contains("Knotes") && instructions.contains("next_offset"), "{instructions}");
     assert!(instructions.contains("stem") && instructions.contains("пральна"), "the model searches by stems: {instructions}");
     assert!(instructions.contains("language the notes are written in") && instructions.contains("notes disagree") && instructions.contains("ask which note"), "{instructions}");
     assert!(instructions.contains("Search a date first as the user says it") && instructions.contains("2026-11-18") && instructions.contains("Prefer figures written in the notes"), "{instructions}");
     assert!(instructions.contains("it sees only checkbox items"), "{instructions}");
     assert!(instructions.contains("[[Projects/Radar#Budget]]") && instructions.contains("list_tasks") && instructions.contains("related"), "{instructions}");
-    let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    assert!(instructions.ends_with(&format!("Today is {} (UTC). The vault: 1 note and 0 PDFs.", &knotes_tools::utc_minute(today)[..10])), "the model knows the day and the vault: {instructions}");
     for field in ["temperature", "max_output_tokens", "previous_response_id", "truncation", "metadata"] {
         assert!(body.get(field).is_none(), "{field} is not allowed on this route");
     }
@@ -115,9 +114,10 @@ fn a_reply_streams_its_text_and_joins_the_conversation() {
     assert_eq!((&namespace["type"], &namespace["name"]), (&json!("namespace"), &json!("vault")));
     assert_eq!(namespace["tools"][0]["type"], "function");
     assert_eq!(namespace["tools"][0]["name"], "search");
-    assert_eq!(body["input"][0]["role"], "developer");
-    assert!(body["input"][0]["content"][0]["text"].as_str().unwrap().contains("Projects/Radar.md"));
-    assert_eq!(body["input"][1], json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}));
+    assert_eq!(body["input"][0], json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Today is Saturday, 2026-11-14 (UTC+02:00). The vault: 1 note and 0 PDFs."}]}), "the day and the vault, set when the conversation starts");
+    assert_eq!(body["input"][1]["role"], "developer");
+    assert!(body["input"][1]["content"][0]["text"].as_str().unwrap().contains("Projects/Radar.md"));
+    assert_eq!(body["input"][2], json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}));
     assert_eq!(items.len(), 3);
     assert_eq!(items[2], json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hello there"}]}));
 }
@@ -137,11 +137,11 @@ fn a_tool_call_is_run_and_its_output_sent_back_with_the_reasoning() {
     let first = fake.body(0);
     assert!(first["include"].as_array().unwrap().contains(&json!("reasoning.encrypted_content")));
     let input = fake.body(1)["input"].as_array().unwrap().clone();
-    assert_eq!(input[1], json!({"type": "reasoning", "summary": [], "encrypted_content": "sealed"}), "sent back without its id");
-    assert_eq!(input[2], json!({"type": "function_call", "call_id": "call_1", "name": "search", "arguments": "{\"query\":\"radar\"}"}));
-    assert_eq!(input[3]["type"], "function_call_output");
-    assert_eq!(input[3]["call_id"], "call_1");
-    assert!(input[3]["output"].as_str().unwrap().contains("Radar.md"));
+    assert_eq!(input[2], json!({"type": "reasoning", "summary": [], "encrypted_content": "sealed"}), "sent back without its id");
+    assert_eq!(input[3], json!({"type": "function_call", "call_id": "call_1", "name": "search", "arguments": "{\"query\":\"radar\"}"}));
+    assert_eq!(input[4]["type"], "function_call_output");
+    assert_eq!(input[4]["call_id"], "call_1");
+    assert!(input[4]["output"].as_str().unwrap().contains("Radar.md"));
     assert_eq!(items.len(), 5, "user, reasoning, call, output, answer: {items:?}");
 }
 
@@ -272,8 +272,9 @@ fn a_long_conversation_has_its_older_part_summarized_and_sends_the_summary_with_
     assert!(words.len() < 10_000, "tool results are cut in what is summarized: {}", words.len());
 
     let input = fake.body(1)["input"].as_array().unwrap().clone();
-    assert!(input[0]["content"][0]["text"].as_str().unwrap().contains("Asked about first and second"), "{}", input[0]);
-    assert_eq!(input[1]["content"][0]["text"], "third?");
+    assert!(input[0]["content"][0]["text"].as_str().unwrap().starts_with("Today is"), "{}", input[0]);
+    assert!(input[1]["content"][0]["text"].as_str().unwrap().contains("Asked about first and second"), "{}", input[1]);
+    assert_eq!(input[2]["content"][0]["text"], "third?");
     assert_eq!(input.last().unwrap()["content"][0]["text"], "fourth?");
     assert_eq!(items.len(), 17, "the conversation keeps every item; only what is sent changes");
 }
@@ -296,7 +297,7 @@ fn a_short_conversation_is_not_summarized() {
 /// A reply whose request OpenAI counted as `input_tokens`.
 fn counted(output: Vec<serde_json::Value>, input_tokens: u64) -> (u16, String) {
     let (status, body) = reply(output);
-    let body = body.replace("\"response\":{\"id\":\"resp_1\",\"output\"", &format!("\"response\":{{\"id\":\"resp_1\",\"usage\":{{\"input_tokens\":{input_tokens},\"output_tokens\":5}},\"output\""));
+    let body = body.replace("\"response\":{\"id\":\"resp_1\",\"output\"", &format!("\"response\":{{\"id\":\"resp_1\",\"usage\":{{\"input_tokens\":{input_tokens},\"input_tokens_details\":{{\"cached_tokens\":{}}},\"output_tokens\":5}},\"output\"", input_tokens / 2));
     assert!(body.contains("input_tokens"), "{body}");
     (status, body)
 }
@@ -313,7 +314,7 @@ fn the_conversation_s_size_is_openai_s_count_and_past_the_threshold_it_is_summar
 
     // Small items, but OpenAI counted the conversation past 90 % of the window: summarized.
     let mut items: Vec<serde_json::Value> = ["first?", "second?"].iter().flat_map(|q| long_turn(q)).collect();
-    let mut memory = Memory { summary: None, tokens: Some(250_000) };
+    let mut memory = Memory { tokens: Some(250_000), ..Memory::default() };
     let fake = Fake::answering(vec![reply(vec![message("Summary.")]), counted(vec![message("third answer")], 40_000)]);
     let mut events = Vec::new();
     chat(&fake, &token).send(&mut items, &mut memory, "third?", None, &tools, &AtomicBool::new(false), &mut |e| events.push(e)).unwrap();
@@ -328,4 +329,51 @@ fn the_threshold_is_ninety_per_cent_of_the_window_up_to_where_requests_cost_doub
     assert_eq!(compact_at(Some(1_050_000)), 244_800);
     assert_eq!(compact_at(Some(272_000)), 244_800);
     assert_eq!(compact_at(Some(128_000)), 115_200);
+}
+
+/// Tools whose vault overview changes each time it is asked for.
+#[derive(Default)]
+struct Changing(Cell<u32>);
+
+impl ToolBox for Changing {
+    fn specs(&self) -> Vec<ToolSpec> {
+        Vec::new()
+    }
+
+    fn call(&self, _name: &str, _args: &Value) -> Result<Value, ToolError> {
+        Ok(json!({}))
+    }
+
+    fn overview(&self) -> String {
+        self.0.set(self.0.get() + 1);
+        format!("The vault: {} notes.", self.0.get())
+    }
+}
+
+#[test]
+fn the_day_and_the_vault_are_set_once_a_conversation_so_its_cached_start_stays_the_same() {
+    let fake = Fake::answering(vec![counted(vec![message("one")], 2_000), counted(vec![message("two")], 3_000)]);
+    let (token, tools) = (Token::default(), Changing::default());
+    let mut items = Vec::new();
+    let mut memory = Memory::default();
+    let chat = chat(&fake, &token);
+    chat.send(&mut items, &mut memory, "first?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    chat.send(&mut items, &mut memory, "second?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    let (first, second) = (fake.body(0)["input"].as_array().unwrap().clone(), fake.body(1)["input"].as_array().unwrap().clone());
+    assert_eq!(first[0], second[0], "the vault changed between the turns; what the model was told did not");
+    assert_eq!(&second[..first.len()], &first[..], "the second request starts with the first one, item for item");
+    assert_eq!(memory.preamble.as_deref(), Some("Today is Saturday, 2026-11-14 (UTC+02:00). The vault: 1 notes."));
+    assert_eq!(memory.cached, Some(1_500), "OpenAI's count of the cached part, kept to be seen");
+}
+
+#[test]
+fn a_summary_brings_the_day_and_the_vault_up_to_date() {
+    let mut items: Vec<serde_json::Value> = ["first?", "second?", "third?"].iter().flat_map(|q| long_turn(q)).collect();
+    let fake = Fake::answering(vec![reply(vec![message("Summary.")]), reply(vec![message("ok")])]);
+    let (token, tools) = (Token::default(), Changing::default());
+    let mut memory = Memory { preamble: Some("Today is long ago.".into()), ..Memory::default() };
+    let small = Chat { compact_at: 60_000, ..chat(&fake, &token) };
+    small.send(&mut items, &mut memory, "fourth?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert_eq!(memory.preamble.as_deref(), Some("Today is Saturday, 2026-11-14 (UTC+02:00). The vault: 1 notes."));
+    assert!(fake.body(1)["input"][0]["content"][0]["text"].as_str().unwrap().starts_with("Today is Saturday"));
 }

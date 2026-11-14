@@ -42,7 +42,7 @@ fn conversations_are_kept_listed_newest_first_and_deleted() {
     first.updated = 100;
     let mut second = talked("gpt-5.5", "Second?");
     second.updated = 200;
-    second.memory = Memory { summary: Some(Summary { covers: 4, text: "Asked about radar.".into() }), tokens: Some(12_345) };
+    second.memory = Memory { preamble: Some("Today is Saturday.".into()), summary: Some(Summary { covers: 4, text: "Asked about radar.".into() }), tokens: Some(12_345), cached: Some(6_000) };
     assert_ne!(first.id, second.id);
     store.save(&first).unwrap();
     store.save(&second).unwrap();

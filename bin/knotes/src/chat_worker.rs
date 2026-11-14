@@ -72,7 +72,7 @@ impl ChatWorker {
                             let result = match &tools {
                                 None => Err(ChatError::Failed("the vault's index is not ready yet".into())),
                                 Some(tools) => {
-                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at };
+                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today() };
                                     chat.send(&mut items, &mut memory, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)
                                 }
                             };
@@ -92,6 +92,16 @@ impl ChatWorker {
     pub fn send(&self, turn: Turn) {
         let _ = self.jobs.send(Job::Turn(turn));
     }
+}
+
+/// The local day for the model, from the system's time zone: "Saturday, 2026-11-14 (UTC+02:00)".
+pub fn local_today() -> String {
+    let offset = i64::try_from(objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT()).unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64) + offset;
+    // 1 January 1970 was a Thursday.
+    let weekday = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"][now.div_euclid(86_400).rem_euclid(7) as usize];
+    let sign = if offset < 0 { '-' } else { '+' };
+    format!("{weekday}, {} (UTC{sign}{:02}:{:02})", &knotes_tools::utc_minute(now)[..10], offset.abs() / 3_600, offset.abs() % 3_600 / 60)
 }
 
 /// Probe: OpenAI as answers read from a file (`KNOTES_PROBE_CHAT`), a JSON list of
@@ -114,5 +124,19 @@ impl Transport for ScriptTransport {
             self.0.lock().unwrap().pop_front().ok_or_else(|| ChatError::Network("no answer left".into()))?
         };
         Ok(HttpResponse { status, body: Box::new(std::io::Cursor::new(body.into_bytes())) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_local_day_names_its_weekday_date_and_offset() {
+        let today = super::local_today();
+        let (weekday, rest) = today.split_once(", ").unwrap();
+        assert!(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].contains(&weekday), "{today}");
+        let (date, zone) = rest.split_once(' ').unwrap();
+        assert_eq!(date.len(), 10, "{today}");
+        assert!(zone.starts_with("(UTC+") || zone.starts_with("(UTC-"), "{today}");
+        println!("{today}");
     }
 }

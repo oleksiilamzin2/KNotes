@@ -1,5 +1,7 @@
-//! What a long conversation sends (ADR 0027): its summary in place of the items it covers,
-//! reasoning only from the turn under way, and old tool results cut short.
+//! What a conversation sends (ADR 0027): the day and the vault as they were when it started,
+//! its summary in place of the items it covers once it grew long, and the rest as it is kept:
+//! nothing that came before is rewritten, so each request starts as the one before did and
+//! OpenAI's cache covers that start.
 
 use serde_json::{Value, json};
 
@@ -14,17 +16,21 @@ pub fn compact_at(context_window: Option<u64>) -> u64 {
     context_window.unwrap_or(PRICED_WINDOW).min(PRICED_WINDOW) * 9 / 10
 }
 
-/// What a conversation remembers of its size: the summary standing in for its first items,
-/// and how many tokens it took when last sent (the last request's input as OpenAI counted it,
-/// with what came back); unknown before the first reply and after a summary.
+/// What a conversation keeps beside its items: what the model is told of the day and the vault
+/// (set when it starts, again only with a summary, so the requests' start stays the same); the
+/// summary standing in for its first items; how many tokens it took when last sent (the last
+/// request's input as OpenAI counted it, with what came back; unknown before the first reply
+/// and after a summary); and how many of those OpenAI took from its cache.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Memory {
+    pub preamble: Option<String>,
     pub summary: Option<Summary>,
     pub tokens: Option<u64>,
+    pub cached: Option<u64>,
 }
-/// The last turns sent whole, their tool results uncut (the one under way among them).
+/// The last turns a summary leaves out (the one under way among them).
 pub const KEEP_TURNS: usize = 2;
-/// An older tool result past this many characters is cut.
+/// A tool result past this many characters is cut in what the model summarizes.
 const OLD_RESULT: usize = 1_500;
 
 /// What the model gets in place of a conversation's first `covers` items once it grew long.
@@ -34,33 +40,19 @@ pub struct Summary {
     pub text: String,
 }
 
-/// The items to send for `items`: the summary (as a developer message) in place of the
-/// items it covers; reasoning only from the last turn (it carries the turn's tool calls on);
-/// tool results before the last `KEEP_TURNS` turns cut short.
-pub fn context(items: &[Value], summary: Option<&Summary>) -> Vec<Value> {
-    let from = summary.map_or(0, |s| s.covers.min(items.len()));
-    let starts = turn_starts(items);
-    let current = starts.last().copied().unwrap_or(0);
-    let recent = recent_start(&starts);
-    let mut out = Vec::with_capacity(items.len() - from + 1);
-    if let Some(summary) = summary {
-        let words = format!("A summary of this conversation's earlier part (its messages are left out):\n{}", summary.text);
-        out.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]}));
+/// The items to send for `items`: the preamble and the summary (developer messages), then the
+/// items the summary does not cover, as they are.
+pub fn context(items: &[Value], memory: &Memory) -> Vec<Value> {
+    let from = memory.summary.as_ref().map_or(0, |s| s.covers.min(items.len()));
+    let developer = |words: &str| json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]});
+    let mut out = Vec::with_capacity(items.len() - from + 2);
+    if let Some(preamble) = &memory.preamble {
+        out.push(developer(preamble));
     }
-    for (i, item) in items.iter().enumerate().skip(from) {
-        match item["type"].as_str() {
-            Some("reasoning") if i < current => {}
-            Some("function_call_output") if i < recent => {
-                let mut item = item.clone();
-                if let Some(output) = item["output"].as_str().filter(|o| o.chars().count() > OLD_RESULT) {
-                    let cut: String = output.chars().take(OLD_RESULT).collect();
-                    item["output"] = json!(format!("{cut}… [cut: call the tool again for the rest]"));
-                }
-                out.push(item);
-            }
-            _ => out.push(item.clone()),
-        }
+    if let Some(summary) = &memory.summary {
+        out.push(developer(&format!("A summary of this conversation's earlier part (its messages are left out):\n{}", summary.text)));
     }
+    out.extend(items[from..].iter().cloned());
     out
 }
 

@@ -70,7 +70,8 @@ impl Conversation {
 
     pub(crate) fn to_json(&self) -> Value {
         let summary = self.memory.summary.as_ref().map(|s| json!({"covers": s.covers, "text": s.text}));
-        json!({"id": self.id, "title": self.title, "model": self.model, "updated": self.updated, "items": self.items, "summary": summary, "tokens": self.memory.tokens})
+        let memory = &self.memory;
+        json!({"id": self.id, "title": self.title, "model": self.model, "updated": self.updated, "items": self.items, "summary": summary, "tokens": memory.tokens, "cached": memory.cached, "preamble": memory.preamble})
     }
 
     pub(crate) fn from_json(value: &Value) -> Option<Self> {
@@ -83,6 +84,8 @@ impl Conversation {
             memory: Memory {
                 summary: value["summary"]["text"].as_str().map(|text| Summary { covers: value["summary"]["covers"].as_u64().unwrap_or(0) as usize, text: text.to_string() }),
                 tokens: value["tokens"].as_u64(),
+                cached: value["cached"].as_u64(),
+                preamble: value["preamble"].as_str().map(str::to_string),
             },
         })
     }

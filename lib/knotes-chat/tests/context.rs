@@ -1,4 +1,4 @@
-use knotes_chat::{Summary, context, estimate_tokens};
+use knotes_chat::{Memory, Summary, context, estimate_tokens};
 use serde_json::{Value, json};
 
 fn user(text: &str) -> Value {
@@ -17,27 +17,22 @@ fn turn(question: &str, result: &str) -> Vec<Value> {
 }
 
 #[test]
-fn only_the_turn_under_way_keeps_its_reasoning_and_only_the_last_two_their_whole_results() {
+fn until_it_is_summarized_a_conversation_is_sent_as_it_is_kept() {
     let long = "x".repeat(5_000);
     let items: Vec<Value> = [turn("one", &long), turn("two", &long), turn("three", &long)].concat();
-    let sent = context(&items, None);
-    let reasoning: Vec<&Value> = sent.iter().filter(|i| i["type"] == "reasoning").collect();
-    assert_eq!(reasoning, vec![&json!({"type": "reasoning", "encrypted_content": "sealed three"})]);
-    let outputs: Vec<usize> = sent.iter().filter(|i| i["type"] == "function_call_output").map(|i| i["output"].as_str().unwrap().len()).collect();
-    assert!(outputs[0] < 2_000 && outputs[1] == 5_000 && outputs[2] == 5_000, "{outputs:?}");
-    assert!(sent.iter().any(|i| i["output"].as_str().is_some_and(|o| o.ends_with("call the tool again for the rest]"))));
-    assert_eq!(sent.len(), items.len() - 2, "two old reasoning items left out, nothing else");
+    assert_eq!(context(&items, &Memory::default()), items, "nothing cut, no reasoning left out: each request starts as the one before did, so OpenAI's cache covers it");
 }
 
 #[test]
-fn a_summary_stands_in_for_the_items_it_covers() {
+fn the_day_and_the_vault_come_first_then_the_summary_in_place_of_what_it_covers() {
     let items: Vec<Value> = [turn("one", "r"), turn("two", "r"), turn("three", "r")].concat();
-    let summary = Summary { covers: 6, text: "Asked one.".into() };
-    let sent = context(&items, Some(&summary));
-    assert_eq!(sent[0]["role"], "developer");
-    assert!(sent[0]["content"][0]["text"].as_str().unwrap().ends_with("Asked one."));
-    assert_eq!(sent[2], user("two"));
+    let memory = Memory { preamble: Some("Today is Saturday.".into()), summary: Some(Summary { covers: 6, text: "Asked one.".into() }), ..Memory::default() };
+    let sent = context(&items, &memory);
+    assert_eq!(sent[0], json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Today is Saturday."}]}));
+    assert!(sent[1]["content"][0]["text"].as_str().unwrap().ends_with("Asked one."));
+    assert_eq!(sent[3], user("two"));
     assert!(!sent.iter().any(|i| *i == user("one")));
+    assert_eq!(sent.len(), 2 + items.len() - 6);
 }
 
 #[test]

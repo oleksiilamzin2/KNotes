@@ -240,6 +240,14 @@ plan usage for open-source and local apps) on 2026-11-14:
   the hint on dates in numbers sent "who comes on 18 November" through four numeric forms before
   "18 листопада". So the model is told that `list_tasks` sees only checkboxes (and to read the
   recent notes for what is coming up), and to search a date first as the user says it.
+- OpenAI's cache needs each request to start byte for byte as the one before (the deep analysis
+  of 2026-11-14 found the day and the vault's overview at the end of `instructions`, changed by
+  any new note, and the history rewritten each turn: old tool results cut, past reasoning left
+  out). So `instructions` hold only the fixed text; the day (local, with weekday and offset, from
+  the system's time zone) and the overview go in a developer message set when the conversation
+  starts, kept with it and set anew only with a summary; and the history is sent as it is kept
+  until the summary (cutting now happens only in what is summarized). OpenAI's count of the
+  cached tokens is kept with the conversation and written in the test runs' answers.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand
