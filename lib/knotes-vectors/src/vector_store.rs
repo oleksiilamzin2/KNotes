@@ -10,8 +10,9 @@ use crate::Snapshot;
 
 /// The vectors of a vault's notes and PDFs, in `vectors.sqlite` beside its index (a file of its
 /// own: the vectors are written in the background, never in the indexer's way). Each document's
-/// row holds the date it had when embedded, its blocks' places and their vectors; a store made
-/// with another model (or another way of embedding) is emptied, to be embedded again.
+/// row holds the date it had when embedded, its blocks' places with the hash of the text each
+/// was embedded as, and their vectors; a store made with another model (or another way of
+/// embedding) is emptied, to be embedded again.
 pub struct VectorStore {
     conn: Connection,
 }
@@ -55,13 +56,22 @@ impl VectorStore {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// `blocks` of the document at `path`, dated `mtime_ns`, and their `vectors`, in place of
-    /// what was kept for it.
-    pub fn put(&self, path: &str, mtime_ns: i64, blocks: &[BlockHit], vectors: &[Vector]) -> Result<(), BoxError> {
-        let places: Vec<Value> = blocks.iter().map(|b| json!([b.ord, b.span.start, b.span.end, b.heading])).collect();
+    /// `blocks` of the document at `path`, dated `mtime_ns`, the `hashes` of the texts they were
+    /// embedded as, and their `vectors`, in place of what was kept for it.
+    pub fn put(&self, path: &str, mtime_ns: i64, blocks: &[BlockHit], hashes: &[u64], vectors: &[Vector]) -> Result<(), BoxError> {
+        let places: Vec<Value> = blocks.iter().zip(hashes).map(|(b, h)| json!([b.ord, b.span.start, b.span.end, b.heading, h])).collect();
         let bytes: Vec<u8> = vectors.iter().flatten().map(|b| *b as u8).collect();
         self.conn.prepare_cached("INSERT OR REPLACE INTO notes VALUES (?1, ?2, ?3, ?4)")?.execute(params![path, mtime_ns, Value::from(places).to_string(), bytes])?;
         Ok(())
+    }
+
+    /// The vectors kept for the document at `path`, by the hash of the text each was embedded
+    /// as: a block whose text has not changed needs no model.
+    pub fn vectors_of(&self, path: &str) -> Result<HashMap<u64, Vector>, BoxError> {
+        let mut st = self.conn.prepare_cached("SELECT places, vectors FROM notes WHERE path = ?1")?;
+        let Some((places, bytes)) = st.query_row([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))).optional()? else { return Ok(HashMap::new()) };
+        let places: Value = serde_json::from_str(&places)?;
+        Ok(places.as_array().into_iter().flatten().zip(bytes.as_chunks::<DIMS>().0).filter_map(|(place, vector)| Some((place.get(4)?.as_u64()?, vector.map(|b| b as i8)))).collect())
     }
 
     pub fn remove(&self, path: &str) -> Result<(), BoxError> {

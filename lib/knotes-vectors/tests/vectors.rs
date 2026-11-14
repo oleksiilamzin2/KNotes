@@ -81,6 +81,26 @@ fn index_notes(index: &mut SqliteIndex, notes: &[(&str, &str, i64)]) {
     index.apply(&changes).unwrap();
 }
 
+/// The words embedder, counting the passages it is given.
+#[derive(Default)]
+struct Counting(std::sync::atomic::AtomicUsize);
+
+impl Embedder for Counting {
+    fn embed(&self, passages: &[Passage]) -> Result<Vec<Vector>, EmbedError> {
+        self.0.fetch_add(passages.len(), std::sync::atomic::Ordering::Relaxed);
+        Words.embed(passages)
+    }
+}
+
+impl Counting {
+    fn take(&self) -> usize {
+        self.0.swap(0, std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Long after every date the tests give.
+const LATER: i64 = 1_000_000_000_000;
+
 #[test]
 fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
     use std::sync::atomic::AtomicBool;
@@ -89,17 +109,55 @@ fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     index_notes(&mut index, &[("Boiler.md", "Replace the anode.", 1), ("Garden.md", "Prune the roses.", 1)]);
     let store = VectorStore::open(vectors.path(), "words").unwrap();
-    let go = AtomicBool::new(false);
-    assert_eq!(update(&index, &store, &Words, &go).unwrap(), 2);
-    assert_eq!(update(&index, &store, &Words, &go).unwrap(), 0, "nothing changed");
+    let (go, model) = (AtomicBool::new(false), Counting::default());
+    assert_eq!(update(&index, &store, &model, LATER, &go).unwrap().documents, 2);
+    assert_eq!(update(&index, &store, &model, LATER, &go).unwrap().documents, 0, "nothing changed");
     index_notes(&mut index, &[("Garden.md", "Prune the roses and the apple trees.", 2)]);
     index.apply(&[IndexChange::Remove { path: "Boiler.md" }]).unwrap();
-    assert_eq!(update(&index, &store, &Words, &go).unwrap(), 1, "the changed one");
+    assert_eq!(update(&index, &store, &model, LATER, &go).unwrap().documents, 1, "the changed one");
     assert_eq!(store.dates().unwrap(), [("Garden.md".to_string(), 2)].into(), "the removed one gone");
     let stop = AtomicBool::new(true);
     index_notes(&mut index, &[("New.md", "Fresh.", 3)]);
-    assert_eq!(update(&index, &store, &Words, &stop).unwrap(), 0, "told to stop");
+    assert_eq!(update(&index, &store, &model, LATER, &stop).unwrap().documents, 0, "told to stop");
 
     let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
     assert_eq!(meaning.nearest("apple trees", 1).unwrap()[0].path, "Garden.md");
+}
+
+#[test]
+fn only_the_blocks_whose_text_changed_go_to_the_model() {
+    use std::sync::atomic::AtomicBool;
+    use knotes_vectors::{VectorStore, update};
+    let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    let three = "# Boiler\n\nReplace the anode.\n\n# Garden\n\nPrune the roses.\n\n# Car\n\nChange the oil.";
+    index_notes(&mut index, &[("Home.md", three, 1)]);
+    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let (go, model) = (AtomicBool::new(false), Counting::default());
+    update(&index, &store, &model, LATER, &go).unwrap();
+    assert_eq!(model.take(), 3);
+    index_notes(&mut index, &[("Home.md", &three.replace("roses", "apple trees"), 2)]);
+    let updated = update(&index, &store, &model, LATER, &go).unwrap();
+    assert_eq!((updated.documents, updated.passages, model.take()), (1, 1, 1), "the garden's block alone");
+    let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
+    assert_eq!(meaning.nearest("change the oil", 1).unwrap()[0].heading.as_deref(), Some("Car"), "the kept vectors still found");
+}
+
+#[test]
+fn a_document_still_being_written_waits_until_it_settles() {
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    use knotes_vectors::{SETTLE, VectorStore, update};
+    let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    let now: i64 = 5_000_000_000_000;
+    let second = 1_000_000_000;
+    index_notes(&mut index, &[("Old.md", "Settled long ago.", 1), ("Typing.md", "Being written", now - 20 * second)]);
+    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let (go, model) = (AtomicBool::new(false), Counting::default());
+    let updated = update(&index, &store, &model, now, &go).unwrap();
+    assert_eq!(updated.documents, 1, "the old one only");
+    assert_eq!(updated.next, Some(SETTLE - Duration::from_secs(20)), "when the one being written is due");
+    let updated = update(&index, &store, &model, now + SETTLE.as_nanos() as i64, &go).unwrap();
+    assert_eq!((updated.documents, updated.next), (1, None), "settled: embedded");
 }

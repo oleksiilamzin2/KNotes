@@ -1,7 +1,10 @@
+use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use knotes_core::{BlockHit, BoxError, NoteBlocks, NoteRows, NoteText};
-use knotes_embed::{Embedder, Passage};
+use knotes_embed::{DIMS, Embedder, Passage, Vector};
 
 use crate::{VectorStore, block_passage};
 
@@ -9,39 +12,98 @@ use crate::{VectorStore, block_passage};
 /// not kept long.
 const BATCH: usize = 32;
 
-/// Brings `store` up to the index: drops the vectors of documents gone, embeds the documents new
-/// or changed since (the newest first), a batch at a time, until done or told to `stop`. How
-/// many documents it embedded.
-pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorStore, embedder: &dyn Embedder, stop: &AtomicBool) -> Result<usize, BoxError> {
+/// How long a document must stay unchanged before it is embedded: one being written (saved every
+/// two seconds) would otherwise go to the model again and again while the user types.
+pub const SETTLE: Duration = Duration::from_secs(60);
+
+/// What a pass did, and when to come back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Updated {
+    /// Documents whose vectors were written.
+    pub documents: usize,
+    /// Blocks that went to the model (those whose text had not changed did not).
+    pub passages: usize,
+    /// When the first document left for being written settles; none if no document was.
+    pub next: Option<Duration>,
+}
+
+/// A document on its way to the store: its blocks, the hash of each one's text, and each one's
+/// vector, kept or still to come from the model.
+struct Pending {
+    path: String,
+    mtime_ns: i64,
+    blocks: Vec<BlockHit>,
+    hashes: Vec<u64>,
+    vectors: Vec<Option<Vector>>,
+}
+
+/// Brings `store` up to the index at `now_ns` (nanoseconds since 1970): drops the vectors of
+/// documents gone, and embeds the documents new or changed since that have settled, the newest
+/// first, a batch at a time, until done or told to `stop`. Only blocks whose text changed go to
+/// the model; the rest keep their vectors.
+pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorStore, embedder: &dyn Embedder, now_ns: i64, stop: &AtomicBool) -> Result<Updated, BoxError> {
     let mut rows = index.note_rows()?;
     let dates = store.dates()?;
-    for path in dates.keys().filter(|p| !rows.iter().any(|r| &r.path == *p)) {
+    let present: HashSet<&str> = rows.iter().map(|r| r.path.as_str()).collect();
+    for path in dates.keys().filter(|p| !present.contains(p.as_str())) {
         store.remove(path)?;
     }
     rows.retain(|r| dates.get(&r.path) != Some(&r.mtime_ns));
-    rows.sort_by_key(|r| std::cmp::Reverse(r.mtime_ns));
-    let mut embedded = 0;
-    // Documents gathered until their blocks fill a batch, then embedded together.
-    let mut waiting: Vec<(String, i64, Vec<BlockHit>)> = Vec::new();
-    let mut passages: Vec<Passage> = Vec::new();
+    // Documents changed within SETTLE wait; the first of them to settle says when to come back.
+    let settle = SETTLE.as_nanos() as i64;
+    let mut next: Option<i64> = None;
+    rows.retain(|r| {
+        let wait = settle - (now_ns - r.mtime_ns);
+        if wait > 0 {
+            next = Some(next.map_or(wait, |n| n.min(wait)));
+        }
+        wait <= 0
+    });
+    rows.sort_by_key(|r| Reverse(r.mtime_ns));
+    let mut done = Updated { documents: 0, passages: 0, next: next.map(|ns| Duration::from_nanos(ns as u64)) };
+    let (mut pending, mut asked, mut passages): (Vec<Pending>, Vec<(usize, usize)>, Vec<Passage>) = (Vec::new(), Vec::new(), Vec::new());
     let mut rows = rows.into_iter().peekable();
     while let Some(row) = rows.next() {
         let text = index.note_text(&row.path)?.unwrap_or_default();
         let blocks = if text.is_empty() { Vec::new() } else { index.note_blocks(&row.path)? };
-        passages.extend(blocks.iter().map(|b| block_passage(&row.path, &text, b)));
-        waiting.push((row.path, row.mtime_ns, blocks));
+        let kept = store.vectors_of(&row.path)?;
+        let mut document = Pending { path: row.path.clone(), mtime_ns: row.mtime_ns, blocks: Vec::new(), hashes: Vec::new(), vectors: Vec::new() };
+        for block in blocks {
+            let passage = block_passage(&row.path, &text, &block);
+            let hash = hash_of(&passage);
+            let vector = kept.get(&hash).copied();
+            if vector.is_none() {
+                asked.push((pending.len(), document.vectors.len()));
+                passages.push(passage);
+            }
+            document.blocks.push(block);
+            document.hashes.push(hash);
+            document.vectors.push(vector);
+        }
+        pending.push(document);
         if passages.len() >= BATCH || rows.peek().is_none() {
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let mut vectors = embedder.embed(&passages)?.into_iter();
-            for (path, mtime_ns, blocks) in waiting.drain(..) {
-                let mine: Vec<_> = vectors.by_ref().take(blocks.len()).collect();
-                store.put(&path, mtime_ns, &blocks, &mine)?;
-                embedded += 1;
+            if !passages.is_empty() {
+                for ((document, block), vector) in asked.drain(..).zip(embedder.embed(&passages)?) {
+                    pending[document].vectors[block] = Some(vector);
+                }
+                done.passages += passages.len();
+                passages.clear();
             }
-            passages.clear();
+            for document in pending.drain(..) {
+                let vectors: Vec<Vector> = document.vectors.into_iter().map(|v| v.unwrap_or([0; DIMS])).collect();
+                store.put(&document.path, document.mtime_ns, &document.blocks, &document.hashes, &vectors)?;
+                done.documents += 1;
+            }
         }
     }
-    Ok(embedded)
+    Ok(done)
+}
+
+/// FNV-1a over the text a passage is embedded as (its title too: a renamed note is embedded
+/// again, as its blocks' text has changed).
+fn hash_of(passage: &Passage) -> u64 {
+    passage.prompt().bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }

@@ -130,7 +130,8 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<ProcessEmbedder>, stop: Arc<AtomicBo
         let paced = Paced(embedder);
         let mut told = false;
         while !stop.load(Ordering::Relaxed) {
-            let result = SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, &stop));
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+            let result = SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, now, &stop));
             if let Err(e) = result
                 && !told
             {
