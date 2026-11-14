@@ -12,9 +12,20 @@ use crate::{VectorStore, block_passage};
 /// not kept long.
 const BATCH: usize = 32;
 
-/// How long a document must stay unchanged before it is embedded: one being written (saved every
-/// two seconds) would otherwise go to the model again and again while the user types.
-pub const SETTLE: Duration = Duration::from_secs(60);
+/// How long a document must stay unchanged before it is embedded in the background: one being
+/// written (saved every two seconds) would otherwise go to the model again and again while the
+/// user types.
+pub const SETTLE: Duration = Duration::from_secs(15);
+
+/// Which of the documents new or changed since they were embedded a pass embeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Which {
+    /// Those unchanged for `SETTLE` (the background's passes).
+    Settled,
+    /// Those changed within `SETTLE`, at once: just before the chat asks, so search sees what
+    /// the user has just written; the backlog of first indexing stays the background's.
+    Waiting,
+}
 
 /// What a pass did, and when to come back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,10 +49,10 @@ struct Pending {
 }
 
 /// Brings `store` up to the index at `now_ns` (nanoseconds since 1970): drops the vectors of
-/// documents gone, and embeds the documents new or changed since that have settled, the newest
-/// first, a batch at a time, until done or told to `stop`. Only blocks whose text changed go to
-/// the model; the rest keep their vectors.
-pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorStore, embedder: &dyn Embedder, now_ns: i64, stop: &AtomicBool) -> Result<Updated, BoxError> {
+/// documents gone, and embeds `which` of the documents new or changed since, the newest first,
+/// a batch at a time, until done or told to `stop`. Only blocks whose text changed go to the
+/// model; the rest keep their vectors.
+pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorStore, embedder: &dyn Embedder, now_ns: i64, which: Which, stop: &AtomicBool) -> Result<Updated, BoxError> {
     let mut rows = index.note_rows()?;
     let dates = store.dates()?;
     let present: HashSet<&str> = rows.iter().map(|r| r.path.as_str()).collect();
@@ -49,15 +60,20 @@ pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorSto
         store.remove(path)?;
     }
     rows.retain(|r| dates.get(&r.path) != Some(&r.mtime_ns));
-    // Documents changed within SETTLE wait; the first of them to settle says when to come back.
+    // Documents changed within SETTLE wait for a settled pass; the first of them to settle says
+    // when to come back.
     let settle = SETTLE.as_nanos() as i64;
     let mut next: Option<i64> = None;
     rows.retain(|r| {
         let wait = settle - (now_ns - r.mtime_ns);
-        if wait > 0 {
-            next = Some(next.map_or(wait, |n| n.min(wait)));
+        match which {
+            Which::Settled if wait > 0 => {
+                next = Some(next.map_or(wait, |n| n.min(wait)));
+                false
+            }
+            Which::Settled => true,
+            Which::Waiting => wait > 0,
         }
-        wait <= 0
     });
     rows.sort_by_key(|r| Reverse(r.mtime_ns));
     let mut done = Updated { documents: 0, passages: 0, next: next.map(|ns| Duration::from_nanos(ns as u64)) };

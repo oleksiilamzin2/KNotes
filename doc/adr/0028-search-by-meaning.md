@@ -114,11 +114,16 @@ Checked on 2026-11-14:
 - Only blocks whose text changed go to the model: the store keeps, with each block's place, a
   hash (FNV-1a) of the text it was embedded as, its title included, and a changed document's
   unchanged blocks keep their vectors. Editing one paragraph of a long note embeds one block.
-- A document changed within the last minute (`SETTLE`) is being written (saved every two
-  seconds): it waits, and the pass says when the first such document settles.
+- A document changed within the last 15 s (`SETTLE`; a minute at first, shortened at the
+  owner's word) is being written (saved every two seconds): the background leaves it, and the
+  pass says when the first such document settles.
+- Before each turn of the chat, the documents still settling are embedded at once (`Which::
+  Waiting`), unpaced, so the model's search finds what the user has just written; the backlog of
+  first indexing stays the background's, never kept waiting for. Search checks the store's
+  version at each query (no longer once in ten seconds), so it sees them.
 - No polling: the window tells the chat worker each time the index changes (each snapshot the
   session sends), and the thread keeping the vectors sleeps until then, or until a document
-  left for being written settles, and lets a run of changes end (5 s without one) before a
+  left for being written settles, and lets a run of changes end (2 s without one) before a
   pass. While nothing changes it never wakes. Another vault drops its waker, which ends it.
 
 Still to do: a set of 40–60 queries by meaning before calling the quality settled; the M1's

@@ -104,21 +104,21 @@ const LATER: i64 = 1_000_000_000_000;
 #[test]
 fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
     use std::sync::atomic::AtomicBool;
-    use knotes_vectors::{VectorStore, update};
+    use knotes_vectors::{VectorStore, Which, update};
     let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     index_notes(&mut index, &[("Boiler.md", "Replace the anode.", 1), ("Garden.md", "Prune the roses.", 1)]);
     let store = VectorStore::open(vectors.path(), "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
-    assert_eq!(update(&index, &store, &model, LATER, &go).unwrap().documents, 2);
-    assert_eq!(update(&index, &store, &model, LATER, &go).unwrap().documents, 0, "nothing changed");
+    assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &go).unwrap().documents, 2);
+    assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &go).unwrap().documents, 0, "nothing changed");
     index_notes(&mut index, &[("Garden.md", "Prune the roses and the apple trees.", 2)]);
     index.apply(&[IndexChange::Remove { path: "Boiler.md" }]).unwrap();
-    assert_eq!(update(&index, &store, &model, LATER, &go).unwrap().documents, 1, "the changed one");
+    assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &go).unwrap().documents, 1, "the changed one");
     assert_eq!(store.dates().unwrap(), [("Garden.md".to_string(), 2)].into(), "the removed one gone");
     let stop = AtomicBool::new(true);
     index_notes(&mut index, &[("New.md", "Fresh.", 3)]);
-    assert_eq!(update(&index, &store, &model, LATER, &stop).unwrap().documents, 0, "told to stop");
+    assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &stop).unwrap().documents, 0, "told to stop");
 
     let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
     assert_eq!(meaning.nearest("apple trees", 1).unwrap()[0].path, "Garden.md");
@@ -127,17 +127,17 @@ fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
 #[test]
 fn only_the_blocks_whose_text_changed_go_to_the_model() {
     use std::sync::atomic::AtomicBool;
-    use knotes_vectors::{VectorStore, update};
+    use knotes_vectors::{VectorStore, Which, update};
     let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     let three = "# Boiler\n\nReplace the anode.\n\n# Garden\n\nPrune the roses.\n\n# Car\n\nChange the oil.";
     index_notes(&mut index, &[("Home.md", three, 1)]);
     let store = VectorStore::open(vectors.path(), "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
-    update(&index, &store, &model, LATER, &go).unwrap();
+    update(&index, &store, &model, LATER, Which::Settled, &go).unwrap();
     assert_eq!(model.take(), 3);
     index_notes(&mut index, &[("Home.md", &three.replace("roses", "apple trees"), 2)]);
-    let updated = update(&index, &store, &model, LATER, &go).unwrap();
+    let updated = update(&index, &store, &model, LATER, Which::Settled, &go).unwrap();
     assert_eq!((updated.documents, updated.passages, model.take()), (1, 1, 1), "the garden's block alone");
     let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
     assert_eq!(meaning.nearest("change the oil", 1).unwrap()[0].heading.as_deref(), Some("Car"), "the kept vectors still found");
@@ -147,17 +147,33 @@ fn only_the_blocks_whose_text_changed_go_to_the_model() {
 fn a_document_still_being_written_waits_until_it_settles() {
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
-    use knotes_vectors::{SETTLE, VectorStore, update};
+    use knotes_vectors::{SETTLE, VectorStore, Which, update};
     let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     let now: i64 = 5_000_000_000_000;
     let second = 1_000_000_000;
-    index_notes(&mut index, &[("Old.md", "Settled long ago.", 1), ("Typing.md", "Being written", now - 20 * second)]);
+    index_notes(&mut index, &[("Old.md", "Settled long ago.", 1), ("Typing.md", "Being written", now - 5 * second)]);
     let store = VectorStore::open(vectors.path(), "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
-    let updated = update(&index, &store, &model, now, &go).unwrap();
+    let updated = update(&index, &store, &model, now, Which::Settled, &go).unwrap();
     assert_eq!(updated.documents, 1, "the old one only");
-    assert_eq!(updated.next, Some(SETTLE - Duration::from_secs(20)), "when the one being written is due");
-    let updated = update(&index, &store, &model, now + SETTLE.as_nanos() as i64, &go).unwrap();
+    assert_eq!(updated.next, Some(SETTLE - Duration::from_secs(5)), "when the one being written is due");
+    let updated = update(&index, &store, &model, now + SETTLE.as_nanos() as i64, Which::Settled, &go).unwrap();
     assert_eq!((updated.documents, updated.next), (1, None), "settled: embedded");
+    assert_eq!(SETTLE, Duration::from_secs(15));
+}
+
+#[test]
+fn before_the_chat_asks_the_documents_being_written_are_embedded_at_once() {
+    use std::sync::atomic::AtomicBool;
+    use knotes_vectors::{VectorStore, Which, update};
+    let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    let now: i64 = 5_000_000_000_000;
+    index_notes(&mut index, &[("Backlog.md", "Never embedded, long settled.", 1), ("Typing.md", "Just written", now - 1_000_000_000)]);
+    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let (go, model) = (AtomicBool::new(false), Counting::default());
+    let updated = update(&index, &store, &model, now, Which::Waiting, &go).unwrap();
+    assert_eq!((updated.documents, updated.next), (1, None));
+    assert_eq!(store.dates().unwrap().keys().collect::<Vec<_>>(), ["Typing.md"], "the one just written; the backlog stays the background's");
 }

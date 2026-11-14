@@ -4,7 +4,7 @@
 //! that keeps the vault's vectors up to its index.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -15,15 +15,16 @@ use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
 use knotes_tools::VaultTools;
 use knotes_vault::FsVault;
-use knotes_vectors::{EMBEDDING, MeaningIndex, VectorStore, update};
+use knotes_vectors::{EMBEDDING, MeaningIndex, Updated, VectorStore, Which, update};
 use serde_json::{Value, json};
 
 /// Called with the conversation's items and memory after a turn, and how it went.
 pub type TurnDone = Box<dyn FnOnce(Vec<Value>, Memory, Result<(), ChatError>) + Send>;
 
-/// How long the index must stay unchanged before the vectors are brought up to it: changes come
-/// in runs (a save every two seconds while the user types), one pass for the run.
-const VECTORS_QUIET: Duration = Duration::from_secs(5);
+/// How long the index must stay unchanged before a pass over the vectors: changes come in runs
+/// (a save every two seconds while the user types), one pass for the run. A document is
+/// embedded once unchanged for `knotes_vectors::SETTLE` (15 s), or at once before the chat asks.
+const VECTORS_QUIET: Duration = Duration::from_secs(2);
 /// A pause after each batch embedded in the background, leaving the GPU to the window.
 const VECTORS_PAUSE: Duration = Duration::from_millis(20);
 
@@ -106,6 +107,12 @@ impl ChatWorker {
                                     }
                                 });
                             }
+                            // What the user has just written, embedded before the model searches.
+                            if let (Some(embedder), Some((_, dir))) = (&embedder, &vault)
+                                && let Err(e) = embed_waiting(dir, &**embedder)
+                            {
+                                eprintln!("knotes: search by meaning: {e}");
+                            }
                             let mut items = std::mem::take(&mut turn.items);
                             let mut memory = std::mem::take(&mut turn.memory);
                             let result = match &tools {
@@ -149,8 +156,7 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<
         let paced = Paced(embedder);
         let mut told = false;
         loop {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
-            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, now, &stop)) {
+            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, now_ns(), Which::Settled, &stop)) {
                 Ok(updated) => updated.next,
                 Err(e) => {
                     if !told {
@@ -172,6 +178,17 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<
         }
     });
     spawned.map_err(|e| eprintln!("knotes: cannot start keeping the vectors: {e}")).ok()
+}
+
+/// Embeds at once the documents of the vault indexed in `dir` changed too lately for the
+/// background (still settling), so the turn's search finds what the user has just written.
+fn embed_waiting(dir: &Path, embedder: &dyn Embedder) -> Result<Updated, knotes_core::BoxError> {
+    let index = SqliteIndex::open_reader(dir)?;
+    update(&index, &VectorStore::open(dir, EMBEDDING)?, embedder, now_ns(), Which::Waiting, &AtomicBool::new(false))
+}
+
+fn now_ns() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64)
 }
 
 /// The embedder, pausing after each batch.
@@ -240,8 +257,12 @@ mod tests {
     }
 
     fn add(index: &mut SqliteIndex, path: &str, text: &str) {
+        add_at(index, path, text, 1);
+    }
+
+    fn add_at(index: &mut SqliteIndex, path: &str, text: &str, mtime_ns: i64) {
         let parsed = knotes_md::MarkdownParser::new().parse(text);
-        let file = VaultFile { path: path.into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 };
+        let file = VaultFile { path: path.into(), kind: FileKind::Markdown, size: 1, mtime_ns };
         index.apply(&[IndexChange::Upsert { file: &file, note: Some((text, &parsed)) }]).unwrap();
     }
 
@@ -251,6 +272,19 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(5), "timed out");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn before_a_turn_what_was_just_written_is_embedded_and_the_backlog_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = SqliteIndex::open(dir.path()).unwrap();
+        add(&mut index, "Backlog.md", "Long settled, never embedded.");
+        add_at(&mut index, "Typing.md", "Just written.", super::now_ns());
+        let embedder = Counting::default();
+        let updated = super::embed_waiting(dir.path(), &embedder).unwrap();
+        assert_eq!((updated.documents, embedder.0.load(Ordering::Relaxed)), (1, 1));
+        let store = knotes_vectors::VectorStore::open_reader(dir.path()).unwrap();
+        assert_eq!(store.dates().unwrap().keys().collect::<Vec<_>>(), ["Typing.md"]);
     }
 
     #[test]
