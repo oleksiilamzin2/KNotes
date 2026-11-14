@@ -7,6 +7,8 @@ pub enum PanelMode {
     Ai,
     /// The outline of the document open.
     Outline,
+    /// The connections of the document open (ADR 0026).
+    Links,
 }
 
 impl PanelMode {
@@ -14,6 +16,7 @@ impl PanelMode {
         match self {
             Self::Ai => "ai",
             Self::Outline => "outline",
+            Self::Links => "links",
         }
     }
 
@@ -21,6 +24,7 @@ impl PanelMode {
         match key {
             "ai" => Some(Self::Ai),
             "outline" => Some(Self::Outline),
+            "links" => Some(Self::Links),
             _ => None,
         }
     }
