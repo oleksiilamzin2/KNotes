@@ -17,3 +17,14 @@ fn a_file_that_is_no_pdf_has_no_text() {
     assert_eq!(knotes_pdf::pdf_text(&dir), None);
     let _ = std::fs::remove_file(&dir);
 }
+
+#[test]
+fn a_vault_s_pdf_is_read_a_page_at_a_time() {
+    use knotes_core::DocumentPages;
+    let dir = std::path::Path::new(FIXTURE).parent().unwrap();
+    let pages = knotes_pdf::PdfTexts::new(dir);
+    assert_eq!(pages.page_count("three-pages.pdf"), Some(3));
+    assert_eq!(pages.page_text("three-pages.pdf", 1).as_deref(), Some("Page 2"));
+    assert_eq!(pages.page_count("note.md"), None);
+    assert_eq!(pages.outline("outlined.pdf").first().map(|o| o.1.as_str()), Some("Вступ"));
+}

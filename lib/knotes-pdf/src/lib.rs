@@ -170,6 +170,27 @@ impl PdfTexts {
     }
 }
 
+impl knotes_core::DocumentPages for PdfTexts {
+    fn page_count(&self, path: &str) -> Option<usize> {
+        if FileKind::from_path(path) != FileKind::Pdf {
+            return None;
+        }
+        // SAFETY: a document of its own.
+        open(&self.root.join(path)).map(|d| unsafe { d.pageCount() })
+    }
+
+    fn page_text(&self, path: &str, page: usize) -> Option<String> {
+        (FileKind::from_path(path) == FileKind::Pdf).then(|| page_text(&self.root.join(path), page).map(|p| p.text(0..p.len()))).flatten()
+    }
+
+    fn outline(&self, path: &str) -> Vec<(u8, String, usize)> {
+        if FileKind::from_path(path) != FileKind::Pdf {
+            return Vec::new();
+        }
+        pdf_outline(&self.root.join(path)).unwrap_or_default().into_iter().map(|b| (b.level, b.title, b.page)).collect()
+    }
+}
+
 impl DocumentText for PdfTexts {
     fn document_text(&self, path: &str) -> Option<String> {
         (FileKind::from_path(path) == FileKind::Pdf).then(|| pdf_text(&self.root.join(path))).flatten()
