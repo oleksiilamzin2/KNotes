@@ -1,7 +1,8 @@
 //! What a conversation sends (ADR 0027): the day and the vault as they were when it started,
-//! its summary in place of the items it covers once it grew long, and the rest as it is kept:
-//! nothing that came before is rewritten, so each request starts as the one before did and
-//! OpenAI's cache covers that start.
+//! its summary in place of the items it covers once it grew long, and the rest: as it is kept
+//! where OpenAI caches the conversation (each request then starts as the one before did, and the
+//! cache covers that start), else with old tool results cut and past reasoning left out, which
+//! sends fewer tokens.
 
 use serde_json::{Value, json};
 
@@ -30,7 +31,8 @@ pub struct Memory {
 }
 /// The last turns a summary leaves out (the one under way among them).
 pub const KEEP_TURNS: usize = 2;
-/// A tool result past this many characters is cut in what the model summarizes.
+/// A tool result past this many characters is cut where nothing is cached, and in what the
+/// model summarizes.
 const OLD_RESULT: usize = 1_500;
 
 /// What the model gets in place of a conversation's first `covers` items once it grew long.
@@ -41,7 +43,10 @@ pub struct Summary {
 }
 
 /// The items to send for `items`: the preamble and the summary (developer messages), then the
-/// items the summary does not cover, as they are.
+/// items the summary does not cover. As they are once OpenAI has said it cached part of this
+/// conversation; until then (the Sign in with ChatGPT route reported no cached tokens on
+/// 2026-11-14) reasoning only from the last turn, and tool results before the last
+/// `KEEP_TURNS` turns cut short.
 pub fn context(items: &[Value], memory: &Memory) -> Vec<Value> {
     let from = memory.summary.as_ref().map_or(0, |s| s.covers.min(items.len()));
     let developer = |words: &str| json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]});
@@ -52,7 +57,27 @@ pub fn context(items: &[Value], memory: &Memory) -> Vec<Value> {
     if let Some(summary) = &memory.summary {
         out.push(developer(&format!("A summary of this conversation's earlier part (its messages are left out):\n{}", summary.text)));
     }
-    out.extend(items[from..].iter().cloned());
+    if memory.cached.is_some_and(|c| c > 0) {
+        out.extend(items[from..].iter().cloned());
+        return out;
+    }
+    let starts = turn_starts(items);
+    let current = starts.last().copied().unwrap_or(0);
+    let recent = recent_start(&starts);
+    for (i, item) in items.iter().enumerate().skip(from) {
+        match item["type"].as_str() {
+            Some("reasoning") if i < current => {}
+            Some("function_call_output") if i < recent => {
+                let mut item = item.clone();
+                if let Some(output) = item["output"].as_str().filter(|o| o.chars().count() > OLD_RESULT) {
+                    let cut: String = output.chars().take(OLD_RESULT).collect();
+                    item["output"] = json!(format!("{cut}… [cut: call the tool again for the rest]"));
+                }
+                out.push(item);
+            }
+            _ => out.push(item.clone()),
+        }
+    }
     out
 }
 

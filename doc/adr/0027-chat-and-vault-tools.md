@@ -246,8 +246,12 @@ plan usage for open-source and local apps) on 2026-11-14:
   out). So `instructions` hold only the fixed text; the day (local, with weekday and offset, from
   the system's time zone) and the overview go in a developer message set when the conversation
   starts, kept with it and set anew only with a summary; and the history is sent as it is kept
-  until the summary (cutting now happens only in what is summarized). OpenAI's count of the
-  cached tokens is kept with the conversation and written in the test runs' answers.
+  until the summary. OpenAI's count of the cached tokens is kept with the conversation and
+  written in the test runs' answers. Measured right after on two questions with 2 and 17 tool
+  calls: the Sign in with ChatGPT route reported 0 cached tokens, even for requests within one
+  answer that began exactly as the one before. So the history is sent unchanged only once a
+  conversation has seen cached tokens; until then old tool results are cut and past reasoning
+  left out, as before, to send fewer tokens.
 - What the user keeps from the AI (decided in ADR 0004, built 2026-11-14): a note tagged `#no-ai`
   (in its text or frontmatter `tags`), and a folder whose `.knotes.json` says `"ai": false`, with
   its subfolders unless one says `"ai": true` (the nearest folder's setting wins, as the other
