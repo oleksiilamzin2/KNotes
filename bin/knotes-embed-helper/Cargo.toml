@@ -1,0 +1,15 @@
+[package]
+name = "knotes-embed-helper"
+description = "The helper process that runs the embedding model for search by meaning (ADR 0028)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "knotes-embed"
+path = "src/main.rs"
+
+[dependencies]
+knotes-embed.workspace = true
+knotes-llama.workspace = true

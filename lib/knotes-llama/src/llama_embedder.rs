@@ -39,6 +39,10 @@ fn backend() -> Result<&'static LlamaBackend, EmbedError> {
 impl LlamaEmbedder {
     /// Loads the model at `path` with every layer on the GPU.
     pub fn load(path: &Path) -> Result<Self, EmbedError> {
+        // llama-cpp-2 asserts the file is there (in debug builds) rather than saying it is not.
+        if !path.is_file() {
+            return Err(EmbedError::Unavailable(format!("no model at {}", path.display())));
+        }
         let backend = backend()?;
         let model = LlamaModel::load_from_file(backend, path, &LlamaModelParams::default().with_n_gpu_layers(u32::MAX))
             .map_err(|e| EmbedError::Unavailable(format!("{}: {e}", path.display())))?;

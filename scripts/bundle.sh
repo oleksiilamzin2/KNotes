@@ -1,16 +1,25 @@
 #!/bin/sh
 # Builds target/<profile>/Knotes.app around the knotes binary (no Xcode needed, ADR 0010),
-# with the MCP server knotes-mcp beside it (ADR 0027).
+# with the MCP server knotes-mcp beside it (ADR 0027) and the helper that runs the embedding
+# model, knotes-embed, with the model in Resources (ADR 0028; scripts/setup.sh fetches it).
 # Usage: scripts/bundle.sh [debug|release]
 set -eu
 profile="${1:-release}"
 cd "$(dirname "$0")/.."
-if [ "$profile" = release ]; then cargo build -q --release -p knotes -p knotes-mcp; else cargo build -q -p knotes -p knotes-mcp; fi
+model=models/embeddinggemma-300M-Q8_0.gguf
+if [ ! -f "$model" ]; then
+  echo "bundle: no $model: run scripts/setup.sh" >&2
+  exit 1
+fi
+packages="-p knotes -p knotes-mcp -p knotes-embed-helper"
+if [ "$profile" = release ]; then cargo build -q --release $packages; else cargo build -q $packages; fi
 app="target/$profile/Knotes.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$profile/knotes" "$app/Contents/MacOS/knotes"
 cp "target/$profile/knotes-mcp" "$app/Contents/MacOS/knotes-mcp"
+cp "target/$profile/knotes-embed" "$app/Contents/MacOS/knotes-embed"
+cp "$model" "$app/Contents/Resources/"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -38,5 +47,6 @@ if security find-identity -p codesigning 2>/dev/null | grep -q '"Knotes Dev"'; t
   identity="Knotes Dev"
 fi
 codesign --force --sign "$identity" "$app/Contents/MacOS/knotes-mcp" 2>/dev/null || true
+codesign --force --sign "$identity" "$app/Contents/MacOS/knotes-embed" 2>/dev/null || true
 codesign --force --sign "$identity" "$app" 2>/dev/null || true
 echo "$app"
