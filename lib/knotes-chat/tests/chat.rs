@@ -1,40 +1,12 @@
+mod common;
+
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::io::Cursor;
 use std::sync::atomic::AtomicBool;
 
-use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, HttpRequest, HttpResponse, Method, Model, ToolBox, Transport, list_models};
+use common::Fake;
+use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, Method, Model, ToolBox, list_models};
 use knotes_tools::{ToolError, ToolSpec};
 use serde_json::{Value, json};
-
-/// OpenAI as a list of answers (status, body), keeping what was sent.
-#[derive(Default)]
-struct Fake {
-    answers: RefCell<VecDeque<(u16, String)>>,
-    sent: RefCell<Vec<HttpRequest>>,
-}
-
-impl Fake {
-    fn answering(answers: Vec<(u16, String)>) -> Self {
-        Self { answers: RefCell::new(answers.into()), ..Default::default() }
-    }
-
-    fn body(&self, i: usize) -> Value {
-        serde_json::from_slice(&self.sent.borrow()[i].body).unwrap()
-    }
-
-    fn header(&self, i: usize, name: &str) -> String {
-        self.sent.borrow()[i].headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default()
-    }
-}
-
-impl Transport for Fake {
-    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, ChatError> {
-        self.sent.borrow_mut().push(request.clone());
-        let (status, body) = self.answers.borrow_mut().pop_front().expect("an answer left");
-        Ok(HttpResponse { status, body: Box::new(Cursor::new(body.into_bytes())) })
-    }
-}
 
 /// "old" until renewed, then "new"; renewing twice fails.
 #[derive(Default)]

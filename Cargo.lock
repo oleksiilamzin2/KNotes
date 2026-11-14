@@ -566,7 +566,9 @@ version = "0.1.0"
 dependencies = [
  "knotes-core",
  "knotes-tools",
+ "security-framework",
  "serde_json",
+ "tempfile",
  "ureq",
 ]
 

@@ -11,3 +11,7 @@ knotes-core.workspace = true
 knotes-tools.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
+security-framework.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

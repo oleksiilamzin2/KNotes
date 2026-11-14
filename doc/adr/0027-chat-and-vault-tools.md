@@ -104,3 +104,25 @@ plan usage for open-source and local apps) on 2026-11-14:
 - The models are `GET /v1/models`' `models` with `visibility: "list"` (`slug`, `display_name`).
 - HTTP is `ureq` over the system's TLS and trusted roots (Security framework, no TLS library
   compiled in); a test over the network, left out by default, checks it reaches OpenAI.
+
+## Built (2026-11-14): signing in
+
+- A sign-in listens on a free loopback port (`http://127.0.0.1:<port>/auth/callback`), opens
+  the authorization URL with fresh `state`, `nonce` and PKCE verifier: the first time with
+  `dynamic_agent_client`, `agent_name_hint=Knotes` and the host id, later with the issued client,
+  the last ID token and the email as hints. A request with another `state` is turned away and
+  the wait goes on; `access_denied` is "declined"; the code is exchanged with the issued client;
+  the ID token's issuer, audience, expiry and nonce are checked, and on a sign-in again its
+  account must be the one before; without `chatgpt.tokens.use.direct` granted, the plan is "not
+  enabled". The browser gets a page saying how it went. OpenAI's authorize endpoint takes the
+  URL (checked by hand: it goes on to its log-in page).
+- The host id (a random `urn:uuid:`), the issued client, the account and whether the first-use
+  notice was shown are in `chatgpt.json` in Knotes's data; the tokens in the login Keychain
+  (one generic password, `app.knotes.Knotes.chatgpt`), in memory for tests.
+- An access token with less than five minutes left is refreshed before use, one refresh at a
+  time, the new refresh token kept; an unusable refresh token (`invalid_grant` and the others)
+  forgets the tokens and asks to sign in again; a network or server failure keeps them. Signing
+  out revokes the refresh token at the endpoint OpenAI's discovery document names, then forgets
+  the tokens (the registration stays, for signing in again).
+- SHA-256 comes from CommonCrypto and random bytes from the Security framework; base64url and
+  form encoding are a few lines here: no crates for them.
