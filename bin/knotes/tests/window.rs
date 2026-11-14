@@ -2814,3 +2814,26 @@ fn code_in_an_answer_sits_on_a_card_of_its_own() {
     assert!(out.contains("chat transcript: How?⏎⏎Run:⏎⏎ls⏎pwd⏎⏎Then cd back.\n"), "code keeps its line breaks: {out}");
     assert!(out.contains("chat code: [ls pwd]\n"), "one card, rounded at its first and last lines: {out}");
 }
+
+#[test]
+fn test_questions_run_through_the_chat_and_their_answers_are_written_down() {
+    let dir = tempfile::tempdir().unwrap();
+    let questions = dir.path().join("questions.json");
+    std::fs::write(&questions, serde_json::json!([
+        {"id": 1, "question": "When?", "expected": "In May."},
+        {"id": 2, "question": "About this?", "expected": "Boris.", "open": "Boris.md"},
+    ]).to_string()).unwrap();
+    let out = dir.path().join("answers.md");
+    let call = serde_json::json!({"type": "function_call", "call_id": "c1", "name": "search", "arguments": "{\"query\":\"radar\"}"});
+    let script = chat_script(dir.path(), &[chat_reply(&[call]), chat_reply(&[chat_message("In May.")]), chat_reply(&[chat_message("It is Boris.")])]);
+    let (_vault, out_text) = probe_notes(
+        &[("Boris.md", "# Boris"), ("Radar.md", "# Radar\n\nIn May.")],
+        &[("KNOTES_PROBE_CHAT", &script), ("KNOTES_CHAT_EVAL", questions.to_str().unwrap()), ("KNOTES_CHAT_EVAL_OUT", out.to_str().unwrap()), ("KNOTES_PROBE_DELAY_MS", "2500")],
+    );
+    let answers = std::fs::read_to_string(&out).unwrap_or_else(|e| panic!("{e}: {out_text}"));
+    assert!(answers.starts_with("# Перевірка ШІ: 2 питань, модель Probe Model"), "{answers}");
+    assert!(answers.contains("## 1. When?") && answers.contains("**Інструменти (1):** search {\"query\":\"radar\"}") && answers.contains("In May.\n"), "{answers}");
+    assert!(answers.contains("## 2. About this?\n\nВідкрито: Boris.md") && answers.contains("It is Boris."), "{answers}");
+    assert!(answers.ends_with("Готово: 2 з 2\n"), "{answers}");
+    assert!(out_text.contains("chat conversations: Нова розмова | selected 0"), "the questions are not kept as conversations: {out_text}");
+}

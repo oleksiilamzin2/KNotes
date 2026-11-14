@@ -186,5 +186,13 @@ plan usage for open-source and local apps) on 2026-11-14:
   block's first and last lines; the text keeps its line breaks, so copying it gives the code).
 - View → "Запитати ШІ" (Cmd+L) unfolds the right panel if folded, switches it to the chat and
   puts the cursor in the question field.
+- The model is told that search matches word starts in any language, so it searches by stems
+  ("прал" finds пралка and пральна), and to try stems, other words, title search and lists
+  before saying the vault lacks something; and to look through every note a question about
+  several notes or a period needs.
+- Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
+  the app asks each question in a conversation of its own, never saved, on the chat's thread,
+  and writes down each answer with the tools called, its size and time, for checking by hand
+  (the household vault's 30 questions are kept beside it, outside the vault).
 - The probe signs in with a script of OpenAI's answers (`KNOTES_PROBE_CHAT`) and tokens in
   memory; without it the probe is signed out and never reads the Keychain.

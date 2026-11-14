@@ -2,6 +2,7 @@
 
 mod app_delegate;
 mod chat_bubble;
+mod chat_eval;
 mod chat_panel;
 mod chat_worker;
 mod collapse_observer;

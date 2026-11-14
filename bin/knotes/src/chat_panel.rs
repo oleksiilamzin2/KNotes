@@ -262,6 +262,8 @@ pub struct ChatPanel {
     target: Retained<ChatTarget>,
     state: RefCell<State>,
     render_due: Cell<bool>,
+    /// The run of test questions (`KNOTES_CHAT_EVAL`) has started.
+    eval_started: Cell<bool>,
     account: Arc<Account>,
     worker: ChatWorker,
     app_data: PathBuf,
@@ -470,6 +472,7 @@ impl ChatPanel {
             target,
             state: RefCell::new(state),
             render_due: Cell::new(false),
+            eval_started: Cell::new(false),
             account,
             worker,
             app_data,
@@ -501,6 +504,25 @@ impl ChatPanel {
         }
         self.list_conversations();
         self.render();
+        self.maybe_start_eval();
+    }
+
+    /// Starts the run of test questions `KNOTES_CHAT_EVAL` names (ADR 0027) once the vault is
+    /// open, the account signed in and the model known.
+    fn maybe_start_eval(&self) {
+        let Ok(questions) = std::env::var("KNOTES_CHAT_EVAL") else { return };
+        let state = self.state.borrow();
+        if self.eval_started.get() || state.conversations.is_none() || state.model.is_empty() || !self.account.is_signed_in() {
+            return;
+        }
+        self.eval_started.set(true);
+        let out = std::env::var("KNOTES_CHAT_EVAL_OUT").unwrap_or_else(|_| format!("{questions}.answers.md"));
+        let name = state.models.iter().find(|m| m.slug == state.model).map_or(state.model.clone(), |m| m.name.clone());
+        let compact_at = compact_at_for(&state.models, &state.model);
+        match crate::chat_eval::turns(crate::chat_eval::questions(std::path::Path::new(&questions)), &state.model, &name, compact_at, std::path::Path::new(&out)) {
+            Ok(turns) => turns.into_iter().for_each(|turn| self.worker.send(turn)),
+            Err(e) => eprintln!("knotes: cannot start the test questions: {e}"),
+        }
     }
 
     /// The document open (a vault path), offered to the model unless crossed out.
@@ -676,6 +698,7 @@ impl ChatPanel {
             state.models = models;
         }
         self.show_models();
+        self.maybe_start_eval();
     }
 
     fn show_models(&self) {

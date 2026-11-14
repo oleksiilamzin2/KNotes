@@ -97,6 +97,7 @@ fn a_reply_streams_its_text_and_joins_the_conversation() {
     assert_eq!(body["prompt_cache_key"], "conversation-1");
     let instructions = body["instructions"].as_str().unwrap();
     assert!(instructions.contains("Knotes") && instructions.contains("next_offset"), "{instructions}");
+    assert!(instructions.contains("stem") && instructions.contains("пральна"), "the model searches by stems: {instructions}");
     let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     assert!(instructions.ends_with(&format!("Today is {} (UTC).", &knotes_tools::utc_minute(today)[..10])), "the model knows the day: {instructions}");
     for field in ["temperature", "max_output_tokens", "previous_response_id", "truncation", "metadata"] {
