@@ -7,6 +7,8 @@ use crate::{EmbedError, Embedder, Passage, Vector, protocol};
 
 /// The embedder in a helper process (`knotes-embed <model>`, ADR 0028): started at the first
 /// request, and again when it has exited (it does after a few idle minutes) or died.
+/// Its stderr goes nowhere: llama.cpp's Metal logs cannot be silenced, and errors come back
+/// in the protocol.
 pub struct ProcessEmbedder {
     helper: PathBuf,
     model: PathBuf,
@@ -29,7 +31,7 @@ impl ProcessEmbedder {
             .arg(&self.model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| EmbedError::Unavailable(format!("{}: {e}", self.helper.display())))?;
         let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
