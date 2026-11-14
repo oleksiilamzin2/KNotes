@@ -220,6 +220,8 @@ struct Asking {
     question: String,
     reply: String,
     tools: Vec<(String, serde_json::Value)>,
+    /// The conversation's older part is being summarized first.
+    compacting: bool,
     cancel: Arc<AtomicBool>,
 }
 
@@ -841,11 +843,12 @@ impl ChatPanel {
             }
             state.current.model = state.model.clone();
             state.error = None;
-            state.turn = Some(Asking { question: text.clone(), reply: String::new(), tools: Vec::new(), cancel: Arc::clone(&cancel) });
+            state.turn = Some(Asking { question: text.clone(), reply: String::new(), tools: Vec::new(), compacting: false, cancel: Arc::clone(&cancel) });
             let target = Arc::new(MainThreadBound::new(self.this.borrow().clone(), self.mtm()));
             let events = Arc::clone(&target);
             Turn {
                 items: state.current.items.clone(),
+                summary: state.current.summary.clone(),
                 text,
                 open: state.document.clone().filter(|_| state.document_on),
                 model: state.model.clone(),
@@ -860,11 +863,11 @@ impl ChatPanel {
                         }
                     });
                 }),
-                done: Box::new(move |items, result| {
+                done: Box::new(move |items, summary, result| {
                     DispatchQueue::main().exec_async(move || {
                         let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
                         if let Some(panel) = target.get(mtm).upgrade() {
-                            panel.turn_done(items, result);
+                            panel.turn_done(items, summary, result);
                         }
                     });
                 }),
@@ -885,15 +888,26 @@ impl ChatPanel {
                 ChatEvent::Text(text) => turn.reply.push_str(&text),
                 ChatEvent::ToolCall { name, arguments } => turn.tools.push((name, arguments)),
                 ChatEvent::ToolDone { .. } => {}
+                ChatEvent::Compacting => turn.compacting = true,
             }
         }
         self.render_later();
     }
 
-    fn turn_done(&self, items: Vec<serde_json::Value>, result: Result<(), ChatError>) {
+    fn turn_done(&self, items: Vec<serde_json::Value>, summary: Option<knotes_chat::Summary>, result: Result<(), ChatError>) {
         let question = {
             let mut state = self.state.borrow_mut();
             let turn = state.turn.take();
+            // A summary made for a turn that then failed still covers items from before it.
+            if summary != state.current.summary {
+                state.current.summary = summary;
+                if result.is_err()
+                    && let Some(conversations) = &state.conversations
+                    && let Err(e) = conversations.save(&state.current)
+                {
+                    eprintln!("knotes: cannot save the conversation: {e}");
+                }
+            }
             match result {
                 Ok(()) => {
                     let state = &mut *state;
@@ -950,7 +964,12 @@ impl ChatPanel {
         let text = NSMutableAttributedString::new();
         let state = self.state.borrow();
         let mut blocks: Vec<(Retained<NSAttributedString>, Block)> = Vec::new();
-        for shown in state.current.shown() {
+        let covers = state.current.summary.as_ref().map_or(0, |s| s.covers);
+        for (i, shown) in state.current.shown_at() {
+            // Where the model's memory of the conversation turns from the summary to the messages.
+            if covers > 0 && i >= covers && !blocks.is_empty() && !blocks.iter().any(|(_, kind)| matches!(kind, Block::Divider)) {
+                blocks.push((tool_text(strings::CHAT_COMPACTED), Block::Divider));
+            }
             blocks.push(match shown {
                 Shown::User(question) => (question_text(&question), Block::Question),
                 Shown::Assistant(answer) => (answer_text(&answer), Block::Other),
@@ -959,6 +978,9 @@ impl ChatPanel {
         }
         if let Some(turn) = &state.turn {
             blocks.push((question_text(&turn.question), Block::Question));
+            if turn.compacting && turn.tools.is_empty() && turn.reply.is_empty() {
+                blocks.push((tool_text(strings::CHAT_COMPACTING), Block::Tool));
+            }
             for (name, arguments) in &turn.tools {
                 blocks.push((tool_text(&strings::chat_tool(name, arguments)), Block::Tool));
             }
@@ -1187,6 +1209,8 @@ fn piece(text: &str, font: &NSFont, colour: &NSColor, link: Option<&str>) -> Ret
 enum Block {
     Question,
     Tool,
+    /// Where the conversation's summary ends.
+    Divider,
     Other,
 }
 

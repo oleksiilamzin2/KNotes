@@ -2,9 +2,10 @@ mod common;
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use common::Fake;
-use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, Method, Model, ToolBox, list_models};
+use knotes_chat::{AccessToken, Chat, ChatError, ChatEvent, Method, Model, Summary, ToolBox, list_models};
 use knotes_tools::{ToolError, ToolSpec};
 use serde_json::{Value, json};
 
@@ -67,13 +68,13 @@ fn reply(output: Vec<Value>) -> (u16, String) {
 }
 
 fn chat<'a>(fake: &'a Fake, token: &'a Token) -> Chat<'a> {
-    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into() }
+    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO] }
 }
 
 /// Sends `text` and gives the outcome with the events on the way.
 fn send(chat: &Chat, items: &mut Vec<Value>, text: &str, open: Option<&str>, tools: &Tools) -> (Result<(), ChatError>, Vec<ChatEvent>) {
     let mut events = Vec::new();
-    let result = chat.send(items, text, open, tools, &AtomicBool::new(false), &mut |e| events.push(e));
+    let result = chat.send(items, &mut None, text, open, tools, &AtomicBool::new(false), &mut |e| events.push(e));
     (result, events)
 }
 
@@ -149,7 +150,9 @@ fn plan_errors_come_out_as_what_to_do_about_them() {
         let fake = Fake::answering(vec![answer]);
         let (token, tools) = (Token::default(), Tools::default());
         let mut items = vec![json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "before"}]})];
-        let (result, _) = send(&chat(&fake, &token), &mut items, "hi", None, &tools);
+        // Without tries again: they have a test of their own.
+        let once = Chat { retry_after: Vec::new(), ..chat(&fake, &token) };
+        let (result, _) = send(&once, &mut items, "hi", None, &tools);
         assert_eq!(result, Err(expected));
         assert_eq!(items.len(), 1, "a failed turn leaves the conversation as it was");
     }
@@ -180,7 +183,7 @@ fn a_stream_cut_short_or_called_off_leaves_the_conversation_as_it_was() {
     assert!(items.is_empty());
 
     let fake = Fake::answering(vec![reply(vec![message("never")])]);
-    let result = chat(&fake, &token).send(&mut items, "hi", None, &tools, &AtomicBool::new(true), &mut |_| {});
+    let result = chat(&fake, &token).send(&mut items, &mut None, "hi", None, &tools, &AtomicBool::new(true), &mut |_| {});
     assert_eq!(result, Err(ChatError::Cancelled));
     assert!(items.is_empty());
 }
@@ -194,4 +197,80 @@ fn the_models_offered_are_those_listed() {
     let request = &fake.sent.borrow()[0];
     assert_eq!((request.method, request.url.as_str()), (Method::Get, "https://api.openai.com/v1/models"));
     assert_eq!(fake.header(0, "Authorization"), "Bearer old");
+}
+
+#[test]
+fn a_moment_s_unavailability_or_network_failure_is_tried_again_but_a_usage_limit_is_not() {
+    let unavailable = (503, json!({"error": {"code": "subscription_sharing_usage_unavailable", "message": "later"}}).to_string());
+    let fake = Fake::answering(vec![unavailable.clone(), reply(vec![message("ok")])]);
+    let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
+    assert_eq!(send(&chat(&fake, &token), &mut items, "hi", None, &tools).0, Ok(()));
+    assert_eq!(fake.sent.borrow().len(), 2);
+
+    let fake = Fake::default();
+    fake.answers.borrow_mut().push_back(Err(ChatError::Network("offline".into())));
+    fake.answers.borrow_mut().push_back(Ok(reply(vec![message("ok")])));
+    assert_eq!(send(&chat(&fake, &token), &mut Vec::new(), "hi", None, &tools).0, Ok(()));
+
+    let fake = Fake::answering(vec![unavailable.clone(), unavailable.clone(), unavailable]);
+    assert_eq!(send(&chat(&fake, &token), &mut Vec::new(), "hi", None, &tools).0, Err(ChatError::Unavailable("later".into())), "two tries more, then it says so");
+    assert_eq!(fake.sent.borrow().len(), 3);
+
+    let limit = (429, json!({"error": {"code": "subscription_sharing_usage_limit_exceeded", "message": "limit"}}).to_string());
+    let fake = Fake::answering(vec![limit]);
+    assert_eq!(send(&chat(&fake, &token), &mut Vec::new(), "hi", None, &tools).0, Err(ChatError::UsageLimit));
+    assert_eq!(fake.sent.borrow().len(), 1);
+}
+
+/// A turn of a conversation: a question, a search with a long result, an answer.
+fn long_turn(question: &str) -> Vec<serde_json::Value> {
+    vec![
+        json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]}),
+        json!({"type": "reasoning", "summary": [], "encrypted_content": "sealed"}),
+        json!({"type": "function_call", "call_id": format!("c-{question}"), "name": "search", "arguments": "{}"}),
+        json!({"type": "function_call_output", "call_id": format!("c-{question}"), "output": "нотатка ".repeat(20_000)}),
+        json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": format!("answer to {question}")}]}),
+    ]
+}
+
+#[test]
+fn a_long_conversation_has_its_older_part_summarized_and_sends_the_summary_with_the_last_turns() {
+    let mut items: Vec<serde_json::Value> = ["first?", "second?", "third?"].iter().flat_map(|q| long_turn(q)).collect();
+    // Without the summary even the cut results would not matter: the uncut last turn alone is long.
+    let fake = Fake::answering(vec![reply(vec![message("Asked about first and second; found nothing.")]), reply(vec![message("fourth answer")])]);
+    let (token, tools) = (Token::default(), Tools::default());
+    let mut summary = None;
+    let mut events = Vec::new();
+    let result = chat(&fake, &token).send(&mut items, &mut summary, "fourth?", None, &tools, &AtomicBool::new(false), &mut |e| events.push(e));
+    assert_eq!(result, Ok(()));
+    assert!(events.contains(&ChatEvent::Compacting), "{events:?}");
+    assert_eq!(summary, Some(Summary { covers: 10, text: "Asked about first and second; found nothing.".into() }), "the first two turns, the last two kept");
+
+    let asked = fake.body(0);
+    assert!(asked.get("tools").is_none(), "summarizing calls no tools");
+    assert!(asked["instructions"].as_str().unwrap().contains("summarize"));
+    let words = asked["input"][0]["content"][0]["text"].as_str().unwrap();
+    assert!(words.contains("User: first?") && words.contains("Assistant: answer to second?") && !words.contains("third?"), "{}", &words[..300]);
+    assert!(words.len() < 10_000, "tool results are cut in what is summarized: {}", words.len());
+
+    let input = fake.body(1)["input"].as_array().unwrap().clone();
+    assert!(input[0]["content"][0]["text"].as_str().unwrap().contains("Asked about first and second"), "{}", input[0]);
+    assert_eq!(input[1]["content"][0]["text"], "third?");
+    assert_eq!(input.last().unwrap()["content"][0]["text"], "fourth?");
+    assert_eq!(items.len(), 17, "the conversation keeps every item; only what is sent changes");
+}
+
+#[test]
+fn a_short_conversation_is_not_summarized() {
+    let mut items: Vec<serde_json::Value> = long_turn("first?").into_iter().map(|mut i| {
+        if i["type"] == "function_call_output" {
+            i["output"] = json!("short");
+        }
+        i
+    }).collect();
+    let fake = Fake::answering(vec![reply(vec![message("ok")])]);
+    let (token, tools) = (Token::default(), Tools::default());
+    let mut summary = None;
+    chat(&fake, &token).send(&mut items, &mut summary, "second?", None, &tools, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert_eq!((summary, fake.sent.borrow().len()), (None, 1));
 }

@@ -1,4 +1,4 @@
-use knotes_chat::{Conversation, Conversations, Shown};
+use knotes_chat::{Conversation, Conversations, Shown, Summary};
 use serde_json::json;
 
 fn talked(model: &str, question: &str) -> Conversation {
@@ -42,12 +42,14 @@ fn conversations_are_kept_listed_newest_first_and_deleted() {
     first.updated = 100;
     let mut second = talked("gpt-5.5", "Second?");
     second.updated = 200;
+    second.summary = Some(Summary { covers: 4, text: "Asked about radar.".into() });
     assert_ne!(first.id, second.id);
     store.save(&first).unwrap();
     store.save(&second).unwrap();
     let titles: Vec<String> = store.list().into_iter().map(|e| e.title).collect();
     assert_eq!(titles, ["Second?", "First?"]);
     assert_eq!(store.load(&first.id), Some(first.clone()));
+    assert_eq!(store.load(&second.id), Some(second.clone()), "its summary kept too");
 
     first.updated = 300;
     first.title = "First, renamed".into();

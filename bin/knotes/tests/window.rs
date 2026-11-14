@@ -2764,3 +2764,22 @@ fn every_point_of_the_question_field_takes_a_click() {
     let line = out.lines().find(|l| l.starts_with("chat field clicks:")).unwrap_or_else(|| panic!("{out}"));
     assert!(line.contains("text 55, button 1, missed [] | text height 66"), "{line}");
 }
+
+#[test]
+fn where_a_long_conversation_was_summarized_for_the_model_is_marked() {
+    let (home, vault, script_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::write(vault.path().join("Boris.md"), "# Boris").unwrap();
+    let dir = knotes_session::index_dir(&home.path().join("Library/Application Support/Knotes"), vault.path()).join("conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let say = |role: &str, kind: &str, text: &str| serde_json::json!({"type": "message", "role": role, "content": [{"type": kind, "text": text}]});
+    let conversation = serde_json::json!({
+        "id": "abc1", "title": "Q1", "model": "probe-model", "updated": 100,
+        "items": [say("user", "input_text", "Q1"), say("assistant", "output_text", "A1"), say("user", "input_text", "Q2"), say("assistant", "output_text", "A2")],
+        "summary": {"covers": 2, "text": "Asked Q1."},
+    });
+    std::fs::write(dir.join("abc1.json"), conversation.to_string()).unwrap();
+    std::fs::write(dir.join("index.json"), serde_json::json!([{"id": "abc1", "title": "Q1", "updated": 100}]).to_string()).unwrap();
+    let script = chat_script(script_dir.path(), &[]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script)]);
+    assert!(out.contains("chat transcript: Q1⏎⏎A1⏎⏎— вище розмову стиснуто: ШІ пам'ятає її коротко —⏎⏎Q2⏎⏎A2\n"), "{out}");
+}

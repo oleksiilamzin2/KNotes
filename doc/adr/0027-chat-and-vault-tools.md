@@ -152,5 +152,18 @@ plan usage for open-source and local apps) on 2026-11-14:
   saves the conversation (named by its first question). A failed one says why (the usage limit
   with a "Керувати використанням" link) and puts the question back in the field; "sign in again"
   shows the sign-in.
+- Long conversations (the owner asked for compression): each request sends reasoning only from
+  the turn under way, and tool results before the last two turns cut to 1 500 characters (the
+  model can call the tool again). Past about 60 000 tokens (estimated as the JSON's bytes over
+  four, a little over for Cyrillic), the turn first has the model summarize what lies before the
+  last two turns (with the summary before, if any; tool results cut) in a request of its own,
+  without tools; from then on the summary goes as a developer message in place of the items it
+  covers. The conversation keeps every item and shows them all, with a line where the model's
+  memory turns from the summary to the messages ("вище розмову стиснуто"); "Стискаю розмову…"
+  shows while it summarizes. A summary made for a turn that then fails is kept.
+- A request OpenAI answers as unavailable (503), or that the network fails before a reply
+  starts, is sent again after 1 s and then 4 s; then the turn says so. A usage limit is never
+  tried again.
+- While the model thinks before its first words, "Думає…".
 - The probe signs in with a script of OpenAI's answers (`KNOTES_PROBE_CHAT`) and tokens in
   memory; without it the probe is signed out and never reads the Keychain.
