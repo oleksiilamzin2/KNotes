@@ -15,18 +15,20 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "search",
-            description: "Search the text of the vault's notes and PDFs. Gives fragments (blocks) holding every word, best first, each with its document, section heading and block number to read on from.",
+            description: "Search the text of the vault's notes and PDFs. Gives fragments (blocks) holding every word, best first, each with its document, section heading and block number to read on from. When more follow, `next_offset` says where: pass it as `offset` for the next page (300 deep at most; past that, narrow the query).",
             parameters: json!({"type": "object", "properties": {
                 "query": {"type": "string", "description": "Words to find; each may be the start of a word."},
-                "limit": {"type": "integer", "description": "How many fragments, 10 by default, 30 at most."}
+                "limit": {"type": "integer", "description": "How many fragments, 10 by default, 30 at most."},
+                "offset": {"type": "integer", "description": "Where the page starts: a previous call's `next_offset`, 0 by default."}
             }, "required": ["query"], "additionalProperties": false}),
         },
         ToolSpec {
             name: "find_by_title",
-            description: "Find notes and PDFs by their title, alias or path, fuzzily (a few letters are enough).",
+            description: "Find notes and PDFs by their title, alias or path, fuzzily (a few letters are enough). When more follow, `next_offset` says where the next page starts.",
             parameters: json!({"type": "object", "properties": {
                 "query": {"type": "string"},
-                "limit": {"type": "integer", "description": "10 by default, 30 at most."}
+                "limit": {"type": "integer", "description": "10 by default, 30 at most."},
+                "offset": {"type": "integer", "description": "Where the page starts: a previous call's `next_offset`, 0 by default."}
             }, "required": ["query"], "additionalProperties": false}),
         },
         ToolSpec {
@@ -59,12 +61,15 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "list_notes",
-            description: "List notes and PDFs, in a folder (with its subfolders) or with a tag, the most recently changed first or by name.",
+            description: "List notes and PDFs, in a folder (with its subfolders), with a tag, or changed between two days, the most recently changed first or by name; each with when it last changed (UTC). Says how many there are in all (`total`) and, when more follow, where the next page starts (`next_offset`).",
             parameters: json!({"type": "object", "properties": {
                 "folder": {"type": "string", "description": "A folder's path in the vault."},
                 "tag": {"type": "string", "description": "A tag without #, e.g. \"work\" or \"area/sub\"."},
+                "changed_after": {"type": "string", "description": "Only those changed on this day (YYYY-MM-DD, UTC) or later."},
+                "changed_before": {"type": "string", "description": "Only those changed on this day (YYYY-MM-DD, UTC) or earlier."},
                 "sort": {"type": "string", "enum": ["modified", "name"]},
-                "limit": {"type": "integer", "description": "30 by default, 100 at most."}
+                "limit": {"type": "integer", "description": "30 by default, 100 at most."},
+                "offset": {"type": "integer", "description": "Where the page starts: a previous call's `next_offset`, 0 by default."}
             }, "additionalProperties": false}),
         },
         ToolSpec {

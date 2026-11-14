@@ -7,12 +7,15 @@ use knotes_md::MarkdownParser;
 use knotes_search::TitleIndex;
 use serde_json::{Value, json};
 
-use crate::{ToolError, ToolIndex, ToolSpec, specs};
+use crate::{ToolError, ToolIndex, ToolSpec, day_start, specs, utc_minute};
 
 /// A fragment's text past this many characters is cut.
 const FRAGMENT: usize = 400;
 /// A read stops past this many characters, at a block's or page's end.
 const READ_BUDGET: usize = 24_000;
+/// How deep search and title search page (offset and page together); past it, a narrower
+/// query does better.
+const DEEPEST: usize = 300;
 /// How old the titles may get before they are listed again (notes come and go meanwhile).
 const TITLES_LAST: Duration = Duration::from_secs(10);
 
@@ -53,8 +56,10 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
 
     fn search(&self, args: &Value) -> Result<Value, ToolError> {
         let query = text_arg(args, "query")?;
-        let limit = count_arg(args, "limit", 10, 30);
-        let hits = self.index.search(&ContentQuery { text: &query, within: Within::Block, prefixes: true, scope: None, limit }).map_err(failed)?;
+        let (offset, limit) = paging(args, 10, 30);
+        // One more than the page, to tell whether more follow.
+        let hits = self.index.search(&ContentQuery { text: &query, within: Within::Block, prefixes: true, scope: None, limit: offset + limit + 1 }).map_err(failed)?;
+        let (hits, next) = page(hits, offset, limit);
         let results: Vec<Value> = hits
             .into_iter()
             .map(|hit| {
@@ -62,17 +67,18 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
                 json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text})
             })
             .collect();
-        Ok(json!({"results": results}))
+        Ok(json!({"results": results, "next_offset": next}))
     }
 
     fn find_by_title(&self, args: &Value) -> Result<Value, ToolError> {
         let query = text_arg(args, "query")?;
-        let limit = count_arg(args, "limit", 10, 30);
+        let (offset, limit) = paging(args, 10, 30);
         if self.titles.borrow().0.elapsed() > TITLES_LAST {
             *self.titles.borrow_mut() = (Instant::now(), titles_of(&self.index));
         }
-        let results: Vec<Value> = self.titles.borrow().1.search_titles(&query, limit).into_iter().map(|h| json!({"path": h.path, "title": title_of(&h.path), "kind": kind_of(&h.path)})).collect();
-        Ok(json!({"results": results}))
+        let (hits, next) = page(self.titles.borrow().1.search_titles(&query, offset + limit + 1), offset, limit);
+        let results: Vec<Value> = hits.into_iter().map(|h| json!({"path": h.path, "title": title_of(&h.path), "kind": kind_of(&h.path)})).collect();
+        Ok(json!({"results": results, "next_offset": next}))
     }
 
     fn read_note(&self, args: &Value) -> Result<Value, ToolError> {
@@ -95,7 +101,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             let heading = block.heading.and_then(|h| parsed.headings.get(h as usize)).map(|h| h.text.clone());
             blocks.push(json!({"block": i, "heading": heading, "text": body}));
         }
-        Ok(json!({"path": path, "title": title_of(&path), "total_blocks": parsed.blocks.len(), "blocks": blocks}))
+        let next = from + blocks.len();
+        let next = (next < parsed.blocks.len()).then_some(next);
+        Ok(json!({"path": path, "title": title_of(&path), "total_blocks": parsed.blocks.len(), "blocks": blocks, "next_block": next}))
     }
 
     fn read_pdf(&self, args: &Value) -> Result<Value, ToolError> {
@@ -113,7 +121,9 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             used += text.len();
             pages.push(json!({"page": page, "text": text}));
         }
-        Ok(json!({"path": path, "title": title_of(&path), "page_count": count, "pages": pages}))
+        let next = from + pages.len();
+        let next = (next <= count).then_some(next);
+        Ok(json!({"path": path, "title": title_of(&path), "page_count": count, "pages": pages, "next_page": next}))
     }
 
     fn outline(&self, args: &Value) -> Result<Value, ToolError> {
@@ -147,8 +157,23 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
     }
 
     fn list_notes(&self, args: &Value) -> Result<Value, ToolError> {
-        let limit = count_arg(args, "limit", 30, 100);
+        let offset = count_arg(args, "offset", 0, usize::MAX);
+        let limit = count_arg(args, "limit", 30, 100).max(1);
+        let day = |name: &str| -> Result<Option<i64>, ToolError> {
+            match args.get(name).and_then(Value::as_str) {
+                None => Ok(None),
+                Some(text) => day_start(text).map(Some).ok_or_else(|| ToolError::BadArguments(format!("`{name}` is a day, YYYY-MM-DD, not {text:?}"))),
+            }
+        };
+        let (after, before) = (day("changed_after")?, day("changed_before")?);
         let mut rows = self.index.note_rows().map_err(failed)?;
+        let seconds = |ns: i64| ns.div_euclid(1_000_000_000);
+        if let Some(after) = after {
+            rows.retain(|r| seconds(r.mtime_ns) >= after);
+        }
+        if let Some(before) = before {
+            rows.retain(|r| seconds(r.mtime_ns) < before + 86_400);
+        }
         if let Some(folder) = args.get("folder").and_then(Value::as_str).map(|f| f.trim_matches('/')).filter(|f| !f.is_empty()) {
             let prefix = format!("{folder}/");
             rows.retain(|r| r.path.starts_with(&prefix));
@@ -161,8 +186,10 @@ impl<I: ToolIndex, F: VaultReader, D: DocumentPages> VaultTools<I, F, D> {
             Some("name") => rows.sort_by_key(|r| title_of(&r.path).to_lowercase()),
             _ => rows.sort_by_key(|r| std::cmp::Reverse(r.mtime_ns)),
         }
-        let notes: Vec<Value> = rows.into_iter().take(limit).map(|r| json!({"path": r.path, "title": title_of(&r.path), "kind": kind_of(&r.path), "modified_unix": r.mtime_ns / 1_000_000_000})).collect();
-        Ok(json!({"notes": notes}))
+        let total = rows.len();
+        let notes: Vec<Value> = rows.into_iter().skip(offset).take(limit).map(|r| json!({"path": r.path, "title": title_of(&r.path), "kind": kind_of(&r.path), "modified": utc_minute(seconds(r.mtime_ns))})).collect();
+        let next = (offset + limit < total).then_some(offset + limit);
+        Ok(json!({"notes": notes, "total": total, "next_offset": next}))
     }
 
     fn list_tags(&self) -> Result<Value, ToolError> {
@@ -181,6 +208,20 @@ fn titles_of(index: &impl ToolIndex) -> TitleIndex {
 /// A required string argument.
 fn text_arg(args: &Value, name: &str) -> Result<String, ToolError> {
     args.get(name).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_owned).ok_or_else(|| ToolError::BadArguments(format!("`{name}` (a string) is needed")))
+}
+
+/// The `offset` and `limit` of a paged call: the limit `default` when missing, at most
+/// `most`; offset and limit together no deeper than `DEEPEST`.
+fn paging(args: &Value, default: usize, most: usize) -> (usize, usize) {
+    let limit = count_arg(args, "limit", default, most).max(1);
+    (count_arg(args, "offset", 0, DEEPEST - limit), limit)
+}
+
+/// The page of `items` (fetched up to one past it) at `offset`, and where the next starts
+/// when more follow (and the next is not too deep).
+fn page<T>(items: Vec<T>, offset: usize, limit: usize) -> (Vec<T>, Option<usize>) {
+    let more = items.len() > offset + limit && offset + limit < DEEPEST;
+    (items.into_iter().skip(offset).take(limit).collect(), more.then_some(offset + limit))
 }
 
 /// An optional count, `default` when missing, at most `most`.

@@ -87,6 +87,13 @@ plan usage for open-source and local apps) on 2026-11-14:
   with a message saying so. `scripts/bundle.sh` puts it in `Knotes.app/Contents/MacOS`. In the
   50k vault, starting and answering a search takes about half a second.
 
+- Paging (2026-11-14, the owner asked for "далі" after the chat's limits on large vaults were laid
+  out): `search` and `find_by_title` take an `offset` and give `next_offset` while more follow
+  (300 deep at most: past that a narrower query does better); `list_notes` gives `total` and
+  `next_offset` and takes `changed_after` / `changed_before` (days, `YYYY-MM-DD`, UTC, both
+  included), each note with when it changed (`2026-11-12T19:40Z`); `read_note` and `read_pdf`
+  give `next_block` / `next_page`. The model is told to page on, and today's date (UTC).
+
 ## Built (2026-11-14): the chat's requests
 
 - `knotes-chat` sends a turn: the document open as a developer message, the user's text,

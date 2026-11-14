@@ -95,7 +95,10 @@ fn a_reply_streams_its_text_and_joins_the_conversation() {
     let body = fake.body(0);
     assert_eq!((&body["store"], &body["stream"], &body["model"]), (&json!(false), &json!(true), &json!("gpt-5.5")));
     assert_eq!(body["prompt_cache_key"], "conversation-1");
-    assert!(body["instructions"].as_str().unwrap().contains("Knotes"));
+    let instructions = body["instructions"].as_str().unwrap();
+    assert!(instructions.contains("Knotes") && instructions.contains("next_offset"), "{instructions}");
+    let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    assert!(instructions.ends_with(&format!("Today is {} (UTC).", &knotes_tools::utc_minute(today)[..10])), "the model knows the day: {instructions}");
     for field in ["temperature", "max_output_tokens", "previous_response_id", "truncation", "metadata"] {
         assert!(body.get(field).is_none(), "{field} is not allowed on this route");
     }

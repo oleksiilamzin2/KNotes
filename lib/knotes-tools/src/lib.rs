@@ -2,11 +2,13 @@
 //! pages, outlines, links, notes and tags. The in-app chat gives them to the model as function
 //! tools; the MCP server gives them to external agents.
 
+mod dates;
 mod specs;
 mod tool_error;
 mod tool_index;
 mod vault_tools;
 
+pub use dates::{day_start, utc_minute};
 pub use specs::{ToolSpec, specs};
 pub use tool_error::ToolError;
 pub use tool_index::ToolIndex;

@@ -137,3 +137,74 @@ fn wrong_calls_say_what_is_wrong() {
     assert!(matches!(v.tools.call("delete_everything", &json!({})), Err(ToolError::Unknown(_))));
     assert!(matches!(v.tools.call("read_note", &json!({"path": "budget.pdf"})), Err(ToolError::BadArguments(_))), "a PDF is read with read_pdf");
 }
+
+/// A vault of `n` notes all naming apples, each changed a day after the one before
+/// (note 0 on 2026-01-01).
+fn orchard(n: usize) -> Vault {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let start = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_767_225_600); // 2026-01-01T00:00Z
+    for i in 0..n {
+        let path = format!("Orchard/Apple {i:02}.md");
+        write(dir.path(), &path, &format!("# Apple {i:02}\n\nThe apple tree number {i}."));
+        let file = std::fs::File::options().write(true).open(dir.path().join(&path)).unwrap();
+        file.set_modified(start + std::time::Duration::from_secs(86_400 * i as u64 + 3_600)).unwrap();
+    }
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    Vault { _dirs: (dir, idx), tools }
+}
+
+fn paths(result: &Value, key: &str) -> Vec<String> {
+    result[key].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn search_title_search_and_lists_go_on_a_page_at_a_time() {
+    let v = orchard(25);
+    let mut seen = Vec::new();
+    let mut offset = Some(0);
+    let mut pages = 0;
+    while let Some(at) = offset {
+        let page = call(&v, "search", json!({"query": "apple tree", "limit": 10, "offset": at}));
+        seen.extend(paths(&page, "results"));
+        offset = page["next_offset"].as_u64();
+        pages += 1;
+    }
+    assert_eq!(pages, 3);
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 25, "every note once over the pages");
+
+    let first = call(&v, "find_by_title", json!({"query": "apple", "limit": 20}));
+    assert_eq!((paths(&first, "results").len(), first["next_offset"].as_u64()), (20, Some(20)));
+    let rest = call(&v, "find_by_title", json!({"query": "apple", "limit": 20, "offset": 20}));
+    assert_eq!((paths(&rest, "results").len(), rest["next_offset"].as_u64()), (5, None));
+
+    let listed = call(&v, "list_notes", json!({"folder": "Orchard", "limit": 10, "offset": 20}));
+    assert_eq!(listed["total"], 25);
+    assert_eq!(paths(&listed, "notes"), ["Orchard/Apple 04.md", "Orchard/Apple 03.md", "Orchard/Apple 02.md", "Orchard/Apple 01.md", "Orchard/Apple 00.md"], "newest first");
+    assert!(listed["next_offset"].is_null());
+}
+
+#[test]
+fn notes_are_listed_by_the_days_they_changed_with_their_dates() {
+    let v = orchard(25);
+    let january = call(&v, "list_notes", json!({"changed_after": "2026-01-10", "changed_before": "2026-01-12"}));
+    assert_eq!(paths(&january, "notes"), ["Orchard/Apple 11.md", "Orchard/Apple 10.md", "Orchard/Apple 09.md"], "both days included");
+    assert_eq!(january["notes"][0]["modified"], "2026-01-12T01:00Z");
+    assert_eq!(january["total"], 3);
+    let wrong = v.tools.call("list_notes", &json!({"changed_after": "last week"}));
+    assert!(matches!(wrong, Err(knotes_tools::ToolError::BadArguments(_))), "{wrong:?}");
+}
+
+#[test]
+fn a_long_read_says_where_to_go_on() {
+    let v = vault();
+    let first = call(&v, "read_note", json!({"path": "Projects/Radar.md", "max_blocks": 2}));
+    assert_eq!(first["next_block"], 2);
+    let last = call(&v, "read_note", json!({"path": "Projects/Radar.md", "from_block": 2}));
+    assert!(last["next_block"].is_null(), "{last}");
+    let pdf = call(&v, "read_pdf", json!({"path": "budget.pdf", "pages": 1}));
+    assert_eq!(pdf["next_page"], 2, "{pdf}");
+}

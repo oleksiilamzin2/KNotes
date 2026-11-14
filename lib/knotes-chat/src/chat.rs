@@ -12,7 +12,8 @@ pub const INSTRUCTIONS: &str = "You are the assistant in Knotes, a notes app. Yo
 Markdown notes and PDFs. Use the vault tools to find and read what you need before answering; don't guess what the notes say. \
 Search gives fragments; read a note's blocks or a PDF's pages for more. When you use a note or a PDF, link it as an Obsidian \
 wiki link with its path, like [[Projects/Radar]] for Projects/Radar.md or [[Papers/budget.pdf#page=3]] for a PDF's page; the app \
-makes them clickable. Answer in the language the user writes in. Be concise.";
+makes them clickable. Tools give results a page at a time: when a result has next_offset, call the tool again with it as \
+offset to see more; read a long note or PDF on from next_block or next_page. Answer in the language the user writes in. Be concise.";
 
 /// What the model is told when it summarizes a conversation's older part.
 pub const SUMMARY_INSTRUCTIONS: &str = "You summarize the earlier part of a conversation between a user and the assistant of \
@@ -155,7 +156,7 @@ impl Chat<'_> {
             .collect();
         let body = json!({
             "model": self.model,
-            "instructions": INSTRUCTIONS,
+            "instructions": format!("{INSTRUCTIONS} Today is {} (UTC).", &knotes_tools::utc_minute(crate::token_endpoint::now() as i64)[..10]),
             "input": input,
             "tools": [{"type": "namespace", "name": NAMESPACE, "description": "Read the user's Knotes vault.", "tools": functions}],
             "tool_choice": "auto",
