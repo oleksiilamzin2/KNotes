@@ -516,6 +516,11 @@ impl ChatPanel {
     }
 
     /// The vault open: its conversations listed, the newest shown, its tools for the model.
+    /// The vault's index has changed (its vectors follow, ADR 0028).
+    pub fn index_changed(&self) {
+        self.worker.index_changed();
+    }
+
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
         self.worker.set_vault(vault, index_dir.clone());
         let conversations = Conversations::new(index_dir.join("conversations"));

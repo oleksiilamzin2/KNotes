@@ -21,8 +21,9 @@ use serde_json::{Value, json};
 /// Called with the conversation's items and memory after a turn, and how it went.
 pub type TurnDone = Box<dyn FnOnce(Vec<Value>, Memory, Result<(), ChatError>) + Send>;
 
-/// How often the vectors are brought up to the index.
-const VECTORS_EVERY: Duration = Duration::from_secs(15);
+/// How long the index must stay unchanged before the vectors are brought up to it: changes come
+/// in runs (a save every two seconds while the user types), one pass for the run.
+const VECTORS_QUIET: Duration = Duration::from_secs(5);
 /// A pause after each batch embedded in the background, leaving the GPU to the window.
 const VECTORS_PAUSE: Duration = Duration::from_millis(20);
 
@@ -56,6 +57,8 @@ enum Job {
 
 pub struct ChatWorker {
     jobs: mpsc::Sender<Job>,
+    /// Wakes the thread keeping the open vault's vectors (none without the embedding model).
+    vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
 
 impl ChatWorker {
@@ -67,6 +70,8 @@ impl ChatWorker {
         } else {
             std::env::current_exe().ok().and_then(|exe| knotes_session::embedder_files(&exe)).map(|(helper, model)| Arc::new(ProcessEmbedder::new(helper, model)))
         };
+        let vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>> = Arc::default();
+        let wake = Arc::clone(&vectors_wake);
         std::thread::Builder::new()
             .name("knotes-chat".into())
             .spawn(move || {
@@ -78,8 +83,13 @@ impl ChatWorker {
                         Job::Vault(root, index_dir) => {
                             vectors_stop.store(true, Ordering::Relaxed);
                             vectors_stop = Arc::new(AtomicBool::new(false));
+                            // The last vault's thread ends with its sender dropped here.
+                            let mut wake = wake.lock().unwrap_or_else(|e| e.into_inner());
+                            *wake = None;
                             if let Some(embedder) = &embedder {
-                                keep_vectors(index_dir.clone(), Arc::clone(embedder), Arc::clone(&vectors_stop));
+                                let (sender, receiver) = mpsc::channel();
+                                *wake = Some(sender);
+                                keep_vectors(index_dir.clone(), Arc::clone(embedder) as Arc<dyn Embedder>, receiver, VECTORS_QUIET, Arc::clone(&vectors_stop));
                             }
                             vault = Some((root, index_dir));
                             tools = None;
@@ -111,7 +121,14 @@ impl ChatWorker {
                 }
             })
             .expect("the chat's thread starts");
-        Self { jobs }
+        Self { jobs, vectors_wake }
+    }
+
+    /// The vault's index has changed: its vectors are to be brought up to it.
+    pub fn index_changed(&self) {
+        if let Some(wake) = self.vectors_wake.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = wake.send(());
+        }
     }
 
     pub fn set_vault(&self, root: PathBuf, index_dir: PathBuf) {
@@ -124,35 +141,41 @@ impl ChatWorker {
 }
 
 /// Keeps the vectors of the vault indexed in `dir` up to its index, on a thread of its own: at
-/// once, then every `VECTORS_EVERY`, until `stop` (another vault opened).
-fn keep_vectors(dir: PathBuf, embedder: Arc<ProcessEmbedder>, stop: Arc<AtomicBool>) {
+/// once, then each time it is woken (the index changed) and the index has stayed unchanged for
+/// `quiet`, or when a document left for being written settles. Asleep otherwise: nothing is
+/// looked at while nothing changes. Ends when its waker is dropped (another vault opened).
+fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<()>, quiet: Duration, stop: Arc<AtomicBool>) -> Option<std::thread::JoinHandle<()>> {
     let spawned = std::thread::Builder::new().name("knotes-vectors".into()).spawn(move || {
         let paced = Paced(embedder);
         let mut told = false;
-        while !stop.load(Ordering::Relaxed) {
+        loop {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
-            let result = SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, now, &stop));
-            if let Err(e) = result
-                && !told
-            {
-                eprintln!("knotes: search by meaning: {e}");
-                told = true;
-            }
-            for _ in 0..VECTORS_EVERY.as_secs() {
-                if stop.load(Ordering::Relaxed) {
-                    return;
+            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, now, &stop)) {
+                Ok(updated) => updated.next,
+                Err(e) => {
+                    if !told {
+                        eprintln!("knotes: search by meaning: {e}");
+                        told = true;
+                    }
+                    None
                 }
-                std::thread::sleep(Duration::from_secs(1));
+            };
+            let woke = match next {
+                Some(wait) => !matches!(wake.recv_timeout(wait), Err(mpsc::RecvTimeoutError::Disconnected)),
+                None => wake.recv().is_ok(),
+            };
+            // Then a quiet moment, the run of changes over.
+            while woke && wake.recv_timeout(quiet).is_ok() {}
+            if !woke || stop.load(Ordering::Relaxed) {
+                return;
             }
         }
     });
-    if let Err(e) = spawned {
-        eprintln!("knotes: cannot start keeping the vectors: {e}");
-    }
+    spawned.map_err(|e| eprintln!("knotes: cannot start keeping the vectors: {e}")).ok()
 }
 
 /// The embedder, pausing after each batch.
-struct Paced(Arc<ProcessEmbedder>);
+struct Paced(Arc<dyn Embedder>);
 
 impl Embedder for Paced {
     fn embed(&self, passages: &[Passage]) -> Result<Vec<Vector>, EmbedError> {
@@ -197,6 +220,58 @@ impl Transport for ScriptTransport {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant};
+
+    use knotes_core::{FileKind, IndexChange, IndexWriter, NoteParser, VaultFile};
+    use knotes_embed::{DIMS, EmbedError, Embedder, Passage, Vector};
+    use knotes_index::SqliteIndex;
+
+    /// Counts the passages it is given.
+    #[derive(Default)]
+    struct Counting(AtomicUsize);
+
+    impl Embedder for Counting {
+        fn embed(&self, passages: &[Passage]) -> Result<Vec<Vector>, EmbedError> {
+            self.0.fetch_add(passages.len(), Ordering::Relaxed);
+            Ok(vec![[1; DIMS]; passages.len()])
+        }
+    }
+
+    fn add(index: &mut SqliteIndex, path: &str, text: &str) {
+        let parsed = knotes_md::MarkdownParser::new().parse(text);
+        let file = VaultFile { path: path.into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 };
+        index.apply(&[IndexChange::Upsert { file: &file, note: Some((text, &parsed)) }]).unwrap();
+    }
+
+    fn wait_for(done: impl Fn() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < Duration::from_secs(5), "timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn the_vectors_follow_the_index_when_woken_and_rest_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = SqliteIndex::open(dir.path()).unwrap();
+        add(&mut index, "a.md", "First note.");
+        let embedder = Arc::new(Counting::default());
+        let (wake, woken) = mpsc::channel();
+        let thread = super::keep_vectors(dir.path().to_path_buf(), Arc::clone(&embedder) as Arc<dyn Embedder>, woken, Duration::from_millis(50), Arc::new(AtomicBool::new(false))).unwrap();
+        let embedded = || embedder.0.load(Ordering::Relaxed);
+        wait_for(|| embedded() == 1);
+        add(&mut index, "b.md", "Second note.");
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(embedded(), 1, "not woken: nothing looked at");
+        wake.send(()).unwrap();
+        wait_for(|| embedded() == 2);
+        drop(wake);
+        thread.join().unwrap();
+    }
+
     #[test]
     fn the_local_day_names_its_weekday_date_and_offset() {
         let today = super::local_today();

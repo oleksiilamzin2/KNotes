@@ -107,6 +107,20 @@ Checked on 2026-11-14:
   opening; through the MCP server "скільки світла спожили в жовтні" finds the meter readings,
   "чим годувати кота" the cat's note, "vehicle oil change" the car's service log.
 
+## Built (2026-11-14): when the vectors are made
+
+- Documents gone are found through a set: comparing each stored path with every indexed one
+  was 2.5 billion comparisons a pass on 50 000 notes.
+- Only blocks whose text changed go to the model: the store keeps, with each block's place, a
+  hash (FNV-1a) of the text it was embedded as, its title included, and a changed document's
+  unchanged blocks keep their vectors. Editing one paragraph of a long note embeds one block.
+- A document changed within the last minute (`SETTLE`) is being written (saved every two
+  seconds): it waits, and the pass says when the first such document settles.
+- No polling: the window tells the chat worker each time the index changes (each snapshot the
+  session sends), and the thread keeping the vectors sleeps until then, or until a document
+  left for being written settles, and lets a run of changes end (5 s without one) before a
+  pass. While nothing changes it never wakes. Another vault drops its waker, which ends it.
+
 Still to do: a set of 40–60 queries by meaning before calling the quality settled; the M1's
 numbers, and whether hours of first indexing on a large vault keep the window smooth; heading
 paths; the Gemma Terms of Use notice in the app.

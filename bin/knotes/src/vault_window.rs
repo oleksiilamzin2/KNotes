@@ -992,7 +992,10 @@ impl VaultWindow {
 
     pub fn apply(&self, event: Event) {
         match event {
-            Event::Snapshot(snapshot) => self.show(&snapshot),
+            Event::Snapshot(snapshot) => {
+                self.show(&snapshot);
+                self.chat.index_changed();
+            }
             Event::Error(e) => eprintln!("knotes: indexing stopped: {e}"),
         }
     }
