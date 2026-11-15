@@ -39,7 +39,7 @@ pub use relink_plan::{Relinks, plan_relinks};
 pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListOption, ListSettings, SortOrder, build_note_list, days_from_civil, list_scope, title_of};
 pub use outline::{Outline, OutlineEntry, OutlinePlace};
 pub use panel_mode::PanelMode;
-pub use sidebar::{Sidebar, SidebarItem, SidebarMode};
+pub use sidebar::{RestPart, Sidebar, SidebarItem, SidebarMode};
 pub use space_folders::SpaceFolders;
 pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};

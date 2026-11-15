@@ -11,7 +11,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList,
+    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -80,6 +80,8 @@ struct State {
     spaces: Arc<Spaces>,
     space: Option<String>,
     space_folders: Option<SpaceFolders>,
+    /// The tags the sidebar lists under «Решта бази» (none there in the space).
+    rest_tags: HashSet<String>,
 }
 
 impl State {
@@ -92,13 +94,6 @@ impl State {
         self.space_folders = self.space.as_ref().map(|id| SpaceFolders::new(&self.folders, &self.spaces, id));
     }
 
-    /// The folder tree the sidebar shows: the space's, or the whole vault's.
-    fn shown_folders(&self) -> Arc<FolderNode> {
-        match &self.space_folders {
-            Some(space) => Arc::new(self.folders.split(space).0),
-            None => Arc::clone(&self.folders),
-        }
-    }
 }
 
 /// Autosave runs after this long without edits (ADR 0011).
@@ -213,7 +208,7 @@ impl Drop for VaultWindow {
 
 impl VaultWindow {
     pub fn new(mtm: MainThreadMarker) -> Rc<Self> {
-        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0, &|_| false);
+        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0, &|_| false, None);
         let sidebar = SidebarSource::new(mtm, empty);
         let (scroll, outline) = sidebar_view::outline(mtm, &sidebar);
         // The folder tree above the space switcher (ADR 0030).
@@ -317,6 +312,7 @@ impl VaultWindow {
             spaces: Arc::new(Spaces::default()),
             space: None,
             space_folders: None,
+            rest_tags: HashSet::new(),
         };
         let this = Rc::new(Self {
             window,
@@ -958,21 +954,32 @@ impl VaultWindow {
                 return;
             }
             drop(state);
-            // In a space: its folders, the inbox if it is one of them, its untagged notes.
-            let untagged = {
-                let mut state = self.state.borrow_mut();
-                match state.space_folders.clone() {
-                    Some(space) => self.untagged_notes(&mut state).iter().filter(|p| space.holds(p)).count(),
-                    None => state.untagged,
-                }
+            // In a space: its folders and tags (counted there), the inbox if it is one of them,
+            // its untagged notes; then the rest of the vault under a row of its own (ADR 0030).
+            let mut state = self.state.borrow_mut();
+            let space = state.space_folders.clone();
+            let untagged = match &space {
+                Some(space) => self.untagged_notes(&mut state).iter().filter(|p| space.holds(p)).count(),
+                None => state.untagged,
             };
+            let split = space.as_ref().map(|space| {
+                let (folders, rest_folders) = state.folders.split(space);
+                self.ensure_reader(&mut state);
+                let tagged = state.reader.as_ref().and_then(|r| r.tagged_notes().ok()).unwrap_or_default();
+                let (tags, rest_tags) = split_tags(&tagged, &|path| space.holds(path));
+                (folders, tags, rest_folders, rest_tags)
+            });
+            state.rest_tags = split.as_ref().map(|(_, _, _, rest)| tag_names(rest)).unwrap_or_default();
+            drop(state);
             let state = self.state.borrow();
-            let folders = state.shown_folders();
+            let (folders, tags) = match &split {
+                Some((folders, tags, _, _)) => (folders, tags.as_slice()),
+                None => (&*state.folders, state.tags.as_slice()),
+            };
+            let rest = split.as_ref().map(|(_, _, rest_folders, rest_tags)| RestPart { folders: rest_folders, tags: rest_tags, notes: rest_folders.notes });
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
             let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
-            Sidebar::new(&folders, &state.tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| {
-                resolve_list_settings(path, &state.rules).include_subfolders
-            })
+            Sidebar::new(folders, tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| resolve_list_settings(path, &state.rules).include_subfolders, rest)
         };
         self.sidebar.set_model(model);
         self.outline.reloadData();
@@ -2485,6 +2492,7 @@ impl VaultWindow {
             SidebarItem::Folder(path) => (path.rsplit('/').next().unwrap_or(path).to_owned(), None),
             SidebarItem::Tag(tag) => (format!("#{tag}"), Some(self.notes_with_tag(&mut state, tag))),
             SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some(self.untagged_notes(&mut state))),
+            SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), None),
             _ => (strings::ALL_NOTES.to_owned(), None),
         };
         let filter = match (&selection, &listed) {
@@ -2505,8 +2513,15 @@ impl VaultWindow {
         // Search results replace the list; it is built only without them (50k notes: ~2 ms).
         // What a search here covers: the list's notes and its PDFs (ADR 0022).
         let searching = !state.search.trim().is_empty();
-        // In a space: its notes, then the rest of the list's under «Решта бази» (ADR 0030).
-        let space = state.space_folders.as_ref().map(SpaceList::Space);
+        // In a space: its notes, then the rest of the list's under «Решта бази»; a row of the
+        // sidebar's «Решта бази» lists the notes outside the space (ADR 0030).
+        let outside = match &selection {
+            SidebarItem::Rest => true,
+            SidebarItem::Folder(path) => state.space_folders.as_ref().is_some_and(|space| !space.holds_folder(path)),
+            SidebarItem::Tag(tag) => state.rest_tags.contains(tag),
+            _ => false,
+        };
+        let space = state.space_folders.as_ref().map(|space| if outside { SpaceList::Rest(space) } else { SpaceList::Space(space) });
         *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings, space));
         let results = self.search_results.borrow();
         let items = match results.as_ref().filter(|_| searching) {
@@ -2830,10 +2845,13 @@ impl VaultWindow {
         let state = self.state.borrow();
         match item {
             // The inbox row shows before its folder exists.
+            // Every folder shows, in a space or under «Решта бази» (ADR 0030); the inbox row
+            // before its folder exists, but not outside the space.
             SidebarItem::Folder(path) => {
                 let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
-                folder_exists(&state.shown_folders(), path) || (*path == inbox && state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)))
+                folder_exists(&state.folders, path) || (*path == inbox && state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)))
             }
+            SidebarItem::Rest => state.space.is_some(),
             SidebarItem::Tag(tag) => tag_exists(&state.tags, tag),
             _ => true,
         }
@@ -2996,6 +3014,17 @@ fn session_settings_key(item: &SidebarItem) -> Option<String> {
 
 fn folder_exists(node: &FolderNode, path: &str) -> bool {
     node.path == path || node.children.iter().any(|c| folder_exists(c, path))
+}
+
+/// Every tag of `nodes` and below them.
+fn tag_names(nodes: &[TagNode]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let mut stack: Vec<&TagNode> = nodes.iter().collect();
+    while let Some(node) = stack.pop() {
+        names.insert(node.tag.clone());
+        stack.extend(node.children.iter());
+    }
+    names
 }
 
 fn tag_exists(nodes: &[TagNode], tag: &str) -> bool {

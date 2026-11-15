@@ -12,9 +12,10 @@ of their space. Obsidian's "Workspaces" are saved window layouts, another thing;
 these «Простори».
 
 The owner chose (2026-11-15): a folder belongs to one space at most (its subfolders with it);
-notes in no space show only in «Уся база»; what search finds outside the space comes as a
-separate group, «Решта бази»; the mark shows on files of other spaces only (on all in «Уся
-база»).
+what search finds outside the space comes as a separate group, «Решта бази»; the mark shows on
+files of other spaces only (on all in «Уся база»). Notes in no space were to show only in «Уся
+база»; trying it, the owner asked for the rest of the vault below the space's, in the sidebar
+and in the lists alike.
 
 ## Decision
 
@@ -34,10 +35,14 @@ separate group, «Решта бази»; the mark shows on files of other spaces
   names decomposed).
 - **The current space is the window's**, kept beside the index (like the tabs, ADR 0024), not in
   the vault: two windows, or two Macs, may be in different spaces.
-- **What a space changes** (first step): the folder tree shows its folders; every list (all
-  notes, a folder, a tag, untagged) keeps its documents; list search finds in it first and
-  gives the rest of the vault under a «Решта бази» header; a new note goes to the space's first
-  folder unless a folder is selected. The chat is told the current space each turn (a developer
+- **What a space changes** (first step): the sidebar lists its folders and its tags (counted in
+  it), then a «Решта бази» row with the rest of the vault's below it, each folder in one part
+  only (one of a part inside the other's hangs from its nearest ancestor in its own part, or at
+  the top named by its path), the tags with no note in the space there; that row, and its
+  folders and tags, list the notes outside the space. Every other list (all notes, a folder, a
+  tag, untagged) gives the space's notes, then the rest of the list's under a «Решта бази»
+  header (no date headers there), and list search its finds the same way; a new note goes to
+  the space's first folder unless a folder is selected. The chat is told the current space each turn (a developer
   message, as the open document is: the cached start of the conversation stays) and its search
   gives the space's documents first, each result naming its space; `search` and `list_notes`
   take a `space` argument. The MCP server knows no current space: it searches the whole vault,

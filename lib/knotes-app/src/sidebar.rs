@@ -15,6 +15,8 @@ pub enum SidebarItem {
     Tag(String),
     /// A document open as a tab (ADR 0024), by its vault path.
     Tab(String),
+    /// The rest of the vault, in a space (ADR 0030): its notes, and its folders or tags below.
+    Rest,
 }
 
 impl SidebarItem {
@@ -28,6 +30,7 @@ impl SidebarItem {
             Self::Folder(path) => format!("f:{path}"),
             Self::Tag(tag) => format!("t:{tag}"),
             Self::Tab(path) => format!("tab:{path}"),
+            Self::Rest => "rest".into(),
         }
     }
 
@@ -36,6 +39,7 @@ impl SidebarItem {
             "all" => Some(Self::AllNotes),
             "untagged" => Some(Self::Untagged),
             "gap" => Some(Self::Gap),
+            "rest" => Some(Self::Rest),
             _ => match key.split_once(':')? {
                 ("f", path) => Some(Self::Folder(path.into())),
                 ("t", tag) => Some(Self::Tag(tag.into())),
@@ -74,6 +78,14 @@ impl SidebarMode {
     }
 }
 
+/// What the sidebar lists of the rest of the vault in a space (ADR 0030): its folders and
+/// tags (as the space's split gives them) and how many notes it has.
+pub struct RestPart<'a> {
+    pub folders: &'a FolderNode,
+    pub tags: &'a [TagNode],
+    pub notes: usize,
+}
+
 struct Entry {
     name: String,
     count: Option<usize>,
@@ -95,7 +107,8 @@ impl Sidebar {
     /// any tag.
     /// `with_subfolders` says whether a folder's list shows its subfolders' notes: its count
     /// counts what its list shows.
-    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode, inbox: Option<&str>, untagged: usize, with_subfolders: &dyn Fn(&str) -> bool) -> Self {
+    /// `rest`: in a space, the rest of the vault, under a row of its own after the space's tree.
+    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode, inbox: Option<&str>, untagged: usize, with_subfolders: &dyn Fn(&str) -> bool, rest: Option<RestPart>) -> Self {
         let mut entries = HashMap::new();
         let fixed = |count| Entry { name: String::new(), count, children: Vec::new() };
         entries.insert(SidebarItem::AllNotes, fixed(Some(folders.notes)));
@@ -120,6 +133,14 @@ impl Sidebar {
             }
             SidebarMode::Tags => top.extend(tags.iter().map(|t| add_tag(t, &mut entries))),
             SidebarMode::Tabs => return Self::tabs(&[]),
+        }
+        if let Some(rest) = rest {
+            let children = match mode {
+                SidebarMode::Tags => rest.tags.iter().map(|t| add_tag(t, &mut entries)).collect(),
+                _ => rest.folders.children.iter().filter(|f| f.path != skip).map(|f| add_folder(f, &mut entries, skip, with_subfolders)).collect(),
+            };
+            entries.insert(SidebarItem::Rest, Entry { name: String::new(), count: Some(rest.notes), children });
+            top.push(SidebarItem::Rest);
         }
         Self { top, entries, inbox: inbox_item }
     }

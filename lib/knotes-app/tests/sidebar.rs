@@ -7,7 +7,7 @@ fn sidebar() -> Sidebar {
 fn sidebar_in(mode: SidebarMode) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md"]);
     let tags = tag_tree(&[("project".to_owned(), 2), ("project/radar".to_owned(), 1), ("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags, mode, None, 0, &|_| true)
+    Sidebar::new(&folders, &tags, mode, None, 0, &|_| true, None)
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn items_round_trip_through_their_keys() {
 fn with_inbox(mode: SidebarMode, inbox: &str) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md", "Inbox/Old/w.md"]);
     let tags = tag_tree(&[("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags, mode, Some(inbox), 3, &|_| true)
+    Sidebar::new(&folders, &tags, mode, Some(inbox), 3, &|_| true, None)
 }
 
 #[test]
@@ -76,11 +76,11 @@ fn the_inbox_shows_before_its_folder_exists_and_may_be_nested() {
 #[test]
 fn a_folder_counts_the_notes_its_list_shows() {
     let folders = folder_tree(["Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md", "Inbox/Old/w.md"]);
-    let own = Sidebar::new(&folders, &[], SidebarMode::Folders, Some("Inbox"), 0, &|_| false);
+    let own = Sidebar::new(&folders, &[], SidebarMode::Folders, Some("Inbox"), 0, &|_| false, None);
     assert_eq!(own.count(&SidebarItem::Folder("Projects".into())), Some(1), "its own notes, not its subfolders'");
     assert_eq!(own.count(&SidebarItem::Folder("Inbox".into())), Some(1));
     assert_eq!(own.count(&SidebarItem::AllNotes), Some(4));
-    let mixed = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|path| path == "Projects");
+    let mixed = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|path| path == "Projects", None);
     assert_eq!(mixed.count(&SidebarItem::Folder("Projects".into())), Some(2), "a folder that shows its subfolders counts them");
 }
 
@@ -93,4 +93,24 @@ fn the_tabs_mode_lists_a_row_per_tab_with_its_name() {
     assert_eq!((sidebar.name(&rows[1]), sidebar.count(&rows[1])), ("doc", None));
     assert_eq!(SidebarItem::from_key(&rows[1].key()), Some(rows[1].clone()));
     assert_eq!(SidebarMode::from_key(SidebarMode::Tabs.key()), Some(SidebarMode::Tabs));
+}
+
+#[test]
+fn in_a_space_the_rest_of_the_vault_hangs_below_a_row_of_its_own() {
+    use knotes_app::RestPart;
+    let folders = folder_tree(["Work/a.md"]);
+    let rest_folders = folder_tree(["Home/b.md", "Home/Kitchen/c.md", "top.md"]);
+    let tags = tag_tree(&[("radar".to_owned(), 1)]);
+    let rest_tags = tag_tree(&[("cooking".to_owned(), 2)]);
+    let rest = RestPart { folders: &rest_folders, tags: &rest_tags, notes: 3 };
+    let s = Sidebar::new(&folders, &tags, SidebarMode::Folders, None, 0, &|_| true, Some(rest));
+    assert_eq!(s.children(None)[3..], [SidebarItem::Folder("Work".into()), SidebarItem::Rest], "after the space's tree");
+    assert_eq!(s.count(&SidebarItem::Rest), Some(3));
+    assert_eq!(s.children(Some(&SidebarItem::Rest)), [SidebarItem::Folder("Home".into())], "its folders below it");
+    assert_eq!(s.children(Some(&SidebarItem::Folder("Home".into()))), [SidebarItem::Folder("Home/Kitchen".into())]);
+    let rest = RestPart { folders: &rest_folders, tags: &rest_tags, notes: 3 };
+    let t = Sidebar::new(&folders, &tags, SidebarMode::Tags, None, 0, &|_| true, Some(rest));
+    assert_eq!(t.children(None)[3..], [SidebarItem::Tag("radar".into()), SidebarItem::Rest]);
+    assert_eq!(t.children(Some(&SidebarItem::Rest)), [SidebarItem::Tag("cooking".into())]);
+    assert_eq!(SidebarItem::from_key(&SidebarItem::Rest.key()), Some(SidebarItem::Rest));
 }
