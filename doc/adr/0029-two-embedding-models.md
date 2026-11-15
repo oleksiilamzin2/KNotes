@@ -105,6 +105,16 @@ git until it is released, both models in the bundle.
   notes a note with e5, 2.7 with EmbeddingGemma 2, by reading mostly about the same thing (no
   benchmark measures it yet).
 
+- **The chat measured with it** (2026-11-15, GPT-5.6 Terra at «Довгі роздуми», e5): the 30
+  questions of ADR 0027 answered as on 2026-11-14 (the same three partly: a disagreement between
+  a note and a contract, a missing passport, one medicine of three), in 90 tool calls instead of
+  111 and 389 s instead of 466 (the to-dos 28 → 13 calls), 14 % more tokens (the effort was not
+  recorded before, so the two cannot be told apart). Eleven new questions, all answered: six in
+  other words than the notes' (one in English), a trap whose answer is "no" (no comprehensive
+  car insurance) and four the vault has no answer to, none made up. Those four cost the most:
+  5, 9, 22 and 26 tool calls (up to 26 000 tokens and 47 s), the model searching on before
+  saying the vault lacks it.
+
 ## Consequences
 
 - The bundle is about 945 MB (debug), the two models 913 MB of it.
