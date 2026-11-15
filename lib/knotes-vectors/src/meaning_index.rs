@@ -5,6 +5,9 @@ use knotes_embed::{Embedder, Passage};
 
 use crate::{Snapshot, VectorStore};
 
+/// Blocks of one document search by meaning gives at most, so one long note does not fill the page.
+const PER_DOCUMENT: usize = 2;
+
 /// Search by meaning: the query embedded, its nearest blocks found in the snapshot, which is
 /// read again from the store (when there is one) once the store has changed: checked at each
 /// search (SQLite's `data_version`, no reading), so vectors written just before are found.
@@ -53,6 +56,6 @@ impl MeaningSearch for MeaningIndex {
             return Ok(Vec::new());
         }
         let vector = self.embedder.embed(&[Passage::Query(query.to_string())])?.remove(0);
-        Ok(snapshot.nearest(&vector, limit))
+        Ok(snapshot.nearest(&vector, limit, PER_DOCUMENT))
     }
 }

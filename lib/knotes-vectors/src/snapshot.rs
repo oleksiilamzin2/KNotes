@@ -23,16 +23,37 @@ impl Snapshot {
         self.blocks.is_empty()
     }
 
-    /// The `limit` blocks nearest `query`, nearest first, each scored minus its similarity.
-    pub fn nearest(&self, query: &Vector, limit: usize) -> Vec<BlockHit> {
+    /// The `limit` blocks nearest `query`, no more than `per_document` of one document, nearest
+    /// first, each scored minus its similarity.
+    pub fn nearest(&self, query: &Vector, limit: usize, per_document: usize) -> Vec<BlockHit> {
         let mut scored: Vec<(i32, usize)> = self.vectors.iter().enumerate().map(|(i, v)| (similarity(query, v), i)).collect();
-        let limit = limit.min(scored.len());
-        if limit == 0 {
+        // Enough candidates that the cap per document still leaves `limit`, as a rule.
+        let candidates = (limit * 8).min(scored.len());
+        if candidates == 0 || limit == 0 {
             return Vec::new();
         }
-        scored.select_nth_unstable_by(limit - 1, |a, b| b.0.cmp(&a.0));
-        scored.truncate(limit);
+        scored.select_nth_unstable_by(candidates - 1, |a, b| b.0.cmp(&a.0));
+        scored.truncate(candidates);
         scored.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        scored.into_iter().map(|(s, i)| BlockHit { score: -f64::from(s), ..self.blocks[i].clone() }).collect()
+        let mut taken: Vec<(&str, usize)> = Vec::new();
+        let mut found = Vec::with_capacity(limit);
+        for (s, i) in scored {
+            let path = self.blocks[i].path.as_str();
+            let count = match taken.iter_mut().find(|(p, _)| *p == path) {
+                Some((_, n)) => n,
+                None => {
+                    taken.push((path, 0));
+                    &mut taken.last_mut().expect("just pushed").1
+                }
+            };
+            if *count < per_document {
+                *count += 1;
+                found.push(BlockHit { score: -f64::from(s), ..self.blocks[i].clone() });
+                if found.len() == limit {
+                    break;
+                }
+            }
+        }
+        found
     }
 }

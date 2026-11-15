@@ -59,10 +59,26 @@ fn the_nearest_blocks_come_first() {
         snapshot.push(hit(&format!("{i}.md"), 0, 0, 1, None), v);
     }
     let query = Words.embed(&[Passage::Query("anode of the boiler".into())]).unwrap()[0];
-    let near: Vec<String> = snapshot.nearest(&query, 2).into_iter().map(|h| h.path).collect();
+    let near: Vec<String> = snapshot.nearest(&query, 2, 2).into_iter().map(|h| h.path).collect();
     assert_eq!(near, ["0.md", "2.md"]);
-    assert!(snapshot.nearest(&query, 3)[0].score < snapshot.nearest(&query, 3)[2].score, "lower the nearer");
+    assert!(snapshot.nearest(&query, 3, 3)[0].score < snapshot.nearest(&query, 3, 3)[2].score, "lower the nearer");
     assert_eq!(snapshot.len(), 3);
+}
+
+#[test]
+fn no_more_than_so_many_blocks_of_one_document_are_found() {
+    let mut snapshot = Snapshot::default();
+    let near = |i: usize| {
+        let mut v = vec![0.0f32; DIMS];
+        (v[0], v[1 + i]) = (1.0, 0.1 * i as f32);
+        quantize(&v)
+    };
+    for i in 0..4 {
+        snapshot.push(hit("Long.md", i as u32, 0, 1, None), near(i));
+    }
+    snapshot.push(hit("Other.md", 0, 0, 1, None), near(5));
+    let found: Vec<(String, u32)> = snapshot.nearest(&near(0), 3, 2).into_iter().map(|h| (h.path, h.ord)).collect();
+    assert_eq!(found, [("Long.md".to_string(), 0), ("Long.md".to_string(), 1), ("Other.md".to_string(), 0)], "the long note's two nearest, then the next note");
 }
 
 #[test]
