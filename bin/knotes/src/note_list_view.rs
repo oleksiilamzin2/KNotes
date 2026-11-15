@@ -5,13 +5,14 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use knotes_app::{Clock, DateGroup, ListItem, TimeStyle, days_from_civil, time_style, title_of};
+use knotes_app::{Clock, DateGroup, ListItem, TimeStyle, days_from_civil, space_mark, time_style, title_of};
+use knotes_spaces::Spaces;
 use knotes_core::NoteRow;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSFont, NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuItem,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuItem,
     NSScrollView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
     NSPasteboardItem, NSPasteboardWriting, NSTextFieldDelegate, NSTextView, NSUserInterfaceItemIdentification, NSView,
 };
@@ -72,6 +73,8 @@ pub struct Ivars {
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
     rows: RefCell<Arc<Vec<NoteRow>>>,
     items: RefCell<Vec<ListItem>>,
+    /// The vault's spaces and the window's, for the marks of other spaces' notes (ADR 0030).
+    spaces: RefCell<(Arc<Spaces>, Option<String>)>,
     clock: Cell<Clock>,
     formatters: Formatters,
 }
@@ -187,6 +190,7 @@ impl NoteListSource {
             renaming: RefCell::new(None),
             rows: RefCell::new(Arc::new(Vec::new())),
             items: RefCell::new(Vec::new()),
+            spaces: RefCell::new((Arc::new(Spaces::default()), None)),
             clock: Cell::new(now()),
             formatters: Formatters::new(),
         };
@@ -198,6 +202,29 @@ impl NoteListSource {
         *self.ivars().rows.borrow_mut() = rows;
         *self.ivars().items.borrow_mut() = items;
         self.ivars().clock.set(now());
+    }
+
+    /// The spaces whose marks the rows show, and the window's (whose own go unmarked).
+    pub fn set_spaces(&self, spaces: Arc<Spaces>, current: Option<String>) {
+        *self.ivars().spaces.borrow_mut() = (spaces, current);
+    }
+
+    /// The marked notes of the list, for the probe: "b • Дім | c • Робота".
+    pub fn probe_marks(&self) -> String {
+        let (spaces, current) = self.ivars().spaces.borrow().clone();
+        let rows = self.ivars().rows.borrow();
+        let marked: Vec<String> = self
+            .ivars()
+            .items
+            .borrow()
+            .iter()
+            .filter_map(|item| item.row())
+            .filter_map(|i| {
+                let path = &rows.get(i as usize)?.path;
+                space_mark(&spaces, current.as_deref(), path).map(|space| format!("{} • {}", title_of(path), space.name))
+            })
+            .collect();
+        marked.join(" | ")
     }
 
     pub fn on_select(&self, callback: impl Fn(String) + 'static) {
@@ -318,6 +345,15 @@ impl NoteListSource {
                     _ => row.snippet.as_str(),
                 };
                 set_field(&cell, SNIPPET_ID, snippet);
+                // The mark of the note's space, when the window is not in it (ADR 0030).
+                if let Some(dot) = cell.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == DOT_ID)).and_then(|v| v.downcast::<NSImageView>().ok()) {
+                    let (spaces, current) = &*self.ivars().spaces.borrow();
+                    let mark = space_mark(spaces, current.as_deref(), &row.path);
+                    if let Some(space) = mark {
+                        dot.setImage(crate::space_ui::dot(space.color, 9.0, &space.name).as_deref());
+                    }
+                    dot.setHidden(mark.is_none());
+                }
                 Some(Retained::into_super(cell))
             }
         }
@@ -397,6 +433,8 @@ pub const NOTE_PATH_TYPE: &str = "app.knotes.note-path";
 pub const TITLE_ID: &str = "title";
 pub const TIME_ID: &str = "time";
 pub const SNIPPET_ID: &str = "snippet";
+/// The dot of another space beside a note's title (ADR 0030).
+const DOT_ID: &str = "space-dot";
 
 fn header_cell(table: &NSTableView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
     reuse(table, "HeaderCell").unwrap_or_else(|| {
@@ -425,13 +463,24 @@ fn note_cell(table: &NSTableView, mtm: MainThreadMarker) -> Retained<NSTableCell
         snippet.setContentCompressionResistancePriority_forOrientation(200.0, NSLayoutConstraintOrientation::Horizontal);
         time.setContentCompressionResistancePriority_forOrientation(800.0, NSLayoutConstraintOrientation::Horizontal);
         title.setContentCompressionResistancePriority_forOrientation(200.0, NSLayoutConstraintOrientation::Horizontal);
+        let dot = NSImageView::new(mtm);
+        dot.setIdentifier(Some(&NSString::from_str(DOT_ID)));
+        dot.setTranslatesAutoresizingMaskIntoConstraints(false);
+        dot.setHidden(true);
+        dot.setContentCompressionResistancePriority_forOrientation(900.0, NSLayoutConstraintOrientation::Horizontal);
         for v in [&title, &time, &snippet] {
             cell.addSubview(v);
         }
+        cell.addSubview(&dot);
         activate(&[
             title.topAnchor().constraintEqualToAnchor_constant(&cell.topAnchor(), 7.0),
             title.leadingAnchor().constraintEqualToAnchor_constant(&cell.leadingAnchor(), 8.0),
-            title.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&cell.trailingAnchor(), -8.0),
+            // The space's dot right after the title, which gives way to it.
+            dot.leadingAnchor().constraintEqualToAnchor_constant(&title.trailingAnchor(), 5.0),
+            dot.centerYAnchor().constraintEqualToAnchor(&title.centerYAnchor()),
+            dot.widthAnchor().constraintEqualToConstant(9.0),
+            dot.heightAnchor().constraintEqualToConstant(9.0),
+            dot.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&cell.trailingAnchor(), -8.0),
             time.topAnchor().constraintEqualToAnchor_constant(&title.bottomAnchor(), 3.0),
             time.leadingAnchor().constraintEqualToAnchor(&title.leadingAnchor()),
             snippet.firstBaselineAnchor().constraintEqualToAnchor(&time.firstBaselineAnchor()),

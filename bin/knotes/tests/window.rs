@@ -2982,3 +2982,13 @@ fn a_folder_s_menu_puts_it_in_a_space_or_a_new_one_writing_only_what_differs_fro
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Home=none")]);
     assert_eq!(rules("Home"), Some(serde_json::json!({})), "a top folder in none: the root gives none already");
 }
+
+#[test]
+fn files_in_spaces_show_their_space_s_dot_in_the_whole_vault() {
+    let vault = spaced_vault();
+    let out = probe_with(&[vault.path()], None);
+    let marks = out.lines().find_map(|l| l.strip_prefix("list-marks: ")).unwrap_or_else(|| panic!("{out}"));
+    let mut marks: Vec<&str> = marks.split(" | ").collect();
+    marks.sort();
+    assert_eq!(marks, ["a • Робота", "b • Робота", "c • Дім"], "top.md, in no space, has none");
+}

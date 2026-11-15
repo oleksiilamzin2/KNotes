@@ -1524,6 +1524,12 @@ impl VaultWindow {
     fn show_spaces(&self) {
         let state = self.state.borrow();
         self.toolbar_delegate.set_spaces(state.spaces.list(), state.space.as_deref());
+        self.list.set_spaces(Arc::clone(&state.spaces), state.space.clone());
+    }
+
+    /// The list's marked notes, for the probe.
+    pub fn probe_list_marks(&self) -> String {
+        self.list.probe_marks()
     }
 
     /// The switcher's menu, for the probe.
