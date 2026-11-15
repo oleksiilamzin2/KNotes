@@ -12,7 +12,7 @@ use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
 use knotes_embed::ProcessEmbedder;
 use knotes_session::{AppSettings, app_data_dir, embedder_files, index_dir};
-use knotes_vectors::{MeaningIndex, VectorStore};
+use knotes_vectors::{MeaningIndex, MeaningModel, VectorStore};
 use knotes_tools::VaultTools;
 use knotes_vault::FsVault;
 
@@ -33,7 +33,8 @@ fn main() -> ExitCode {
     };
     let mut tools = VaultTools::new(index, FsVault::new(&vault), PdfTexts::new(&vault));
     // Search by meaning over the vectors Knotes keeps (ADR 0028), with a helper of its own.
-    if let (Some((helper, model)), Ok(store)) = (std::env::current_exe().ok().and_then(|exe| embedder_files(&exe)), VectorStore::open_reader(&index_dir(&app_data, &vault))) {
+    let model = MeaningModel::DEFAULT;
+    if let (Some((helper, model)), Ok(store)) = (std::env::current_exe().ok().and_then(|exe| embedder_files(&exe, model.file())), VectorStore::open_reader(&index_dir(&app_data, &vault), &model.store_file())) {
         tools = tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::new(ProcessEmbedder::new(helper, model)), store)));
     }
     let server = McpServer::new(tools);

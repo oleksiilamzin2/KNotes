@@ -11,6 +11,6 @@ mod vector;
 
 pub use embed_error::EmbedError;
 pub use embedder::Embedder;
-pub use passage::Passage;
+pub use passage::{Passage, PromptStyle};
 pub use process_embedder::ProcessEmbedder;
 pub use vector::{DIMS, Vector, quantize, similarity};

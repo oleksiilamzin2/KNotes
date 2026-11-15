@@ -13,19 +13,16 @@ pub fn index_dir(app_data: &Path, vault: &Path) -> PathBuf {
     app_data.join("vaults").join(format!("{:016x}", fnv1a(canonical.as_os_str().as_encoded_bytes())))
 }
 
-/// The embedding model's file (ADR 0028): in the bundle's Resources, or `models/` in the
-/// repository while developing (`scripts/setup.sh` fetches it).
-pub const EMBEDDING_MODEL_FILE: &str = "embeddinggemma-300M-Q8_0.gguf";
-
-/// The helper that runs the embedding model and the model, for the program at `exe`: the helper
-/// beside it (`Contents/MacOS/knotes-embed`, or `target/<profile>/knotes-embed` while
-/// developing), the model in `Contents/Resources`, else in the repository's `models/`. None
-/// when either is missing: search goes on by words alone.
-pub fn embedder_files(exe: &Path) -> Option<(PathBuf, PathBuf)> {
+/// The helper that runs an embedding model and the model's file `model` (ADR 0028, 0029), for the
+/// program at `exe`: the helper beside it (`Contents/MacOS/knotes-embed`, or
+/// `target/<profile>/knotes-embed` while developing), the model in `Contents/Resources`, else in
+/// the repository's `models/` (`scripts/setup.sh` fetches it). None when either is missing:
+/// search goes on by words alone.
+pub fn embedder_files(exe: &Path, model: &str) -> Option<(PathBuf, PathBuf)> {
     let dir = exe.parent()?;
     let helper = dir.join("knotes-embed");
-    let bundled = dir.parent().map(|contents| contents.join("Resources").join(EMBEDDING_MODEL_FILE));
-    let developing = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(EMBEDDING_MODEL_FILE);
+    let bundled = dir.parent().map(|contents| contents.join("Resources").join(model));
+    let developing = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(model);
     let model = bundled.filter(|m| m.is_file()).or_else(|| developing.is_file().then_some(developing))?;
     helper.is_file().then_some((helper, model))
 }

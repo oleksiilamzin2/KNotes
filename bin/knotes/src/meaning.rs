@@ -15,7 +15,8 @@ pub fn embedder() -> Option<Arc<ProcessEmbedder>> {
             if crate::probe::enabled() {
                 return None;
             }
-            std::env::current_exe().ok().and_then(|exe| knotes_session::embedder_files(&exe)).map(|(helper, model)| Arc::new(ProcessEmbedder::new(helper, model)))
+            let model = knotes_vectors::MeaningModel::DEFAULT;
+            std::env::current_exe().ok().and_then(|exe| knotes_session::embedder_files(&exe, model.file())).map(|(helper, model)| Arc::new(ProcessEmbedder::new(helper, model)))
         })
         .clone()
 }

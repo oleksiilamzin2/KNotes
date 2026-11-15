@@ -1,4 +1,6 @@
-use knotes_session::{EMBEDDING_MODEL_FILE, embedder_files};
+use knotes_session::embedder_files;
+
+const MODEL: &str = "some-model.gguf";
 
 #[test]
 fn the_embedder_and_its_model_are_found_inside_the_bundle() {
@@ -7,8 +9,8 @@ fn the_embedder_and_its_model_are_found_inside_the_bundle() {
     std::fs::create_dir_all(&macos).unwrap();
     std::fs::create_dir_all(&resources).unwrap();
     let exe = macos.join("knotes");
-    assert_eq!(embedder_files(&exe), None, "no helper beside the app");
+    assert_eq!(embedder_files(&exe, MODEL), None, "no helper beside the app");
     std::fs::write(macos.join("knotes-embed"), "").unwrap();
-    std::fs::write(resources.join(EMBEDDING_MODEL_FILE), "").unwrap();
-    assert_eq!(embedder_files(&exe), Some((macos.join("knotes-embed"), resources.join(EMBEDDING_MODEL_FILE))));
+    std::fs::write(resources.join(MODEL), "").unwrap();
+    assert_eq!(embedder_files(&exe, MODEL), Some((macos.join("knotes-embed"), resources.join(MODEL))));
 }

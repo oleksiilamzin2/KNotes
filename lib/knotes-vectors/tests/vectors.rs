@@ -143,7 +143,7 @@ fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
     let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     index_notes(&mut index, &[("Boiler.md", "Replace the anode.", 1), ("Garden.md", "Prune the roses.", 1)]);
-    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let store = VectorStore::open(vectors.path(), "v.sqlite", "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
     assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &go).unwrap().documents, 2);
     assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &go).unwrap().documents, 0, "nothing changed");
@@ -155,7 +155,7 @@ fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
     index_notes(&mut index, &[("New.md", "Fresh.", 3)]);
     assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &stop).unwrap().documents, 0, "told to stop");
 
-    let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
+    let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path(), "v.sqlite").unwrap());
     assert_eq!(meaning.nearest("apple trees", 1, None).unwrap()[0].path, "Garden.md");
 }
 
@@ -167,14 +167,14 @@ fn only_the_blocks_whose_text_changed_go_to_the_model() {
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     let three = "# Boiler\n\nReplace the anode.\n\n# Garden\n\nPrune the roses.\n\n# Car\n\nChange the oil.";
     index_notes(&mut index, &[("Home.md", three, 1)]);
-    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let store = VectorStore::open(vectors.path(), "v.sqlite", "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
     update(&index, &store, &model, LATER, Which::Settled, &go).unwrap();
     assert_eq!(model.take(), 3);
     index_notes(&mut index, &[("Home.md", &three.replace("roses", "apple trees"), 2)]);
     let updated = update(&index, &store, &model, LATER, Which::Settled, &go).unwrap();
     assert_eq!((updated.documents, updated.passages, model.take()), (1, 1, 1), "the garden's block alone");
-    let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
+    let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path(), "v.sqlite").unwrap());
     assert_eq!(meaning.nearest("change the oil", 1, None).unwrap()[0].heading.as_deref(), Some("Car"), "the kept vectors still found");
 }
 
@@ -188,7 +188,7 @@ fn a_document_still_being_written_waits_until_it_settles() {
     let now: i64 = 5_000_000_000_000;
     let second = 1_000_000_000;
     index_notes(&mut index, &[("Old.md", "Settled long ago.", 1), ("Typing.md", "Being written", now - 5 * second)]);
-    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let store = VectorStore::open(vectors.path(), "v.sqlite", "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
     let updated = update(&index, &store, &model, now, Which::Settled, &go).unwrap();
     assert_eq!(updated.documents, 1, "the old one only");
@@ -206,7 +206,7 @@ fn before_the_chat_asks_the_documents_being_written_are_embedded_at_once() {
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     let now: i64 = 5_000_000_000_000;
     index_notes(&mut index, &[("Backlog.md", "Never embedded, long settled.", 1), ("Typing.md", "Just written", now - 1_000_000_000)]);
-    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let store = VectorStore::open(vectors.path(), "v.sqlite", "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
     let updated = update(&index, &store, &model, now, Which::Waiting, &go).unwrap();
     assert_eq!((updated.documents, updated.next), (1, None));
@@ -223,7 +223,7 @@ fn a_document_under_active_editing_waits_a_minute() {
     let second: i64 = 1_000_000_000;
     let first = 5_000_000 * second;
     index_notes(&mut index, &[("Draft.md", "First words.", first), ("Old.md", "Untouched for long.", 1)]);
-    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let store = VectorStore::open(vectors.path(), "v.sqlite", "words").unwrap();
     let (go, model) = (AtomicBool::new(false), Counting::default());
     update(&index, &store, &model, first + 20 * second, Which::Settled, &go).unwrap();
     assert_eq!(store.dates().unwrap().len(), 2, "both embedded once settled");
@@ -237,4 +237,14 @@ fn a_document_under_active_editing_waits_a_minute() {
     assert_eq!(SETTLE_EDITING, Duration::from_secs(60));
     let updated = update(&index, &store, &model, again + 20 * second, Which::Waiting, &go).unwrap();
     assert_eq!(updated.documents, 1, "before the chat asks, the draft at once");
+}
+
+#[test]
+fn each_model_keeps_its_vectors_apart_under_its_key() {
+    use knotes_vectors::MeaningModel;
+    let files: Vec<String> = MeaningModel::ALL.iter().map(|m| m.store_file()).collect();
+    assert_eq!(files, ["vectors-e5-large-instruct.sqlite", "vectors-embeddinggemma-2.sqlite"]);
+    assert!(MeaningModel::ALL.iter().all(|m| MeaningModel::from_key(m.key()) == Some(*m)));
+    assert_eq!(MeaningModel::from_key("off"), None);
+    assert_eq!(MeaningModel::DEFAULT, MeaningModel::E5Large);
 }

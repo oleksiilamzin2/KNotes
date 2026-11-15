@@ -8,4 +8,6 @@ publish.workspace = true
 
 [dependencies]
 knotes-embed.workspace = true
-llama-cpp-2 = { version = "=0.1.161", default-features = false, features = ["metal"] }
+# From git until a crates.io release carries a llama.cpp that runs EmbeddingGemma 2 (0.1.161
+# predates it; this commit bundles llama.cpp of 2026-11-04, ADR 0029).
+llama-cpp-2 = { git = "https://github.com/utilityai/llama-cpp-rs", rev = "d94c59486926bfbaa2e7ebfcf142fcfc3be24ede", default-features = false, features = ["metal"] }

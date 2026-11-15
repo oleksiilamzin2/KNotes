@@ -22,8 +22,8 @@ use knotes_indexer::Indexer;
 use knotes_md::MarkdownParser;
 use knotes_pdf::PdfTexts;
 use knotes_llama::LlamaEmbedder;
-use knotes_tools::{ToolIndex, VaultTools, notes_by_meaning};
-use knotes_vectors::{MeaningIndex, embed_notes};
+use knotes_tools::{Closeness, ToolIndex, VaultTools, notes_by_meaning};
+use knotes_vectors::{MeaningIndex, MeaningModel, embed_notes};
 use knotes_vault::FsVault;
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
@@ -33,16 +33,6 @@ use unicode_normalization::UnicodeNormalization;
 /// five-letter stems and all-but-one-word finds, 36 of 37): a change to search may raise them,
 /// never lower them.
 const WORDS_RECALL: f64 = 0.97;
-/// With search by meaning merged in (EmbeddingGemma Q8_0 over 100 blocks): 2026-11-14, by words
-/// 37 of 37, by meaning 6 of 9; 2026-11-15, on 65 queries by meaning (5 found by words alone),
-/// 53 of 65 (MRR 0.71), all 90 of 102; with dates told in words too, 54 of 65 (MRR 0.72), all
-/// 91 of 102.
-const MEANING_RECALL: f64 = 0.83;
-const ALL_WITH_MEANING: f64 = 0.89;
-/// The note list's search by meaning (2026-11-15): by words 37 of 37, by meaning 54 of 65 (MRR
-/// 0.75), 5.5 documents listed a query on average; it may list more only if it finds more.
-const LIST_MEANING_RECALL: f64 = 0.83;
-const LIST_SHOWN: f64 = 6.0;
 
 struct Query {
     text: String,
@@ -145,29 +135,58 @@ fn search_finds_what_the_model_looked_for() {
     let by_words = run(&queries, |q| tools_find(&words_only, q));
     by_words.print("By words");
 
-    let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/embeddinggemma-300M-Q8_0.gguf");
-    assert!(model.exists(), "no model at {}: run scripts/setup.sh", model.display());
-    let embedder = Arc::new(LlamaEmbedder::load(&model).unwrap());
-    let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder).unwrap();
-    println!("({} blocks embedded)", snapshot.len());
-    let list_meaning = MeaningIndex::new(embedder.clone(), snapshot.clone());
-    let merged = tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot)));
-    let with_meaning = run(&queries, |q| tools_find(&merged, q));
-    with_meaning.print("With meaning");
-    let reader = SqliteIndex::open_reader(index_dir.path()).unwrap();
-    let list = run(&queries, |q| notes_by_meaning(&reader, &list_meaning, q, None, 40).into_iter().map(|h| h.path).collect());
-    list.print("The list's search by meaning");
-
-    if own.is_none() {
-        for (name, run) in [("by words", &by_words), ("with meaning", &with_meaning)] {
-            assert!(run.words.recall() >= WORDS_RECALL, "search by words got worse {name}: {}", run.words.line("by words"));
+    // Each model search by meaning can run on (ADR 0029); KNOTES_RETRIEVAL_MODEL=<key> measures
+    // one alone.
+    let only = std::env::var("KNOTES_RETRIEVAL_MODEL").ok();
+    for model in MeaningModel::ALL.into_iter().filter(|m| only.as_deref().is_none_or(|k| k == m.key())) {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(model.file());
+        assert!(file.exists(), "no model at {}: run scripts/setup.sh", file.display());
+        let embedder = Arc::new(LlamaEmbedder::load(&file).unwrap());
+        let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder).unwrap();
+        println!("\n{} ({} blocks embedded)", model.key(), snapshot.len());
+        let list_meaning = MeaningIndex::new(embedder.clone(), snapshot.clone());
+        let merged = tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot)));
+        let with_meaning = run(&queries, |q| tools_find(&merged, q));
+        with_meaning.print("With meaning");
+        let reader = SqliteIndex::open_reader(index_dir.path()).unwrap();
+        // KNOTES_RETRIEVAL_CLOSENESS=0.80:0.03 tries other thresholds for the list (to tune them).
+        let tried = std::env::var("KNOTES_RETRIEVAL_CLOSENESS").ok().and_then(|t| t.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+        let (near_enough, behind_nearest) = tried.unwrap_or(model.closeness());
+        let closeness = Closeness { near_enough, behind_nearest };
+        let list = run(&queries, |q| notes_by_meaning(&reader, &list_meaning, q, None, 40, closeness).into_iter().map(|h| h.path).collect());
+        list.print("The list's search by meaning");
+        if own.is_none() && tried.is_none() {
+            let floors = floors(model);
+            assert!(with_meaning.words.recall() >= WORDS_RECALL, "search by words got worse with {}: {}", model.key(), with_meaning.words.line("by words"));
+            assert!(with_meaning.meaning.recall() >= floors.meaning, "search by meaning got worse with {}: {}", model.key(), with_meaning.meaning.line("by meaning"));
+            assert!(list.words.recall() >= WORDS_RECALL && list.meaning.recall() >= floors.list, "the list's search got worse with {}: {} {}", model.key(), list.words.line("by words"), list.meaning.line("by meaning"));
+            assert!(list.shown as f64 / list.all.queries as f64 <= floors.shown, "the list's search lists more noise with {}: {}", model.key(), list.shown);
         }
-        assert!(with_meaning.meaning.recall() >= MEANING_RECALL, "search by meaning got worse: {}", with_meaning.meaning.line("by meaning"));
-        assert!(with_meaning.all.recall() >= ALL_WITH_MEANING, "search with meaning got worse: {}", with_meaning.all.line("all"));
-        assert!(list.words.recall() >= WORDS_RECALL && list.meaning.recall() >= LIST_MEANING_RECALL, "the list's search got worse: {} {}", list.words.line("by words"), list.meaning.line("by meaning"));
-        assert!(list.shown as f64 / list.all.queries as f64 <= LIST_SHOWN, "the list's search lists more noise: {}", list.shown);
+    }
+    if own.is_none() {
+        assert!(by_words.words.recall() >= WORDS_RECALL, "search by words got worse: {}", by_words.words.line("by words"));
     }
 }
+
+/// What a model's runs may not fall below: by meaning in the tools' search and in the list's,
+/// and how many documents the list may show a query on average.
+struct Floors {
+    meaning: f64,
+    list: f64,
+    shown: f64,
+}
+
+/// Each model's scores (2026-11-15, 512 dimensions): a change to search may raise them, never
+/// lower them.
+fn floors(model: MeaningModel) -> Floors {
+    match model {
+        // 63 of 65 by meaning (MRR 0.81), the list 63 of 65 (MRR 0.83) showing 7.0 a query.
+        MeaningModel::E5Large => Floors { meaning: 0.96, list: 0.96, shown: 7.5 },
+        // 62 of 65 (MRR 0.78), the list 62 of 65 (MRR 0.81) showing 6.3 a query.
+        MeaningModel::EmbeddingGemma2 => Floors { meaning: 0.95, list: 0.95, shown: 6.8 },
+    }
+}
+
 
 fn read_queries(path: &Path) -> Vec<Query> {
     let value: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();

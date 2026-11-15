@@ -1,6 +1,6 @@
-/// How wide a kept vector is: the first 256 of the model's 768 (it was trained so that a cut
-/// keeps most of the meaning).
-pub const DIMS: usize = 256;
+/// How wide a kept vector is: the first 512 of the model's (e5's 1024, EmbeddingGemma 2's 768).
+/// On the benchmark e5 found 63 of 65 at 512 and 64 at 1024, for half the memory (ADR 0029).
+pub const DIMS: usize = 512;
 
 /// A vector normalized and scaled to bytes (×127).
 pub type Vector = [i8; DIMS];

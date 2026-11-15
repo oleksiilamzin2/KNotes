@@ -9,6 +9,6 @@ mod snapshot;
 
 pub use app_settings::{AppSettings, SETTINGS_FILE};
 pub use lock::VaultLock;
-pub use paths::{EMBEDDING_MODEL_FILE, app_data_dir, embedder_files, index_dir};
+pub use paths::{app_data_dir, embedder_files, index_dir};
 pub use session::{Event, VaultSession};
 pub use snapshot::Snapshot;

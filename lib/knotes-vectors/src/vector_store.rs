@@ -8,16 +8,15 @@ use serde_json::{Value, json};
 
 use crate::Snapshot;
 
-/// The vectors of a vault's notes and PDFs, in `vectors.sqlite` beside its index (a file of its
-/// own: the vectors are written in the background, never in the indexer's way). Each document's
+/// The vectors of a vault's notes and PDFs, in a file beside its index, one a model
+/// (`MeaningModel::store_file`; a file of its own: the vectors are written in the background,
+/// never in the indexer's way). Each document's
 /// row holds the date it had when embedded, its blocks' places with the hash of the text each
 /// was embedded as, and their vectors; a store made with another model (or another way of
 /// embedding) is emptied, to be embedded again.
 pub struct VectorStore {
     conn: Connection,
 }
-
-pub const VECTORS_FILE: &str = "vectors.sqlite";
 
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
@@ -28,10 +27,10 @@ CREATE TABLE IF NOT EXISTS notes(path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NUL
 ";
 
 impl VectorStore {
-    /// The store in `dir` for writing vectors made by `model`.
-    pub fn open(dir: &Path, model: &str) -> Result<Self, BoxError> {
+    /// The store `file` in `dir` for writing vectors made as `model` says.
+    pub fn open(dir: &Path, file: &str, model: &str) -> Result<Self, BoxError> {
         std::fs::create_dir_all(dir)?;
-        let conn = Connection::open(dir.join(VECTORS_FILE))?;
+        let conn = Connection::open(dir.join(file))?;
         conn.execute_batch(SCHEMA)?;
         let kept: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = 'model'", [], |r| r.get(0)).optional()?;
         if kept.as_deref() != Some(model) {
@@ -41,10 +40,10 @@ impl VectorStore {
         Ok(Self { conn })
     }
 
-    /// The store in `dir` for searching (created empty if not there yet).
-    pub fn open_reader(dir: &Path) -> Result<Self, BoxError> {
+    /// The store `file` in `dir` for searching (created empty if not there yet).
+    pub fn open_reader(dir: &Path, file: &str) -> Result<Self, BoxError> {
         std::fs::create_dir_all(dir)?;
-        let conn = Connection::open(dir.join(VECTORS_FILE))?;
+        let conn = Connection::open(dir.join(file))?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self { conn })
     }

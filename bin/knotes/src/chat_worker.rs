@@ -15,7 +15,7 @@ use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
 use knotes_tools::VaultTools;
 use knotes_vault::FsVault;
-use knotes_vectors::{EMBEDDING, MeaningIndex, Updated, VectorStore, Which, update};
+use knotes_vectors::{MeaningIndex, MeaningModel, Updated, VectorStore, Which, update};
 use serde_json::{Value, json};
 
 /// Called with the conversation's items and memory after a turn, and how it went.
@@ -99,7 +99,7 @@ impl ChatWorker {
                             {
                                 tools = SqliteIndex::open_reader(dir).ok().map(|index| {
                                     let tools = VaultTools::new(index, FsVault::new(root), PdfTexts::new(root));
-                                    match (&embedder, VectorStore::open_reader(dir)) {
+                                    match (&embedder, VectorStore::open_reader(dir, &MeaningModel::DEFAULT.store_file())) {
                                         (Some(embedder), Ok(store)) => tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::clone(embedder) as Arc<dyn Embedder>, store))),
                                         _ => tools,
                                     }
@@ -162,7 +162,7 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<
         let paced = Paced(embedder);
         let mut told = false;
         loop {
-            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &VectorStore::open(&dir, EMBEDDING)?, &paced, now_ns(), Which::Settled, &stop)) {
+            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &store(&dir)?, &paced, now_ns(), Which::Settled, &stop)) {
                 Ok(updated) => updated.next,
                 Err(e) => {
                     if !told {
@@ -190,7 +190,13 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<
 /// background (still settling), so the turn's search finds what the user has just written.
 fn embed_waiting(dir: &Path, embedder: &dyn Embedder) -> Result<Updated, knotes_core::BoxError> {
     let index = SqliteIndex::open_reader(dir)?;
-    update(&index, &VectorStore::open(dir, EMBEDDING)?, embedder, now_ns(), Which::Waiting, &AtomicBool::new(false))
+    update(&index, &store(dir)?, embedder, now_ns(), Which::Waiting, &AtomicBool::new(false))
+}
+
+/// The store of the model's vectors for the vault indexed in `dir`.
+fn store(dir: &Path) -> Result<VectorStore, knotes_core::BoxError> {
+    let model = MeaningModel::DEFAULT;
+    VectorStore::open(dir, &model.store_file(), model.embedding())
 }
 
 fn now_ns() -> i64 {
@@ -289,7 +295,7 @@ mod tests {
         let embedder = Counting::default();
         let updated = super::embed_waiting(dir.path(), &embedder).unwrap();
         assert_eq!((updated.documents, embedder.0.load(Ordering::Relaxed)), (1, 1));
-        let store = knotes_vectors::VectorStore::open_reader(dir.path()).unwrap();
+        let store = knotes_vectors::VectorStore::open_reader(dir.path(), &knotes_vectors::MeaningModel::DEFAULT.store_file()).unwrap();
         assert_eq!(store.dates().unwrap().keys().collect::<Vec<_>>(), ["Typing.md"]);
     }
 

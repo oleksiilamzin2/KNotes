@@ -6,28 +6,28 @@ use knotes_core::{BlockHit, ContentQuery, ContentSearch, MeaningSearch, Within};
 
 use crate::without_question_words;
 
-/// How near in meaning a block must be (cosine) to be listed when the query's words are not in
-/// its note...
-pub const NEAR_ENOUGH: f64 = 0.25;
-/// ...and no farther than this below the nearest. Tuned on the benchmark's 65 queries by meaning
-/// (2026-11-15): a floor of 0.30 left five queries with nothing (other languages score lower),
-/// 0.25 found 54 of 65 as the tools' search does; behind the nearest by 0.25 a query listed 16
-/// documents, by 0.10 5.5 with nothing lost, by 0.07 one answer was lost.
-pub const BEHIND_NEAREST: f64 = 0.10;
+/// Which finds by meaning the list shows when the query's words are not in their notes: those at
+/// least `near_enough` (cosine) and no more than `behind_nearest` below the nearest. Each model
+/// scores on a scale of its own (`MeaningModel::closeness`, tuned on the benchmark).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Closeness {
+    pub near_enough: f64,
+    pub behind_nearest: f64,
+}
 
 /// Search by meaning in the list: the notes holding the query's words (question and function
 /// words left out, word forms found) first, as search by words would give them, then merged by
 /// reciprocal rank fusion with the notes near in meaning, those not near enough left out; each
 /// note once, as the block that found it. A note saying "тиск" and "ліки" comes before one
 /// merely about medicines, which the model alone put first. `limit` bounds each list.
-pub fn notes_by_meaning(index: &impl ContentSearch, meaning: &dyn MeaningSearch, query: &str, scope: Option<&[String]>, limit: usize) -> Vec<BlockHit> {
+pub fn notes_by_meaning(index: &impl ContentSearch, meaning: &dyn MeaningSearch, query: &str, scope: Option<&[String]>, limit: usize, closeness: Closeness) -> Vec<BlockHit> {
     const K: f64 = 60.0;
     let words = without_question_words(query);
     let lexical = index.search(&ContentQuery { text: &words, within: Within::Note, prefixes: true, scope, limit }).unwrap_or_default();
     let near = meaning.nearest(query, limit, scope).unwrap_or_default();
     let full = 127.0 * 127.0;
     let nearest = near.first().map_or(0.0, |h| -h.score / full);
-    let near_enough = NEAR_ENOUGH.max(nearest - BEHIND_NEAREST) * full;
+    let near_enough = closeness.near_enough.max(nearest - closeness.behind_nearest) * full;
     // Each note's best block and its score; the first note by words stays first.
     let mut found: Vec<(BlockHit, f64)> = Vec::new();
     let mut add = |hit: BlockHit, rank: usize| {

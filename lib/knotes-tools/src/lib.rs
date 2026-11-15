@@ -10,7 +10,7 @@ mod tool_index;
 mod vault_tools;
 
 pub use dates::{day_start, utc_minute};
-pub use notes_by_meaning::{BEHIND_NEAREST, NEAR_ENOUGH, notes_by_meaning};
+pub use notes_by_meaning::{Closeness, notes_by_meaning};
 pub use specs::{ToolSpec, specs};
 pub use tool_error::ToolError;
 pub use tool_index::ToolIndex;

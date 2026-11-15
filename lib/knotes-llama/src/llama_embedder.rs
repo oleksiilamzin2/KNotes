@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use knotes_embed::{EmbedError, Embedder, Passage, Vector, quantize};
+use knotes_embed::{EmbedError, Embedder, Passage, PromptStyle, Vector, quantize};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -23,6 +23,10 @@ static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
 pub struct LlamaEmbedder {
     backend: &'static LlamaBackend,
     model: LlamaModel,
+    /// Told by the model's name (or its file's): e5, or EmbeddingGemma.
+    style: PromptStyle,
+    /// The tokens a decode takes: `WINDOW`, or less for a model trained on less (e5, 512).
+    window: usize,
 }
 
 fn backend() -> Result<&'static LlamaBackend, EmbedError> {
@@ -46,7 +50,11 @@ impl LlamaEmbedder {
         let backend = backend()?;
         let model = LlamaModel::load_from_file(backend, path, &LlamaModelParams::default().with_n_gpu_layers(u32::MAX))
             .map_err(|e| EmbedError::Unavailable(format!("{}: {e}", path.display())))?;
-        Ok(Self { backend, model })
+        // The model's name, or its file's when the file names none.
+        let name = model.meta_val_str("general.name").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()).to_lowercase();
+        let style = if name.contains("e5") { PromptStyle::E5Instruct } else { PromptStyle::EmbeddingGemma };
+        let window = WINDOW.min(model.n_ctx_train() as usize);
+        Ok(Self { backend, model, style, window })
     }
 }
 
@@ -56,25 +64,25 @@ impl Embedder for LlamaEmbedder {
         let tokens: Vec<_> = passages
             .iter()
             .map(|p| {
-                let mut t = vocab.tokenize(p.prompt().as_bytes(), true, false);
-                t.truncate(WINDOW);
+                let mut t = vocab.tokenize(p.prompt_in(self.style).as_bytes(), true, false);
+                t.truncate(self.window);
                 t
             })
             .collect();
         let params = LlamaContextParams::default()
             .with_embeddings(true)
-            .with_n_ctx(NonZeroU32::new(WINDOW as u32))
-            .with_n_batch(WINDOW as u32)
-            .with_n_ubatch(WINDOW as u32)
+            .with_n_ctx(NonZeroU32::new(self.window as u32))
+            .with_n_batch(self.window as u32)
+            .with_n_ubatch(self.window as u32)
             .with_n_seq_max(SEQUENCES as u32);
         let mut context = self.model.new_context(self.backend, params).map_err(|e| EmbedError::Failed(format!("context: {e}")))?;
         let mut vectors = Vec::with_capacity(passages.len());
-        let mut batch = LlamaBatch::new(WINDOW, SEQUENCES as i32);
+        let mut batch = LlamaBatch::new(self.window, SEQUENCES as i32);
         let mut start = 0;
         while start < tokens.len() {
             // As many passages as fit in one decode.
             let (mut end, mut used) = (start, 0);
-            while end < tokens.len() && end - start < SEQUENCES && (end == start || used + tokens[end].len() <= WINDOW) {
+            while end < tokens.len() && end - start < SEQUENCES && (end == start || used + tokens[end].len() <= self.window) {
                 used += tokens[end].len();
                 end += 1;
             }
