@@ -17,14 +17,52 @@ pub struct FolderNode {
 }
 
 impl FolderNode {
-    /// The tree a space shows (ADR 0030): its folders, and the folders above them that hold
-    /// them, each counting only the notes of the space's folders.
-    pub fn within(&self, space: &SpaceFolders) -> FolderNode {
-        let children: Vec<FolderNode> = self.children.iter().map(|c| c.within(space)).filter(|c| space.holds_folder(&c.path) || !c.children.is_empty()).collect();
+    /// The two parts of the folder tree in a space (ADR 0030): its folders, then the rest of
+    /// the vault's, each folder in one part only. A folder of one part inside a folder of the
+    /// other hangs from its nearest ancestor in its own part (named by its path from there), or
+    /// at the top (named by its whole path); each part counts its own notes (the root's go to
+    /// the rest).
+    pub fn split(&self, space: &SpaceFolders) -> (FolderNode, FolderNode) {
+        let (mut ins, mut outs) = (Vec::new(), Vec::new());
+        for child in &self.children {
+            let (node, other) = part(child, space);
+            if space.holds_folder(&child.path) {
+                ins.push(node);
+                outs.extend(other);
+            } else {
+                outs.push(node);
+                ins.extend(other);
+            }
+        }
         let own = self.notes - self.children.iter().map(|c| c.notes).sum::<usize>();
-        let notes = if space.holds_folder(&self.path) { own } else { 0 } + children.iter().map(|c| c.notes).sum::<usize>();
-        FolderNode { path: self.path.clone(), name: self.name.clone(), notes, children }
+        let root = |mut children: Vec<FolderNode>, own: usize| {
+            children.sort_by(|x, y| natural_cmp(&x.name, &y.name));
+            FolderNode { path: self.path.clone(), name: self.name.clone(), notes: own + children.iter().map(|c| c.notes).sum::<usize>(), children }
+        };
+        (root(ins, 0), root(outs, own))
     }
+}
+
+/// `node` with the folders below it of its own part of a space's split, and the folders of the
+/// other part found below it (each with its own below it), named by their whole path.
+fn part(node: &FolderNode, space: &SpaceFolders) -> (FolderNode, Vec<FolderNode>) {
+    let mine = space.holds_folder(&node.path);
+    let (mut children, mut other) = (Vec::new(), Vec::new());
+    for child in &node.children {
+        let (child_node, child_other) = part(child, space);
+        if space.holds_folder(&child.path) == mine {
+            children.push(child_node);
+            other.extend(child_other);
+        } else {
+            other.push(FolderNode { name: child.path.clone(), ..child_node });
+            // Below a folder of the other part, back in this one: they hang from here.
+            children.extend(child_other.into_iter().map(|g| FolderNode { name: g.path[node.path.len() + 1..].to_owned(), ..g }));
+        }
+    }
+    children.sort_by(|x, y| natural_cmp(&x.name, &y.name));
+    let own = node.notes - node.children.iter().map(|c| c.notes).sum::<usize>();
+    let notes = own + children.iter().map(|c| c.notes).sum::<usize>();
+    (FolderNode { path: node.path.clone(), name: node.name.clone(), notes, children }, other)
 }
 
 /// Builds the folder tree from vault-relative file paths. Every folder that holds any file

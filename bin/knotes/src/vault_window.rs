@@ -95,7 +95,7 @@ impl State {
     /// The folder tree the sidebar shows: the space's, or the whole vault's.
     fn shown_folders(&self) -> Arc<FolderNode> {
         match &self.space_folders {
-            Some(space) => Arc::new(self.folders.within(space)),
+            Some(space) => Arc::new(self.folders.split(space).0),
             None => Arc::clone(&self.folders),
         }
     }

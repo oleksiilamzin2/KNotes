@@ -35,21 +35,25 @@ fn the_hidden_attachments_folder_is_no_folder_in_the_tree() {
 }
 
 #[test]
-fn in_a_space_the_tree_holds_its_folders_counting_their_notes() {
+fn in_a_space_the_tree_splits_into_its_folders_and_the_rest_each_folder_in_one_part() {
     use knotes_app::SpaceFolders;
     use knotes_spaces::Spaces;
-    let paths = ["Work/a.md", "Work/Radar/b.md", "Work/Radar/c.md", "Work/Archive/d.md", "Home/e.md", "top.md", "Areas/f.md", "Areas/Job/g.md"];
+    let paths = ["Work/a.md", "Work/Radar/b.md", "Work/Radar/c.md", "Work/Archive/d.md", "Work/Archive/Keep/h.md", "Home/e.md", "top.md", "Areas/f.md", "Areas/Job/g.md"];
     let tree = folder_tree(paths);
     let spaces = Spaces::from_texts(&[
         (String::new(), r#"{"spaces": [{"id": "work"}]}"#.into()),
         ("Work".into(), r#"{"space": "work"}"#.into()),
         ("Work/Archive".into(), r#"{"space": null}"#.into()),
+        ("Work/Archive/Keep".into(), r#"{"space": "work"}"#.into()),
         ("Areas/Job".into(), r#"{"space": "work"}"#.into()),
     ]);
-    let within = tree.within(&SpaceFolders::new(&tree, &spaces, "work"));
-    assert_eq!(names(&within), [("Areas", 1), ("Work", 3)], "Areas only holds the space's Job; Home and the root's note are out");
-    let work = within.children.iter().find(|c| c.name == "Work").unwrap();
-    assert_eq!(names(work), [("Radar", 2)], "Archive is taken out");
-    assert_eq!(within.notes, 4);
-    assert_eq!(within.children[0].children[0].path, "Areas/Job");
+    let (space, rest) = tree.split(&SpaceFolders::new(&tree, &spaces, "work"));
+    assert_eq!(names(&space), [("Areas/Job", 1), ("Work", 4)], "a space's folder inside another part's at the top, named by its path");
+    let work = space.children.iter().find(|c| c.path == "Work").unwrap();
+    assert_eq!(names(work), [("Archive/Keep", 1), ("Radar", 2)], "back in the space below a taken-out folder: hangs from Work");
+    assert_eq!(space.notes, 5);
+    assert_eq!(names(&rest), [("Areas", 1), ("Home", 1), ("Work/Archive", 1)], "Areas keeps its own note, Job gone up");
+    assert_eq!(rest.notes, 4, "with the root's note");
+    let own = |n: &FolderNode| n.notes - n.children.iter().map(|c| c.notes).sum::<usize>();
+    assert_eq!(own(work), 1, "a folder's own notes are its count less its children's, as the sidebar takes them");
 }
