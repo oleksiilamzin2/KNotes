@@ -285,3 +285,18 @@ plan usage for open-source and local apps) on 2026-11-14:
   (the household vault's 30 questions are kept beside it, outside the vault).
 - The probe signs in with a script of OpenAI's answers (`KNOTES_PROBE_CHAT`) and tokens in
   memory; without it the probe is signed out and never reads the Keychain.
+- Knowing when to stop (2026-11-15): with search by meaning (ADR 0029) the model still spent
+  5–26 tool calls (15.5 on average, up to 47 s) on questions the vault has no answer to,
+  trying synonyms, folders, weekdays and recent notes as the instructions told it to before
+  saying the vault lacks something. A rule at the instructions' end (search by meaning already
+  tries other wordings; when two or three searches bring nothing about it, say so) cut that to
+  about 10 and once lost a deposit from a list; search's result saying when no document holds
+  the words nor their stems (`words_found: false`) did not help where a word did occur ("зал"
+  in "залишок"). What did: a developer message after the outputs of the step where the turn's
+  tool calls reach six ("N tool calls so far. If what was asked has not turned up …, answer
+  now … Go on only to read the notes a list or a period needs."), once a turn, not shown in the
+  panel. Measured on the 41 questions (the 30 and eleven of ADR 0029): every answer right, 127
+  tool calls instead of 171; those with no answer 4, 10, 4 and 6 (24 instead of 62, 61 s
+  instead of 119); lists unhurt (the to-dos 16, with all their dates). It can still pass ten
+  when the model calls several tools at once just before the reminder (11 twice in 16 runs of
+  those questions); a hard limit would cut lists, which need 13–19.
