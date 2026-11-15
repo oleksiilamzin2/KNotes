@@ -49,10 +49,16 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-# A stable signature when the "Knotes Dev" certificate is in the keychain: macOS then knows each
-# build as the same app (the Keychain keeps its "Always Allow"); else ad hoc, new every build.
+# The signature. The Keychain lets an app in by its item's partition list, which names a team
+# (`teamid:…`) for code signed with a team and the build's own hash (`cdhash:…`) for code signed
+# without one: only an Apple Development certificate (Xcode → Settings → Accounts, a free
+# Personal Team will do) keeps "Always Allow" across builds. "Knotes Dev" (self-signed) keeps
+# the app's identity but not that, so the Keychain asks after each build; ad hoc else.
 identity=-
-if security find-identity -p codesigning 2>/dev/null | grep -q '"Knotes Dev"'; then
+apple=$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development: / {print $2; exit}')
+if [ -n "$apple" ]; then
+  identity=$apple
+elif security find-identity -p codesigning 2>/dev/null | grep -q '"Knotes Dev"'; then
   identity="Knotes Dev"
 fi
 codesign --force --sign "$identity" "$app/Contents/MacOS/knotes-mcp" 2>/dev/null || true
