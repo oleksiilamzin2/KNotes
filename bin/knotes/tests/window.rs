@@ -2992,3 +2992,15 @@ fn files_in_spaces_show_their_space_s_dot_in_the_whole_vault() {
     marks.sort();
     assert_eq!(marks, ["a • Робота", "b • Робота", "c • Дім"], "top.md, in no space, has none");
 }
+
+#[test]
+fn a_folder_shows_the_dot_of_the_space_it_sets_and_a_tab_of_another_space_its_own() {
+    let vault = spaced_vault();
+    let out = probe_with(&[vault.path()], None);
+    assert!(out.contains("sidebar-marks: Home • Дім | Work • Робота"), "{out}");
+    // Tabs opened in the whole vault come back in the space.
+    let home = tempfile::tempdir().unwrap();
+    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Home/c.md"), ("KNOTES_PROBE_NEW_TAB", "Work/a.md")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SIDEBAR", "tabs")]);
+    assert!(out.contains("sidebar-marks: c • Дім\n"), "the tab of another space marked, the space's own not: {out}");
+}

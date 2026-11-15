@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use knotes_app::{Sidebar, SidebarItem};
+use knotes_app::{Sidebar, SidebarItem, folder_space_mark, space_mark};
 use knotes_spaces::Spaces;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -47,8 +47,9 @@ pub struct Ivars {
     /// menu closes the others.
     on_close: RefCell<Option<OnClose>>,
     on_close_others: RefCell<Option<OnClose>>,
-    /// The vault's spaces, for a folder's menu, and what choosing one there calls.
-    spaces: RefCell<Arc<Spaces>>,
+    /// The vault's spaces and the window's (for a folder's menu and the rows' dots), and what
+    /// choosing a space in a folder's menu calls.
+    spaces: RefCell<(Arc<Spaces>, Option<String>)>,
     on_folder_space: RefCell<Option<OnFolderSpace>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
@@ -231,7 +232,7 @@ impl SidebarSource {
             on_rename: RefCell::new(None),
             on_close: RefCell::new(None),
             on_close_others: RefCell::new(None),
-            spaces: RefCell::new(Arc::new(Spaces::default())),
+            spaces: RefCell::new((Arc::new(Spaces::default()), None)),
             on_folder_space: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
@@ -261,6 +262,13 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         if let Some(image) = unsafe { cell.imageView() } {
             image.setImage(icon.and_then(|name| NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)).as_deref());
             image.setHidden(icon.is_none());
+        }
+        if let Some(dot) = dot_view(&cell) {
+            let mark = self.mark(&item);
+            if let Some(space) = &mark {
+                dot.setImage(crate::space_ui::dot(space.color, 9.0, &space.name).as_deref());
+            }
+            dot.setHidden(mark.is_none());
         }
         if let Some(count) = count_field(&cell) {
             let text = model.count(&item).map(|n| n.to_string()).unwrap_or_default();
@@ -328,7 +336,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     pub fn folder_space_menu(&self, folder: &str) -> Retained<NSMenu> {
         let mtm = self.mtm();
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(strings::SPACE));
-        let spaces = Arc::clone(&self.ivars().spaces.borrow());
+        let spaces = Arc::clone(&self.ivars().spaces.borrow().0);
         let current = spaces.of_folder(folder).map(|s| s.id.clone());
         let entry = |title: &str, choice: &str, ticked: bool| {
             // SAFETY: the source outlives the menu (the outline keeps it) and implements the action.
@@ -352,8 +360,30 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         menu
     }
 
-    pub fn set_spaces(&self, spaces: Arc<Spaces>) {
-        *self.ivars().spaces.borrow_mut() = spaces;
+    pub fn set_spaces(&self, spaces: Arc<Spaces>, current: Option<String>) {
+        *self.ivars().spaces.borrow_mut() = (spaces, current);
+    }
+
+    /// The space whose dot a row shows (ADR 0030): a folder's where it sets one, a tab's
+    /// document's of another space.
+    fn mark(&self, item: &SidebarItem) -> Option<knotes_spaces::Space> {
+        let (spaces, current) = &*self.ivars().spaces.borrow();
+        match item {
+            SidebarItem::Folder(folder) => folder_space_mark(spaces, current.as_deref(), folder).cloned(),
+            SidebarItem::Tab(path) => space_mark(spaces, current.as_deref(), path).cloned(),
+            _ => None,
+        }
+    }
+
+    /// The marked rows shown, for the probe: "Home • Дім | Work • Робота".
+    pub fn probe_marks(&self) -> String {
+        let Some(outline) = self.ivars().outline.borrow().load() else { return String::new() };
+        let model = self.ivars().model.borrow();
+        let marked: Vec<String> = (0..outline.numberOfRows())
+            .filter_map(|row| outline.itemAtRow(row).and_then(|o| item_of(&o)))
+            .filter_map(|item| self.mark(&item).map(|space| format!("{} • {}", model.name(&item), space.name)))
+            .collect();
+        marked.join(" | ")
     }
 
     pub fn on_folder_space(&self, callback: impl Fn(String, FolderChoice) + 'static) {
@@ -494,6 +524,8 @@ const CELL_ID: &str = "SidebarCell";
 const GAP_HEIGHT: f64 = 10.0;
 const COUNT_ID: &str = "count";
 const CLOSE_ID: &str = "close";
+/// A row's space dot (ADR 0030).
+const DOT_ID: &str = "space-dot";
 
 /// A reused cell (icon, name, count on the right), laid out with constraints.
 fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
@@ -519,7 +551,11 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     close.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
     close.setIdentifier(Some(&NSString::from_str(CLOSE_ID)));
     close.setHidden(true);
-    for view in [&*image as &NSView, &name, &count, &close] {
+    // The dot of a space (ADR 0030), right after the name; hidden on most rows.
+    let dot = NSImageView::new(mtm);
+    dot.setIdentifier(Some(&NSString::from_str(DOT_ID)));
+    dot.setHidden(true);
+    for view in [&*image as &NSView, &name, &count, &close, &dot] {
         view.setTranslatesAutoresizingMaskIntoConstraints(false);
         cell.addSubview(view);
     }
@@ -531,11 +567,15 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         name.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         count.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -6.0),
         count.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
-        name.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&count.leadingAnchor(), -6.0),
         close.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
         close.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         close.widthAnchor().constraintEqualToConstant(16.0),
-        name.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&close.leadingAnchor(), -4.0),
+        dot.leadingAnchor().constraintEqualToAnchor_constant(&name.trailingAnchor(), 5.0),
+        dot.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
+        dot.widthAnchor().constraintEqualToConstant(9.0),
+        dot.heightAnchor().constraintEqualToConstant(9.0),
+        dot.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&count.leadingAnchor(), -6.0),
+        dot.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&close.leadingAnchor(), -4.0),
     ];
     for c in &constraints {
         c.setActive(true);
@@ -624,6 +664,10 @@ impl SidebarCell {
 pub fn close_button(cell: &NSTableCellView) -> Option<Retained<NSButton>> {
     let id = NSString::from_str(CLOSE_ID);
     cell.subviews().iter().find(|v| v.identifier().is_some_and(|i| i.isEqualToString(&id))).and_then(|v| v.downcast::<NSButton>().ok())
+}
+
+fn dot_view(cell: &NSTableCellView) -> Option<Retained<NSImageView>> {
+    cell.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == DOT_ID)).and_then(|v| v.downcast::<NSImageView>().ok())
 }
 
 pub fn count_field(cell: &NSTableCellView) -> Option<Retained<NSTextField>> {

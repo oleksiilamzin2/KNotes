@@ -961,7 +961,6 @@ impl VaultWindow {
                 }
             };
             let state = self.state.borrow();
-            self.sidebar.set_spaces(Arc::clone(&state.spaces));
             let folders = state.shown_folders();
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
             let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
@@ -1525,6 +1524,7 @@ impl VaultWindow {
         let state = self.state.borrow();
         self.toolbar_delegate.set_spaces(state.spaces.list(), state.space.as_deref());
         self.list.set_spaces(Arc::clone(&state.spaces), state.space.clone());
+        self.sidebar.set_spaces(Arc::clone(&state.spaces), state.space.clone());
     }
 
     /// The list's marked notes, for the probe.

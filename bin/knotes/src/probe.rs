@@ -825,6 +825,7 @@ pub fn schedule(with_sidebar: bool) {
                     println!("space: {}", window.describe_space());
                     println!("space-menu: {}", window.probe_space_menu());
                     println!("list-marks: {}", window.probe_list_marks());
+                    println!("sidebar-marks: {}", window.sidebar.probe_marks());
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
                     report_panel(window);
