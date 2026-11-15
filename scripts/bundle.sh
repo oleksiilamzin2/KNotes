@@ -11,14 +11,16 @@ if [ ! -f "$model" ]; then
   echo "bundle: no $model: run scripts/setup.sh" >&2
   exit 1
 fi
-packages="-p knotes -p knotes-mcp -p knotes-embed-helper"
+packages="-p knotes -p knotes-mcp"
 if [ "$profile" = release ]; then cargo build -q --release $packages; else cargo build -q $packages; fi
+# The embedding helper is always built optimized: in a debug build llama.cpp's own code is too.
+cargo build -q --release -p knotes-embed-helper
 app="target/$profile/Knotes.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$profile/knotes" "$app/Contents/MacOS/knotes"
 cp "target/$profile/knotes-mcp" "$app/Contents/MacOS/knotes-mcp"
-cp "target/$profile/knotes-embed" "$app/Contents/MacOS/knotes-embed"
+cp "target/release/knotes-embed" "$app/Contents/MacOS/knotes-embed"
 cp "$model" "$app/Contents/Resources/"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 cat > "$app/Contents/Info.plist" <<PLIST
