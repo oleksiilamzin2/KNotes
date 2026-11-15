@@ -94,5 +94,10 @@ pub fn specs() -> Vec<ToolSpec> {
             description: "The vault's tags with how many notes have each, the most used first.",
             parameters: json!({"type": "object", "properties": {}, "additionalProperties": false}),
         },
+        ToolSpec {
+            name: "list_spaces",
+            description: "The vault's spaces: named sets of its folders the user works in (they may call them spaces, простори, профілі, воркспейси or сфери), each with the folders whose rules put them in it and how many notes it has, and the space the user's window is in (`current`, none for the whole vault). search and list_notes take a space's name as `space`.",
+            parameters: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        },
     ]
 }

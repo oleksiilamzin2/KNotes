@@ -62,7 +62,7 @@ fn call(vault: &Vault, name: &str, args: Value) -> Value {
 #[test]
 fn every_tool_is_described_with_a_json_schema() {
     let names: Vec<&str> = VaultTools::<SqliteIndex, FsVault, Pdfs>::specs().iter().map(|s| s.name).collect();
-    assert_eq!(names, ["search", "find_by_title", "read_note", "read_pdf", "outline", "links", "related", "list_notes", "list_tasks", "list_tags"]);
+    assert_eq!(names, ["search", "find_by_title", "read_note", "read_pdf", "outline", "links", "related", "list_notes", "list_tasks", "list_tags", "list_spaces"]);
     for spec in VaultTools::<SqliteIndex, FsVault, Pdfs>::specs() {
         assert_eq!(spec.parameters["type"], "object", "{}", spec.name);
         assert!(!spec.description.is_empty());
@@ -515,4 +515,16 @@ fn the_window_s_space_comes_first_and_the_vault_s_description_names_the_spaces()
     assert_eq!(paths(&call(&v, "search", json!({"query": "apples"})), "results")[0], "Work/Apples.md");
     let overview = v.tools.overview();
     assert!(overview.contains("Spaces") && overview.contains("Робота (Work)") && overview.contains("Дім (Home)"), "{overview}");
+}
+
+#[test]
+fn the_spaces_are_listed_with_their_folders_notes_and_the_window_s() {
+    let v = spaced();
+    v.tools.set_space(Some("home".into()));
+    let listed = call(&v, "list_spaces", json!({}));
+    assert_eq!(listed, json!({"spaces": [{"name": "Робота", "folders": ["Work"], "notes": 1}, {"name": "Дім", "folders": ["Home"], "notes": 1}], "current": "Дім"}));
+    let line = v.tools.spaces_line();
+    assert!(line.contains("Робота (Work)") && line.contains("Дім (Home)"), "{line}");
+    assert_eq!(vault().tools.spaces_line(), "", "a vault with no spaces: nothing to say");
+    assert_eq!(call(&vault(), "list_spaces", json!({})), json!({"spaces": [], "current": null}));
 }

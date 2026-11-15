@@ -14,6 +14,10 @@ pub trait ToolBox {
     fn excluded(&self, _path: &str) -> bool {
         false
     }
+    /// The vault's spaces in a sentence, told each turn (ADR 0030); empty when it has none.
+    fn spaces(&self) -> String {
+        String::new()
+    }
 }
 
 impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> ToolBox for VaultTools<I, F, D> {
@@ -31,5 +35,9 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> ToolBox 
 
     fn excluded(&self, path: &str) -> bool {
         VaultTools::excluded(self, path)
+    }
+
+    fn spaces(&self) -> String {
+        VaultTools::spaces_line(self)
     }
 }

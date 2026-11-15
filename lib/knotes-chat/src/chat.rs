@@ -23,7 +23,8 @@ period, look through all of them before answering. Search a date first as the us
 \"жовтень\"); if nothing comes, try the forms notes often use (2026-11-18, 18.11.2026, 18.11, 2026-10). Prefer figures written in the notes (readings, tables, receipts) \
 to working them out from others; if you must estimate, say so and from what. When notes disagree, say so, which says what and when each last changed (modified). When the user says \
 \"this\" or \"here\" and no document is open, ask which note they mean. Tools give results a page at a time: when a result has next_offset, call the tool again with it as \
-offset to see more; read a long note or PDF on from next_block or next_page. Know when to stop. Search by meaning (finds marked `meaning`) already tries other wordings and languages, \
+offset to see more; read a long note or PDF on from next_block or next_page. The vault may have spaces: named sets of its folders the user works in (they may call them spaces, \
+простори, профілі, воркспейси or сфери); list_spaces gives them with their folders, and search and list_notes take one as `space`. Know when to stop. Search by meaning (finds marked `meaning`) already tries other wordings and languages, \
 so do not try synonyms one by one yourself. If two or three searches bring nothing about what was asked (`words_found` false, the \
 finds by meaning about something else), the vault does not have it: say so at once, naming what is nearest if it helps, and never \
 spend more than eight tool calls on something not found. A question about several notes, a list or a period is different: read \
@@ -109,8 +110,17 @@ impl Chat<'_> {
         if let Some(path) = open.filter(|p| !tools.excluded(p)) {
             told.push(format!("The user has {path} open in Knotes; \"this note\", \"here\" and the like mean it."));
         }
-        if let Some(space) = &self.space {
-            told.push(format!("The user works in the space «{space}» (a named set of the vault's folders): search gives its documents first, others naming their space; ask about another space or the whole vault when the question is about it."));
+        // The spaces as they are now (made or renamed since the conversation began), and the
+        // window's (ADR 0030).
+        let spaces = tools.spaces();
+        let spaced = !spaces.is_empty();
+        if spaced {
+            told.push(spaces);
+        }
+        match &self.space {
+            Some(space) => told.push(format!("The user works in the space «{space}»: search gives its documents first, others naming their space; ask about another space or the whole vault when the question is about it.")),
+            None if spaced => told.push("The user's window shows the whole vault, in no space.".to_owned()),
+            None => {}
         }
         if !told.is_empty() {
             items.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": told.join(" ")}]}));

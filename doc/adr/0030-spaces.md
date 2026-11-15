@@ -47,7 +47,12 @@ and in the lists alike.
   gives the space's documents first, each result naming its space (one message with the document
   open: a turn starts at the developer message before the question); `search` and `list_notes`
   take a `space` argument (a name or an id), which narrows every way search finds, by meaning
-  too; the vault's description lists the spaces with their folders. In the list, search by
+  too; the vault's description lists the spaces with their folders. Trying it, the chat answered
+  "what spaces are there" with the top folders: its conversation had begun before the spaces
+  were made, and the description is fixed at a conversation's start. So the spaces are told in
+  the message before each question too (with the window's, or that it shows the whole vault), a
+  `list_spaces` tool lists them (folders, notes, the window's), and the instructions say what
+  spaces are and the owner's other words for them (простори, профілі, воркспейси, сфери). In the list, search by
   meaning runs apart in the space's notes, then in the whole list, so the rest of the vault can
   neither take the space's places nor raise its bar. The MCP server knows no current space: it searches the whole vault,
   names each result's space and takes the same argument.

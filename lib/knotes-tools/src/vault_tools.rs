@@ -174,6 +174,22 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         *self.space.borrow_mut() = id;
     }
 
+    /// The vault's spaces in a sentence for the model (told each turn: a conversation begun
+    /// before a space was made knows it); empty when it has none.
+    pub fn spaces_line(&self) -> String {
+        let kept = self.kept();
+        let catalog: Vec<_> = self.index.catalog().unwrap_or_default().into_iter().filter(|e| !kept.holds(&e.path)).collect();
+        spaces_line(&kept, &catalog)
+    }
+
+    fn list_spaces(&self) -> Value {
+        let kept = self.kept();
+        let catalog: Vec<_> = self.index.catalog().unwrap_or_default().into_iter().filter(|e| !kept.holds(&e.path)).collect();
+        let spaces: Vec<Value> = space_folders(&kept, &catalog).into_iter().map(|(space, folders, notes)| json!({"name": space.name, "folders": folders, "notes": notes})).collect();
+        let current = self.space.borrow().as_deref().and_then(|id| kept.spaces.get(id)).map(|s| s.name.clone());
+        json!({"spaces": spaces, "current": current})
+    }
+
     /// The tags with how many shared notes have each (the marking tag left out).
     fn tag_counts(&self, kept: &Kept) -> Vec<(String, usize)> {
         let counts = self.index.tag_counts().unwrap_or_default().into_iter().filter(|(tag, _)| tag != NO_AI_TAG);
@@ -206,6 +222,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             "list_notes" => self.list_notes(args),
             "list_tasks" => self.list_tasks(args),
             "list_tags" => self.list_tags(),
+            "list_spaces" => Ok(self.list_spaces()),
             _ => Err(ToolError::Unknown(name.to_owned())),
         }
     }
@@ -632,26 +649,10 @@ fn describe(index: &impl ToolIndex, kept: &Kept, tags: &[(String, usize)]) -> St
         text.push_str(&format!(" Top-level folders (files in each): {}{more}", sorted.join(", ")));
         text.push_str(&if top > 0 { format!("; {top} files at the top.") } else { ".".to_string() });
     }
-    // The spaces (ADR 0030), each with the folders whose rules put them in it.
-    if !kept.spaces.is_empty() {
-        let mut all: BTreeSet<&str> = BTreeSet::new();
-        for entry in &catalog {
-            let mut path = entry.path.as_str();
-            while let Some((folder, _)) = path.rsplit_once('/') {
-                all.insert(folder);
-                path = folder;
-            }
-        }
-        let listed: Vec<String> = kept
-            .spaces
-            .list()
-            .iter()
-            .map(|space| {
-                let folders: Vec<&str> = all.iter().copied().filter(|f| kept.spaces.own(f).flatten().is_some_and(|s| s.id == space.id)).collect();
-                format!("{} ({})", space.name, folders.join(", "))
-            })
-            .collect();
-        text.push_str(&format!(" Spaces (named sets of folders the user works in; search and list_notes take one as `space`): {}.", listed.join(", ")));
+    let spaces = spaces_line(kept, &catalog);
+    if !spaces.is_empty() {
+        text.push(' ');
+        text.push_str(&spaces);
     }
     let mut tags = tags.to_vec();
     tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -670,6 +671,38 @@ fn describe(index: &impl ToolIndex, kept: &Kept, tags: &[(String, usize)]) -> St
         text.push_str(&format!(" Its titles are mostly in {script}: search with words in the notes' language."));
     }
     text
+}
+
+/// Each space of the vault (ADR 0030) with the folders whose own rules put them in it and how
+/// many of `catalog`'s notes it has.
+fn space_folders(kept: &Kept, catalog: &[knotes_core::CatalogEntry]) -> Vec<(Space, Vec<String>, usize)> {
+    let mut all: BTreeSet<&str> = BTreeSet::new();
+    for entry in catalog {
+        let mut path = entry.path.as_str();
+        while let Some((folder, _)) = path.rsplit_once('/') {
+            all.insert(folder);
+            path = folder;
+        }
+    }
+    kept.spaces
+        .list()
+        .iter()
+        .map(|space| {
+            let folders = all.iter().filter(|f| kept.spaces.own(f).flatten().is_some_and(|s| s.id == space.id)).map(|f| f.to_string()).collect();
+            let notes = catalog.iter().filter(|e| kind_of(&e.path) == "note" && kept.spaces.of(&e.path).is_some_and(|s| s.id == space.id)).count();
+            (space.clone(), folders, notes)
+        })
+        .collect()
+}
+
+/// The spaces in a sentence for the model: each with its folders; empty with none.
+fn spaces_line(kept: &Kept, catalog: &[knotes_core::CatalogEntry]) -> String {
+    let spaces = space_folders(kept, catalog);
+    if spaces.is_empty() {
+        return String::new();
+    }
+    let listed: Vec<String> = spaces.iter().map(|(space, folders, _)| format!("{} ({})", space.name, folders.join(", "))).collect();
+    format!("Spaces of the vault (named sets of its folders the user works in; list_spaces lists them, search and list_notes take one as `space`): {}.", listed.join(", "))
 }
 
 /// Search hits as they are gathered: how each was found, the hit, and the document it was

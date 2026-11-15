@@ -26,10 +26,12 @@ impl AccessToken for Token {
     }
 }
 
-/// One tool, `search`, answering with a note, keeping its calls.
+/// One tool, `search`, answering with a note, keeping its calls; a vault with spaces when
+/// `spaced`.
 #[derive(Default)]
 struct Tools {
     calls: RefCell<Vec<(String, Value)>>,
+    spaced: Cell<bool>,
 }
 
 impl ToolBox for Tools {
@@ -48,6 +50,10 @@ impl ToolBox for Tools {
 
     fn excluded(&self, path: &str) -> bool {
         path.starts_with("Private/")
+    }
+
+    fn spaces(&self) -> String {
+        if self.spaced.get() { "The vault's spaces: Робота (Work), Тварини (Pets).".into() } else { String::new() }
     }
 }
 
@@ -178,6 +184,19 @@ fn the_window_s_space_is_told_each_turn_before_the_question() {
     assert_eq!(input[input.len() - 2]["role"], "developer");
     assert!(told.contains("«Робота»") && told.contains("first"), "{told}");
     assert_eq!(fake.body(0)["instructions"], INSTRUCTIONS, "not in the instructions: their cached start stays");
+}
+
+#[test]
+fn the_vault_s_spaces_are_told_each_turn_so_a_conversation_begun_before_them_knows_them() {
+    let fake = Fake::answering(vec![reply(vec![message("ok")])]);
+    let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
+    tools.spaced.set(true);
+    let (result, _) = send(&chat(&fake, &token), &mut items, "які є простори?", None, &tools);
+    assert_eq!(result, Ok(()));
+    let input = fake.body(0)["input"].as_array().unwrap().clone();
+    let told = input[input.len() - 2]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+    assert!(told.contains("Робота (Work), Тварини (Pets)") && told.contains("whole vault"), "the window in no space: {told}");
+    assert!(INSTRUCTIONS.contains("list_spaces") && INSTRUCTIONS.contains("профілі"), "the model knows what spaces are and their other names");
 }
 
 #[test]
