@@ -2925,3 +2925,33 @@ fn test_questions_run_through_the_chat_and_their_answers_are_written_down() {
     assert!(answers.ends_with("Готово: 2 з 2\n"), "{answers}");
     assert!(out_text.contains("chat conversations: Нова розмова | selected 0"), "the questions are not kept as conversations: {out_text}");
 }
+
+/// A vault with two spaces: Work (Робота) and Home (Дім), and a note in neither.
+fn spaced_vault() -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    for (path, text) in [("Work/a.md", "a"), ("Work/Radar/b.md", "b #radar"), ("Home/c.md", "c"), ("top.md", "top")] {
+        let path = vault.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    std::fs::write(vault.path().join(".knotes.json"), r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}, {"id": "home", "name": "Дім", "color": "green"}]}"#).unwrap();
+    std::fs::write(vault.path().join("Work/.knotes.json"), r#"{"space": "work"}"#).unwrap();
+    std::fs::write(vault.path().join("Home/.knotes.json"), r#"{"space": "home"}"#).unwrap();
+    vault
+}
+
+#[test]
+fn a_space_keeps_the_sidebar_and_the_list_to_its_folders_and_is_remembered() {
+    let (vault, home) = (spaced_vault(), tempfile::tempdir().unwrap());
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "work")]);
+    let line = |name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("no {name}: {out}")).to_string();
+    assert_eq!(line("space: "), "Робота | spaces: Робота, Дім");
+    assert_eq!(line("sidebar: "), "Усі нотатки (2) | Без тегів (1) | · | Work (1)", "the space's folders, no inbox outside it");
+    let list = line("list: ");
+    assert!(list.contains("a ~") && list.contains("b ~") && !list.contains("c ~") && !list.contains("top ~"), "{list}");
+    let again = probe_env(&[vault.path()], Some(home.path()), &[]);
+    assert!(again.contains("space: Робота |"), "the window's space comes back: {again}");
+    let whole = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "")]);
+    assert!(whole.contains("space: — |"), "the whole vault: {whole}");
+    assert!(whole.contains("Усі нотатки (4)"), "{whole}");
+}

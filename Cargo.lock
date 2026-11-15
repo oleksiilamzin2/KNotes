@@ -576,6 +576,7 @@ dependencies = [
  "knotes-pdf",
  "knotes-search",
  "knotes-session",
+ "knotes-spaces",
  "knotes-synth",
  "knotes-tools",
  "knotes-vault",

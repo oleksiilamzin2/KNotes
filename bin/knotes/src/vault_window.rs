@@ -11,7 +11,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder,
+    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -21,6 +21,7 @@ use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_co
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
+use knotes_spaces::Spaces;
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
@@ -74,6 +75,29 @@ struct State {
     sidebar_mode: SidebarMode,
     /// Text in the search field over the list; the list shows its results when not empty.
     search: String,
+    /// The vault's spaces (ADR 0030), the window's (none: the whole vault) and its folders.
+    spaces: Arc<Spaces>,
+    space: Option<String>,
+    space_folders: Option<SpaceFolders>,
+}
+
+impl State {
+    /// The space's folders again, after a snapshot or a change of space; none when the vault
+    /// no longer has the space.
+    fn fit_space(&mut self) {
+        if self.space.as_ref().is_some_and(|id| self.spaces.get(id).is_none()) {
+            self.space = None;
+        }
+        self.space_folders = self.space.as_ref().map(|id| SpaceFolders::new(&self.folders, &self.spaces, id));
+    }
+
+    /// The folder tree the sidebar shows: the space's, or the whole vault's.
+    fn shown_folders(&self) -> Arc<FolderNode> {
+        match &self.space_folders {
+            Some(space) => Arc::new(self.folders.within(space)),
+            None => Arc::clone(&self.folders),
+        }
+    }
 }
 
 /// Autosave runs after this long without edits (ADR 0011).
@@ -82,6 +106,8 @@ const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
 const OUTLINE_DELAY: Duration = Duration::from_millis(150);
 /// The vault's tabs, beside its index (ADR 0024).
 const TABS_FILE: &str = "tabs.json";
+/// The window's space, beside the index (ADR 0030).
+const SPACE_FILE: &str = "space.json";
 
 /// The note open in the editor.
 struct Editing {
@@ -126,6 +152,8 @@ pub struct VaultWindow {
     /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
     tabs: RefCell<Tabs>,
     tabs_restored: Cell<bool>,
+    /// Whether the last launch's space came back (on the first snapshot).
+    space_restored: Cell<bool>,
     /// The next document opened goes in a new tab (the list's menu asked for it).
     new_tab_next: Cell<bool>,
     /// The next document is opened from the note (a link or a preview clicked in it).
@@ -281,6 +309,9 @@ impl VaultWindow {
             titles: None,
             sidebar_mode: SidebarMode::Folders,
             search: String::new(),
+            spaces: Arc::new(Spaces::default()),
+            space: None,
+            space_folders: None,
         };
         let this = Rc::new(Self {
             window,
@@ -306,6 +337,7 @@ impl VaultWindow {
             no_document,
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
+            space_restored: Cell::new(false),
             new_tab_next: Cell::new(false),
             from_note: Cell::new(false),
             panel_mode: Cell::new(PanelMode::Ai),
@@ -900,8 +932,20 @@ impl VaultWindow {
                 self.outline.reloadData();
                 return;
             }
+            drop(state);
+            // In a space: its folders, the inbox if it is one of them, its untagged notes.
+            let untagged = {
+                let mut state = self.state.borrow_mut();
+                match state.space_folders.clone() {
+                    Some(space) => self.untagged_notes(&mut state).iter().filter(|p| space.holds(p)).count(),
+                    None => state.untagged,
+                }
+            };
+            let state = self.state.borrow();
+            let folders = state.shown_folders();
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
-            Sidebar::new(&state.folders, &state.tags, state.sidebar_mode, Some(&inbox), state.untagged, &|path| {
+            let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
+            Sidebar::new(&folders, &state.tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| {
                 resolve_list_settings(path, &state.rules).include_subfolders
             })
         };
@@ -1032,7 +1076,12 @@ impl VaultWindow {
             state.tags = Arc::clone(&snapshot.tags);
             state.untagged = snapshot.untagged;
             state.catalog = Arc::clone(&snapshot.catalog);
+            state.spaces = Arc::clone(&snapshot.spaces);
         }
+        if !self.space_restored.replace(true) {
+            self.state.borrow_mut().space = self.saved_space();
+        }
+        self.state.borrow_mut().fit_space();
         let new_links = {
             let mut state = self.state.borrow_mut();
             let fresh = !state.links.as_ref().is_some_and(|l| Arc::ptr_eq(l, &snapshot.links));
@@ -1073,6 +1122,9 @@ impl VaultWindow {
             probe::search_requested(&self.window);
             probe::toggle_sidebar_requested(&self.window);
             probe::panel_requested(&self.window);
+            if let Some(space) = probe::requested_space() {
+                self.set_space(space);
+            }
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
                 self.select(item);
@@ -1382,6 +1434,52 @@ impl VaultWindow {
         if let Some(path) = current {
             self.open_note(&path, true);
         }
+    }
+
+    /// The window's space (ADR 0030), none for the whole vault: kept beside the index; the
+    /// sidebar and the list are shown again for it (a selection outside it goes to all notes).
+    pub fn set_space(&self, id: Option<String>) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.space = id.filter(|id| state.spaces.get(id).is_some());
+            state.fit_space();
+        }
+        self.save_space();
+        self.rebuild_sidebar();
+        let mut selection = self.state.borrow().selection.clone();
+        if !self.exists(&selection) {
+            selection = SidebarItem::AllNotes;
+            self.state.borrow_mut().selection = selection.clone();
+        }
+        self.highlight(&selection);
+        self.refresh_list();
+    }
+
+    /// The space and the spaces, for the probe: "Робота | spaces: Робота, Дім" (— for none).
+    pub fn describe_space(&self) -> String {
+        let state = self.state.borrow();
+        let name = state.space.as_ref().and_then(|id| state.spaces.get(id)).map_or("—", |s| s.name.as_str());
+        let names: Vec<&str> = state.spaces.list().iter().map(|s| s.name.as_str()).collect();
+        format!("{name} | spaces: {}", names.join(", "))
+    }
+
+    fn space_file(&self) -> Option<PathBuf> {
+        self.state.borrow().index_dir.as_ref().map(|dir| dir.join(SPACE_FILE))
+    }
+
+    fn save_space(&self) {
+        let Some(file) = self.space_file() else { return };
+        let text = serde_json::json!({"space": self.state.borrow().space}).to_string();
+        let tmp = file.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &file)) {
+            eprintln!("knotes: cannot save the space: {e}");
+        }
+    }
+
+    /// The space of the last launch.
+    fn saved_space(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.space_file()?).ok()?;
+        serde_json::from_str::<serde_json::Value>(&text).ok()?.get("space")?.as_str().map(str::to_owned)
     }
 
     /// Opens `path` in a new tab beside the tab shown (the list's menu).
@@ -2318,11 +2416,11 @@ impl VaultWindow {
         // Search results replace the list; it is built only without them (50k notes: ~2 ms).
         // What a search here covers: the list's notes and its PDFs (ADR 0022).
         let searching = !state.search.trim().is_empty();
-        *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings, None));
+        *self.search_scope.borrow_mut() = (searching && (!matches!(selection, SidebarItem::AllNotes) || state.space.is_some())).then(|| list_scope(&state.rows, &filter, &settings, state.space_folders.as_ref()));
         let results = self.search_results.borrow();
         let items = match results.as_ref().filter(|_| searching) {
-            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, None),
-            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now(), None),
+            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, state.space_folders.as_ref()),
+            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now(), state.space_folders.as_ref()),
         };
         drop(results);
         self.list.set_items(Arc::clone(&state.rows), items);
@@ -2641,7 +2739,10 @@ impl VaultWindow {
         let state = self.state.borrow();
         match item {
             // The inbox row shows before its folder exists.
-            SidebarItem::Folder(path) => folder_exists(&state.folders, path) || *path == new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER),
+            SidebarItem::Folder(path) => {
+                let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
+                folder_exists(&state.shown_folders(), path) || (*path == inbox && state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)))
+            }
             SidebarItem::Tag(tag) => tag_exists(&state.tags, tag),
             _ => true,
         }

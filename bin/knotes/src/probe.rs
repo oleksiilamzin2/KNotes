@@ -723,6 +723,12 @@ pub fn requested_selection() -> Option<knotes_app::SidebarItem> {
     knotes_app::SidebarItem::from_key(&std::env::var("KNOTES_PROBE_SELECT").ok()?)
 }
 
+/// The space to work in before reporting (`KNOTES_PROBE_SPACE=work`; empty: the whole vault).
+pub fn requested_space() -> Option<Option<String>> {
+    let id = std::env::var("KNOTES_PROBE_SPACE").ok()?;
+    Some((!id.is_empty()).then_some(id))
+}
+
 /// List option to choose before reporting (`KNOTES_PROBE_ACTION=sort=title`, `group=off`, …),
 /// through the same handler as the menu.
 pub fn requested_option() -> Option<knotes_app::ListOption> {
@@ -793,6 +799,7 @@ pub fn schedule(with_sidebar: bool) {
                     table_scroll_bench(&window.note_text, &at);
                 }
                 if with_sidebar {
+                    println!("space: {}", window.describe_space());
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
                     report_panel(window);
