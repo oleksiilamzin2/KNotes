@@ -35,6 +35,9 @@ pub struct SearchRequest {
     pub titles: Option<Arc<TitleIndex>>,
     /// Which finds by meaning to show (the chosen model's scale, ADR 0029).
     pub closeness: knotes_tools::Closeness,
+    /// In a space, the list's notes in it: search by meaning finds there apart, so the rest
+    /// of the vault can neither take its places nor raise its bar (ADR 0030).
+    pub space: Option<Vec<String>>,
 }
 
 pub struct SearchResponse {
@@ -100,7 +103,15 @@ fn search(request: &SearchRequest, reader: Option<&SqliteIndex>, meaning: Option
     };
     if request.mode == SearchMode::Meaning {
         if let (Some(reader), Some(meaning), false) = (reader, meaning, query.is_empty()) {
-            content = by_meaning(reader, meaning, query, request.scope.as_deref(), request.closeness);
+            content = match &request.space {
+                Some(space) => {
+                    let mut found = by_meaning(reader, meaning, query, Some(space), request.closeness);
+                    let seen: HashSet<String> = found.iter().map(|m| m.path.clone()).collect();
+                    found.extend(by_meaning(reader, meaning, query, request.scope.as_deref(), request.closeness).into_iter().filter(|m| !seen.contains(&m.path)));
+                    found
+                }
+                None => by_meaning(reader, meaning, query, request.scope.as_deref(), request.closeness),
+            };
         }
     } else if within.is_none() {
         titles = request.titles.as_ref().map(|t| t.search_titles(query, MAX_TITLES).into_iter().map(|h| h.path).collect()).unwrap_or_default();
@@ -185,7 +196,7 @@ mod tests {
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
         let near = Near(vec![("Аптечка.md", 0, whole(0), 0.45), ("Дорога.md", 0, whole(2), 0.36), ("Мама.md", 0, whole(1), 0.30), ("Піца.md", 0, whole(3), 0.20)]);
-        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "ліки від тиску".into(), scope: None, titles: None, closeness: CLOSE };
+        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "ліки від тиску".into(), scope: None, titles: None, closeness: CLOSE, space: None };
         let found = search(&request, Some(&index), Some(&near));
         let paths: Vec<&str> = found.content.iter().map(|c| c.path.as_str()).collect();
         assert_eq!(paths, ["Мама.md", "Аптечка.md", "Дорога.md"], "the note with the words first; the far one left out");
@@ -198,7 +209,7 @@ mod tests {
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
         let near = Near(vec![("Ванна.md", 0, whole(0), 0.70), ("Балкон.md", 0, whole(1), 0.62), ("Хорватія.md", 0, whole(2), 0.55)]);
-        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "скільки коштувала переробка санвузла".into(), scope: None, titles: None, closeness: CLOSE };
+        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "скільки коштувала переробка санвузла".into(), scope: None, titles: None, closeness: CLOSE, space: None };
         let paths: Vec<String> = search(&request, Some(&index), Some(&near)).content.into_iter().map(|c| c.path).collect();
         assert_eq!(paths, ["Ванна.md", "Балкон.md"], "0.55 is too far behind 0.70");
     }
@@ -210,7 +221,7 @@ mod tests {
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
         let near = Near(vec![("Cat.md", 0, whole(0), 0.50), ("Cat.md", 0, 6, 0.48), ("Work/Plan.md", 0, whole(2), 0.47), ("Shop.md", 0, whole(1), 0.45)]);
-        let request = |scope: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "чим годувати кота".into(), scope, titles: None, closeness: CLOSE };
+        let request = |scope: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "чим годувати кота".into(), scope, titles: None, closeness: CLOSE, space: None };
         let found = search(&request(None), Some(&index), Some(&near));
         let paths: Vec<&str> = found.content.iter().map(|c| c.path.as_str()).collect();
         assert_eq!(paths, ["Cat.md", "Work/Plan.md", "Shop.md"], "nearest first, each note once");
@@ -218,5 +229,17 @@ mod tests {
         let in_list = search(&request(Some(vec!["Cat.md".into(), "Shop.md".into()])), Some(&index), Some(&near));
         assert_eq!(in_list.content.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), ["Cat.md", "Shop.md"], "the selected list's notes only");
         assert!(search(&request(None), Some(&index), None).content.is_empty(), "no model: nothing found, nothing broken");
+    }
+
+    #[test]
+    fn in_a_space_search_by_meaning_finds_its_notes_apart_from_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes = [("Out1.md", "один"), ("Out2.md", "два"), ("Out3.md", "три"), ("Work/In.md", "робоче")];
+        let index = index_of(dir.path(), &notes);
+        let near = Near(vec![("Out1.md", 0, 4, 0.50), ("Out2.md", 0, 4, 0.48), ("Out3.md", 0, 4, 0.47), ("Work/In.md", 0, 4, 0.30)]);
+        let request = |space: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "щось".into(), scope: None, titles: None, closeness: CLOSE, space };
+        let paths = |space| search(&request(space), Some(&index), Some(&near)).content.into_iter().map(|c| c.path).collect::<Vec<_>>();
+        assert!(!paths(None).contains(&"Work/In.md".to_string()), "in the whole vault the nearer notes raise the bar past it");
+        assert_eq!(paths(Some(vec!["Work/In.md".into()])), ["Work/In.md", "Out1.md", "Out2.md", "Out3.md"], "the space's first, near enough among its own");
     }
 }

@@ -131,6 +131,12 @@ pub fn list_scope(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings
     rows.iter().filter(|r| keeps(filter, settings, r, side)).map(|r| r.path.clone()).collect()
 }
 
+/// The paths of the list of `filter` that are in `space` (its notes and PDFs): search by
+/// meaning finds there apart from the rest (ADR 0030).
+pub fn list_space_scope(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, space: &crate::SpaceFolders) -> Vec<String> {
+    rows.iter().filter(|r| keeps(filter, settings, r, Side::In(space))).map(|r| r.path.clone()).collect()
+}
+
 /// The notes of `filter` (PDFs show only in a search's results). In a space: its notes, then
 /// the rest of the list's under a «Решта бази» header, sorted the same way without date
 /// headers; or the rest alone (ADR 0030).

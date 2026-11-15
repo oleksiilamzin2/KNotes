@@ -11,7 +11,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path, space_notes_folder,
+    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -191,6 +191,8 @@ pub struct VaultWindow {
     search_results: RefCell<Option<SearchResponse>>,
     /// The paths a search of the shown list covers (`None`: all notes).
     search_scope: RefCell<Option<Vec<String>>>,
+    /// In a space, the list's notes in it, which search by meaning finds apart (ADR 0030).
+    search_space: RefCell<Option<Vec<String>>>,
     /// The sidebar's split view item, watched to hide the folders/tags switch with it.
     sidebar_item: Retained<NSSplitViewItem>,
     collapse_observer: RefCell<Option<Retained<CollapseObserver>>>,
@@ -366,6 +368,7 @@ impl VaultWindow {
             search_generation: Cell::new(0),
             search_results: RefCell::new(None),
             search_scope: RefCell::new(None),
+            search_space: RefCell::new(None),
             sidebar_item: split.splitViewItems().objectAtIndex(0),
             collapse_observer: RefCell::new(None),
             panel_item: split.splitViewItems().objectAtIndex(3),
@@ -2617,6 +2620,10 @@ impl VaultWindow {
         };
         let space = state.space_folders.as_ref().map(|space| if outside { SpaceList::Rest(space) } else { SpaceList::Space(space) });
         *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings, space));
+        *self.search_space.borrow_mut() = match space {
+            Some(SpaceList::Space(folders)) if searching => Some(list_space_scope(&state.rows, &filter, &settings, folders)),
+            _ => None,
+        };
         let results = self.search_results.borrow();
         let items = match results.as_ref().filter(|_| searching) {
             Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, space),
@@ -2884,7 +2891,7 @@ impl VaultWindow {
         let (query, scope, titles, index_dir) = {
             let state = self.state.borrow();
             let scope = self.search_scope.borrow().clone();
-            (state.search.clone(), scope, state.titles.clone(), state.index_dir.clone())
+            (state.search.clone(), (scope, self.search_space.borrow().clone()), state.titles.clone(), state.index_dir.clone())
         };
         let (mode, query) = {
             let (mode, text) = parse_search(&query);
@@ -2913,7 +2920,8 @@ impl VaultWindow {
         }
         if let Some(worker) = self.search_worker.borrow().as_ref() {
             let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
-            worker.request(SearchRequest { generation, mode, query, scope, titles, closeness });
+            let (scope, space) = scope;
+            worker.request(SearchRequest { generation, mode, query, scope, titles, closeness, space });
         }
     }
 
