@@ -109,8 +109,8 @@ impl ChatWorker {
                             {
                                 tools = SqliteIndex::open_reader(dir).ok().map(|index| {
                                     let tools = VaultTools::new(index, FsVault::new(root), PdfTexts::new(root));
-                                    match meaning.as_ref().and_then(|(model, embedder)| VectorStore::open_reader(dir, &model.store_file()).ok().map(|store| (embedder, store))) {
-                                        Some((embedder, store)) => tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::clone(embedder) as Arc<dyn Embedder>, store))),
+                                    match meaning.as_ref().and_then(|(model, embedder)| VectorStore::open_reader(dir, &model.store_file()).ok().map(|store| (model, embedder, store))) {
+                                        Some((model, embedder, store)) => tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::clone(embedder) as Arc<dyn Embedder>, store)), model.closeness()),
                                         None => tools,
                                     }
                                 });

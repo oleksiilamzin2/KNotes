@@ -9,7 +9,7 @@ use knotes_search::TitleIndex;
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::{ToolError, ToolIndex, ToolSpec, day_start, specs, utc_minute};
+use crate::{Closeness, ToolError, ToolIndex, ToolSpec, day_start, specs, utc_minute};
 
 /// A fragment's text past this many characters is cut.
 const FRAGMENT: usize = 400;
@@ -69,8 +69,9 @@ pub struct VaultTools<I, F, D> {
     overview: RefCell<Option<(Instant, String)>>,
     /// What the user keeps from the AI, and when it was looked up.
     kept: RefCell<Option<(Instant, Rc<Kept>)>>,
-    /// Search by meaning, merged into search's finds when there (ADR 0028).
-    meaning: Option<Box<dyn MeaningSearch>>,
+    /// Search by meaning, merged into search's finds when there (ADR 0028), and which of its
+    /// finds are near enough to give.
+    meaning: Option<(Box<dyn MeaningSearch>, Closeness)>,
 }
 
 impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultTools<I, F, D> {
@@ -79,9 +80,10 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None), meaning: None }
     }
 
-    /// Search finds blocks by meaning too, merged with those by words (ADR 0028).
-    pub fn with_meaning(mut self, meaning: Box<dyn MeaningSearch>) -> Self {
-        self.meaning = Some(meaning);
+    /// Search finds blocks by meaning too, merged with those by words (ADR 0028), the ones not
+    /// near enough left out.
+    pub fn with_meaning(mut self, meaning: Box<dyn MeaningSearch>, closeness: Closeness) -> Self {
+        self.meaning = Some((meaning, closeness));
         self
     }
 
@@ -227,9 +229,16 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 hits.add("partial", find(&rest, Within::Note, None)?, Some(format!("missing:{word}")), false);
             }
         }
-        // Finds by meaning beside them, the two lists merged; a failing search by meaning (its
+        // Finds by meaning beside them, those standing out too little left out (what the vault
+        // does not hold would fill the page with unrelated notes), the two lists merged; each
+        // block found by meaning says how far it stood out. A failing search by meaning (its
         // helper gone, no model) leaves search by words as it is.
-        if let Some(near) = self.meaning.as_ref().and_then(|m| m.nearest(&asked, wanted, None).ok()) {
+        let mut standing: HashMap<(String, u32), f64> = HashMap::new();
+        if let Some((meaning, closeness)) = &self.meaning
+            && let Ok(near) = meaning.nearest(&asked, wanted, None)
+        {
+            let near = closeness.keep(near);
+            standing = near.iter().map(|h| ((h.path.clone(), h.ord), -h.score)).collect();
             hits.0 = merged(std::mem::take(&mut hits.0), near);
         }
         let kept = self.kept();
@@ -240,6 +249,9 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             .map(|(found, hit, via)| {
                 let text = self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..hit.span.end as usize).map(cut)).unwrap_or_default();
                 let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "modified": self.modified(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
+                if let Some(s) = standing.get(&(hit.path.clone(), hit.ord)) {
+                    result["closeness"] = json!((s * 10.0).round() / 10.0);
+                }
                 // A partial find names the word it lacks; a linked one, the document it came through.
                 if let Some((key, value)) = via.as_deref().map(|v| v.strip_prefix("missing:").map_or(("via", v), |w| ("missing", w))) {
                     result[key] = json!(value);

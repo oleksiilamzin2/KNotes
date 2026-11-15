@@ -2,6 +2,7 @@
 
 mod attachment_store;
 mod change_feed;
+mod closeness;
 mod content_scan;
 mod content_search;
 mod corpus_source;
@@ -30,6 +31,7 @@ mod vault_scanner;
 
 pub use attachment_store::AttachmentStore;
 pub use change_feed::ChangeFeed;
+pub use closeness::Closeness;
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};
 pub use content_search::{BlockHit, ContentQuery, ContentSearch, Within};
 pub use corpus_source::CorpusSource;

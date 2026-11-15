@@ -170,20 +170,20 @@ fn search_finds_what_the_model_looked_for() {
         let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder, pieces).unwrap();
         println!("\n{} ({} blocks embedded)", model.key(), snapshot.len());
         let list_meaning = MeaningIndex::new(embedder.clone(), snapshot.clone());
-        let merged = tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot)));
+        // KNOTES_RETRIEVAL_CLOSENESS=1.8:1.6 tries other thresholds for both searches (to tune them).
+        let tried = std::env::var("KNOTES_RETRIEVAL_CLOSENESS").ok().and_then(|t| t.split_once(':').and_then(|(a, b)| Some(Closeness { near_enough: a.parse().ok()?, behind_nearest: b.parse().ok()? })));
+        let closeness = tried.unwrap_or(model.closeness());
+        let merged = tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot)), closeness);
         let with_meaning = run(&queries, |q| tools_find(&merged, q));
         with_meaning.print("With meaning");
         let reader = SqliteIndex::open_reader(index_dir.path()).unwrap();
-        // KNOTES_RETRIEVAL_CLOSENESS=0.80:0.03 tries other thresholds for the list (to tune them).
-        let tried = std::env::var("KNOTES_RETRIEVAL_CLOSENESS").ok().and_then(|t| t.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
-        let (near_enough, behind_nearest) = tried.unwrap_or(model.closeness());
-        let closeness = Closeness { near_enough, behind_nearest };
         let list = run(&queries, |q| notes_by_meaning(&reader, &list_meaning, q, None, 40, closeness).into_iter().map(|h| h.path).collect());
         list.print("The list's search by meaning");
         if own.is_none() && tried.is_none() {
             let floors = floors(model);
             assert!(with_meaning.words.recall() >= WORDS_RECALL, "search by words got worse with {}: {}", model.key(), with_meaning.words.line("by words"));
             assert!(with_meaning.meaning.recall() >= floors.meaning, "search by meaning got worse with {}: {}", model.key(), with_meaning.meaning.line("by meaning"));
+            assert!(with_meaning.none_shown() <= floors.shown_for_none, "the tools' search gives more for what the vault does not hold with {}: {:.1}", model.key(), with_meaning.none_shown());
             assert!(list.words.recall() >= WORDS_RECALL && list.meaning.recall() >= floors.list, "the list's search got worse with {}: {} {}", model.key(), list.words.line("by words"), list.meaning.line("by meaning"));
             assert!(list.shown as f64 / list.all.queries as f64 <= floors.shown, "the list's search lists more noise with {}: {}", model.key(), list.shown);
             assert!(list.none_shown() <= floors.shown_for_none, "the list's search lists more for what the vault does not hold with {}: {:.1}", model.key(), list.none_shown());
@@ -200,7 +200,8 @@ struct Floors {
     meaning: f64,
     list: f64,
     shown: f64,
-    /// How many documents the list may show a query with no answer in the vault, on average.
+    /// How many documents the list, and the tools' search, may give a query with no answer in the
+    /// vault, on average.
     shown_for_none: f64,
 }
 
@@ -209,10 +210,11 @@ struct Floors {
 fn floors(model: MeaningModel) -> Floors {
     match model {
         // 63 of 65 by meaning (MRR 0.82 in pieces of 400), the list 63 of 65 (MRR 0.86) showing
-        // 3.9 a query, and 3.9 a query with no answer.
+        // 3.9 a query, and 3.9 a query with no answer; the tools' search 3.9 too (8.8 with every
+        // find by meaning given).
         MeaningModel::E5Large => Floors { meaning: 0.96, list: 0.96, shown: 4.2, shown_for_none: 4.2 },
-        // 62 of 65 (MRR 0.82), the list 62 of 65 (MRR 0.86) showing 3.7 a query, 4.9 with no
-        // answer.
+        // 62 of 65 (MRR 0.81), the list 62 of 65 (MRR 0.86) showing 3.7 a query, 4.9 with no
+        // answer; the tools' search 4.9 too (9.2 with every find by meaning given).
         MeaningModel::EmbeddingGemma2 => Floors { meaning: 0.95, list: 0.95, shown: 4.0, shown_for_none: 5.2 },
     }
 }

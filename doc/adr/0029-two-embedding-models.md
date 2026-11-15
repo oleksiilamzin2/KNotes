@@ -86,6 +86,15 @@ git until it is released, both models in the bundle.
   function words left out of the words searched now include prepositions, conjunctions,
   particles and pronouns ("за" found every word starting with it). The benchmark holds a ceiling
   on what the list shows for queries with no answer.
+- **The tools' search keeps the same thresholds** (2026-11-15): it gave every find by meaning
+  beside those by words, so the chat's model and MCP clients got 8.8 (e5) and 9.2
+  (EmbeddingGemma 2) documents for queries with no answer, unrelated notes to read or to build an
+  answer on. With the list's thresholds a model they get 3.9 and 4.9, finding as much (by
+  meaning 63 and 62 of 65; EmbeddingGemma 2's MRR 0.82 → 0.81); looser thresholds found no more
+  and gave 5.7–9.2. Each block found by meaning says how far it stands out (`closeness`, one
+  decimal), so the model can tell a match from a neighbour: on the benchmark 50–59% of the
+  answers' blocks stood at 3 or more, 7–17% of the rest; below 2.5 mostly the rest. The benchmark
+  holds the same ceiling on the tools' search.
 
 ## Consequences
 

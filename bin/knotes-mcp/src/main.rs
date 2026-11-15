@@ -35,9 +35,9 @@ fn main() -> ExitCode {
     // Search by meaning over the vectors Knotes keeps (ADR 0028), with a helper of its own.
     // The model chosen in Knotes' settings (ADR 0029); none when the user turned it off.
     if let Some(model) = MeaningModel::from_setting(AppSettings::load(&app_data).meaning_model.as_deref())
-        && let (Some((helper, model)), Ok(store)) = (std::env::current_exe().ok().and_then(|exe| embedder_files(&exe, model.file())), VectorStore::open_reader(&index_dir(&app_data, &vault), &model.store_file()))
+        && let (Some((helper, file)), Ok(store)) = (std::env::current_exe().ok().and_then(|exe| embedder_files(&exe, model.file())), VectorStore::open_reader(&index_dir(&app_data, &vault), &model.store_file()))
     {
-        tools = tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::new(ProcessEmbedder::new(helper, model)), store)));
+        tools = tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::new(ProcessEmbedder::new(helper, file)), store)), model.closeness());
     }
     let server = McpServer::new(tools);
     let mut out = std::io::stdout().lock();

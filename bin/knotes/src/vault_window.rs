@@ -2614,8 +2614,8 @@ impl VaultWindow {
             *self.search_worker.borrow_mut() = Some(worker);
         }
         if let Some(worker) = self.search_worker.borrow().as_ref() {
-            let (near_enough, behind_nearest) = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
-            worker.request(SearchRequest { generation, mode, query, scope, titles, closeness: knotes_tools::Closeness { near_enough, behind_nearest } });
+            let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
+            worker.request(SearchRequest { generation, mode, query, scope, titles, closeness });
         }
     }
 

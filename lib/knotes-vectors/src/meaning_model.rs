@@ -1,3 +1,6 @@
+use knotes_core::Closeness;
+
+
 /// The setting turning search by meaning off.
 pub const OFF: &str = "off";
 
@@ -66,16 +69,16 @@ impl MeaningModel {
         }
     }
 
-    /// For the note list's search by meaning: how far a block must stand out from all the blocks
-    /// (in standard deviations) to be listed when the query's words are not in its note, and how
-    /// far behind the nearest it may be. Tuned on the benchmark (2026-11-15) with 14 queries the
+    /// For the note list's search by meaning and the tools' search: how far a block must stand out
+    /// from all the blocks (in standard deviations) to be given by meaning, and how far behind the
+    /// nearest it may be. Tuned on the benchmark (2026-11-15) with 14 queries the
     /// vault holds no answer to: cosine thresholds listed 11.8 (e5) and 15.3 (EmbeddingGemma 2)
     /// notes for them, more than for queries it answers, as unrelated notes crowd together; these
     /// list 3.9 and 4.9 and find as much (a floor of 1.9 cost e5 an answer, of 1.8 EmbeddingGemma 2).
-    pub fn closeness(self) -> (f64, f64) {
+    pub fn closeness(self) -> Closeness {
         match self {
-            Self::E5Large => (1.8, 1.6),
-            Self::EmbeddingGemma2 => (1.7, 1.5),
+            Self::E5Large => Closeness { near_enough: 1.8, behind_nearest: 1.6 },
+            Self::EmbeddingGemma2 => Closeness { near_enough: 1.7, behind_nearest: 1.5 },
         }
     }
 }
