@@ -536,7 +536,7 @@ impl VaultWindow {
         let weak_settings: Weak<Self> = Rc::downgrade(&this);
         this.space_switcher.on_settings(move || {
             if let Some(window) = weak_settings.upgrade() {
-                crate::settings_window::show(MainThreadMarker::from(&*window.window));
+                crate::settings_window::show_spaces(MainThreadMarker::from(&*window.window), window.vault());
             }
         });
         let weak_new_folder: Weak<Self> = Rc::downgrade(&this);

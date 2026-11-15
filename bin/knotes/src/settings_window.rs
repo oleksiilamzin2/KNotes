@@ -1,7 +1,9 @@
 //! The settings window (Cmd+,), a tab a subject (ADR 0029): «Пошук» chooses the model search by
-//! meaning runs on, or turns search by meaning off.
+//! meaning runs on, or turns search by meaning off; «Простори» edits the front window's vault's
+//! spaces (ADR 0030).
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime};
@@ -15,6 +17,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
+use crate::settings_spaces::SpacesTab;
 use crate::strings;
 
 /// The tag of the item turning search by meaning off (a model's is its place in
@@ -39,7 +42,8 @@ struct Settings {
     /// The vectors being made: how far, how fast.
     status: Retained<NSTextField>,
     progress: Retained<NSProgressIndicator>,
-    _tabs: Retained<NSTabViewController>,
+    spaces: Retained<SpacesTab>,
+    tabs: Retained<NSTabViewController>,
     _target: Retained<SettingsTarget>,
 }
 
@@ -92,17 +96,30 @@ pub fn on_meaning_change(callback: impl Fn() + 'static) {
     ON_MEANING.with(|c| *c.borrow_mut() = Some(Box::new(callback)));
 }
 
-/// Shows the window (made at the first call) with the current choices.
-pub fn show(mtm: MainThreadMarker) {
+/// Shows the window (made at the first call) with the current choices; its «Простори» tab
+/// shows `vault`'s spaces (the front window's).
+pub fn show(mtm: MainThreadMarker, vault: Option<PathBuf>) {
     SHOWN.with(|shown| {
         let mut shown = shown.borrow_mut();
         let settings = shown.get_or_insert_with(|| make(mtm));
+        settings.spaces.set_vault(vault);
         let tag = crate::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
         settings.popup.selectItemWithTag(tag);
         refresh(settings);
         settings.window.makeKeyAndOrderFront(None);
     });
     tick();
+}
+
+/// Shows the window on its «Простори» tab (the space switcher's «Налаштувати простори…»).
+pub fn show_spaces(mtm: MainThreadMarker, vault: Option<PathBuf>) {
+    show(mtm, vault);
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            settings.tabs.setSelectedTabViewItemIndex(1);
+            settings.window.setTitle(&NSString::from_str(strings::SETTINGS_SPACES));
+        }
+    });
 }
 
 /// While the window is shown, its sizes and progress are looked at again twice a second.
@@ -116,6 +133,7 @@ fn tick() {
         SHOWN.with(|shown| {
             if let Some(settings) = shown.borrow().as_ref() {
                 refresh(settings);
+                settings.spaces.refresh();
             }
         });
         tick();
@@ -319,18 +337,34 @@ fn make(mtm: MainThreadMarker) -> Settings {
     let tabs = NSTabViewController::new(mtm);
     tabs.setTabStyle(NSTabViewControllerTabStyle::Toolbar);
     tabs.addTabViewItem(&item);
+    let (spaces, spaces_view) = SpacesTab::make(mtm);
+    let spaces_vc = NSViewController::new(mtm);
+    spaces_vc.setView(&spaces_view);
+    let spaces_item = NSTabViewItem::tabViewItemWithViewController(&spaces_vc);
+    spaces_item.setLabel(&NSString::from_str(strings::SETTINGS_SPACES));
+    spaces_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("square.stack"), None).as_deref());
+    tabs.addTabViewItem(&spaces_item);
     let window = NSWindow::windowWithContentViewController(&tabs);
     window.setStyleMask(NSWindowStyleMask::Titled | NSWindowStyleMask::Closable);
     window.setTitle(&NSString::from_str(strings::SETTINGS_SEARCH));
     // SAFETY: the window is kept here; closing it must not release it.
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
-    Settings { window, popup, caches, status, progress, _tabs: tabs, _target: target }
+    Settings { window, popup, caches, status, progress, spaces, tabs, _target: target }
+}
+
+/// Probe: an edit made through the «Простори» tab's controls (see `SpacesTab::probe_edit`).
+pub fn probe_spaces_edit(spec: &str) {
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            settings.spaces.probe_edit(spec);
+        }
+    });
 }
 
 /// Probe: `setting` (a model's key, or `off`) chosen in the menu, as a click would.
 pub fn probe_choose(mtm: MainThreadMarker, setting: &str) {
-    show(mtm);
+    show(mtm, None);
     let tag = MeaningModel::ALL.iter().position(|m| m.key() == setting).map_or(OFF_TAG, |i| i as isize);
     SHOWN.with(|shown| {
         if let Some(settings) = shown.borrow().as_ref() {
@@ -342,7 +376,7 @@ pub fn probe_choose(mtm: MainThreadMarker, setting: &str) {
 
 /// Probe: `model`'s stored vectors cleared, as a click on its button would.
 pub fn probe_clear(mtm: MainThreadMarker, key: &str) {
-    show(mtm);
+    show(mtm, None);
     if let Some(model) = MeaningModel::from_key(key) {
         cleared(model);
     }
@@ -375,6 +409,12 @@ pub fn probe_lines() -> Vec<String> {
             })
             .unwrap_or_default();
         let status = shown.borrow().as_ref().map(|s| s.status.stringValue().to_string()).unwrap_or_default();
-        vec![format!("settings: {} | meaning: {chosen} | choices: {}", window.title(), choices.join(" / ")), format!("settings-cache: {}", caches.join(" | ")), format!("settings-progress: {status}")]
+        let spaces = shown.borrow().as_ref().map(|s| s.spaces.probe_line()).unwrap_or_default();
+        vec![
+            format!("settings: {} | meaning: {chosen} | choices: {}", window.title(), choices.join(" / ")),
+            format!("settings-cache: {}", caches.join(" | ")),
+            format!("settings-progress: {status}"),
+            format!("settings-spaces: {spaces}"),
+        ]
     })
 }

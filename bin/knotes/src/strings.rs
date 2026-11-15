@@ -17,6 +17,40 @@ pub const CREATE: &str = "Створити";
 /// A new folder's name, and the commands that make one.
 pub const NEW_FOLDER: &str = "Нова тека";
 pub const NEW_SUBFOLDER: &str = "Нова підтека";
+/// The settings' «Простори» tab (ADR 0030).
+pub const SETTINGS_SPACES: &str = "Простори";
+pub const SPACES_NOTE: &str = "Простори бази зберігаються в ній самій (у файлі .knotes.json у її корені) і їдуть разом з нею. Теку додають до простору з її меню в бічній панелі.";
+pub const SPACES_NO_VAULT: &str = "Відкрийте базу, щоб налаштувати її простори.";
+pub const ADD_SPACE: &str = "Додати простір";
+pub const DELETE: &str = "Видалити";
+pub const NEW_SPACE_NAME: &str = "Новий простір";
+pub const DELETE_SPACE_NOTE: &str = "Його теки й нотатки лишаться на місці, лише вийдуть із простору.";
+
+/// "Простори бази «Дім»".
+pub fn spaces_of(vault: &str) -> String {
+    format!("Простори бази «{vault}»")
+}
+
+/// "Видалити простір «Робота»?"
+pub fn delete_space_question(name: &str) -> String {
+    format!("Видалити простір «{name}»?")
+}
+
+/// A space's colour as the settings name it.
+pub fn color_name(color: knotes_spaces::SpaceColor) -> &'static str {
+    use knotes_spaces::SpaceColor;
+    match color {
+        SpaceColor::Blue => "Синій",
+        SpaceColor::Purple => "Фіолетовий",
+        SpaceColor::Pink => "Рожевий",
+        SpaceColor::Red => "Червоний",
+        SpaceColor::Orange => "Помаранчевий",
+        SpaceColor::Yellow => "Жовтий",
+        SpaceColor::Green => "Зелений",
+        SpaceColor::Teal => "Бірюзовий",
+        SpaceColor::Gray => "Сірий",
+    }
+}
 pub const TODAY: &str = "Сьогодні";
 pub const YESTERDAY: &str = "Вчора";
 pub const PREVIOUS_7_DAYS: &str = "Попередні 7 днів";

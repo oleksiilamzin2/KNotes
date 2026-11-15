@@ -176,7 +176,7 @@ define_class!(
         /// Knotes → Settings (Cmd+,).
         #[unsafe(method(showSettings:))]
         fn show_settings(&self, _sender: Option<&AnyObject>) {
-            crate::settings_window::show(self.mtm());
+            crate::settings_window::show(self.mtm(), self.front_window().and_then(|w| w.vault()));
         }
 
         /// File → Save: writes the unsaved notes of all windows (autosave would in 2 s anyway).

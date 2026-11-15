@@ -26,6 +26,7 @@ mod quiet_scroll_view;
 mod rename_dialog;
 mod search_bar;
 mod search_worker;
+mod settings_spaces;
 mod settings_window;
 mod sidebar_view;
 mod space_switcher;

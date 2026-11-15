@@ -3049,3 +3049,20 @@ fn in_a_space_a_new_note_goes_to_one_of_its_folders() {
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_ACTION", "new")]);
     assert!(vault.path().join("Work/Без назви.md").exists(), "the inbox is not the space's: its folder: {out}");
 }
+
+#[test]
+fn the_settings_spaces_tab_lists_the_vault_s_spaces_and_edits_them() {
+    let vault = spaced_vault();
+    let root = || serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(vault.path().join(".knotes.json")).unwrap()).unwrap()["spaces"].clone();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces")]);
+    let vault_name = vault.path().file_name().unwrap().to_string_lossy().to_string();
+    assert!(out.contains(&format!("settings-spaces: {vault_name} | Робота (blue) | Дім (green)")), "{out}");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "rename:0=Офіс")]);
+    assert_eq!(root()[0], serde_json::json!({"id": "work", "name": "Офіс", "color": "blue"}), "renamed, its id kept");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "color:1=red")]);
+    assert_eq!(root()[1]["color"], "red");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "add")]);
+    assert_eq!(root()[2], serde_json::json!({"id": "novyi-prostir", "name": "Новий простір", "color": "purple"}));
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "delete:0")]);
+    assert_eq!(root().as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["home", "novyi-prostir"]);
+}

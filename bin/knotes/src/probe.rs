@@ -976,8 +976,15 @@ fn tabs_requested(window: &VaultWindow) {
     }
     // `KNOTES_PROBE_SETTINGS=1`: the settings window shown; `KNOTES_PROBE_SETTINGS_MEANING=off`
     // (or a model's key): that chosen for search by meaning, as a click in its menu would.
-    if std::env::var_os("KNOTES_PROBE_SETTINGS").is_some() {
-        crate::settings_window::show(window.window.mtm());
+    // `KNOTES_PROBE_SETTINGS=spaces`: on the «Простори» tab, then `KNOTES_PROBE_SETTINGS_SPACES`'s
+    // edit made through it (ADR 0030).
+    match std::env::var("KNOTES_PROBE_SETTINGS").as_deref() {
+        Ok("spaces") => crate::settings_window::show_spaces(window.window.mtm(), window.vault()),
+        Ok(_) => crate::settings_window::show(window.window.mtm(), window.vault()),
+        Err(_) => {}
+    }
+    if let Ok(spec) = std::env::var("KNOTES_PROBE_SETTINGS_SPACES") {
+        crate::settings_window::probe_spaces_edit(&spec);
     }
     if let Ok(setting) = std::env::var("KNOTES_PROBE_SETTINGS_MEANING") {
         crate::settings_window::probe_choose(window.window.mtm(), &setting);
