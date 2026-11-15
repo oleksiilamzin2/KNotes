@@ -7,8 +7,9 @@
 //! model's own; 56 more were written on 2026-11-15 from the vault's text, so that a change to
 //! search by meaning can be told from noise (ADR 0028).
 //!
-//! Run twice: by words alone, then with search by meaning (EmbeddingGemma, ADR 0028; the model
-//! comes from `scripts/setup.sh`) merged in.
+//! Run three times: the tools' search by words alone, then with search by meaning (EmbeddingGemma,
+//! ADR 0028; the model comes from `scripts/setup.sh`) merged in, then the note list's search by
+//! meaning (`notes_by_meaning`, ADR 0015).
 //!
 //! `cargo test -p knotes-tools --test retrieval -- --nocapture` prints the report. Another vault:
 //! `KNOTES_RETRIEVAL_VAULT=… KNOTES_RETRIEVAL_QUERIES=….json` (then nothing is asserted).
@@ -21,7 +22,7 @@ use knotes_indexer::Indexer;
 use knotes_md::MarkdownParser;
 use knotes_pdf::PdfTexts;
 use knotes_llama::LlamaEmbedder;
-use knotes_tools::{ToolIndex, VaultTools};
+use knotes_tools::{ToolIndex, VaultTools, notes_by_meaning};
 use knotes_vectors::{MeaningIndex, embed_notes};
 use knotes_vault::FsVault;
 use serde_json::{Value, json};
@@ -38,6 +39,10 @@ const WORDS_RECALL: f64 = 0.97;
 /// 91 of 102.
 const MEANING_RECALL: f64 = 0.83;
 const ALL_WITH_MEANING: f64 = 0.89;
+/// The note list's search by meaning (2026-11-15): by words 37 of 37, by meaning 54 of 65 (MRR
+/// 0.75), 5.5 documents listed a query on average; it may list more only if it finds more.
+const LIST_MEANING_RECALL: f64 = 0.83;
+const LIST_SHOWN: f64 = 6.0;
 
 struct Query {
     text: String,
@@ -77,6 +82,8 @@ struct Run {
     words: Score,
     meaning: Score,
     missed: Vec<String>,
+    /// How many documents a query found, all told (the list shows them all).
+    shown: usize,
 }
 
 impl Run {
@@ -85,22 +92,29 @@ impl Run {
         println!("  {}", self.all.line("all"));
         println!("  {}", self.words.line("by words"));
         println!("  {}", self.meaning.line("by meaning"));
+        println!("  documents found a query: {:.1}", self.shown as f64 / self.all.queries.max(1) as f64);
         println!("  Not in the first five:\n{}", self.missed.join("\n"));
     }
 }
 
-fn run<I: ToolIndex>(tools: &VaultTools<I, FsVault, PdfTexts>, queries: &[Query]) -> Run {
-    let mut run = Run { all: Score::default(), words: Score::default(), meaning: Score::default(), missed: Vec::new() };
+/// The paths the tools' search finds for `query`, best first.
+fn tools_find<I: ToolIndex>(tools: &VaultTools<I, FsVault, PdfTexts>, query: &str) -> Vec<String> {
+    let found = tools.call("search", &json!({"query": query, "limit": 10})).unwrap();
+    found["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect()
+}
+
+fn run(queries: &[Query], find: impl Fn(&str) -> Vec<String>) -> Run {
+    let mut run = Run { all: Score::default(), words: Score::default(), meaning: Score::default(), missed: Vec::new(), shown: 0 };
     for query in queries {
-        let found = tools.call("search", &json!({"query": query.text, "limit": 10})).unwrap();
         let mut paths: Vec<String> = Vec::new();
-        for result in found["results"].as_array().unwrap() {
+        for path in find(&query.text) {
             // Files macOS names keep their letters decomposed (й as и + ˘): compared composed.
-            let path: String = result["path"].as_str().unwrap().nfc().collect();
+            let path: String = path.nfc().collect();
             if !paths.contains(&path) {
                 paths.push(path);
             }
         }
+        run.shown += paths.len();
         let rank = paths.iter().position(|p| query.expected.contains(p)).map(|i| i + 1);
         run.all.add(rank);
         if query.by_meaning { run.meaning.add(rank) } else { run.words.add(rank) }
@@ -127,7 +141,8 @@ fn search_finds_what_the_model_looked_for() {
     let tools = || VaultTools::new(SqliteIndex::open_reader(index_dir.path()).unwrap(), FsVault::new(&vault), PdfTexts::new(&vault));
 
     println!("Retrieval on {} ({} queries)", vault.display(), queries.len());
-    let by_words = run(&tools(), &queries);
+    let words_only = tools();
+    let by_words = run(&queries, |q| tools_find(&words_only, q));
     by_words.print("By words");
 
     let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/embeddinggemma-300M-Q8_0.gguf");
@@ -135,8 +150,13 @@ fn search_finds_what_the_model_looked_for() {
     let embedder = Arc::new(LlamaEmbedder::load(&model).unwrap());
     let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder).unwrap();
     println!("({} blocks embedded)", snapshot.len());
-    let with_meaning = run(&tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot))), &queries);
+    let list_meaning = MeaningIndex::new(embedder.clone(), snapshot.clone());
+    let merged = tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot)));
+    let with_meaning = run(&queries, |q| tools_find(&merged, q));
     with_meaning.print("With meaning");
+    let reader = SqliteIndex::open_reader(index_dir.path()).unwrap();
+    let list = run(&queries, |q| notes_by_meaning(&reader, &list_meaning, q, None, 40).into_iter().map(|h| h.path).collect());
+    list.print("The list's search by meaning");
 
     if own.is_none() {
         for (name, run) in [("by words", &by_words), ("with meaning", &with_meaning)] {
@@ -144,6 +164,8 @@ fn search_finds_what_the_model_looked_for() {
         }
         assert!(with_meaning.meaning.recall() >= MEANING_RECALL, "search by meaning got worse: {}", with_meaning.meaning.line("by meaning"));
         assert!(with_meaning.all.recall() >= ALL_WITH_MEANING, "search with meaning got worse: {}", with_meaning.all.line("all"));
+        assert!(list.words.recall() >= WORDS_RECALL && list.meaning.recall() >= LIST_MEANING_RECALL, "the list's search got worse: {} {}", list.words.line("by words"), list.meaning.line("by meaning"));
+        assert!(list.shown as f64 / list.all.queries as f64 <= LIST_SHOWN, "the list's search lists more noise: {}", list.shown);
     }
 }
 

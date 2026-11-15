@@ -5,7 +5,7 @@ use knotes_embed::{Vector, similarity};
 
 /// Blocks and their vectors, in memory, searched by brute force (256 bytes a block: 200 000
 /// blocks are about 51 MB and a few milliseconds).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Snapshot {
     blocks: Vec<BlockHit>,
     vectors: Vec<Vector>,

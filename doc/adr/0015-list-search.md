@@ -56,6 +56,10 @@ fourth, behind the first-aid kit, a travel list and a pizza dough, and listed 34
 model scores every household note 0.2–0.35 against any query. The mode is therefore hybrid:
 the notes holding the query's words (question and function words left out, word forms found)
 come first, as search by words gives them, merged by reciprocal rank fusion with the notes near
-in meaning, of which those below 0.30, or more than 0.25 behind the nearest, are left out. On
-the household vault "ліки від тиску" then lists the mother's note first among 4, "що робити
-якщо пропав інтернет" the internet note first among 3.
+in meaning, of which those below 0.25, or more than 0.10 behind the nearest, are left out. On
+the household vault "ліки від тиску" then lists the mother's note first, "що робити якщо пропав
+інтернет" the internet note first. The function (`knotes_tools::notes_by_meaning`) is measured
+by the retrieval benchmark as a third run: by words 37 of 37, by meaning 54 of 65 (MRR 0.75),
+5.5 documents listed a query; the thresholds were tuned there (a floor of 0.30 left five
+queries, in other languages mostly, with nothing; 0.25 behind the nearest listed 16 documents a
+query, 0.10 listed 5.5 and lost nothing, 0.07 lost an answer).

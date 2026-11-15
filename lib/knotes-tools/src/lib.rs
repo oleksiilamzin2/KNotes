@@ -3,12 +3,14 @@
 //! tools; the MCP server gives them to external agents.
 
 mod dates;
+mod notes_by_meaning;
 mod specs;
 mod tool_error;
 mod tool_index;
 mod vault_tools;
 
 pub use dates::{day_start, utc_minute};
+pub use notes_by_meaning::{BEHIND_NEAREST, NEAR_ENOUGH, notes_by_meaning};
 pub use specs::{ToolSpec, specs};
 pub use tool_error::ToolError;
 pub use tool_index::ToolIndex;

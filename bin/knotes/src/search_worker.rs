@@ -112,50 +112,12 @@ fn search(request: &SearchRequest, reader: Option<&SqliteIndex>, meaning: Option
     SearchResponse { generation: request.generation, titles, content }
 }
 
-/// How near in meaning a block must be (cosine) to be listed when the query's words are not in
-/// its note: below it every note is somewhat near (household notes scored 0.2–0.35 against
-/// queries they had nothing to do with, 0.4–0.7 against those they answered)...
-const NEAR_ENOUGH: f64 = 0.30;
-/// ...and no farther than this below the nearest: after a 0.70 the 0.35s are noise.
-const BEHIND_NEAREST: f64 = 0.25;
-
-/// Search by meaning in the list: the notes holding the query's words (question and function
-/// words left out, word forms found) first, as search by words would give them, then merged by
-/// reciprocal rank fusion with the notes near in meaning, those not near enough left out; each
-/// note once, the block that found it shown. A note saying "тиск" and "ліки" comes before one
-/// merely about medicines, which the model alone put first.
+/// Search by meaning in the list (ADR 0015): `knotes_tools::notes_by_meaning`, each note shown
+/// with the block that found it.
 fn by_meaning(reader: &SqliteIndex, meaning: &dyn MeaningSearch, query: &str, scope: Option<&[String]>) -> Vec<ContentMatch> {
-    const K: f64 = 60.0;
-    let words = knotes_tools::without_question_words(query);
-    let lexical = reader.search(&ContentQuery { text: &words, within: Within::Note, prefixes: true, scope, limit: MAX_MEANING }).unwrap_or_default();
-    let near = meaning.nearest(query, MAX_MEANING, scope).unwrap_or_default();
-    let full = 127.0 * 127.0;
-    let nearest = near.first().map_or(0.0, |h| -h.score / full);
-    let near_enough = NEAR_ENOUGH.max(nearest - BEHIND_NEAREST) * full;
-    // Each note's best block and its score; the first note by words stays first.
-    let mut found: Vec<(knotes_core::BlockHit, f64)> = Vec::new();
-    let mut add = |hit: knotes_core::BlockHit, rank: usize| {
-        let score = 1.0 / (K + rank as f64 + 1.0);
-        match found.iter_mut().find(|(h, _)| h.path == hit.path) {
-            Some((_, total)) => *total += score,
-            None => found.push((hit, score)),
-        }
-    };
-    let first = lexical.first().map(|h| h.path.clone());
-    for (rank, hit) in lexical.into_iter().enumerate() {
-        add(hit, rank);
-    }
-    let mut seen = HashSet::new();
-    for (rank, hit) in near.into_iter().filter(|h| -h.score >= near_enough && seen.insert(h.path.clone())).enumerate() {
-        add(hit, rank);
-    }
-    if let Some((_, score)) = found.iter_mut().find(|(h, _)| first.as_ref() == Some(&h.path)) {
-        *score = f64::INFINITY;
-    }
-    found.sort_by(|a, b| b.1.total_cmp(&a.1));
-    found
+    knotes_tools::notes_by_meaning(reader, meaning, query, scope, MAX_MEANING)
         .into_iter()
-        .map(|(hit, _)| {
+        .map(|hit| {
             let text = reader.note_text(&hit.path).ok().flatten().unwrap_or_default();
             let block = text.get(hit.span.start as usize..hit.span.end as usize).unwrap_or(&text);
             ContentMatch { snippet: found_snippet(block, query, SNIPPET_CHARS), path: hit.path }
@@ -220,10 +182,10 @@ mod tests {
         let notes = [("Ванна.md", "Ремонт: 87 450 грн."), ("Балкон.md", "Утеплення: 80 500 грн."), ("Хорватія.md", "Відпустка: 3 900 €.")];
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
-        let near = Near(vec![("Ванна.md", 0, whole(0), 0.70), ("Балкон.md", 0, whole(1), 0.46), ("Хорватія.md", 0, whole(2), 0.40)]);
+        let near = Near(vec![("Ванна.md", 0, whole(0), 0.70), ("Балкон.md", 0, whole(1), 0.62), ("Хорватія.md", 0, whole(2), 0.55)]);
         let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "скільки коштувала переробка санвузла".into(), scope: None, titles: None };
         let paths: Vec<String> = search(&request, Some(&index), Some(&near)).content.into_iter().map(|c| c.path).collect();
-        assert_eq!(paths, ["Ванна.md", "Балкон.md"], "0.40 is far behind 0.70");
+        assert_eq!(paths, ["Ванна.md", "Балкон.md"], "0.55 is too far behind 0.70");
     }
 
     #[test]
@@ -232,7 +194,7 @@ mod tests {
         let notes = [("Cat.md", "Барсик їсть Royal Canin."), ("Shop.md", "Корм коту, сіль."), ("Work/Plan.md", "Квартальний план.")];
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
-        let near = Near(vec![("Cat.md", 0, whole(0), 0.5), ("Cat.md", 0, 6, 0.45), ("Work/Plan.md", 0, whole(2), 0.4), ("Shop.md", 0, whole(1), 0.35)]);
+        let near = Near(vec![("Cat.md", 0, whole(0), 0.50), ("Cat.md", 0, 6, 0.48), ("Work/Plan.md", 0, whole(2), 0.47), ("Shop.md", 0, whole(1), 0.45)]);
         let request = |scope: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "чим годувати кота".into(), scope, titles: None };
         let found = search(&request(None), Some(&index), Some(&near));
         let paths: Vec<&str> = found.content.iter().map(|c| c.path.as_str()).collect();
