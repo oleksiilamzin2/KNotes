@@ -180,3 +180,10 @@ paths.
   it is), pooling from the last token (`<|endoftext|>`, which its tokenizer adds) and a KV
   cache shared by the passages of a decode (`with_kv_unified(true)`: split, each of 32
   sequences got 64 tokens).
+- NVIDIA's Nemotron-3-Embed-1B (OpenMDW-1.1, 34 languages with Ukrainian; mradermacher's Q8_0
+  GGUF, 1.2 GB, architecture `mistral3` attending both ways, mean pooling, prompts `query: …` /
+  `passage: …`), asked for by the owner as a second model to choose in the settings: by meaning
+  0.54 (MRR 0.42) at 256 dimensions, 0.71 at 1024, 0.77 (MRR 0.61) at all 2048, against
+  EmbeddingGemma's 0.83 (MRR 0.72) at 256; the start token `<s>` made it worse (0.51). Whether
+  the conversion or llama.cpp's running of the architecture costs it something was not checked
+  against NVIDIA's own code. The owner chose to do without it (2026-11-15).
