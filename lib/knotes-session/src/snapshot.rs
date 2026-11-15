@@ -5,6 +5,7 @@ use knotes_app::{FolderNode, FolderRules, TagNode, folder_tree, tag_tree};
 use knotes_core::{BoxError, CatalogEntry, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
+use knotes_spaces::Spaces;
 
 /// Everything the window shows about a vault at one moment; immutable and cheap to share.
 #[derive(Clone)]
@@ -17,6 +18,8 @@ pub struct Snapshot {
     pub untagged: usize,
     /// `.knotes.json` rules by folder (`""` is the vault root); unreadable files are skipped.
     pub rules: Arc<HashMap<String, FolderRules>>,
+    /// The vault's spaces and its folders' (ADR 0030), from the rules.
+    pub spaces: Arc<Spaces>,
     /// Link resolution for the editor (ADR 0013).
     pub links: Arc<LinkTargets>,
     /// Fuzzy title search, for link completion.
@@ -58,7 +61,8 @@ impl Snapshot {
                     None
                 }
             })
-            .collect();
+            .collect::<HashMap<String, FolderRules>>();
+        let spaces = Spaces::from_rules(rules.iter().map(|(folder, rules)| (folder.as_str(), rules.object())));
         Ok(Self {
             rows: Arc::new(rows),
             catalog,
@@ -68,6 +72,7 @@ impl Snapshot {
             tags: Arc::new(tags),
             untagged,
             rules: Arc::new(rules),
+            spaces: Arc::new(spaces),
             changed,
         })
     }

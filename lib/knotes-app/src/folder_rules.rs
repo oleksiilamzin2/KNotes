@@ -62,6 +62,11 @@ impl FolderRules {
         list.insert(key.into(), value);
     }
 
+    /// The file's object, every key in it (spaces read theirs from it, ADR 0030).
+    pub fn object(&self) -> &Map<String, Value> {
+        &self.root
+    }
+
     /// Pretty JSON with a trailing newline.
     pub fn to_json(&self) -> String {
         let mut text = serde_json::to_string_pretty(&self.root).unwrap_or_else(|_| "{}".into());

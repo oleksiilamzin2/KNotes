@@ -66,6 +66,23 @@ fn snapshots_carry_folder_rules_and_follow_their_changes() {
 }
 
 #[test]
+fn snapshots_carry_the_spaces_and_follow_their_changes() {
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::create_dir_all(vault.path().join("Work/Radar")).unwrap();
+    fs::write(vault.path().join("Work/Radar/a.md"), "a").unwrap();
+    fs::write(vault.path().join("b.md"), "b").unwrap();
+    fs::write(vault.path().join(".knotes.json"), r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}]}"#).unwrap();
+    fs::write(vault.path().join("Work/.knotes.json"), r#"{"space": "work"}"#).unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| s.rows.len() == 2);
+    assert_eq!(first.spaces.list().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Робота"]);
+    assert_eq!(first.spaces.of("Work/Radar/a.md").map(|s| s.id.as_str()), Some("work"), "a subfolder's note");
+    assert_eq!(first.spaces.of("b.md"), None);
+    fs::write(vault.path().join("Work/.knotes.json"), r#"{"space": null}"#).unwrap();
+    wait_for(&events, |s| s.spaces.of("Work/Radar/a.md").is_none());
+}
+
+#[test]
 fn closing_a_session_is_immediate() {
     let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     fs::write(vault.path().join("a.md"), "a").unwrap();

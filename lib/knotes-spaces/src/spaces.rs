@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
 
 use crate::{Space, SpaceColor};
@@ -19,8 +19,8 @@ pub struct Spaces {
 
 impl Spaces {
     /// From each folder's rules (the root's is the folder ""), already parsed.
-    pub fn from_rules<'a>(rules: impl IntoIterator<Item = (&'a str, &'a Value)>) -> Self {
-        let rules: Vec<(&str, &Value)> = rules.into_iter().collect();
+    pub fn from_rules<'a>(rules: impl IntoIterator<Item = (&'a str, &'a Map<String, Value>)>) -> Self {
+        let rules: Vec<(&str, &Map<String, Value>)> = rules.into_iter().collect();
         let mut list: Vec<Space> = Vec::new();
         if let Some(Value::Array(spaces)) = rules.iter().find(|(folder, _)| folder.is_empty()).and_then(|(_, root)| root.get("spaces")) {
             for space in spaces {
@@ -45,9 +45,9 @@ impl Spaces {
         Self { list, folders }
     }
 
-    /// From each folder's rules file as written; a file that is not JSON is skipped.
+    /// From each folder's rules file as written; a file that is not a JSON object is skipped.
     pub fn from_texts(rules: &[(String, String)]) -> Self {
-        let parsed: Vec<(&str, Value)> = rules.iter().filter_map(|(folder, text)| Some((folder.as_str(), serde_json::from_str(text).ok()?))).collect();
+        let parsed: Vec<(&str, Map<String, Value>)> = rules.iter().filter_map(|(folder, text)| Some((folder.as_str(), serde_json::from_str(text).ok()?))).collect();
         Self::from_rules(parsed.iter().map(|(folder, rules)| (*folder, rules)))
     }
 
