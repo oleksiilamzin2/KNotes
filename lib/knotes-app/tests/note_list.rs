@@ -24,24 +24,24 @@ fn flat(sort: SortOrder) -> ListSettings {
 #[test]
 fn folder_filter_with_and_without_subfolders() {
     let rows = vec![row("P/a.md", 1), row("P/Sub/b.md", 2), row("Q/c.md", 3), row("top.md", 4)];
-    let all = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK);
+    let all = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK, None);
     assert_eq!(notes(&rows, &all).len(), 4);
-    let deep = build_note_list(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), &CLOCK);
+    let deep = build_note_list(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), &CLOCK, None);
     assert_eq!(notes(&rows, &deep), ["P/a.md", "P/Sub/b.md"]);
     let direct = ListSettings { include_subfolders: false, ..flat(SortOrder::Title) };
-    let only = build_note_list(&rows, &ListFilter::Folder("P"), &direct, &CLOCK);
+    let only = build_note_list(&rows, &ListFilter::Folder("P"), &direct, &CLOCK, None);
     assert_eq!(notes(&rows, &only), ["P/a.md"]);
     let tagged: HashSet<String> = ["Q/c.md".to_owned()].into();
-    let by_tag = build_note_list(&rows, &ListFilter::Paths(&tagged), &flat(SortOrder::Title), &CLOCK);
+    let by_tag = build_note_list(&rows, &ListFilter::Paths(&tagged), &flat(SortOrder::Title), &CLOCK, None);
     assert_eq!(notes(&rows, &by_tag), ["Q/c.md"]);
 }
 
 #[test]
 fn sorting() {
     let rows = vec![row("note 10.md", 5), row("Note 2.md", 5), row("alpha.md", 1), row("zeta.md", 9)];
-    let by_time = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Modified), &CLOCK);
+    let by_time = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Modified), &CLOCK, None);
     assert_eq!(notes(&rows, &by_time), ["zeta.md", "Note 2.md", "note 10.md", "alpha.md"]);
-    let by_title = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK);
+    let by_title = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK, None);
     assert_eq!(notes(&rows, &by_title), ["alpha.md", "Note 2.md", "note 10.md", "zeta.md"]);
 }
 
@@ -58,7 +58,7 @@ fn date_groups_like_apple_notes() {
         row("last year.md", NOW - 330 * D),
     ];
     let settings = ListSettings { sort: SortOrder::Modified, group_by_date: true, include_subfolders: true };
-    let items = build_note_list(&rows, &ListFilter::All, &settings, &CLOCK);
+    let items = build_note_list(&rows, &ListFilter::All, &settings, &CLOCK, None);
     let shape: Vec<String> = items
         .iter()
         .map(|i| match i {
@@ -90,14 +90,41 @@ fn date_groups_like_apple_notes() {
 fn no_headers_when_sorted_by_title() {
     let rows = vec![row("a.md", NOW), row("b.md", NOW - 40 * D)];
     let settings = ListSettings { sort: SortOrder::Title, group_by_date: true, include_subfolders: true };
-    let items = build_note_list(&rows, &ListFilter::All, &settings, &CLOCK);
+    let items = build_note_list(&rows, &ListFilter::All, &settings, &CLOCK, None);
     assert!(items.iter().all(|i| matches!(i, ListItem::Note(_))));
 }
 
 #[test]
 fn a_folder_s_list_shows_its_notes_and_its_search_covers_its_pdfs_too() {
     let rows = vec![row("P/a.md", 1), row("P/doc.pdf", 2), row("Q/c.md", 3)];
-    let list = build_note_list(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), &CLOCK);
+    let list = build_note_list(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), &CLOCK, None);
     assert_eq!(notes(&rows, &list), ["P/a.md"], "no PDF among the notes");
-    assert_eq!(knotes_app::list_scope(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title)), ["P/a.md", "P/doc.pdf"]);
+    assert_eq!(knotes_app::list_scope(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), None), ["P/a.md", "P/doc.pdf"]);
+}
+
+#[test]
+fn a_list_in_a_space_keeps_the_notes_of_the_space_s_folders() {
+    use knotes_app::{SpaceFolders, folder_tree, list_scope};
+    use knotes_spaces::Spaces;
+    let rows = vec![row("Work/a.md", 1), row("Work/Radar/b.md", 2), row("Work/Archive/c.md", 3), row("Home/d.md", 4), row("top.md", 5), row("Work/e.pdf", 6)];
+    let tree = folder_tree(rows.iter().map(|r| r.path.as_str()));
+    let spaces = Spaces::from_texts(&[
+        (String::new(), r#"{"spaces": [{"id": "work"}, {"id": "home"}]}"#.into()),
+        ("Work".into(), r#"{"space": "work"}"#.into()),
+        ("Work/Archive".into(), r#"{"space": null}"#.into()),
+        ("Home".into(), r#"{"space": "home"}"#.into()),
+    ]);
+    let work = SpaceFolders::new(&tree, &spaces, "work");
+    assert!(work.holds("Work/Radar/b.md") && !work.holds("Work/Archive/c.md") && !work.holds("top.md"));
+    assert!(work.holds_folder("Work/Radar") && !work.holds_folder("Home") && !work.holds_folder(""));
+    let all = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK, Some(&work));
+    assert_eq!(notes(&rows, &all), ["Work/a.md", "Work/Radar/b.md"], "all the space's notes, its taken-out subfolder's not");
+    let folder = build_note_list(&rows, &ListFilter::Folder("Work"), &flat(SortOrder::Title), &CLOCK, Some(&work));
+    assert_eq!(notes(&rows, &folder), ["Work/a.md", "Work/Radar/b.md"]);
+    let tagged: HashSet<String> = ["Home/d.md".to_owned(), "Work/a.md".to_owned()].into();
+    let by_tag = build_note_list(&rows, &ListFilter::Paths(&tagged), &flat(SortOrder::Title), &CLOCK, Some(&work));
+    assert_eq!(notes(&rows, &by_tag), ["Work/a.md"], "a tag's notes in the space");
+    assert_eq!(list_scope(&rows, &ListFilter::All, &flat(SortOrder::Title), Some(&work)), ["Work/a.md", "Work/Radar/b.md", "Work/e.pdf"], "and its PDFs for search");
+    let whole = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK, None);
+    assert_eq!(notes(&rows, &whole).len(), 5, "no space: the whole vault");
 }

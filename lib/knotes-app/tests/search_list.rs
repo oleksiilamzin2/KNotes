@@ -30,9 +30,9 @@ fn title_matches_come_first_then_text_matches_within_the_list() {
         ContentMatch { path: "a.md".into(), snippet: "outside".into() },
     ];
     let titles = ["a.md".to_owned(), "Projects/d.md".to_owned()];
-    let items = search_list(&rows, &ListFilter::Folder("Projects"), &ListSettings::default(), &titles, &content);
+    let items = search_list(&rows, &ListFilter::Folder("Projects"), &ListSettings::default(), &titles, &content, None);
     assert_eq!(items, [ListItem::Found(1, "…d fragment".into()), ListItem::Found(0, "…c fragment".into())]);
-    let only_title = search_list(&rows, &ListFilter::All, &ListSettings::default(), &["a.md".to_owned()], &[]);
+    let only_title = search_list(&rows, &ListFilter::All, &ListSettings::default(), &["a.md".to_owned()], &[], None);
     assert_eq!(only_title, [ListItem::Note(2)], "a title match without a text match keeps the usual snippet");
 }
 
@@ -51,6 +51,6 @@ fn a_pdf_found_by_its_text_is_an_entry_of_its_own() {
     let rows = vec![knotes_core::NoteRow { path: "a.md".into(), mtime_ns: 1, snippet: String::new() }, knotes_core::NoteRow { path: "doc.pdf".into(), mtime_ns: 2, snippet: String::new() }];
     let content = [knotes_app::ContentMatch { path: "doc.pdf".into(), snippet: "Page 2".into() }];
     let settings = knotes_app::ListSettings { sort: knotes_app::SortOrder::Title, group_by_date: false, include_subfolders: true };
-    let items = knotes_app::search_list(&rows, &knotes_app::ListFilter::All, &settings, &[], &content);
+    let items = knotes_app::search_list(&rows, &knotes_app::ListFilter::All, &settings, &[], &content, None);
     assert_eq!(items, [knotes_app::ListItem::Found(1, "Page 2".into())]);
 }

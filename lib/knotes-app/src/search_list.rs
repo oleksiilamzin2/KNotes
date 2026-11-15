@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use knotes_core::NoteRow;
 
 use crate::note_list::keeps;
-use crate::{ListFilter, ListItem, ListSettings};
+use crate::{ListFilter, ListItem, ListSettings, SpaceFolders};
 
 /// A note whose text matched, with the text around the match.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,8 +17,8 @@ pub struct ContentMatch {
 
 /// Results in the list of `filter`: notes in `titles` (best first), each with its text match
 /// when there is one, then the other notes of `content` (best first). `rows` is sorted by path.
-pub fn search_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, titles: &[String], content: &[ContentMatch]) -> Vec<ListItem> {
-    let row_of = |path: &str| rows.binary_search_by(|r| r.path.as_str().cmp(path)).ok().filter(|&i| keeps(filter, settings, &rows[i]));
+pub fn search_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, titles: &[String], content: &[ContentMatch], space: Option<&SpaceFolders>) -> Vec<ListItem> {
+    let row_of = |path: &str| rows.binary_search_by(|r| r.path.as_str().cmp(path)).ok().filter(|&i| keeps(filter, settings, &rows[i], space));
     let snippet_of = |path: &str| content.iter().find(|m| m.path == path).map(|m| m.snippet.clone());
     let mut seen = HashSet::new();
     let mut items = Vec::new();

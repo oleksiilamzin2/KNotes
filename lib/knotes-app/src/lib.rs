@@ -17,6 +17,7 @@ mod outline;
 mod panel_mode;
 mod relink_plan;
 mod sidebar;
+mod space_folders;
 mod tabs;
 mod tag_tree;
 
@@ -37,5 +38,6 @@ pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListOption, ListSett
 pub use outline::{Outline, OutlineEntry, OutlinePlace};
 pub use panel_mode::PanelMode;
 pub use sidebar::{Sidebar, SidebarItem, SidebarMode};
+pub use space_folders::SpaceFolders;
 pub use tabs::{AfterClose, TabPlace, Tabs};
 pub use tag_tree::{TagNode, tag_tree};

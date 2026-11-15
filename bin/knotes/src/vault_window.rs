@@ -2318,11 +2318,11 @@ impl VaultWindow {
         // Search results replace the list; it is built only without them (50k notes: ~2 ms).
         // What a search here covers: the list's notes and its PDFs (ADR 0022).
         let searching = !state.search.trim().is_empty();
-        *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings));
+        *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings, None));
         let results = self.search_results.borrow();
         let items = match results.as_ref().filter(|_| searching) {
-            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content),
-            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now()),
+            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, None),
+            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now(), None),
         };
         drop(results);
         self.list.set_items(Arc::clone(&state.rows), items);

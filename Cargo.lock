@@ -603,6 +603,7 @@ dependencies = [
  "knotes-core",
  "knotes-index",
  "knotes-md",
+ "knotes-spaces",
  "serde_json",
 ]
 

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use knotes_core::{FileKind, NoteRow};
 
+use crate::SpaceFolders;
 use crate::natural_order::{natural_cmp, natural_key};
 
 /// Current time and the local UTC offset (from the system), for date groups.
@@ -100,8 +101,11 @@ pub fn title_of(path: &str) -> &str {
     name.strip_suffix(".md").unwrap_or(name)
 }
 
-/// Whether the list of `filter` shows the note `row`.
-pub(crate) fn keeps(filter: &ListFilter, settings: &ListSettings, row: &NoteRow) -> bool {
+/// Whether the list of `filter` shows the note `row`, in `space` when there is one (ADR 0030).
+pub(crate) fn keeps(filter: &ListFilter, settings: &ListSettings, row: &NoteRow, space: Option<&SpaceFolders>) -> bool {
+    if space.is_some_and(|s| !s.holds(&row.path)) {
+        return false;
+    }
     match filter {
         ListFilter::All => true,
         ListFilter::Paths(paths) => paths.contains(&row.path),
@@ -114,14 +118,15 @@ pub(crate) fn keeps(filter: &ListFilter, settings: &ListSettings, row: &NoteRow)
     }
 }
 
-/// The paths a search in the list of `filter` covers: its notes and its PDFs (ADR 0022).
-pub fn list_scope(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings) -> Vec<String> {
-    rows.iter().filter(|r| keeps(filter, settings, r)).map(|r| r.path.clone()).collect()
+/// The paths a search in the list of `filter` (in `space`) covers: its notes and its PDFs
+/// (ADR 0022).
+pub fn list_scope(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, space: Option<&SpaceFolders>) -> Vec<String> {
+    rows.iter().filter(|r| keeps(filter, settings, r, space)).map(|r| r.path.clone()).collect()
 }
 
-/// The notes of `filter` (PDFs show only in a search's results).
-pub fn build_note_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, clock: &Clock) -> Vec<ListItem> {
-    let keep = |row: &NoteRow| keeps(filter, settings, row) && FileKind::from_path(&row.path) == FileKind::Markdown;
+/// The notes of `filter`, in `space` when there is one (PDFs show only in a search's results).
+pub fn build_note_list(rows: &[NoteRow], filter: &ListFilter, settings: &ListSettings, clock: &Clock, space: Option<&SpaceFolders>) -> Vec<ListItem> {
+    let keep = |row: &NoteRow| keeps(filter, settings, row, space) && FileKind::from_path(&row.path) == FileKind::Markdown;
     let mut picked: Vec<u32> = (0..rows.len() as u32).filter(|&i| keep(&rows[i as usize])).collect();
     let title = |i: u32| title_of(&rows[i as usize].path);
     match settings.sort {
