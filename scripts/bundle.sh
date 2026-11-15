@@ -1,7 +1,8 @@
 #!/bin/sh
 # Builds target/<profile>/Knotes.app around the knotes binary (no Xcode needed, ADR 0010),
 # with the MCP server knotes-mcp beside it (ADR 0027) and the helper that runs the embedding
-# model, knotes-embed, with the model in Resources (ADR 0028; scripts/setup.sh fetches it).
+# model, knotes-embed, with the model in Resources (ADR 0028; scripts/setup.sh fetches it), the
+# licenses passing it on requires in Resources/Licenses, and Credits.rtf for the About window.
 # Usage: scripts/bundle.sh [debug|release]
 set -eu
 profile="${1:-release}"
@@ -22,6 +23,9 @@ cp "target/$profile/knotes" "$app/Contents/MacOS/knotes"
 cp "target/$profile/knotes-mcp" "$app/Contents/MacOS/knotes-mcp"
 cp "target/release/knotes-embed" "$app/Contents/MacOS/knotes-embed"
 cp "$model" "$app/Contents/Resources/"
+mkdir -p "$app/Contents/Resources/Licenses"
+cp licenses/*.txt "$app/Contents/Resources/Licenses/"
+cp licenses/Credits.rtf "$app/Contents/Resources/"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

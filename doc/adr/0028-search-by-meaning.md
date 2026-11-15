@@ -143,4 +143,22 @@ driving licence's date, each beaten by a note nearby in meaning.
 
 Still to do: the M1's
 numbers, and whether hours of first indexing on a large vault keep the window smooth; heading
-paths; the Gemma Terms of Use notice in the app.
+paths.
+
+## Built (2026-11-15): polish
+
+- Dates written in numbers are embedded told in words as well ("2026-10-01 (1 жовтня 2026)",
+  "02.11.2025", "12.2026"; Ukrainian months), `EMBEDDING` v2 so every store is embedded again:
+  by meaning 53 → 54 of 65 (MRR 0.72). October's electricity is still missed: its queries are
+  the model's word stems ("жовт електроенерг"), which embed poorly.
+- At most two blocks of one document among the finds by meaning: no change on the household
+  vault, whose notes are short; a guard for long notes.
+- The helper is started (and loads its model) as soon as the user types in the question field
+  or presses Cmd+L, never waiting itself: the turn's first search does not wait for the model.
+- `bundle.sh` builds the helper optimized in debug bundles too.
+- Licenses, as passing the model and llama.cpp on requires (checked against ai.google.dev/gemma/
+  terms on 2026-11-15, whose Appendix names EmbeddingGemma): `licenses/` holds the Notice with
+  the sentence the Terms require, copies of the Gemma Terms of Use and of the Prohibited Use
+  Policy taken from their pages, and llama.cpp's MIT license; the bundle carries them in
+  `Resources/Licenses`, and `Credits.rtf` (RTF without colours, so it reads in dark mode too)
+  says it in the About window.
