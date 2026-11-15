@@ -45,6 +45,13 @@ fn a_block_is_embedded_with_its_note_s_title_and_its_section_s_heading() {
 }
 
 #[test]
+fn dates_written_in_numbers_are_told_in_words_too() {
+    let text = "Показники 2026-10-01: день 41 605. Анод міняли 02.11.2025, Нурофєн придатний до 12.2026; 2026-13-40 не дата.";
+    let Passage::Document { text, .. } = block_passage("Дім.md", text, &hit("Дім.md", 0, 0, text.len() as u32, None)) else { panic!() };
+    assert_eq!(text, "Показники 2026-10-01 (1 жовтня 2026): день 41 605. Анод міняли 02.11.2025 (2 листопада 2025), Нурофєн придатний до 12.2026 (грудень 2026); 2026-13-40 не дата.");
+}
+
+#[test]
 fn the_nearest_blocks_come_first() {
     let mut snapshot = Snapshot::default();
     let vectors = Words.embed(&[Passage::Query("boiler anode".into()), Passage::Query("garden roses".into()), Passage::Query("boiler pressure".into())]).unwrap();

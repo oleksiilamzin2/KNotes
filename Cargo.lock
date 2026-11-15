@@ -872,6 +872,7 @@ dependencies = [
  "knotes-embed",
  "knotes-index",
  "knotes-md",
+ "regex",
  "rusqlite",
  "serde_json",
  "tempfile",

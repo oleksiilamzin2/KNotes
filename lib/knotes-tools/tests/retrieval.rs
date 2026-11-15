@@ -34,9 +34,10 @@ use unicode_normalization::UnicodeNormalization;
 const WORDS_RECALL: f64 = 0.97;
 /// With search by meaning merged in (EmbeddingGemma Q8_0 over 100 blocks): 2026-11-14, by words
 /// 37 of 37, by meaning 6 of 9; 2026-11-15, on 65 queries by meaning (5 found by words alone),
-/// 53 of 65 (MRR 0.71), all 90 of 102.
-const MEANING_RECALL: f64 = 0.81;
-const ALL_WITH_MEANING: f64 = 0.88;
+/// 53 of 65 (MRR 0.71), all 90 of 102; with dates told in words too, 54 of 65 (MRR 0.72), all
+/// 91 of 102.
+const MEANING_RECALL: f64 = 0.83;
+const ALL_WITH_MEANING: f64 = 0.89;
 
 struct Query {
     text: String,
