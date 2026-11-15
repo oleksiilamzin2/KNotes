@@ -11,7 +11,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders,
+    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -2505,11 +2505,13 @@ impl VaultWindow {
         // Search results replace the list; it is built only without them (50k notes: ~2 ms).
         // What a search here covers: the list's notes and its PDFs (ADR 0022).
         let searching = !state.search.trim().is_empty();
-        *self.search_scope.borrow_mut() = (searching && (!matches!(selection, SidebarItem::AllNotes) || state.space.is_some())).then(|| list_scope(&state.rows, &filter, &settings, state.space_folders.as_ref()));
+        // In a space: its notes, then the rest of the list's under «Решта бази» (ADR 0030).
+        let space = state.space_folders.as_ref().map(SpaceList::Space);
+        *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings, space));
         let results = self.search_results.borrow();
         let items = match results.as_ref().filter(|_| searching) {
-            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, state.space_folders.as_ref()),
-            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now(), state.space_folders.as_ref()),
+            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, space),
+            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now(), space),
         };
         drop(results);
         self.list.set_items(Arc::clone(&state.rows), items);

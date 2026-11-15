@@ -6,6 +6,8 @@ pub const TAGS: &str = "Теги";
 /// The space switcher at the sidebar's foot (ADR 0030).
 pub const SPACE: &str = "Простір";
 pub const WHOLE_VAULT: &str = "Уся база";
+/// The part of a list, and of the sidebar, outside the window's space.
+pub const REST_OF_VAULT: &str = "Решта бази";
 pub const SPACE_SETTINGS: &str = "Налаштувати простори…";
 /// A folder's menu in the sidebar: its space.
 pub const NO_SPACE: &str = "Без простору";

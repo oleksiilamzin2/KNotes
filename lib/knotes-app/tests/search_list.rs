@@ -54,3 +54,23 @@ fn a_pdf_found_by_its_text_is_an_entry_of_its_own() {
     let items = knotes_app::search_list(&rows, &knotes_app::ListFilter::All, &settings, &[], &content, None);
     assert_eq!(items, [knotes_app::ListItem::Found(1, "Page 2".into())]);
 }
+
+#[test]
+fn a_search_in_a_space_gives_its_finds_then_the_rest_of_the_vault_s_under_a_header() {
+    use knotes_app::{SpaceFolders, SpaceList, folder_tree};
+    use knotes_spaces::Spaces;
+    let rows = [row("Home/b.md"), row("Work/a.md"), row("top.md")];
+    let tree = folder_tree(rows.iter().map(|r| r.path.as_str()));
+    let spaces = Spaces::from_texts(&[(String::new(), r#"{"spaces": [{"id": "work"}]}"#.into()), ("Work".into(), r#"{"space": "work"}"#.into())]);
+    let work = SpaceFolders::new(&tree, &spaces, "work");
+    let content = [
+        ContentMatch { path: "top.md".into(), snippet: "top".into() },
+        ContentMatch { path: "Work/a.md".into(), snippet: "a".into() },
+        ContentMatch { path: "Home/b.md".into(), snippet: "b".into() },
+    ];
+    let items = search_list(&rows, &ListFilter::All, &ListSettings::default(), &[], &content, Some(SpaceList::Space(&work)));
+    let shown: Vec<String> = items.iter().map(|i| match i { ListItem::Found(n, _) | ListItem::Note(n) => rows[*n as usize].path.clone(), ListItem::Rest => "[rest]".into(), ListItem::Header(_) => "?".into() }).collect();
+    assert_eq!(shown, ["Work/a.md", "[rest]", "top.md", "Home/b.md"], "the space's first, each part in the search's order");
+    let rest = search_list(&rows, &ListFilter::All, &ListSettings::default(), &[], &content, Some(SpaceList::Rest(&work)));
+    assert_eq!(rest.len(), 2, "outside only: {rest:?}");
+}

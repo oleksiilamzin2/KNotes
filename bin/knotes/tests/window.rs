@@ -2949,7 +2949,9 @@ fn a_space_keeps_the_sidebar_and_the_list_to_its_folders_and_is_remembered() {
     assert_eq!(line("space-menu: "), "Уся база | ✓ Робота | Дім | — | Налаштувати простори…", "chosen through the toolbar's menu");
     assert_eq!(line("sidebar: "), "Усі нотатки (2) | Без тегів (1) | · | Work (1)", "the space's folders, no inbox outside it");
     let list = line("list: ");
-    assert!(list.contains("a ~") && list.contains("b ~") && !list.contains("c ~") && !list.contains("top ~"), "{list}");
+    let rest = list.find("[Решта бази]").unwrap_or_else(|| panic!("{list}"));
+    let (space, others) = list.split_at(rest);
+    assert!(space.contains("a ~") && space.contains("b ~") && others.contains("c ~") && others.contains("top ~"), "the space's notes, then the rest of the vault's: {list}");
     let again = probe_env(&[vault.path()], Some(home.path()), &[]);
     assert!(again.contains("space: Робота |"), "the window's space comes back: {again}");
     let whole = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "")]);

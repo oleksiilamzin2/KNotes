@@ -314,7 +314,7 @@ impl NoteListSource {
     }
 
     fn is_header(&self, row: NSInteger) -> bool {
-        matches!(self.ivars().items.borrow().get(row as usize), Some(ListItem::Header(_)))
+        matches!(self.ivars().items.borrow().get(row as usize), Some(ListItem::Header(_) | ListItem::Rest))
     }
 
     /// Notes (not headers) in the list.
@@ -326,10 +326,14 @@ impl NoteListSource {
         let item = self.ivars().items.borrow().get(index)?.clone();
         let mtm = self.mtm();
         match item {
-            ListItem::Header(group) => {
+            ListItem::Header(_) | ListItem::Rest => {
+                let label = match item {
+                    ListItem::Header(group) => self.group_label(group),
+                    _ => strings::REST_OF_VAULT.to_owned(),
+                };
                 let cell = header_cell(table, mtm);
                 if let Some(field) = unsafe { cell.textField() } {
-                    field.setStringValue(&NSString::from_str(&self.group_label(group)));
+                    field.setStringValue(&NSString::from_str(&label));
                 }
                 Some(Retained::into_super(cell))
             }

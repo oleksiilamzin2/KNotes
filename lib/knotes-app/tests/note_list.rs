@@ -63,6 +63,7 @@ fn date_groups_like_apple_notes() {
         .iter()
         .map(|i| match i {
             ListItem::Header(g) => format!("{g:?}"),
+            ListItem::Rest => "[rest]".into(),
             ListItem::Note(n) | ListItem::Found(n, _) => rows[*n as usize].path.clone(),
         })
         .collect();
@@ -102,9 +103,21 @@ fn a_folder_s_list_shows_its_notes_and_its_search_covers_its_pdfs_too() {
     assert_eq!(knotes_app::list_scope(&rows, &ListFilter::Folder("P"), &flat(SortOrder::Title), None), ["P/a.md", "P/doc.pdf"]);
 }
 
+/// A list's rows: each note's path, the «Решта бази» header as `[rest]`, date headers left out.
+fn parts(rows: &[NoteRow], items: &[ListItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|i| match i {
+            ListItem::Note(n) | ListItem::Found(n, _) => Some(rows[*n as usize].path.clone()),
+            ListItem::Rest => Some("[rest]".into()),
+            ListItem::Header(_) => None,
+        })
+        .collect()
+}
+
 #[test]
-fn a_list_in_a_space_keeps_the_notes_of_the_space_s_folders() {
-    use knotes_app::{SpaceFolders, folder_tree, list_scope};
+fn a_list_in_a_space_gives_its_notes_then_the_rest_of_the_vault_s_under_a_header() {
+    use knotes_app::{SpaceFolders, SpaceList, folder_tree, list_scope};
     use knotes_spaces::Spaces;
     let rows = vec![row("Work/a.md", 1), row("Work/Radar/b.md", 2), row("Work/Archive/c.md", 3), row("Home/d.md", 4), row("top.md", 5), row("Work/e.pdf", 6)];
     let tree = folder_tree(rows.iter().map(|r| r.path.as_str()));
@@ -117,14 +130,25 @@ fn a_list_in_a_space_keeps_the_notes_of_the_space_s_folders() {
     let work = SpaceFolders::new(&tree, &spaces, "work");
     assert!(work.holds("Work/Radar/b.md") && !work.holds("Work/Archive/c.md") && !work.holds("top.md"));
     assert!(work.holds_folder("Work/Radar") && !work.holds_folder("Home") && !work.holds_folder(""));
-    let all = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK, Some(&work));
-    assert_eq!(notes(&rows, &all), ["Work/a.md", "Work/Radar/b.md"], "all the space's notes, its taken-out subfolder's not");
-    let folder = build_note_list(&rows, &ListFilter::Folder("Work"), &flat(SortOrder::Title), &CLOCK, Some(&work));
-    assert_eq!(notes(&rows, &folder), ["Work/a.md", "Work/Radar/b.md"]);
+    let space = Some(SpaceList::Space(&work));
+    let title = flat(SortOrder::Title);
+    let all = build_note_list(&rows, &ListFilter::All, &title, &CLOCK, space);
+    assert_eq!(parts(&rows, &all), ["Work/a.md", "Work/Radar/b.md", "[rest]", "Work/Archive/c.md", "Home/d.md", "top.md"], "the space's notes, then the rest of the vault's");
+    let folder = build_note_list(&rows, &ListFilter::Folder("Work"), &title, &CLOCK, space);
+    assert_eq!(parts(&rows, &folder), ["Work/a.md", "Work/Radar/b.md", "[rest]", "Work/Archive/c.md"], "the folder's taken-out subfolder below");
     let tagged: HashSet<String> = ["Home/d.md".to_owned(), "Work/a.md".to_owned()].into();
-    let by_tag = build_note_list(&rows, &ListFilter::Paths(&tagged), &flat(SortOrder::Title), &CLOCK, Some(&work));
-    assert_eq!(notes(&rows, &by_tag), ["Work/a.md"], "a tag's notes in the space");
-    assert_eq!(list_scope(&rows, &ListFilter::All, &flat(SortOrder::Title), Some(&work)), ["Work/a.md", "Work/Radar/b.md", "Work/e.pdf"], "and its PDFs for search");
-    let whole = build_note_list(&rows, &ListFilter::All, &flat(SortOrder::Title), &CLOCK, None);
+    let by_tag = build_note_list(&rows, &ListFilter::Paths(&tagged), &title, &CLOCK, space);
+    assert_eq!(parts(&rows, &by_tag), ["Work/a.md", "[rest]", "Home/d.md"]);
+    let radar = build_note_list(&rows, &ListFilter::Folder("Work/Radar"), &title, &CLOCK, space);
+    assert_eq!(parts(&rows, &radar), ["Work/Radar/b.md"], "nothing outside: no header");
+    let rest = build_note_list(&rows, &ListFilter::All, &title, &CLOCK, Some(SpaceList::Rest(&work)));
+    assert_eq!(parts(&rows, &rest), ["Work/Archive/c.md", "Home/d.md", "top.md"], "the rest alone, no header");
+    let grouped = ListSettings { sort: SortOrder::Modified, group_by_date: true, include_subfolders: true };
+    let dated = build_note_list(&rows, &ListFilter::All, &grouped, &CLOCK, space);
+    let after = dated.iter().position(|i| *i == ListItem::Rest).unwrap();
+    assert!(dated[..after].iter().any(|i| matches!(i, ListItem::Header(_))) && !dated[after..].iter().any(|i| matches!(i, ListItem::Header(_))), "date headers over the space's notes only: {dated:?}");
+    assert_eq!(list_scope(&rows, &ListFilter::All, &title, space).len(), 6, "a search covers both parts");
+    assert_eq!(list_scope(&rows, &ListFilter::All, &title, Some(SpaceList::Rest(&work))), ["Work/Archive/c.md", "Home/d.md", "top.md"]);
+    let whole = build_note_list(&rows, &ListFilter::All, &title, &CLOCK, None);
     assert_eq!(notes(&rows, &whole).len(), 5, "no space: the whole vault");
 }
