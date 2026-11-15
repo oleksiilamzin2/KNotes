@@ -23,23 +23,36 @@ guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil), let pict
     exit(1)
 }
 
-// The dark square's edges: the first and last dark pixels across the middle row and down the
-// middle column (the background and its shadow are light).
+// The square's edges, across the middle row and down the middle column, each found from the
+// picture's edge inward. A dark square: its first dark pixel (the background and its shadow are
+// light). A light one on a light background: just past the darkest point of the margin (the
+// square's outline and shadow), where it is as light as the square again.
 let (w, h) = (picture.width, picture.height)
 var pixels = [UInt8](repeating: 0, count: w * h * 4)
 pixels.withUnsafeMutableBytes { buffer in
     let context = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space, bitmapInfo: rgba)!
     context.draw(picture, in: CGRect(x: 0, y: 0, width: w, height: h))
 }
-func dark(_ x: Int, _ y: Int) -> Bool {
-    let i = (y * w + x) * 4
-    return 0.299 * Double(pixels[i]) + 0.587 * Double(pixels[i + 1]) + 0.114 * Double(pixels[i + 2]) < 90
+func luma(_ point: (Int, Int)) -> Double {
+    let i = (point.1 * w + point.0) * 4
+    return 0.299 * Double(pixels[i]) + 0.587 * Double(pixels[i + 1]) + 0.114 * Double(pixels[i + 2])
 }
-guard let left = (0..<w).first(where: { dark($0, h / 2) }), let right = (0..<w).last(where: { dark($0, h / 2) }),
-      let top = (0..<h).first(where: { dark(w / 2, $0) }), let bottom = (0..<h).last(where: { dark(w / 2, $0) }) else {
-    FileHandle.standardError.write("icon: no dark square in the picture\n".data(using: .utf8)!)
+// The square's own shade, between its top edge and what is drawn on it.
+let shade = luma((w / 2, h * 12 / 100))
+func edge(_ count: Int, _ point: (Int) -> (Int, Int)) -> Int? {
+    if shade < 128 {
+        return (0..<count).first { luma(point($0)) < 90 }
+    }
+    let margin = 0..<(count * 15 / 100)
+    guard let darkest = margin.min(by: { luma(point($0)) < luma(point($1)) }) else { return nil }
+    return (darkest..<count).first { luma(point($0)) >= shade - 4 }
+}
+guard let fromLeft = edge(w, { ($0, h / 2) }), let fromRight = edge(w, { (w - 1 - $0, h / 2) }),
+      let fromTop = edge(h, { (w / 2, $0) }), let fromBottom = edge(h, { (w / 2, h - 1 - $0) }) else {
+    FileHandle.standardError.write("icon: no square in the picture\n".data(using: .utf8)!)
     exit(1)
 }
+let (left, right, top, bottom) = (fromLeft, w - 1 - fromRight, fromTop, h - 1 - fromBottom)
 // A few pixels in, past the edge's light fringe; the corners are cut by the mask below.
 let inset = 4
 let square = picture.cropping(to: CGRect(x: left + inset, y: top + inset, width: right - left - 2 * inset, height: bottom - top - 2 * inset))!
