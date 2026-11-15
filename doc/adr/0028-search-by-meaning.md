@@ -166,3 +166,8 @@ paths.
   the selected list's documents (the chat's tools pass none). One helper serves the whole app:
   `meaning::embedder()`, shared by the chat, the list's search and the thread keeping the
   vectors.
+- Tried for ranking and left out (2026-11-15), measured on the 65 queries by meaning: all 768
+  dimensions, 54 → 55 of 65, MRR 0.72 → 0.74, at three times the memory; blocks embedded in
+  pieces of a few lines (a table's rows with its header), 54 → 55 of 65 but MRR 0.72 → 0.69,
+  and the mother's note on blood pressure fell from fourth to fifth. What fixed the list's
+  ranking was the words: the list's mode by meaning is hybrid (ADR 0015).

@@ -689,7 +689,7 @@ const QUESTION_WORDS: &[&str] = &[
 ];
 
 /// `query` without its question and function words, unless it holds nothing else.
-fn without_question_words(query: &str) -> String {
+pub fn without_question_words(query: &str) -> String {
     let kept: Vec<&str> = query.split_whitespace().filter(|w| !QUESTION_WORDS.contains(&name_form(w).as_str())).collect();
     if kept.is_empty() { query.to_string() } else { kept.join(" ") }
 }
