@@ -45,8 +45,9 @@ separate group, «Решта бази»; the mark shows on files of other spaces
 - **The mark**: a dot of the space's colour beside a file of another space (in «Уся база» beside
   every file in one): in the list, the folder tree, the tabs and the links panel.
 - **Managed** in Settings, a «Простори» tab (add, rename, colour, remove), and from a folder's
-  menu in the sidebar («Простір ▸»); a switcher in the toolbar (the spaces with their dots,
-  «Уся база»).
+  menu in the sidebar («Простір ▸»); a pop-up at the foot of the sidebar switches (the spaces
+  with their dots, «Уся база»; the owner's choice over a toolbar menu), hidden while the vault
+  has no space.
 
 ## Consequences
 

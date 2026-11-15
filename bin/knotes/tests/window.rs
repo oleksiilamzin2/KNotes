@@ -118,7 +118,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(3), space, sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(3), panel"
+        "toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(3), panel"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -1123,7 +1123,7 @@ fn a_folder_is_renamed_from_the_sidebar_with_the_links_into_it() {
 fn the_toolbar_shows_the_open_notes_name_and_renames_it() {
     let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md")]);
     assert!(out.contains("note-title: Old"), "{out}");
-    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(3), space, sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
+    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
     let (vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "toolbar-rename=From toolbar")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("From toolbar.md")).ok().as_deref(), Some("# Old\n\ntext"), "the first line is content, not the name: {out}");
     assert!(out.contains("note-title: From toolbar"), "{out}");

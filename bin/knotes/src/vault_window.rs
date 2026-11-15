@@ -46,6 +46,7 @@ use crate::find_bar::FindBar;
 use crate::search_bar::SearchBar;
 use crate::search_worker::{SearchRequest, SearchResponse, SearchWorker};
 use crate::sidebar_view::{self, FolderChoice, SidebarSource};
+use crate::space_switcher::SpaceSwitcher;
 use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
 
@@ -169,6 +170,8 @@ pub struct VaultWindow {
     outline_jump: Cell<Option<(usize, f64)>>,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
+    /// The space switcher at the sidebar's foot (ADR 0030).
+    space_switcher: Retained<SpaceSwitcher>,
     state: RefCell<State>,
     /// Set while the window selects a sidebar or list row itself, so selection callbacks ignore it.
     highlighting: Cell<bool>,
@@ -213,8 +216,10 @@ impl VaultWindow {
         let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0, &|_| false);
         let sidebar = SidebarSource::new(mtm, empty);
         let (scroll, outline) = sidebar_view::outline(mtm, &sidebar);
+        // The folder tree above the space switcher (ADR 0030).
+        let (space_switcher, column) = SpaceSwitcher::column(mtm, &scroll);
         let sidebar_vc = NSViewController::new(mtm);
-        sidebar_vc.setView(&scroll);
+        sidebar_vc.setView(&column);
         let list = NoteListSource::new(mtm);
         let (list_scroll, table) = note_list_view::table(mtm, &list);
         let list_vc = NSViewController::new(mtm);
@@ -345,6 +350,7 @@ impl VaultWindow {
             outline_due: Cell::new(false),
             outline_jump: Cell::new(None),
             toolbar_delegate: toolbar,
+            space_switcher,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
             editing: RefCell::new(None),
@@ -517,13 +523,13 @@ impl VaultWindow {
         let weak: Weak<Self> = Rc::downgrade(&this);
         // The space switcher (ADR 0030): a space chosen, or its settings asked for.
         let weak_space: Weak<Self> = Rc::downgrade(&this);
-        this.toolbar_delegate.on_space(move |id| {
+        this.space_switcher.on_space(move |id| {
             if let Some(window) = weak_space.upgrade() {
                 window.set_space(id);
             }
         });
         let weak_settings: Weak<Self> = Rc::downgrade(&this);
-        this.toolbar_delegate.on_space_settings(move || {
+        this.space_switcher.on_settings(move || {
             if let Some(window) = weak_settings.upgrade() {
                 crate::settings_window::show(MainThreadMarker::from(&*window.window));
             }
@@ -1143,8 +1149,8 @@ impl VaultWindow {
             probe::toggle_sidebar_requested(&self.window);
             probe::panel_requested(&self.window);
             if let Some(space) = probe::requested_space() {
-                // Through the toolbar's menu, as a click.
-                self.toolbar_delegate.probe_choose_space(space.as_deref());
+                // Through the switcher, as a click.
+                self.space_switcher.probe_choose(space.as_deref());
             }
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
@@ -1519,10 +1525,11 @@ impl VaultWindow {
         write(folder, set_folder_space(&rules_of(folder), wanted));
     }
 
-    /// The toolbar's switcher offers the vault's spaces, the window's ticked.
+    /// The switcher offers the vault's spaces, the window's selected; the list and the sidebar
+    /// mark the others'.
     fn show_spaces(&self) {
         let state = self.state.borrow();
-        self.toolbar_delegate.set_spaces(state.spaces.list(), state.space.as_deref());
+        self.space_switcher.set_spaces(state.spaces.list(), state.space.as_deref());
         self.list.set_spaces(Arc::clone(&state.spaces), state.space.clone());
         self.sidebar.set_spaces(Arc::clone(&state.spaces), state.space.clone());
     }
@@ -1534,7 +1541,7 @@ impl VaultWindow {
 
     /// The switcher's menu, for the probe.
     pub fn probe_space_menu(&self) -> String {
-        self.toolbar_delegate.probe_space_menu()
+        self.space_switcher.probe_menu()
     }
 
     /// The space and the spaces, for the probe: "Робота | spaces: Робота, Дім" (— for none).
