@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use knotes_core::FileKind;
 
+use crate::SpaceFolders;
 use crate::natural_order::natural_cmp;
 
 /// A folder of the vault; the root has an empty path and name.
@@ -13,6 +14,17 @@ pub struct FolderNode {
     pub notes: usize,
     /// Sorted naturally by name.
     pub children: Vec<FolderNode>,
+}
+
+impl FolderNode {
+    /// The tree a space shows (ADR 0030): its folders, and the folders above them that hold
+    /// them, each counting only the notes of the space's folders.
+    pub fn within(&self, space: &SpaceFolders) -> FolderNode {
+        let children: Vec<FolderNode> = self.children.iter().map(|c| c.within(space)).filter(|c| space.holds_folder(&c.path) || !c.children.is_empty()).collect();
+        let own = self.notes - self.children.iter().map(|c| c.notes).sum::<usize>();
+        let notes = if space.holds_folder(&self.path) { own } else { 0 } + children.iter().map(|c| c.notes).sum::<usize>();
+        FolderNode { path: self.path.clone(), name: self.name.clone(), notes, children }
+    }
 }
 
 /// Builds the folder tree from vault-relative file paths. Every folder that holds any file
