@@ -415,6 +415,7 @@ pub fn probe_lines() -> Vec<String> {
             format!("settings-cache: {}", caches.join(" | ")),
             format!("settings-progress: {status}"),
             format!("settings-spaces: {spaces}"),
+            format!("settings-space-colors: {}", shown.borrow().as_ref().map(|s| s.spaces.probe_colors()).unwrap_or_default()),
         ]
     })
 }

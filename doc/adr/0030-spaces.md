@@ -24,7 +24,9 @@ and in the lists alike.
     "color": "blue"}, …]`, in the order shown. The root file is watched (a file under `.knotes/`
     is not) and already holds a vault-wide setting (`newNotes.folder`). Colours are names of
     macOS's system colours (blue, purple, pink, red, orange, yellow, green, teal, gray), right in
-    light and dark; an unknown name shows as gray.
+    light and dark; an unknown name shows as gray. A colour of one's own (at the owner's word,
+    2026-11-15) is `#rrggbb`, chosen in macOS's colour panel from the settings' «Свій колір…»;
+    it stays as chosen in dark appearance.
   - A folder's space, in its own `.knotes.json`: `"space": "work"`. Subfolders take it, the
     nearest folder that says wins (as list settings and the `ai` rule do), so a folder moved or
     renamed keeps it; `"space": null` takes a subfolder out. The vault's root is in no space; an

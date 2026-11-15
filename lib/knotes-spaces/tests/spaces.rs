@@ -68,10 +68,19 @@ fn broken_rules_and_bad_spaces_are_skipped() {
 #[test]
 fn colours_go_by_their_names() {
     for colour in SpaceColor::ALL {
-        assert_eq!(SpaceColor::from_name(colour.name()), colour);
+        assert_eq!(SpaceColor::from_name(&colour.name()), colour);
     }
     assert_eq!(SpaceColor::ALL.len(), 9);
     assert_eq!(SpaceColor::from_name("BLUE"), SpaceColor::Gray, "names are lower case");
+}
+
+#[test]
+fn a_colour_of_one_s_own_goes_by_its_hex_code() {
+    assert_eq!(SpaceColor::from_name("#FF8800"), SpaceColor::Custom(255, 136, 0));
+    assert_eq!(SpaceColor::from_name("#f80"), SpaceColor::Custom(255, 136, 0), "the short form");
+    assert_eq!(SpaceColor::Custom(255, 136, 0).name(), "#ff8800");
+    assert_eq!(SpaceColor::from_name("#zzzzzz"), SpaceColor::Gray, "not a colour: gray");
+    assert!(!SpaceColor::ALL.contains(&SpaceColor::Custom(0, 0, 0)), "the palette of named ones");
 }
 
 #[test]

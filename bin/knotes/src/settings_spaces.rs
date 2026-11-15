@@ -3,7 +3,7 @@
 //! rules file; the windows follow through their snapshots, and the tab reads the file again
 //! while shown, so spaces made elsewhere show too.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use knotes_core::FolderRulesStore;
@@ -13,11 +13,16 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSButton, NSColor, NSFont, NSLayoutConstraint, NSPopUpButton, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
+    NSAlert, NSAlertFirstButtonReturn, NSButton, NSColor, NSColorPanel, NSColorSpace, NSFont, NSLayoutConstraint, NSMenuItem, NSPopUpButton, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
 use crate::{probe, strings};
+
+/// A row's colour menu: its own colour (shown first when it has one), and the item opening the
+/// colour panel; a named colour's tag is its place in `SpaceColor::ALL`.
+const OWN_TAG: isize = 100;
+const CHOOSE_TAG: isize = 101;
 
 pub struct Ivars {
     /// The vault whose spaces are shown, and the spaces as last shown.
@@ -26,6 +31,8 @@ pub struct Ivars {
     title: RefCell<Option<Retained<NSTextField>>>,
     rows: RefCell<Option<Retained<NSStackView>>>,
     add: RefCell<Option<Retained<NSButton>>>,
+    /// The row whose colour the colour panel chooses, while it is open for it.
+    picking: Cell<Option<isize>>,
 }
 
 define_class!(
@@ -50,15 +57,32 @@ define_class!(
             });
         }
 
-        /// A row's colour chosen.
+        /// A row's colour chosen: a named one, or «Свій колір…», which opens the colour panel.
         #[unsafe(method(colorSpace:))]
         fn color(&self, sender: &NSPopUpButton) {
-            let color = usize::try_from(sender.selectedTag()).ok().and_then(|i| SpaceColor::ALL.get(i).copied());
-            self.edit(sender.tag(), |list, i| {
-                if let Some(color) = color {
-                    list[i].color = color;
+            match sender.selectedTag() {
+                OWN_TAG => {}
+                CHOOSE_TAG => self.choose_own(sender.tag()),
+                tag => {
+                    let color = usize::try_from(tag).ok().and_then(|i| SpaceColor::ALL.get(i).copied());
+                    self.edit(sender.tag(), |list, i| {
+                        if let Some(color) = color {
+                            list[i].color = color;
+                        }
+                    });
                 }
-            });
+            }
+        }
+
+        /// The colour panel's colour, for the row it was opened for (sent when the mouse is let
+        /// go, not at every move).
+        #[unsafe(method(colorPicked:))]
+        fn color_picked(&self, sender: &NSColorPanel) {
+            let Some(row) = self.ivars().picking.get() else { return };
+            let Some(srgb) = sender.color().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) else { return };
+            let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let color = SpaceColor::Custom(byte(srgb.redComponent()), byte(srgb.greenComponent()), byte(srgb.blueComponent()));
+            self.edit(row, |list, i| list[i].color = color);
         }
 
         /// A row's button: the space goes, once confirmed; its folders stay, out of any space.
@@ -104,6 +128,7 @@ impl SpacesTab {
                 title: RefCell::new(None),
                 rows: RefCell::new(None),
                 add: RefCell::new(None),
+                picking: Cell::new(None),
             });
             unsafe { msg_send![super(this), init] }
         };
@@ -185,14 +210,28 @@ impl SpacesTab {
     fn row(&self, i: usize, space: &Space) -> Retained<NSStackView> {
         let mtm = self.mtm();
         let popup = NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
-        for (c, color) in SpaceColor::ALL.iter().enumerate() {
-            popup.addItemWithTitle(&NSString::from_str(strings::color_name(*color)));
+        let entry = |title: &str, tag: isize, color: Option<SpaceColor>| {
+            popup.addItemWithTitle(&NSString::from_str(title));
             if let Some(item) = popup.lastItem() {
-                item.setTag(c as isize);
-                item.setImage(crate::space_ui::dot(*color, 11.0, strings::color_name(*color)).as_deref());
+                item.setTag(tag);
+                item.setImage(color.and_then(|c| crate::space_ui::dot(c, 11.0, title)).as_deref());
             }
+        };
+        // One's own colour first, when the space has one.
+        if let SpaceColor::Custom(..) = space.color {
+            entry(strings::OWN_COLOR, OWN_TAG, Some(space.color));
         }
-        popup.selectItemWithTag(SpaceColor::ALL.iter().position(|c| *c == space.color).unwrap_or(0) as isize);
+        for (c, color) in SpaceColor::ALL.iter().enumerate() {
+            entry(strings::color_name(*color), c as isize, Some(*color));
+        }
+        if let Some(menu) = popup.menu() {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+        entry(strings::CHOOSE_COLOR, CHOOSE_TAG, None);
+        popup.selectItemWithTag(match space.color {
+            SpaceColor::Custom(..) => OWN_TAG,
+            named => SpaceColor::ALL.iter().position(|c| *c == named).unwrap_or(0) as isize,
+        });
         popup.setTag(i as isize);
         let name = NSTextField::textFieldWithString(&NSString::from_str(&space.name), mtm);
         name.setTag(i as isize);
@@ -215,6 +254,28 @@ impl SpacesTab {
             row.addArrangedSubview(view);
         }
         row
+    }
+
+    /// Opens the colour panel on the row's colour; what is chosen there becomes its own.
+    fn choose_own(&self, row: isize) {
+        let Some(space) = self.spaces().and_then(|list| usize::try_from(row).ok().and_then(|i| list.get(i).cloned())) else { return };
+        // The menu shows the space's colour again until the panel gives one.
+        *self.ivars().shown.borrow_mut() = None;
+        self.refresh();
+        if probe::enabled() {
+            return;
+        }
+        let panel = NSColorPanel::sharedColorPanel(self.mtm());
+        self.ivars().picking.set(Some(row));
+        panel.setContinuous(false);
+        panel.setShowsAlpha(false);
+        panel.setColor(&crate::space_ui::color(space.color));
+        // SAFETY: the tab lives as long as the settings window, kept with it.
+        unsafe {
+            panel.setTarget(Some(self));
+            panel.setAction(Some(sel!(colorPicked:)));
+        }
+        panel.makeKeyAndOrderFront(None);
     }
 
     /// The vault's spaces as its root's rules file lists them now; none without a vault.
@@ -263,6 +324,18 @@ impl SpacesTab {
         std::iter::once(vault).chain(spaces).collect::<Vec<_>>().join(" | ")
     }
 
+    /// Each row's colour as its menu shows it, for the probe: "Синій | Свій колір".
+    pub fn probe_colors(&self) -> String {
+        let Some(rows) = self.ivars().rows.borrow().clone() else { return String::new() };
+        let titles: Vec<String> = rows
+            .arrangedSubviews()
+            .iter()
+            .filter_map(|row| row.downcast::<NSStackView>().ok()?.arrangedSubviews().iter().next()?.downcast::<NSPopUpButton>().ok()?.titleOfSelectedItem())
+            .map(|t| t.to_string())
+            .collect();
+        titles.join(" | ")
+    }
+
     /// An edit through the tab's controls, as the user makes it (probe mode): `add`,
     /// `rename:0=Name`, `color:1=red` or `delete:0`.
     pub fn probe_edit(&self, spec: &str) {
@@ -286,8 +359,19 @@ impl SpacesTab {
                 }
                 "color" => {
                     if let Some(popup) = control(row, 0).and_then(|v| v.downcast::<NSPopUpButton>().ok()) {
-                        popup.selectItemWithTag(SpaceColor::ALL.iter().position(|c| c.name() == value).unwrap_or(0) as isize);
-                        let _: () = msg_send![target, colorSpace: &*popup];
+                        if value.starts_with('#') {
+                            // One's own: «Свій колір…», then the panel's colour (not shown here).
+                            popup.selectItemWithTag(CHOOSE_TAG);
+                            let _: () = msg_send![target, colorSpace: &*popup];
+                            self.ivars().picking.set(Some(row as isize));
+                            let color = SpaceColor::from_name(value);
+                            let panel = NSColorPanel::sharedColorPanel(self.mtm());
+                            panel.setColor(&crate::space_ui::color(color));
+                            let _: () = msg_send![target, colorPicked: &*panel];
+                        } else {
+                            popup.selectItemWithTag(SpaceColor::ALL.iter().position(|c| c.name() == value).unwrap_or(0) as isize);
+                            let _: () = msg_send![target, colorSpace: &*popup];
+                        }
                     }
                 }
                 "delete" => {

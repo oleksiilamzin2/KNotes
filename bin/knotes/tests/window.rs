@@ -3061,6 +3061,9 @@ fn the_settings_spaces_tab_lists_the_vault_s_spaces_and_edits_them() {
     assert_eq!(root()[0], serde_json::json!({"id": "work", "name": "Офіс", "color": "blue"}), "renamed, its id kept");
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "color:1=red")]);
     assert_eq!(root()[1]["color"], "red");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "color:1=#ff8800")]);
+    assert_eq!(root()[1]["color"], "#ff8800", "one's own, from the colour panel");
+    assert!(out.contains("Дім (#ff8800)") && out.contains("settings-space-colors: Синій | Свій колір"), "shown first in its row's menu: {out}");
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "add")]);
     assert_eq!(root()[2], serde_json::json!({"id": "novyi-prostir", "name": "Новий простір", "color": "purple"}));
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "delete:0")]);

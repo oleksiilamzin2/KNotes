@@ -49,8 +49,13 @@ pub fn color_name(color: knotes_spaces::SpaceColor) -> &'static str {
         SpaceColor::Green => "Зелений",
         SpaceColor::Teal => "Бірюзовий",
         SpaceColor::Gray => "Сірий",
+        SpaceColor::Custom(..) => OWN_COLOR,
     }
 }
+
+/// A space's colour of one's own, and the item choosing one in the colour panel.
+pub const OWN_COLOR: &str = "Свій колір";
+pub const CHOOSE_COLOR: &str = "Свій колір…";
 pub const TODAY: &str = "Сьогодні";
 pub const YESTERDAY: &str = "Вчора";
 pub const PREVIOUS_7_DAYS: &str = "Попередні 7 днів";

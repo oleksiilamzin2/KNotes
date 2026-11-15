@@ -18,6 +18,8 @@ pub fn color(color: SpaceColor) -> Retained<NSColor> {
         SpaceColor::Green => NSColor::systemGreenColor(),
         SpaceColor::Teal => NSColor::systemTealColor(),
         SpaceColor::Gray => NSColor::systemGrayColor(),
+        // One's own, as chosen: the same in light and dark appearance.
+        SpaceColor::Custom(r, g, b) => NSColor::colorWithSRGBRed_green_blue_alpha(f64::from(r) / 255.0, f64::from(g) / 255.0, f64::from(b) / 255.0, 1.0),
     }
 }
 
