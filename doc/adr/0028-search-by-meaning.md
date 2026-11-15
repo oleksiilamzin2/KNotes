@@ -116,7 +116,10 @@ Checked on 2026-11-14:
   unchanged blocks keep their vectors. Editing one paragraph of a long note embeds one block.
 - A document changed within the last 15 s (`SETTLE`; a minute at first, shortened at the
   owner's word) is being written (saved every two seconds): the background leaves it, and the
-  pass says when the first such document settles.
+  pass says when the first such document settles. One under active editing — changed again
+  within five minutes (`EDITING`) of the version last embedded — waits a minute
+  (`SETTLE_EDITING`), at the owner's word: told from the files' dates alone, so edits made in
+  another editor count too.
 - Before each turn of the chat, the documents still settling are embedded at once (`Which::
   Waiting`), unpaced, so the model's search finds what the user has just written; the backlog of
   first indexing stays the background's, never kept waiting for. Search checks the store's

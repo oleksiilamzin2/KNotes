@@ -177,3 +177,29 @@ fn before_the_chat_asks_the_documents_being_written_are_embedded_at_once() {
     assert_eq!((updated.documents, updated.next), (1, None));
     assert_eq!(store.dates().unwrap().keys().collect::<Vec<_>>(), ["Typing.md"], "the one just written; the backlog stays the background's");
 }
+
+#[test]
+fn a_document_under_active_editing_waits_a_minute() {
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    use knotes_vectors::{SETTLE_EDITING, VectorStore, Which, update};
+    let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    let second: i64 = 1_000_000_000;
+    let first = 5_000_000 * second;
+    index_notes(&mut index, &[("Draft.md", "First words.", first), ("Old.md", "Untouched for long.", 1)]);
+    let store = VectorStore::open(vectors.path(), "words").unwrap();
+    let (go, model) = (AtomicBool::new(false), Counting::default());
+    update(&index, &store, &model, first + 20 * second, Which::Settled, &go).unwrap();
+    assert_eq!(store.dates().unwrap().len(), 2, "both embedded once settled");
+
+    // Changed again half a minute after the version embedded: being worked on.
+    let again = first + 30 * second;
+    index_notes(&mut index, &[("Draft.md", "First words, and more.", again), ("Old.md", "Changed after long.", again)]);
+    let updated = update(&index, &store, &model, again + 20 * second, Which::Settled, &go).unwrap();
+    assert_eq!(updated.documents, 1, "the one untouched for long, after 15 s");
+    assert_eq!(updated.next, Some(SETTLE_EDITING - Duration::from_secs(20)), "the draft after a minute");
+    assert_eq!(SETTLE_EDITING, Duration::from_secs(60));
+    let updated = update(&index, &store, &model, again + 20 * second, Which::Waiting, &go).unwrap();
+    assert_eq!(updated.documents, 1, "before the chat asks, the draft at once");
+}

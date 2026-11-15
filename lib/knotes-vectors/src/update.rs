@@ -17,13 +17,21 @@ const BATCH: usize = 32;
 /// user types.
 pub const SETTLE: Duration = Duration::from_secs(15);
 
+/// How long a document under active editing must stay unchanged: one changed again within
+/// `EDITING` of the version last embedded.
+pub const SETTLE_EDITING: Duration = Duration::from_secs(60);
+
+/// A document changed again this soon after the version last embedded is being worked on.
+pub const EDITING: Duration = Duration::from_secs(5 * 60);
+
 /// Which of the documents new or changed since they were embedded a pass embeds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
-    /// Those unchanged for `SETTLE` (the background's passes).
+    /// Those unchanged for `SETTLE` (`SETTLE_EDITING` under active editing): the background's
+    /// passes.
     Settled,
-    /// Those changed within `SETTLE`, at once: just before the chat asks, so search sees what
-    /// the user has just written; the backlog of first indexing stays the background's.
+    /// Those still settling, at once: just before the chat asks, so search sees what the user has
+    /// just written; the backlog of first indexing stays the background's.
     Waiting,
 }
 
@@ -60,12 +68,14 @@ pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorSto
         store.remove(path)?;
     }
     rows.retain(|r| dates.get(&r.path) != Some(&r.mtime_ns));
-    // Documents changed within SETTLE wait for a settled pass; the first of them to settle says
-    // when to come back.
-    let settle = SETTLE.as_nanos() as i64;
+    // Documents still settling wait for a settled pass; the first of them to settle says when to
+    // come back. One changed again soon after its version embedded is under active editing and
+    // settles longer.
+    let nanos = |d: Duration| d.as_nanos() as i64;
     let mut next: Option<i64> = None;
     rows.retain(|r| {
-        let wait = settle - (now_ns - r.mtime_ns);
+        let editing = dates.get(&r.path).is_some_and(|embedded| r.mtime_ns - embedded < nanos(EDITING));
+        let wait = nanos(if editing { SETTLE_EDITING } else { SETTLE }) - (now_ns - r.mtime_ns);
         match which {
             Which::Settled if wait > 0 => {
                 next = Some(next.map_or(wait, |n| n.min(wait)));

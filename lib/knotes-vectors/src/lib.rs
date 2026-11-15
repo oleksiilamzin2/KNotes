@@ -13,7 +13,7 @@ pub use embed_notes::embed_notes;
 pub use meaning_index::MeaningIndex;
 pub use passage_of::block_passage;
 pub use snapshot::Snapshot;
-pub use update::{SETTLE, Updated, Which, update};
+pub use update::{EDITING, SETTLE, SETTLE_EDITING, Updated, Which, update};
 pub use vector_store::{VECTORS_FILE, VectorStore};
 
 /// How the vectors are made, kept with them: another model, width or text for a block, and the

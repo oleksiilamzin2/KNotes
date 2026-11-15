@@ -23,7 +23,8 @@ pub type TurnDone = Box<dyn FnOnce(Vec<Value>, Memory, Result<(), ChatError>) + 
 
 /// How long the index must stay unchanged before a pass over the vectors: changes come in runs
 /// (a save every two seconds while the user types), one pass for the run. A document is
-/// embedded once unchanged for `knotes_vectors::SETTLE` (15 s), or at once before the chat asks.
+/// embedded once unchanged for `knotes_vectors::SETTLE` (15 s; a minute under active editing),
+/// or at once before the chat asks.
 const VECTORS_QUIET: Duration = Duration::from_secs(2);
 /// A pause after each batch embedded in the background, leaving the GPU to the window.
 const VECTORS_PAUSE: Duration = Duration::from_millis(20);
