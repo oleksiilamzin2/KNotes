@@ -61,8 +61,8 @@ impl MeaningModel {
     /// How its vectors are made, kept with them: another way, and the store is embedded again.
     pub fn embedding(self) -> &'static str {
         match self {
-            Self::E5Large => "multilingual-e5-large-instruct-q8_0, first 512, title and heading › block, dates in words, v1",
-            Self::EmbeddingGemma2 => "embeddinggemma-2-Q8_0, first 512, title and heading › block, dates in words, v1",
+            Self::E5Large => "multilingual-e5-large-instruct-q8_0, first 512, title and heading › block in pieces of 400, dates in words, v2",
+            Self::EmbeddingGemma2 => "embeddinggemma-2-Q8_0, first 512, title and heading › block in pieces of 400, dates in words, v2",
         }
     }
 

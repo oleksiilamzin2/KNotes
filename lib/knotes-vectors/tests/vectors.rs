@@ -4,7 +4,7 @@ use knotes_core::{BlockHit, FileKind, IndexChange, IndexWriter, MeaningSearch, N
 use knotes_embed::{DIMS, EmbedError, Embedder, Passage, Vector, quantize};
 use knotes_index::SqliteIndex;
 use knotes_md::MarkdownParser;
-use knotes_vectors::{MeaningIndex, Snapshot, block_passage, embed_notes};
+use knotes_vectors::{MeaningIndex, PIECE_CHARS, Snapshot, block_passage, block_pieces, embed_notes};
 
 /// Words as vectors: each word lights the dimension its letters sum to, so texts sharing words
 /// are near.
@@ -42,6 +42,46 @@ fn a_block_is_embedded_with_its_note_s_title_and_its_section_s_heading() {
     assert_eq!(second, Passage::Document { title: "Boiler".into(), text: "Boiler › The anode is magnesium.".into() });
     let plain = block_passage("Scan.pdf", "Page one.", &hit("Scan.pdf", 0, 0, 9, None));
     assert_eq!(plain, Passage::Document { title: "Scan".into(), text: "Page one.".into() });
+}
+
+/// `block`'s pieces of about 200 characters (smaller than the app's, for short test texts).
+fn piece_texts(path: &str, text: &str, block: &BlockHit) -> Vec<(String, String)> {
+    block_pieces(path, text, block, 200)
+        .into_iter()
+        .map(|(piece, passage)| {
+            assert_eq!((piece.path.as_str(), piece.ord, &piece.heading), (block.path.as_str(), block.ord, &block.heading), "a piece names its block");
+            let Passage::Document { text: embedded, .. } = passage else { panic!() };
+            (text[piece.span.start as usize..piece.span.end as usize].to_string(), embedded)
+        })
+        .collect()
+}
+
+#[test]
+fn a_long_block_is_embedded_in_pieces_of_a_few_lines_each() {
+    let text = "# Мама\n\nОльга Петрівна, 12 березня 1958. Живе окремо, у сусідньому районі, 15 хвилин машиною.\n- Тиск: тримає 130/85 на ліках.\n- Ліки: Лізиноприл 10 мг зранку, Аторвастатин 20 мг увечері.\n- Кардіолог — Ірина Степанівна Мельник, приймає в поліклініці № 3 по середах.\n- Наступний візит до кардіолога — 25 листопада 2026.\nВечорами дзвонити після 19:00, раніше вона на прогулянці.";
+    let pieces = piece_texts("Сім'я/Мама.md", text, &hit("Сім'я/Мама.md", 0, 0, text.len() as u32, Some("Мама")));
+    assert!(pieces.len() > 1, "{pieces:?}");
+    assert!(pieces[0].1.starts_with("# Мама"), "{pieces:?}");
+    assert!(pieces[1..].iter().all(|(_, embedded)| embedded.starts_with("Мама › ")), "later pieces name their section: {pieces:?}");
+    let all: String = pieces.iter().map(|(shown, _)| shown.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(all.contains("Тиск: тримає 130/85") && all.contains("на прогулянці."), "every line in some piece: {all}");
+}
+
+#[test]
+fn a_table_s_pieces_keep_its_header_row() {
+    let rows: String = (1..=12).map(|m| format!("| 2026-{m:02}-01 | 41 {m}00 | 18 {m}00 |\n")).collect();
+    let text = format!("| Дата | Світло день | Світло ніч |\n|---|---|---|\n{rows}");
+    let pieces = piece_texts("Лічильники.md", &text, &hit("Лічильники.md", 0, 0, text.len() as u32, None));
+    assert!(pieces.len() > 1, "{pieces:?}");
+    assert!(pieces.iter().all(|(_, embedded)| embedded.contains("| Дата | Світло день | Світло ніч |")), "{pieces:?}");
+    assert!(pieces.iter().all(|(_, embedded)| !embedded.contains("|---|")), "the separator says nothing: {pieces:?}");
+}
+
+#[test]
+fn a_short_block_is_one_piece() {
+    let text = "Replace the anode every autumn.";
+    let block = hit("Boiler.md", 3, 0, text.len() as u32, Some("Boiler"));
+    assert_eq!(block_pieces("Boiler.md", text, &block, PIECE_CHARS), [(block.clone(), block_passage("Boiler.md", text, &block))]);
 }
 
 #[test]
@@ -102,7 +142,7 @@ fn the_vault_s_blocks_are_embedded_and_searched_by_meaning() {
     let files: Vec<_> = notes.iter().map(|(p, _)| VaultFile { path: (*p).into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 }).collect();
     let changes: Vec<_> = files.iter().zip(&notes).zip(&parsed).map(|((file, (_, text)), parsed)| IndexChange::Upsert { file, note: Some((text, parsed)) }).collect();
     index.apply(&changes).unwrap();
-    let snapshot = embed_notes(&index, &Words).unwrap();
+    let snapshot = embed_notes(&index, &Words, usize::MAX).unwrap();
     assert_eq!(snapshot.len(), 2);
     let meaning = MeaningIndex::new(Arc::new(Words), snapshot);
     let found = meaning.nearest("when to replace the anode", 1, None).unwrap();

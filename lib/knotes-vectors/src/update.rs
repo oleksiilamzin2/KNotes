@@ -6,7 +6,7 @@ use std::time::Duration;
 use knotes_core::{BlockHit, BoxError, NoteBlocks, NoteRows, NoteText};
 use knotes_embed::{DIMS, Embedder, Passage, Vector};
 
-use crate::{VectorStore, block_passage};
+use crate::{PIECE_CHARS, VectorStore, block_pieces};
 
 /// Passages one request to the embedder takes: small enough that a search waiting behind it is
 /// not kept long.
@@ -121,8 +121,7 @@ pub fn update_reporting(
         let blocks = if text.is_empty() { Vec::new() } else { index.note_blocks(&row.path)? };
         let kept = store.vectors_of(&row.path)?;
         let mut document = Pending { path: row.path.clone(), mtime_ns: row.mtime_ns, blocks: Vec::new(), hashes: Vec::new(), vectors: Vec::new() };
-        for block in blocks {
-            let passage = block_passage(&row.path, &text, &block);
+        for (block, passage) in blocks.iter().flat_map(|block| block_pieces(&row.path, &text, block, PIECE_CHARS)) {
             let hash = hash_of(&passage);
             let vector = kept.get(&hash).copied();
             if vector.is_none() {

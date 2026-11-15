@@ -23,7 +23,7 @@ use knotes_md::MarkdownParser;
 use knotes_pdf::PdfTexts;
 use knotes_llama::LlamaEmbedder;
 use knotes_tools::{Closeness, ToolIndex, VaultTools, notes_by_meaning};
-use knotes_vectors::{MeaningIndex, MeaningModel, embed_notes};
+use knotes_vectors::{MeaningIndex, MeaningModel, PIECE_CHARS, embed_notes};
 use knotes_vault::FsVault;
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
@@ -142,7 +142,9 @@ fn search_finds_what_the_model_looked_for() {
         let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models").join(model.file());
         assert!(file.exists(), "no model at {}: run scripts/setup.sh", file.display());
         let embedder = Arc::new(LlamaEmbedder::load(&file).unwrap());
-        let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder).unwrap();
+        // KNOTES_RETRIEVAL_PIECES=600 tries pieces of another size (0: blocks whole).
+        let pieces = std::env::var("KNOTES_RETRIEVAL_PIECES").ok().and_then(|p| p.parse().ok()).map_or(PIECE_CHARS, |p: usize| if p == 0 { usize::MAX } else { p });
+        let snapshot = embed_notes(&SqliteIndex::open_reader(index_dir.path()).unwrap(), &*embedder, pieces).unwrap();
         println!("\n{} ({} blocks embedded)", model.key(), snapshot.len());
         let list_meaning = MeaningIndex::new(embedder.clone(), snapshot.clone());
         let merged = tools().with_meaning(Box::new(MeaningIndex::new(embedder, snapshot)));
@@ -180,9 +182,11 @@ struct Floors {
 /// lower them.
 fn floors(model: MeaningModel) -> Floors {
     match model {
-        // 63 of 65 by meaning (MRR 0.81), the list 63 of 65 (MRR 0.83) showing 7.0 a query.
-        MeaningModel::E5Large => Floors { meaning: 0.96, list: 0.96, shown: 7.5 },
-        // 62 of 65 (MRR 0.78), the list 62 of 65 (MRR 0.81) showing 6.3 a query.
+        // 63 of 65 by meaning (MRR 0.81, 0.83 in pieces of 400), the list 63 of 65 (MRR 0.83,
+        // 0.86 in pieces) showing 7.4 a query.
+        MeaningModel::E5Large => Floors { meaning: 0.96, list: 0.96, shown: 7.6 },
+        // 62 of 65 (MRR 0.78, 0.82 in pieces), the list 62 of 65 (MRR 0.81, 0.86 in pieces)
+        // showing 6.3 a query.
         MeaningModel::EmbeddingGemma2 => Floors { meaning: 0.95, list: 0.95, shown: 6.8 },
     }
 }

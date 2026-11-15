@@ -4,15 +4,87 @@ use knotes_core::BlockHit;
 use knotes_embed::Passage;
 use regex::{Captures, Regex};
 
+/// A piece of a long block holds whole lines up to about this many characters: a list's or a
+/// table's lines in one vector blur each other (a note's line on blood pressure lost to a travel
+/// list). With EmbeddingGemma-300M pieces did not help (ADR 0028); with the models of ADR 0029,
+/// 400 raised MRR by 0.02–0.05 on both, 320 and 600 lost answers (2026-11-15).
+pub const PIECE_CHARS: usize = 400;
+
 /// What `block` of the document at `path` (its text `text`) is embedded as: its text with the
 /// document's title, its section's heading before it unless the text starts with it, and its
 /// dates in numbers told in words as well (a query asks for "October", a note says 2026-10-01).
 pub fn block_passage(path: &str, text: &str, block: &BlockHit) -> Passage {
-    let body = text.get(block.span.start as usize..block.span.end as usize).unwrap_or_default().trim();
-    let body = &dates_in_words(body);
-    let text = match &block.heading {
-        Some(heading) if !body.lines().next().is_some_and(|first| first.contains(heading.as_str())) => format!("{heading} › {body}"),
-        _ => body.to_string(),
+    passage(path, text.get(block.span.start as usize..block.span.end as usize).unwrap_or_default(), block.heading.as_deref())
+}
+
+/// The pieces `block` is embedded in, each its own place (the block's, its span narrowed to its
+/// lines) and passage: the block whole when short, else runs of whole lines of about
+/// `piece_chars`, a table's rows each run with the table's header row.
+pub fn block_pieces(path: &str, text: &str, block: &BlockHit, piece_chars: usize) -> Vec<(BlockHit, Passage)> {
+    let (start, end) = (block.span.start as usize, block.span.end as usize);
+    let whole = || vec![(block.clone(), block_passage(path, text, block))];
+    let Some(body) = text.get(start..end) else { return whole() };
+    if body.trim().chars().count() <= piece_chars {
+        return whole();
+    }
+    // The block's lines with where they lie in the note, blank lines and table separators left out.
+    let mut lines: Vec<(usize, usize)> = Vec::new();
+    let mut at = start;
+    for line in body.split('\n') {
+        if !line.trim().is_empty() && !is_separator(line) {
+            lines.push((at, at + line.len()));
+        }
+        at += line.len() + 1;
+    }
+    let rows: Vec<&str> = body.split('\n').collect();
+    let header = rows.windows(2).find(|pair| is_row(pair[0]) && is_separator(pair[1])).map(|pair| pair[0].trim());
+    let line_text = |(s, e): (usize, usize)| &text[s..e];
+    let mut pieces = Vec::new();
+    let mut run: Vec<(usize, usize)> = Vec::new();
+    let mut chars = 0;
+    let mut flush = |run: &mut Vec<(usize, usize)>| {
+        let (Some(first), Some(last)) = (run.first().copied(), run.last().copied()) else { return };
+        let mut embedded: Vec<&str> = run.iter().map(|&l| line_text(l)).collect();
+        if let Some(header) = header
+            && embedded.iter().any(|l| is_row(l))
+            && !embedded.iter().any(|l| l.trim() == header)
+        {
+            embedded.insert(0, header);
+        }
+        let piece = BlockHit { span: knotes_core::Span { start: first.0 as u32, end: last.1 as u32 }, ..block.clone() };
+        pieces.push((piece, passage(path, &embedded.join("\n"), block.heading.as_deref())));
+        run.clear();
+    };
+    for line in lines {
+        let length = line_text(line).chars().count();
+        if !run.is_empty() && chars + length > piece_chars {
+            flush(&mut run);
+            chars = 0;
+        }
+        run.push(line);
+        chars += length + 1;
+    }
+    flush(&mut run);
+    pieces
+}
+
+/// A table row: `| … |`.
+fn is_row(line: &str) -> bool {
+    line.trim_start().starts_with('|')
+}
+
+/// A table's separator row: `|---|:--|`.
+fn is_separator(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with('|') && line.contains('-') && line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+}
+
+/// `body` of the document at `path`, under `heading`, as the model takes it.
+fn passage(path: &str, body: &str, heading: Option<&str>) -> Passage {
+    let body = dates_in_words(body.trim());
+    let text = match heading {
+        Some(heading) if !body.lines().next().is_some_and(|first| first.contains(heading)) => format!("{heading} › {body}"),
+        _ => body,
     };
     Passage::Document { title: title_of(path), text }
 }

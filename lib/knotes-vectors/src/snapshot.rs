@@ -26,7 +26,8 @@ impl Snapshot {
     }
 
     /// The `limit` blocks nearest `query`, no more than `per_document` of one document, among the
-    /// documents of `scope` when given, nearest first, each scored minus its similarity.
+    /// documents of `scope` when given, nearest first, each scored minus its similarity. A block
+    /// embedded in pieces comes once, as its nearest piece.
     pub fn nearest(&self, query: &Vector, limit: usize, per_document: usize, scope: Option<&HashSet<&str>>) -> Vec<BlockHit> {
         let mut scored: Vec<(i32, usize)> = self
             .vectors
@@ -44,9 +45,13 @@ impl Snapshot {
         scored.truncate(candidates);
         scored.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         let mut taken: Vec<(&str, usize)> = Vec::new();
+        let mut blocks: HashSet<(&str, u32)> = HashSet::new();
         let mut found = Vec::with_capacity(limit);
         for (s, i) in scored {
             let path = self.blocks[i].path.as_str();
+            if !blocks.insert((path, self.blocks[i].ord)) {
+                continue;
+            }
             let count = match taken.iter_mut().find(|(p, _)| *p == path) {
                 Some((_, n)) => n,
                 None => {

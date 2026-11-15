@@ -66,6 +66,14 @@ git until it is released, both models in the bundle.
   (`update_reporting`, at its start and after each batch); "Вектори актуальні" otherwise. The
   window looks again twice a second while shown. A generation, raised by each model chosen and
   each store cleared, tells the list's search to open its store again.
+- **Long blocks embedded in pieces** (2026-11-15), whole lines of about 400 characters, a
+  table's rows with its header row, each piece its own place in the store; search gives a block
+  once, as its nearest piece (whose text the list's row and the tools' result then show). With
+  EmbeddingGemma-300M pieces had not helped (ADR 0028); with these models, measured against whole
+  blocks (by meaning, MRR in the tools' search / the list's): e5 0.81 → 0.83 / 0.83 → 0.86,
+  EmbeddingGemma 2 0.78 → 0.82 / 0.81 → 0.86, nothing lost, the list's noise about the same;
+  pieces of 240 and 320 lost answers with EmbeddingGemma 2, of 600 with e5. The way of embedding
+  is v2 for both, so every store is embedded again.
 
 ## Consequences
 
