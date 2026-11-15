@@ -7,6 +7,11 @@ pub const TAGS: &str = "Теги";
 pub const SPACE: &str = "Простір";
 pub const WHOLE_VAULT: &str = "Уся база";
 pub const SPACE_SETTINGS: &str = "Налаштувати простори…";
+/// A folder's menu in the sidebar: its space.
+pub const NO_SPACE: &str = "Без простору";
+pub const NEW_SPACE: &str = "Новий простір…";
+pub const NEW_SPACE_QUESTION: &str = "Назва нового простору";
+pub const CREATE: &str = "Створити";
 pub const TODAY: &str = "Сьогодні";
 pub const YESTERDAY: &str = "Вчора";
 pub const PREVIOUS_7_DAYS: &str = "Попередні 7 днів";

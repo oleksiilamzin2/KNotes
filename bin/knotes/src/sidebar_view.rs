@@ -4,8 +4,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use knotes_app::{Sidebar, SidebarItem};
+use knotes_spaces::Spaces;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -22,6 +24,16 @@ use crate::strings;
 type OnSelect = Box<dyn Fn(SidebarItem)>;
 type OnDrop = Box<dyn Fn(String, String)>;
 type OnClose = Box<dyn Fn(String)>;
+type OnFolderSpace = Box<dyn Fn(String, FolderChoice)>;
+
+/// A space chosen from a folder's menu (ADR 0030).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderChoice {
+    Space(String),
+    NoSpace,
+    /// A new space, named in a dialog.
+    NewSpace,
+}
 
 pub struct Ivars {
     model: RefCell<Sidebar>,
@@ -35,6 +47,9 @@ pub struct Ivars {
     /// menu closes the others.
     on_close: RefCell<Option<OnClose>>,
     on_close_others: RefCell<Option<OnClose>>,
+    /// The vault's spaces, for a folder's menu, and what choosing one there calls.
+    spaces: RefCell<Arc<Spaces>>,
+    on_folder_space: RefCell<Option<OnFolderSpace>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -156,6 +171,21 @@ define_class!(
             }
         }
 
+        /// A folder's menu: a space chosen for it.
+        #[unsafe(method(chooseFolderSpace:))]
+        fn choose_folder_space(&self, item: &NSMenuItem) {
+            let Some(spec) = item.representedObject().and_then(|o| o.downcast::<NSString>().ok()).map(|s| s.to_string()) else { return };
+            let Some((choice, folder)) = spec.split_once('\u{1}') else { return };
+            let choice = match choice {
+                "none" => FolderChoice::NoSpace,
+                "new" => FolderChoice::NewSpace,
+                id => FolderChoice::Space(id.strip_prefix("s:").unwrap_or(id).to_owned()),
+            };
+            if let Some(callback) = self.ivars().on_folder_space.borrow().as_ref() {
+                callback(folder.to_owned(), choice);
+            }
+        }
+
         #[unsafe(method(renameFolder:))]
         fn rename_folder(&self, _sender: Option<&AnyObject>) {
             if let Some((row, _)) = self.menu_folder() {
@@ -201,6 +231,8 @@ impl SidebarSource {
             on_rename: RefCell::new(None),
             on_close: RefCell::new(None),
             on_close_others: RefCell::new(None),
+            spaces: RefCell::new(Arc::new(Spaces::default())),
+            on_folder_space: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -284,6 +316,48 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             }
             menu.addItem(&entry);
         }
+        if let Some(SidebarItem::Folder(folder)) = item {
+            let space = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(self.mtm()), &NSString::from_str(strings::SPACE), None, ns_string!("")) };
+            space.setSubmenu(Some(&self.folder_space_menu(folder)));
+            menu.addItem(&space);
+        }
+    }
+
+    /// A folder's «Простір ▸»: the spaces with their dots and none, the folder's ticked, and a
+    /// new space (ADR 0030).
+    pub fn folder_space_menu(&self, folder: &str) -> Retained<NSMenu> {
+        let mtm = self.mtm();
+        let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(strings::SPACE));
+        let spaces = Arc::clone(&self.ivars().spaces.borrow());
+        let current = spaces.of_folder(folder).map(|s| s.id.clone());
+        let entry = |title: &str, choice: &str, ticked: bool| {
+            // SAFETY: the source outlives the menu (the outline keeps it) and implements the action.
+            let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(chooseFolderSpace:)), ns_string!("")) };
+            // SAFETY: as above; the represented object is a string.
+            unsafe {
+                item.setTarget(Some(self));
+                item.setRepresentedObject(Some(NSString::from_str(&format!("{choice}\u{1}{folder}")).as_ref()));
+            }
+            item.setState(if ticked { objc2_app_kit::NSControlStateValueOn } else { objc2_app_kit::NSControlStateValueOff });
+            item
+        };
+        for space in spaces.list() {
+            let item = entry(&space.name, &format!("s:{}", space.id), current.as_deref() == Some(space.id.as_str()));
+            item.setImage(crate::space_ui::dot(space.color, 11.0, &space.name).as_deref());
+            menu.addItem(&item);
+        }
+        menu.addItem(&entry(strings::NO_SPACE, "none", current.is_none()));
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        menu.addItem(&entry(strings::NEW_SPACE, "new", false));
+        menu
+    }
+
+    pub fn set_spaces(&self, spaces: Arc<Spaces>) {
+        *self.ivars().spaces.borrow_mut() = spaces;
+    }
+
+    pub fn on_folder_space(&self, callback: impl Fn(String, FolderChoice) + 'static) {
+        *self.ivars().on_folder_space.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_rename(&self, callback: impl Fn(String, String) + 'static) {

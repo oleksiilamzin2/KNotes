@@ -674,6 +674,29 @@ pub fn folder_rename_requested(sidebar: &crate::sidebar_view::SidebarSource, out
     }
 }
 
+/// `KNOTES_PROBE_ACTION=folder-space=Folder=work` (or `none`, `new` with
+/// `KNOTES_PROBE_SPACE_NAME`): a choice in the folder's «Простір ▸» menu (ADR 0030), its items
+/// printed first.
+pub fn folder_space_requested(sidebar: &crate::sidebar_view::SidebarSource) {
+    let Some(spec) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("folder-space=").map(str::to_owned)) else { return };
+    let Some((folder, choice)) = spec.rsplit_once('=') else { return };
+    let menu = sidebar.folder_space_menu(folder);
+    let items = menu.itemArray();
+    let titles: Vec<String> = items
+        .iter()
+        .map(|i| if i.isSeparatorItem() { "—".to_string() } else { format!("{}{}", if i.state() == objc2_app_kit::NSControlStateValueOn { "✓ " } else { "" }, i.title()) })
+        .collect();
+    println!("sidebar-space-menu: {}", titles.join(" | "));
+    let wanted = match choice {
+        "none" | "new" => choice.to_owned(),
+        id => format!("s:{id}"),
+    };
+    let Some(item) = items.iter().find(|i| i.representedObject().and_then(|o| o.downcast::<NSString>().ok()).is_some_and(|s| s.to_string().split('\u{1}').next() == Some(wanted.as_str()))) else { return };
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: the menu item's own target and action, sent as a click would.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };
+}
+
 /// `KNOTES_PROBE_SHORTCUT=f` (or `shift+f`): Cmd with that key pressed while the note has the
 /// focus, through the window and the menu bar as AppKit sends a key equivalent.
 pub fn shortcut_requested(window: &NSWindow, focus: &objc2_app_kit::NSView) {

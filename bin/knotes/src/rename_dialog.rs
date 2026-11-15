@@ -4,7 +4,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSComboBox};
+use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSComboBox, NSTextField};
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
 
 use crate::{probe, strings};
@@ -63,6 +63,23 @@ pub fn ask_folder(mtm: MainThreadMarker, note: &str, folders: &[String]) -> Opti
         alert.addButtonWithTitle(&NSString::from_str(title));
     }
     (alert.runModal() == NSAlertFirstButtonReturn).then(|| folder_of(&combo.stringValue().to_string()))
+}
+
+/// Asks a new space's name (ADR 0030); `None` when cancelled or left empty. In probe mode the
+/// name comes from `KNOTES_PROBE_SPACE_NAME`.
+pub fn ask_space_name(mtm: MainThreadMarker) -> Option<String> {
+    if probe::enabled() {
+        return std::env::var("KNOTES_PROBE_SPACE_NAME").ok().filter(|n| !n.trim().is_empty());
+    }
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(strings::NEW_SPACE_QUESTION));
+    let field = NSTextField::initWithFrame(NSTextField::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 24.0)));
+    alert.setAccessoryView(Some(&field));
+    alert.window().setInitialFirstResponder(Some(&field));
+    for title in [strings::CREATE, strings::CANCEL] {
+        alert.addButtonWithTitle(&NSString::from_str(title));
+    }
+    (alert.runModal() == NSAlertFirstButtonReturn).then(|| field.stringValue().to_string().trim().to_owned()).filter(|n| !n.is_empty())
 }
 
 /// A typed folder as a vault path: no slashes at its ends, `/` the root.

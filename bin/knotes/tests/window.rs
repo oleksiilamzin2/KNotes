@@ -2965,3 +2965,20 @@ fn a_vault_without_spaces_shows_no_space_switcher() {
     assert!(out.contains("space-menu: (hidden)"), "{out}");
     assert!(out.contains("space: — | spaces: \n") || out.lines().any(|l| l == "space: — | spaces: "), "{out}");
 }
+
+#[test]
+fn a_folder_s_menu_puts_it_in_a_space_or_a_new_one_writing_only_what_differs_from_its_parent() {
+    let vault = spaced_vault();
+    let rules = |folder: &str| std::fs::read_to_string(vault.path().join(folder).join(".knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Home=work")]);
+    assert!(out.contains("sidebar-space-menu: Робота | ✓ Дім | Без простору | — | Новий простір…"), "{out}");
+    assert_eq!(rules("Home"), Some(serde_json::json!({"space": "work"})));
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Work/Radar=new"), ("KNOTES_PROBE_SPACE_NAME", "Проєкт Радар")]);
+    let root = rules("").unwrap();
+    assert_eq!(root["spaces"][2], serde_json::json!({"id": "proiekt-radar", "name": "Проєкт Радар", "color": "purple"}), "the next colour no space has");
+    assert_eq!(rules("Work/Radar"), Some(serde_json::json!({"space": "proiekt-radar"})));
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Work/Radar=work")]);
+    assert_eq!(rules("Work/Radar"), Some(serde_json::json!({})), "its parent's space: the key goes");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Home=none")]);
+    assert_eq!(rules("Home"), Some(serde_json::json!({})), "a top folder in none: the root gives none already");
+}

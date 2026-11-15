@@ -21,7 +21,7 @@ use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_co
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
-use knotes_spaces::Spaces;
+use knotes_spaces::{FolderSpace, Space, SpaceColor, Spaces, new_space_id, set_folder_space, set_spaces};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;
@@ -45,7 +45,7 @@ use crate::note_view::{self, NoteTextView};
 use crate::find_bar::FindBar;
 use crate::search_bar::SearchBar;
 use crate::search_worker::{SearchRequest, SearchResponse, SearchWorker};
-use crate::sidebar_view::{self, SidebarSource};
+use crate::sidebar_view::{self, FolderChoice, SidebarSource};
 use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
 
@@ -528,6 +528,12 @@ impl VaultWindow {
                 crate::settings_window::show(MainThreadMarker::from(&*window.window));
             }
         });
+        let weak_folder_space: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_folder_space(move |folder, choice| {
+            if let Some(window) = weak_folder_space.upgrade() {
+                window.set_folder_space(&folder, choice);
+            }
+        });
         // The tabs/folders/tags switch; the choice lasts the session (every launch starts on the
         // folders).
         let weak_mode: Weak<Self> = Rc::downgrade(&this);
@@ -955,6 +961,7 @@ impl VaultWindow {
                 }
             };
             let state = self.state.borrow();
+            self.sidebar.set_spaces(Arc::clone(&state.spaces));
             let folders = state.shown_folders();
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
             let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
@@ -1179,6 +1186,7 @@ impl VaultWindow {
             probe::list_menu_requested(&self.list, &self.table);
             probe::drag_requested(&self.list, &self.table, &self.sidebar);
             probe::folder_rename_requested(&self.sidebar, &self.outline);
+            probe::folder_space_requested(&self.sidebar);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -1469,6 +1477,47 @@ impl VaultWindow {
         }
         self.highlight(&selection);
         self.refresh_list();
+    }
+
+    /// A folder's menu put it in a space, in none, or in a new space named in a dialog (ADR
+    /// 0030): its rules file says so only where that differs from its parent's space (else the
+    /// key goes). The snapshot that follows the writes shows it.
+    fn set_folder_space(&self, folder: &str, choice: FolderChoice) {
+        let Some(vault) = self.vault() else { return };
+        let files = FsVault::new(&vault);
+        let rules_of = |folder: &str| files.read_rules(&[folder]).ok().and_then(|r| r.into_iter().next()).map(|(_, text)| text).unwrap_or_default();
+        let write = |folder: &str, text: Result<String, String>| match text.map_err(std::io::Error::other).and_then(|text| files.write_rules(folder, &text)) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("knotes: cannot write {folder}/.knotes.json: {e}");
+                false
+            }
+        };
+        let spaces = Arc::clone(&self.state.borrow().spaces);
+        let id = match choice {
+            FolderChoice::Space(id) => Some(id),
+            FolderChoice::NoSpace => None,
+            FolderChoice::NewSpace => {
+                let Some(name) = rename_dialog::ask_space_name(MainThreadMarker::from(&*self.window)) else { return };
+                let mut list = spaces.list().to_vec();
+                let id = new_space_id(&list, &name);
+                // The first colour no space has, else round the palette.
+                let color = SpaceColor::ALL.into_iter().find(|c| list.iter().all(|s| s.color != *c)).unwrap_or(SpaceColor::ALL[list.len() % SpaceColor::ALL.len()]);
+                list.push(Space { id: id.clone(), name, color });
+                if !write("", set_spaces(&rules_of(""), &list)) {
+                    return;
+                }
+                Some(id)
+            }
+        };
+        let parent = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let inherited = spaces.of_folder(parent).map(|s| s.id.clone());
+        let wanted = match &id {
+            _ if inherited == id => FolderSpace::Inherit,
+            Some(id) => FolderSpace::In(id),
+            None => FolderSpace::None,
+        };
+        write(folder, set_folder_space(&rules_of(folder), wanted));
     }
 
     /// The toolbar's switcher offers the vault's spaces, the window's ticked.
