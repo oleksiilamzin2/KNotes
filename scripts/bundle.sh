@@ -58,8 +58,15 @@ identity=-
 apple=$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development: / {print $2; exit}')
 if [ -n "$apple" ]; then
   identity=$apple
-elif security find-identity -p codesigning 2>/dev/null | grep -q '"Knotes Dev"'; then
-  identity="Knotes Dev"
+else
+  # Without Apple's intermediate (WWDR G3, https://www.apple.com/certificateauthority/) in the
+  # keychain the certificate is there but cannot sign: codesign cannot build its chain.
+  if security find-identity -p codesigning 2>/dev/null | grep -q '"Apple Development: '; then
+    echo "bundle: the Apple Development certificate is not valid (Apple's WWDR G3 intermediate missing?)" >&2
+  fi
+  if security find-identity -p codesigning 2>/dev/null | grep -q '"Knotes Dev"'; then
+    identity="Knotes Dev"
+  fi
 fi
 codesign --force --sign "$identity" "$app/Contents/MacOS/knotes-mcp" 2>/dev/null || true
 codesign --force --sign "$identity" "$app/Contents/MacOS/knotes-embed" 2>/dev/null || true
