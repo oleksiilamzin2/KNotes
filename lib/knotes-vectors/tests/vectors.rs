@@ -253,3 +253,20 @@ fn each_model_keeps_its_vectors_apart_under_its_key() {
     assert_eq!(MeaningModel::from_setting(Some("a model of a later version")), Some(MeaningModel::DEFAULT));
     assert_eq!(MeaningModel::setting(None), "off");
 }
+
+#[test]
+fn a_pass_says_how_far_it_has_gone() {
+    use std::sync::atomic::AtomicBool;
+    use knotes_vectors::{Progress, VectorStore, Which, update_reporting};
+    let (idx, vectors) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    let many: Vec<(String, String)> = (0..40).map(|i| (format!("n{i:02}.md"), format!("Note {i} about the boiler and the anode."))).collect();
+    let notes: Vec<(&str, &str, i64)> = many.iter().map(|(p, t)| (p.as_str(), t.as_str(), 1)).collect();
+    index_notes(&mut index, &notes);
+    let store = VectorStore::open(vectors.path(), "v.sqlite", "words").unwrap();
+    let mut seen: Vec<Progress> = Vec::new();
+    update_reporting(&index, &store, &Words, LATER, Which::Settled, &AtomicBool::new(false), &mut |p| seen.push(p)).unwrap();
+    assert_eq!(seen.first(), Some(&Progress { done: 0, total: 40, passages: 0 }), "at the start: how many");
+    assert_eq!(seen.last(), Some(&Progress { done: 40, total: 40, passages: 40 }), "at the end: all");
+    assert!(seen.len() > 2 && seen.windows(2).all(|w| w[0].done <= w[1].done), "a batch at a time: {seen:?}");
+}

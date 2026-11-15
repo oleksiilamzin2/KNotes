@@ -56,6 +56,29 @@ pub const SETTINGS_MEANING: &str = "Пошук за змістом:";
 pub const SETTINGS_MEANING_E5: &str = "e5-large-instruct — точніший";
 pub const SETTINGS_MEANING_GEMMA: &str = "EmbeddingGemma 2 — легший";
 pub const SETTINGS_MEANING_OFF: &str = "Вимкнено";
+pub const SETTINGS_CACHE: &str = "Збережені вектори:";
+pub const SETTINGS_CACHE_NONE: &str = "немає";
+pub const SETTINGS_CLEAR: &str = "Очистити";
+pub const SETTINGS_REGENERATE: &str = "Перегенерувати";
+pub const SETTINGS_VECTORS_READY: &str = "Вектори актуальні";
+pub const SETTINGS_MEANING_IS_OFF: &str = "Пошук за змістом вимкнено";
+
+/// The vectors being made: notes done of all, and blocks a second.
+pub fn settings_making(done: usize, total: usize, per_second: f64) -> String {
+    format!("Генерація векторів: {done} з {total} нотаток · {per_second:.0} блоків/с")
+}
+pub const SETTINGS_CACHE_E5: &str = "e5-large-instruct";
+pub const SETTINGS_CACHE_GEMMA: &str = "EmbeddingGemma 2";
+
+/// A size on disk in bytes, as the settings show it: "152 КБ", "1,4 МБ".
+pub fn file_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let b = bytes as f64;
+    let (value, unit) = if b < KB * KB { (b / KB, "КБ") } else if b < KB * KB * KB { (b / KB / KB, "МБ") } else { (b / KB / KB / KB, "ГБ") };
+    let text = if value < 10.0 && unit != "КБ" { format!("{value:.1}") } else { format!("{:.0}", value.max(1.0)) };
+    format!("{} {unit}", text.replace('.', ","))
+}
+
 pub const SETTINGS_MEANING_NOTE: &str = "Модель працює лише на цьому Mac: нотатки нікуди не надсилаються. Після перемикання вектори нотаток перераховуються у фоні, а повернення до вже обробленої моделі миттєве.";
 pub const HIDE: &str = "Сховати Knotes";
 pub const HIDE_OTHERS: &str = "Сховати інші";

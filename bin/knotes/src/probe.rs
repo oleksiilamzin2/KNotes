@@ -909,6 +909,14 @@ pub fn toolbar_rename_requested(window: &NSWindow) {
 /// the report: `KNOTES_PROBE_TAB_CLOSE=a.md`, a click on the cross of that document's tab;
 /// `KNOTES_PROBE_TAB_TRIP=b.md`, that document's tab clicked, then the tab shown before.
 fn tabs_requested(window: &VaultWindow) {
+    // `KNOTES_PROBE_SETTINGS_MAKING=12/40/300`: vectors being made (12 of 40 notes, 300 blocks
+    // so far), as the thread keeping them would say, for the settings' progress bar.
+    if let Some((done, total, passages)) = std::env::var("KNOTES_PROBE_SETTINGS_MAKING").ok().and_then(|m| {
+        let n: Vec<usize> = m.split('/').filter_map(|p| p.parse().ok()).collect();
+        (n.len() == 3).then(|| (n[0], n[1], n[2]))
+    }) {
+        crate::meaning::report(std::path::Path::new("/probe"), knotes_vectors::Progress { done, total, passages });
+    }
     // `KNOTES_PROBE_SETTINGS=1`: the settings window shown; `KNOTES_PROBE_SETTINGS_MEANING=off`
     // (or a model's key): that chosen for search by meaning, as a click in its menu would.
     if std::env::var_os("KNOTES_PROBE_SETTINGS").is_some() {
@@ -916,6 +924,10 @@ fn tabs_requested(window: &VaultWindow) {
     }
     if let Ok(setting) = std::env::var("KNOTES_PROBE_SETTINGS_MEANING") {
         crate::settings_window::probe_choose(window.window.mtm(), &setting);
+    }
+    // `KNOTES_PROBE_SETTINGS_CLEAR=e5-large-instruct`: that model's stored vectors cleared.
+    if let Ok(key) = std::env::var("KNOTES_PROBE_SETTINGS_CLEAR") {
+        crate::settings_window::probe_clear(window.window.mtm(), &key);
     }
     // The chat, before the report: `KNOTES_PROBE_CHAT_NEW=1` starts a new conversation,
     // `KNOTES_PROBE_CHAT_CHOOSE=1` chooses the list's second, `KNOTES_PROBE_CHAT_CLICK_LINK=1`

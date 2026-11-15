@@ -15,7 +15,7 @@ use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
 use knotes_tools::VaultTools;
 use knotes_vault::FsVault;
-use knotes_vectors::{MeaningIndex, MeaningModel, Updated, VectorStore, Which, update};
+use knotes_vectors::{MeaningIndex, MeaningModel, Updated, VectorStore, Which, update, update_reporting};
 use serde_json::{Value, json};
 
 /// Called with the conversation's items and memory after a turn, and how it went.
@@ -178,7 +178,10 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, model: MeaningModel, 
         let paced = Paced(embedder);
         let mut told = false;
         loop {
-            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &store(&dir, model)?, &paced, now_ns(), Which::Settled, &stop)) {
+            // How far each pass goes, for the settings' progress bar.
+            let pass = SqliteIndex::open_reader(&dir).and_then(|index| update_reporting(&index, &store(&dir, model)?, &paced, now_ns(), Which::Settled, &stop, &mut |p| crate::meaning::report(&dir, p)));
+            crate::meaning::finished(&dir);
+            let next = match pass {
                 Ok(updated) => updated.next,
                 Err(e) => {
                     if !told {

@@ -57,6 +57,15 @@ git until it is released, both models in the bundle.
   at the next turn; the list's search remakes its search by meaning when the model it was made
   for is no longer the one chosen; off greys the switch's «За змістом» segment (a search by
   meaning under way goes back to file names). The MCP server reads the same setting.
+- **Stored vectors in the settings** (at the owner's word): the «Пошук» tab shows, for each
+  model, how much its stores take in all vaults (with SQLite's journal) and one action: the
+  model not in use is cleared (its files removed, room freed); the one in use is made again
+  («Перегенерувати»: its files removed, the windows told, the thread keeping the vectors starts
+  from nothing). Under them a line and a bar say how far the vectors being made have gone and how
+  fast ("Генерація векторів: 1 240 з 5 000 нотаток · 380 блоків/с"), from what each pass reports
+  (`update_reporting`, at its start and after each batch); "Вектори актуальні" otherwise. The
+  window looks again twice a second while shown. A generation, raised by each model chosen and
+  each store cleared, tells the list's search to open its store again.
 
 ## Consequences
 

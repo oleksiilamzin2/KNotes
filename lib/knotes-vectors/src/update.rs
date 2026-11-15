@@ -46,6 +46,15 @@ pub struct Updated {
     pub next: Option<Duration>,
 }
 
+/// How far a pass has gone: documents embedded of those it found to embed, and the blocks that
+/// went to the model so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Progress {
+    pub done: usize,
+    pub total: usize,
+    pub passages: usize,
+}
+
 /// A document on its way to the store: its blocks, the hash of each one's text, and each one's
 /// vector, kept or still to come from the model.
 struct Pending {
@@ -61,6 +70,20 @@ struct Pending {
 /// a batch at a time, until done or told to `stop`. Only blocks whose text changed go to the
 /// model; the rest keep their vectors.
 pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorStore, embedder: &dyn Embedder, now_ns: i64, which: Which, stop: &AtomicBool) -> Result<Updated, BoxError> {
+    update_reporting(index, store, embedder, now_ns, which, stop, &mut |_| {})
+}
+
+/// `update`, saying how far it has gone at its start and after each batch (for the settings'
+/// progress bar).
+pub fn update_reporting(
+    index: &(impl NoteRows + NoteText + NoteBlocks),
+    store: &VectorStore,
+    embedder: &dyn Embedder,
+    now_ns: i64,
+    which: Which,
+    stop: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Updated, BoxError> {
     let mut rows = index.note_rows()?;
     let dates = store.dates()?;
     let present: HashSet<&str> = rows.iter().map(|r| r.path.as_str()).collect();
@@ -87,6 +110,10 @@ pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorSto
     });
     rows.sort_by_key(|r| Reverse(r.mtime_ns));
     let mut done = Updated { documents: 0, passages: 0, next: next.map(|ns| Duration::from_nanos(ns as u64)) };
+    let total = rows.len();
+    if total > 0 {
+        progress(Progress { done: 0, total, passages: 0 });
+    }
     let (mut pending, mut asked, mut passages): (Vec<Pending>, Vec<(usize, usize)>, Vec<Passage>) = (Vec::new(), Vec::new(), Vec::new());
     let mut rows = rows.into_iter().peekable();
     while let Some(row) = rows.next() {
@@ -123,6 +150,7 @@ pub fn update(index: &(impl NoteRows + NoteText + NoteBlocks), store: &VectorSto
                 store.put(&document.path, document.mtime_ns, &document.blocks, &document.hashes, &vectors)?;
                 done.documents += 1;
             }
+            progress(Progress { done: done.documents, total, passages: done.passages });
         }
     }
     Ok(done)

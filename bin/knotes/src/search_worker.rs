@@ -58,8 +58,9 @@ impl SearchWorker {
             .name("knotes-search".into())
             .spawn(move || {
                 let mut reader: Option<SqliteIndex> = None;
-                // Search by meaning over the chosen model's vectors, and the model it was made for.
-                let mut meaning: Option<(Option<knotes_vectors::MeaningModel>, MeaningIndex)> = None;
+                // Search by meaning over the chosen model's vectors, and the stores' generation it
+                // was made in (another model chosen, or a store cleared, makes it again).
+                let mut meaning: Option<(u64, MeaningIndex)> = None;
                 while let Ok(mut request) = incoming.recv() {
                     // Queries typed meanwhile replace this one: only the latest matters.
                     while let Ok(newer) = incoming.try_recv() {
@@ -68,14 +69,14 @@ impl SearchWorker {
                     if reader.is_none() {
                         reader = SqliteIndex::open_reader(&index_dir).ok();
                     }
-                    // Made at the first search by meaning, and again for another model chosen.
-                    let model = crate::meaning::model();
-                    if request.mode == SearchMode::Meaning && meaning.as_ref().is_none_or(|(made_for, _)| *made_for != model) {
-                        meaning = model.zip(crate::meaning::embedder()).and_then(|(model, embedder)| {
-                            VectorStore::open_reader(&index_dir, &model.store_file()).ok().map(|store| (Some(model), MeaningIndex::over_store(embedder as Arc<dyn Embedder>, store)))
+                    // Made at the first search by meaning, and again in a later generation.
+                    let generation = crate::meaning::generation();
+                    if request.mode == SearchMode::Meaning && meaning.as_ref().is_none_or(|(made_in, _)| *made_in != generation) {
+                        meaning = crate::meaning::model().zip(crate::meaning::embedder()).and_then(|(model, embedder)| {
+                            VectorStore::open_reader(&index_dir, &model.store_file()).ok().map(|store| (generation, MeaningIndex::over_store(embedder as Arc<dyn Embedder>, store)))
                         });
                     }
-                    let meaning = meaning.as_ref().filter(|(made_for, _)| *made_for == model).map(|(_, m)| m as &dyn MeaningSearch);
+                    let meaning = meaning.as_ref().filter(|(made_in, _)| *made_in == generation).map(|(_, m)| m as &dyn MeaningSearch);
                     deliver(search(&request, reader.as_ref(), meaning));
                 }
             })

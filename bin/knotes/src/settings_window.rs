@@ -2,12 +2,16 @@
 //! meaning runs on, or turns search by meaning off.
 
 use std::cell::RefCell;
+use std::time::Duration;
+
+use dispatch2::{DispatchQueue, DispatchTime};
 
 use knotes_vectors::MeaningModel;
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSFont, NSImage, NSLayoutConstraint, NSMenuItem, NSPopUpButton, NSTabViewController, NSTabViewControllerTabStyle, NSTabViewItem, NSTextField, NSView, NSViewController, NSWindow, NSWindowStyleMask,
+    NSButton, NSColor, NSControlSize, NSFont, NSImage, NSLayoutConstraint, NSMenuItem, NSPopUpButton, NSProgressIndicator, NSProgressIndicatorStyle, NSTabViewController, NSTabViewControllerTabStyle, NSTabViewItem,
+    NSTextAlignment, NSTextField, NSView, NSViewController, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
@@ -19,9 +23,22 @@ const OFF_TAG: isize = 99;
 
 type OnMeaning = Box<dyn Fn()>;
 
+/// A model's row of stored vectors: their size, the button clearing them (a model not in use) and
+/// the one making them again (the model in use).
+struct CacheRow {
+    model: MeaningModel,
+    size: Retained<NSTextField>,
+    clear: Retained<NSButton>,
+    regenerate: Retained<NSButton>,
+}
+
 struct Settings {
     window: Retained<NSWindow>,
     popup: Retained<NSPopUpButton>,
+    caches: Vec<CacheRow>,
+    /// The vectors being made: how far, how fast.
+    status: Retained<NSTextField>,
+    progress: Retained<NSProgressIndicator>,
     _tabs: Retained<NSTabViewController>,
     _target: Retained<SettingsTarget>,
 }
@@ -44,6 +61,20 @@ define_class!(
         #[unsafe(method(chooseMeaning:))]
         fn choose_meaning(&self, sender: &NSPopUpButton) {
             chosen(sender.selectedTag());
+        }
+
+        #[unsafe(method(clearCache:))]
+        fn clear_cache(&self, sender: &NSButton) {
+            if let Some(model) = usize::try_from(sender.tag()).ok().and_then(|i| MeaningModel::ALL.get(i).copied()) {
+                cleared(model);
+            }
+        }
+
+        #[unsafe(method(regenerateCache:))]
+        fn regenerate_cache(&self, sender: &NSButton) {
+            if let Some(model) = usize::try_from(sender.tag()).ok().and_then(|i| MeaningModel::ALL.get(i).copied()) {
+                cleared(model);
+            }
         }
     }
 );
@@ -68,7 +99,75 @@ pub fn show(mtm: MainThreadMarker) {
         let settings = shown.get_or_insert_with(|| make(mtm));
         let tag = crate::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
         settings.popup.selectItemWithTag(tag);
+        refresh(settings);
         settings.window.makeKeyAndOrderFront(None);
+    });
+    tick();
+}
+
+/// While the window is shown, its sizes and progress are looked at again twice a second.
+fn tick() {
+    let shown = SHOWN.with(|shown| shown.borrow().as_ref().is_some_and(|s| s.window.isVisible()));
+    if !shown {
+        return;
+    }
+    let when = DispatchTime::try_from(Duration::from_millis(500)).expect("short delay");
+    let _ = DispatchQueue::main().after(when, || {
+        SHOWN.with(|shown| {
+            if let Some(settings) = shown.borrow().as_ref() {
+                refresh(settings);
+            }
+        });
+        tick();
+    });
+}
+
+/// Each model's stored vectors as they are on disk now, and those being made.
+fn refresh(settings: &Settings) {
+    let in_use = crate::meaning::model();
+    for CacheRow { model, size, clear, regenerate } in &settings.caches {
+        let bytes = crate::meaning::cache_size(*model);
+        size.setStringValue(&NSString::from_str(&if bytes == 0 { strings::SETTINGS_CACHE_NONE.to_string() } else { strings::file_size(bytes) }));
+        // The model in use is made again rather than cleared (cleared, it would be anyway): its
+        // row shows «Перегенерувати», the others «Очистити».
+        let used = in_use == Some(*model);
+        clear.setHidden(used);
+        clear.setEnabled(bytes > 0);
+        regenerate.setHidden(!used);
+    }
+    match (in_use, crate::meaning::making()) {
+        (None, _) => {
+            settings.status.setStringValue(&NSString::from_str(strings::SETTINGS_MEANING_IS_OFF));
+            settings.progress.setHidden(true);
+        }
+        (Some(_), Some(making)) => {
+            settings.status.setStringValue(&NSString::from_str(&strings::settings_making(making.done, making.total, making.per_second)));
+            settings.progress.setMaxValue(making.total.max(1) as f64);
+            settings.progress.setDoubleValue(making.done as f64);
+            settings.progress.setHidden(false);
+        }
+        (Some(_), None) => {
+            settings.status.setStringValue(&NSString::from_str(strings::SETTINGS_VECTORS_READY));
+            settings.progress.setHidden(true);
+        }
+    }
+}
+
+/// `model`'s stored vectors removed; the windows open fresh stores when it is the one in use
+/// (its vectors are embedded again in the background: «Перегенерувати»).
+fn cleared(model: MeaningModel) {
+    crate::meaning::clear_cache(model);
+    if crate::meaning::model() == Some(model) {
+        ON_MEANING.with(|c| {
+            if let Some(callback) = c.borrow().as_ref() {
+                callback();
+            }
+        });
+    }
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            refresh(settings);
+        }
     });
 }
 
@@ -83,6 +182,18 @@ fn chosen(tag: isize) {
             callback();
         }
     });
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            refresh(settings);
+        }
+    });
+}
+
+fn short_title_of(model: MeaningModel) -> &'static str {
+    match model {
+        MeaningModel::E5Large => strings::SETTINGS_CACHE_E5,
+        MeaningModel::EmbeddingGemma2 => strings::SETTINGS_CACHE_GEMMA,
+    }
 }
 
 fn title_of(model: MeaningModel) -> &'static str {
@@ -122,8 +233,8 @@ fn make(mtm: MainThreadMarker) -> Settings {
         v.setTranslatesAutoresizingMaskIntoConstraints(false);
         view.addSubview(v);
     }
-    let constraints = [
-        view.widthAnchor().constraintEqualToConstant(500.0),
+    let mut constraints = vec![
+        view.widthAnchor().constraintEqualToConstant(560.0),
         label.leadingAnchor().constraintEqualToAnchor_constant(&view.leadingAnchor(), 24.0),
         label.centerYAnchor().constraintEqualToAnchor(&popup.centerYAnchor()),
         popup.topAnchor().constraintEqualToAnchor_constant(&view.topAnchor(), 24.0),
@@ -132,8 +243,73 @@ fn make(mtm: MainThreadMarker) -> Settings {
         note.topAnchor().constraintEqualToAnchor_constant(&popup.bottomAnchor(), 12.0),
         note.leadingAnchor().constraintEqualToAnchor(&popup.leadingAnchor()),
         note.trailingAnchor().constraintEqualToAnchor_constant(&view.trailingAnchor(), -24.0),
-        note.bottomAnchor().constraintEqualToAnchor_constant(&view.bottomAnchor(), -24.0),
     ];
+    // Each model's stored vectors: a row of its name, their size and a button clearing them.
+    let cache_label = NSTextField::labelWithString(&NSString::from_str(strings::SETTINGS_CACHE), mtm);
+    cache_label.setTranslatesAutoresizingMaskIntoConstraints(false);
+    view.addSubview(&cache_label);
+    let mut caches = Vec::new();
+    let mut above = note.bottomAnchor();
+    let mut gap = 20.0;
+    for (i, model) in MeaningModel::ALL.iter().enumerate() {
+        let name = NSTextField::labelWithString(&NSString::from_str(short_title_of(*model)), mtm);
+        let size = NSTextField::labelWithString(&NSString::new(), mtm);
+        size.setAlignment(NSTextAlignment::Right);
+        size.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        // SAFETY: the target lives as long as the window, kept with it.
+        let clear = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(strings::SETTINGS_CLEAR), Some(&target), Some(sel!(clearCache:)), mtm) };
+        clear.setTag(i as isize);
+        clear.setControlSize(NSControlSize::Small);
+        // SAFETY: as the button above.
+        let regenerate = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(strings::SETTINGS_REGENERATE), Some(&target), Some(sel!(regenerateCache:)), mtm) };
+        regenerate.setTag(i as isize);
+        regenerate.setControlSize(NSControlSize::Small);
+        for v in [&*name as &NSView, &size, &clear, &regenerate] {
+            v.setTranslatesAutoresizingMaskIntoConstraints(false);
+            view.addSubview(v);
+        }
+        constraints.extend([
+            clear.topAnchor().constraintEqualToAnchor_constant(&above, gap),
+            name.leadingAnchor().constraintEqualToAnchor(&popup.leadingAnchor()),
+            name.widthAnchor().constraintEqualToConstant(150.0),
+            name.centerYAnchor().constraintEqualToAnchor(&clear.centerYAnchor()),
+            size.leadingAnchor().constraintEqualToAnchor_constant(&name.trailingAnchor(), 8.0),
+            size.widthAnchor().constraintEqualToConstant(70.0),
+            size.centerYAnchor().constraintEqualToAnchor(&clear.centerYAnchor()),
+            clear.leadingAnchor().constraintEqualToAnchor_constant(&size.trailingAnchor(), 12.0),
+            // In the same place: a row shows the one that applies.
+            regenerate.leadingAnchor().constraintEqualToAnchor(&clear.leadingAnchor()),
+            regenerate.centerYAnchor().constraintEqualToAnchor(&clear.centerYAnchor()),
+        ]);
+        if i == 0 {
+            constraints.push(cache_label.trailingAnchor().constraintEqualToAnchor(&label.trailingAnchor()));
+            constraints.push(cache_label.centerYAnchor().constraintEqualToAnchor(&clear.centerYAnchor()));
+        }
+        above = clear.bottomAnchor();
+        gap = 6.0;
+        caches.push(CacheRow { model: *model, size, clear, regenerate });
+    }
+    // The vectors being made: a line saying how far and how fast, a bar under it.
+    let status = NSTextField::labelWithString(&NSString::new(), mtm);
+    status.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    status.setFont(Some(&NSFont::systemFontOfSize(NSFont::smallSystemFontSize())));
+    let progress = NSProgressIndicator::new(mtm);
+    progress.setStyle(NSProgressIndicatorStyle::Bar);
+    progress.setIndeterminate(false);
+    progress.setHidden(true);
+    for v in [&*status as &NSView, &progress] {
+        v.setTranslatesAutoresizingMaskIntoConstraints(false);
+        view.addSubview(v);
+    }
+    constraints.extend([
+        status.topAnchor().constraintEqualToAnchor_constant(&above, 16.0),
+        status.leadingAnchor().constraintEqualToAnchor(&popup.leadingAnchor()),
+        status.trailingAnchor().constraintEqualToAnchor_constant(&view.trailingAnchor(), -24.0),
+        progress.topAnchor().constraintEqualToAnchor_constant(&status.bottomAnchor(), 6.0),
+        progress.leadingAnchor().constraintEqualToAnchor(&popup.leadingAnchor()),
+        progress.trailingAnchor().constraintEqualToAnchor_constant(&view.trailingAnchor(), -24.0),
+        view.bottomAnchor().constraintEqualToAnchor_constant(&progress.bottomAnchor(), 24.0),
+    ]);
     NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
     let search = NSViewController::new(mtm);
     search.setView(&view);
@@ -149,7 +325,7 @@ fn make(mtm: MainThreadMarker) -> Settings {
     // SAFETY: the window is kept here; closing it must not release it.
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
-    Settings { window, popup, _tabs: tabs, _target: target }
+    Settings { window, popup, caches, status, progress, _tabs: tabs, _target: target }
 }
 
 /// Probe: `setting` (a model's key, or `off`) chosen in the menu, as a click would.
@@ -164,6 +340,14 @@ pub fn probe_choose(mtm: MainThreadMarker, setting: &str) {
     chosen(tag);
 }
 
+/// Probe: `model`'s stored vectors cleared, as a click on its button would.
+pub fn probe_clear(mtm: MainThreadMarker, key: &str) {
+    show(mtm);
+    if let Some(model) = MeaningModel::from_key(key) {
+        cleared(model);
+    }
+}
+
 /// Probe: the settings window, when shown.
 pub fn probe_window() -> Option<Retained<NSWindow>> {
     SHOWN.with(|shown| shown.borrow().as_ref().map(|s| s.window.clone()))
@@ -176,6 +360,21 @@ pub fn probe_lines() -> Vec<String> {
         let (window, popup) = settings;
         let choices: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).filter(|t| !t.is_empty()).collect();
         let chosen = popup.titleOfSelectedItem().map(|t| t.to_string()).unwrap_or_default();
-        vec![format!("settings: {} | meaning: {chosen} | choices: {}", window.title(), choices.join(" / "))]
+        let caches: Vec<String> = shown
+            .borrow()
+            .as_ref()
+            .map(|s| {
+                s.caches
+                    .iter()
+                    .map(|CacheRow { model, size, clear, regenerate }| {
+                        let clear = if !clear.isHidden() && clear.isEnabled() { " [clear]" } else { "" };
+                        let regenerate = if regenerate.isHidden() { "" } else { " [regenerate]" };
+                        format!("{} {}{clear}{regenerate}", model.key(), size.stringValue())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let status = shown.borrow().as_ref().map(|s| s.status.stringValue().to_string()).unwrap_or_default();
+        vec![format!("settings: {} | meaning: {chosen} | choices: {}", window.title(), choices.join(" / ")), format!("settings-cache: {}", caches.join(" | ")), format!("settings-progress: {status}")]
     })
 }

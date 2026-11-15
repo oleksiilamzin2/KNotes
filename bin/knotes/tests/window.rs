@@ -772,6 +772,30 @@ fn search_by_meaning_turned_off_greys_its_segment_and_stays_off() {
 }
 
 #[test]
+fn the_settings_show_each_model_s_stored_vectors_and_clear_or_make_them_again() {
+    let home = tempfile::tempdir().unwrap();
+    let vaults = home.path().join("Library/Application Support/Knotes/vaults/x");
+    std::fs::create_dir_all(&vaults).unwrap();
+    std::fs::write(vaults.join("vectors-e5-large-instruct.sqlite"), vec![0u8; 3000]).unwrap();
+    std::fs::write(vaults.join("vectors-embeddinggemma-2.sqlite"), vec![0u8; 2048]).unwrap();
+    let notes = [("a.md", "a")];
+    let line = |out: &str, prefix: &str| out.lines().find_map(|l| l.strip_prefix(prefix)).unwrap_or_default().to_string();
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS", "1")], home.path());
+    // The model in use (e5, the default) is made again rather than cleared; the other cleared.
+    assert_eq!(line(&out, "settings-cache: "), "e5-large-instruct 3 КБ [regenerate] | embeddinggemma-2 2 КБ [clear]", "{out}");
+    assert_eq!(line(&out, "settings-progress: "), "Вектори актуальні", "nothing being made in the probe");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS_CLEAR", "embeddinggemma-2")], home.path());
+    assert_eq!(line(&out, "settings-cache: "), "e5-large-instruct 3 КБ [regenerate] | embeddinggemma-2 немає", "{out}");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS_CLEAR", "e5-large-instruct")], home.path());
+    assert_eq!(line(&out, "settings-cache: "), "e5-large-instruct немає [regenerate] | embeddinggemma-2 немає", "made again: emptied first (the probe never runs a model)");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS", "1"), ("KNOTES_PROBE_SETTINGS_MAKING", "12/40/300")], home.path());
+    let making = line(&out, "settings-progress: ");
+    assert!(making.starts_with("Генерація векторів: 12 з 40 нотаток · ") && making.ends_with(" блоків/с"), "{making}");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS_MEANING", "off")], home.path());
+    assert_eq!(line(&out, "settings-progress: "), "Пошук за змістом вимкнено", "{out}");
+}
+
+#[test]
 fn word_forms_are_found_and_an_empty_search_restores_the_list() {
     let (_vault, out) = probe_notes(
         &[("a.md", "Пишемо українською мовою"), ("b.md", "інше")],

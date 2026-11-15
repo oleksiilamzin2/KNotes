@@ -15,5 +15,5 @@ pub use meaning_index::MeaningIndex;
 pub use meaning_model::MeaningModel;
 pub use passage_of::block_passage;
 pub use snapshot::Snapshot;
-pub use update::{EDITING, SETTLE, SETTLE_EDITING, Updated, Which, update};
+pub use update::{EDITING, Progress, SETTLE, SETTLE_EDITING, Updated, Which, update, update_reporting};
 pub use vector_store::VectorStore;
