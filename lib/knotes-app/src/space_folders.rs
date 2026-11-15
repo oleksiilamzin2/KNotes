@@ -17,7 +17,8 @@ impl SpaceFolders {
         let mut folders = HashSet::new();
         let mut stack: Vec<&FolderNode> = tree.children.iter().collect();
         while let Some(node) = stack.pop() {
-            if spaces.of_folder(&node.path).is_some_and(|s| s.id == id) {
+            // Its own folders, and those in every space (ADR 0030).
+            if spaces.holds_folder(&node.path, id) {
                 folders.insert(node.path.clone());
             }
             stack.extend(node.children.iter());

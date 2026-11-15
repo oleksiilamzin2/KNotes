@@ -41,3 +41,9 @@ fn a_new_space_gets_an_id_from_its_name_that_no_other_has() {
     assert_eq!(new_space_id(&[space("robota", "", SpaceColor::Blue), space("robota-2", "", SpaceColor::Blue)], "Робота"), "robota-3");
     assert_eq!(new_space_id(&[], "🙂"), "space", "nothing to spell it with");
 }
+
+#[test]
+fn a_folder_in_every_space_is_written_as_a_star() {
+    let written: Value = serde_json::from_str(&set_folder_space("{}", FolderSpace::Shared).unwrap()).unwrap();
+    assert_eq!(written, json!({"space": "*"}));
+}

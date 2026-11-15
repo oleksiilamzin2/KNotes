@@ -7,4 +7,6 @@ pub enum FolderSpace<'a> {
     None,
     /// The space with this id.
     In(&'a str),
+    /// Every space (`"space": "*"`): a folder each of them shows, as contacts or an inbox.
+    Shared,
 }

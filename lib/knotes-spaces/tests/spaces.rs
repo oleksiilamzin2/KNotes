@@ -90,3 +90,14 @@ fn what_a_folder_s_own_rules_say_is_told_apart_from_what_it_takes() {
     assert_eq!(spaces.own("Робота/Архів").map(|s| s.map(|s| s.id.as_str())), Some(None), "says none");
     assert_eq!(spaces.own("Робота/Проєкти"), None, "says nothing: takes its parent's");
 }
+
+#[test]
+fn a_folder_in_every_space_is_in_each_but_named_for_none() {
+    let spaces = vault(&[("Контакти", r#"{"space": "*"}"#), ("Контакти/Робочі", r#"{"space": "work"}"#), ("Робота", r#"{"space": "work"}"#)]);
+    assert!(spaces.holds("Контакти/Анна.md", "work") && spaces.holds("Контакти/Анна.md", "home"), "in every space");
+    assert!(spaces.shared("Контакти") && spaces.shared("Контакти/Сусіди"), "subfolders take it");
+    assert!(!spaces.holds("Контакти/Робочі/Боб.md", "home") && spaces.holds("Контакти/Робочі/Боб.md", "work"), "a subfolder may name one space");
+    assert_eq!(space_of(&spaces, "Контакти/Анна.md"), None, "no one space to mark it with");
+    assert!(spaces.holds("Робота/План.md", "work") && !spaces.holds("Робота/План.md", "home") && !spaces.holds("top.md", "work"));
+    assert!(spaces.own_shared("Контакти") && !spaces.own_shared("Контакти/Сусіди"), "set there, not taken");
+}

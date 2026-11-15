@@ -10,4 +10,4 @@ pub use folder_space::FolderSpace;
 pub use rules_text::{new_space_id, set_folder_space, set_spaces};
 pub use space::Space;
 pub use space_color::SpaceColor;
-pub use spaces::Spaces;
+pub use spaces::{SHARED, Spaces};

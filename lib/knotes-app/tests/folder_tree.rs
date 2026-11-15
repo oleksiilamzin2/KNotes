@@ -67,3 +67,23 @@ fn empty_folders_are_in_the_tree_with_no_notes() {
     assert_eq!(names(work), [("New", 0)]);
     assert_eq!(names(&work.children[0]), [("Deeper", 0)]);
 }
+
+#[test]
+fn a_folder_in_every_space_shows_in_each_space_s_part() {
+    use knotes_app::SpaceFolders;
+    use knotes_spaces::Spaces;
+    let tree = folder_tree(["Work/a.md", "Home/b.md", "Контакти/c.md"]);
+    let spaces = Spaces::from_texts(&[
+        (String::new(), r#"{"spaces": [{"id": "work"}, {"id": "home"}]}"#.into()),
+        ("Work".into(), r#"{"space": "work"}"#.into()),
+        ("Home".into(), r#"{"space": "home"}"#.into()),
+        ("Контакти".into(), r#"{"space": "*"}"#.into()),
+    ]);
+    for (id, own) in [("work", "Work"), ("home", "Home")] {
+        let space = SpaceFolders::new(&tree, &spaces, id);
+        assert!(space.holds("Контакти/c.md"), "{id}");
+        let (mine, rest) = tree.split(&space);
+        assert_eq!(names(&mine), [(own, 1), ("Контакти", 1)], "{id}");
+        assert!(rest.children.iter().all(|c| c.name != "Контакти"), "{id}: not among the rest");
+    }
+}

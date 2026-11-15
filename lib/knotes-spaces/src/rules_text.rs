@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::{FolderSpace, Space};
+use crate::{FolderSpace, SHARED, Space};
 
 /// A folder's rules file with its space set as `space` says, its other keys kept.
 pub fn set_folder_space(rules: &str, space: FolderSpace) -> Result<String, String> {
@@ -9,6 +9,7 @@ pub fn set_folder_space(rules: &str, space: FolderSpace) -> Result<String, Strin
         FolderSpace::Inherit => root.remove("space"),
         FolderSpace::None => root.insert("space".into(), Value::Null),
         FolderSpace::In(id) => root.insert("space".into(), json!(id)),
+        FolderSpace::Shared => root.insert("space".into(), json!(SHARED)),
     };
     Ok(pretty(&root))
 }

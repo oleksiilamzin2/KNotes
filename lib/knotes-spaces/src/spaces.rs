@@ -6,15 +6,27 @@ use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
 
 use crate::{Space, SpaceColor};
 
+/// What a folder's rules say of every space.
+pub const SHARED: &str = "*";
+
 /// A vault's spaces and which folders are in them (ADR 0030). The root's rules list the spaces
 /// (`"spaces": [{"id", "name", "color"}]`); a folder's rules name its space (`"space": "id"`,
-/// or `null` for none), which its subfolders take unless one names another. The root is in no
-/// space. Folders are compared composed (NFC).
+/// `"*"` for every space, or `null` for none), which its subfolders take unless one names
+/// another. The root is in no space. Folders are compared composed (NFC).
 #[derive(Debug, Clone, Default)]
 pub struct Spaces {
     list: Vec<Space>,
-    /// Each folder that names a space: the space's index, or none (`null`, or an id no space has).
-    folders: HashMap<String, Option<usize>>,
+    /// Each folder whose rules say something of its space.
+    folders: HashMap<String, Rule>,
+}
+
+/// What a folder's rules say: a space (its index), every space, or none (`null`, or an id no
+/// space has).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rule {
+    In(usize),
+    Shared,
+    None,
 }
 
 impl Spaces {
@@ -35,12 +47,13 @@ impl Spaces {
         }
         let mut folders = HashMap::new();
         for (folder, rules) in rules.iter().filter(|(folder, _)| !folder.is_empty()) {
-            let space = match rules.get("space") {
-                Some(Value::String(id)) => list.iter().position(|s| s.id == *id),
-                Some(Value::Null) => None,
+            let rule = match rules.get("space") {
+                Some(Value::String(id)) if id == SHARED => Rule::Shared,
+                Some(Value::String(id)) => list.iter().position(|s| s.id == *id).map_or(Rule::None, Rule::In),
+                Some(Value::Null) => Rule::None,
                 _ => continue,
             };
-            folders.insert(composed(folder).into_owned(), space);
+            folders.insert(composed(folder).into_owned(), rule);
         }
         Self { list, folders }
     }
@@ -64,23 +77,59 @@ impl Spaces {
         self.list.iter().find(|s| s.id == id)
     }
 
-    /// The space of a folder: the nearest of it and its parents that names one.
-    pub fn of_folder(&self, folder: &str) -> Option<&Space> {
+    /// The rule a folder follows: the nearest of it and its parents' that says one.
+    fn rule(&self, folder: &str) -> Rule {
         let folder = composed(folder);
         let mut at = folder.as_ref();
         while !at.is_empty() {
-            if let Some(space) = self.folders.get(at) {
-                return space.map(|i| &self.list[i]);
+            if let Some(rule) = self.folders.get(at) {
+                return *rule;
             }
             at = at.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
-        None
+        Rule::None
     }
 
-    /// What the folder's own rules say: a space, none (`null` or an unknown id), or nothing at
-    /// all (`None`: it takes its parent's).
+    /// The one space of a folder: the nearest of it and its parents that names one; none for a
+    /// folder in every space.
+    pub fn of_folder(&self, folder: &str) -> Option<&Space> {
+        match self.rule(folder) {
+            Rule::In(i) => Some(&self.list[i]),
+            Rule::Shared | Rule::None => None,
+        }
+    }
+
+    /// Whether the folder is in every space.
+    pub fn shared(&self, folder: &str) -> bool {
+        self.rule(folder) == Rule::Shared
+    }
+
+    /// Whether the folder is in the space `id`: its own, or every space.
+    pub fn holds_folder(&self, folder: &str, id: &str) -> bool {
+        match self.rule(folder) {
+            Rule::In(i) => self.list[i].id == id,
+            Rule::Shared => true,
+            Rule::None => false,
+        }
+    }
+
+    /// Whether the document at `path` is in the space `id` (its folder is).
+    pub fn holds(&self, path: &str, id: &str) -> bool {
+        path.rsplit_once('/').is_some_and(|(folder, _)| self.holds_folder(folder, id))
+    }
+
+    /// What the folder's own rules say: a space, none (`null` or an unknown id; every space
+    /// counts too, as no one space), or nothing at all (`None`: it takes its parent's).
     pub fn own(&self, folder: &str) -> Option<Option<&Space>> {
-        self.folders.get(composed(folder).as_ref()).map(|space| space.map(|i| &self.list[i]))
+        self.folders.get(composed(folder).as_ref()).map(|rule| match rule {
+            Rule::In(i) => Some(&self.list[*i]),
+            Rule::Shared | Rule::None => None,
+        })
+    }
+
+    /// Whether the folder's own rules put it in every space.
+    pub fn own_shared(&self, folder: &str) -> bool {
+        self.folders.get(composed(folder).as_ref()) == Some(&Rule::Shared)
     }
 
     /// The space of a document: its folder's.
