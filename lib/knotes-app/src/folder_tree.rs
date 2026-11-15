@@ -68,6 +68,12 @@ fn part(node: &FolderNode, space: &SpaceFolders) -> (FolderNode, Vec<FolderNode>
 /// Builds the folder tree from vault-relative file paths. Every folder that holds any file
 /// appears; only Markdown notes are counted.
 pub fn folder_tree<'a>(paths: impl IntoIterator<Item = &'a str>) -> FolderNode {
+    folder_tree_with(paths, std::iter::empty())
+}
+
+/// The folder tree of `paths` and of `folders` too, which appear though empty (as listed by
+/// `FolderLister`).
+pub fn folder_tree_with<'a>(paths: impl IntoIterator<Item = &'a str>, folders: impl IntoIterator<Item = &'a str>) -> FolderNode {
     struct Builder {
         path: String,
         notes: usize,
@@ -105,6 +111,26 @@ pub fn folder_tree<'a>(paths: impl IntoIterator<Item = &'a str>) -> FolderNode {
                 nodes[index].notes += 1;
             }
             current = index;
+        }
+    }
+    // Folders listed though they hold no file: in the tree with no notes.
+    for folder in folders.into_iter().filter(|f| !f.is_empty() && !f.starts_with('.')) {
+        let mut current = 0;
+        let mut end = 0;
+        for segment in folder.split('/') {
+            end += segment.len();
+            let path = &folder[..end];
+            end += 1;
+            current = match by_path.get(path) {
+                Some(&i) => i,
+                None => {
+                    nodes.push(Builder { path: path.to_owned(), notes: 0, children: Vec::new() });
+                    let i = nodes.len() - 1;
+                    nodes[current].children.push(i);
+                    by_path.insert(path.to_owned(), i);
+                    i
+                }
+            };
         }
     }
 

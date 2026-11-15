@@ -3020,3 +3020,12 @@ fn in_a_space_the_rest_of_the_vault_s_row_and_folders_list_the_notes_outside_it(
     let tags = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SIDEBAR", "tags")]);
     assert!(tags.contains("sidebar: Усі нотатки (2) | Без тегів (1) | · | radar (1) | Решта бази (2)"), "{tags}");
 }
+
+#[test]
+fn an_empty_folder_shows_in_the_sidebar() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir(vault.path().join("Empty")).unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let out = probe_with(&[vault.path()], None);
+    assert!(out.contains("| · | Empty (0)"), "{out}");
+}

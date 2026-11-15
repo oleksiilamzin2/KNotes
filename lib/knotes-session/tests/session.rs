@@ -83,6 +83,23 @@ fn snapshots_carry_the_spaces_and_follow_their_changes() {
 }
 
 #[test]
+fn snapshots_show_empty_folders_and_folders_made_meanwhile() {
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::create_dir_all(vault.path().join("Empty/Inner")).unwrap();
+    fs::create_dir(vault.path().join(".hidden")).unwrap();
+    fs::write(vault.path().join("a.md"), "a").unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let names = |s: &Snapshot| s.folders.children.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+    let first = wait_for(&events, |s| s.rows.len() == 1);
+    assert_eq!(names(&first), ["Empty"], "hidden folders left out");
+    assert_eq!(first.folders.children[0].children[0].name, "Inner");
+    fs::create_dir(vault.path().join("Made")).unwrap();
+    wait_for(&events, |s| names(s).contains(&"Made".to_string()));
+    fs::remove_dir_all(vault.path().join("Empty")).unwrap();
+    wait_for(&events, |s| !names(s).contains(&"Empty".to_string()));
+}
+
+#[test]
 fn closing_a_session_is_immediate() {
     let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     fs::write(vault.path().join("a.md"), "a").unwrap();

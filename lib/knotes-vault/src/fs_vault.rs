@@ -3,7 +3,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use knotes_core::{ATTACHMENTS_FOLDER, AttachmentStore, FileKind, FolderRulesStore, NoteMover, NoteWriter, VaultFile, VaultReader, VaultScanner};
+use knotes_core::{ATTACHMENTS_FOLDER, AttachmentStore, FileKind, FolderLister, FolderRulesStore, NoteMover, NoteWriter, VaultFile, VaultReader, VaultScanner};
 use rayon::prelude::*;
 
 pub struct FsVault {
@@ -32,6 +32,39 @@ impl VaultScanner for FsVault {
         files.par_sort_unstable_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
     }
+}
+
+impl FolderLister for FsVault {
+    /// Walks folders in parallel, reading only their entries' types (no file is looked at).
+    fn folders(&self) -> io::Result<Vec<String>> {
+        let mut folders = folders_in(&self.root, "")?;
+        folders.par_sort_unstable();
+        Ok(folders)
+    }
+}
+
+/// The visible folders below `abs` (its path `rel` in the vault), each with those below it.
+fn folders_in(abs: &Path, rel: &str) -> io::Result<Vec<String>> {
+    let mut dirs = Vec::new();
+    for entry in fs::read_dir(abs)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str().filter(|n| !n.starts_with('.')) else { continue };
+        if entry.file_type()?.is_dir() {
+            dirs.push((entry.path(), if rel.is_empty() { name.to_owned() } else { format!("{rel}/{name}") }));
+        }
+    }
+    let nested: Vec<Vec<String>> = dirs
+        .par_iter()
+        .map(|(abs, rel)| match folders_in(abs, rel) {
+            // Deleted while listed: not part of the vault any more.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            other => other,
+        })
+        .collect::<io::Result<_>>()?;
+    let mut folders: Vec<String> = dirs.into_iter().map(|(_, rel)| rel).collect();
+    folders.extend(nested.into_iter().flatten());
+    Ok(folders)
 }
 
 fn scan_dir(abs: &Path, rel: &str) -> io::Result<Vec<VaultFile>> {

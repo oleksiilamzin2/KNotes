@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use knotes_app::{FolderNode, FolderRules, TagNode, folder_tree, tag_tree};
-use knotes_core::{BoxError, CatalogEntry, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex};
+use knotes_app::{FolderNode, FolderRules, TagNode, folder_tree_with, tag_tree};
+use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
 use knotes_spaces::Spaces;
@@ -13,6 +13,9 @@ pub struct Snapshot {
     pub rows: Arc<Vec<NoteRow>>,
     pub catalog: Arc<Vec<CatalogEntry>>,
     pub folders: Arc<FolderNode>,
+    /// Every folder of the vault, empty ones too: listed again only when a change is not a
+    /// known file's (a folder came or went).
+    pub folder_paths: Arc<Vec<String>>,
     pub tags: Arc<Vec<TagNode>>,
     /// Notes without any tag.
     pub untagged: usize,
@@ -32,7 +35,7 @@ impl Snapshot {
     /// `previous`: its lookups are reused when the files (paths and aliases) are the same.
     pub fn read(
         index: &(impl NoteRows + NoteCatalog + TagIndex),
-        rules_store: &impl FolderRulesStore,
+        rules_store: &(impl FolderRulesStore + FolderLister),
         changed: Vec<String>,
         previous: Option<&Snapshot>,
     ) -> Result<Self, BoxError> {
@@ -46,7 +49,12 @@ impl Snapshot {
                 (Arc::new(catalog), Arc::new(links), Arc::new(titles))
             }
         };
-        let folders = folder_tree(catalog.iter().map(|e| e.path.as_str()));
+        let known = |path: &str| catalog.binary_search_by(|e| e.path.as_str().cmp(path)).is_ok() || previous.is_some_and(|p| p.catalog.binary_search_by(|e| e.path.as_str().cmp(path)).is_ok());
+        let folder_paths = match previous.filter(|_| changed.iter().all(|path| known(path))) {
+            Some(previous) => Arc::clone(&previous.folder_paths),
+            None => Arc::new(rules_store.folders()?),
+        };
+        let folders = folder_tree_with(catalog.iter().map(|e| e.path.as_str()), folder_paths.iter().map(String::as_str));
         let tags = tag_tree(&index.tag_counts()?);
         let untagged = index.untagged_notes()?.len();
         let mut paths = Vec::new();
@@ -69,6 +77,7 @@ impl Snapshot {
             links,
             titles,
             folders: Arc::new(folders),
+            folder_paths,
             tags: Arc::new(tags),
             untagged,
             rules: Arc::new(rules),

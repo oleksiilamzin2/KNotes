@@ -57,3 +57,13 @@ fn in_a_space_the_tree_splits_into_its_folders_and_the_rest_each_folder_in_one_p
     let own = |n: &FolderNode| n.notes - n.children.iter().map(|c| c.notes).sum::<usize>();
     assert_eq!(own(work), 1, "a folder's own notes are its count less its children's, as the sidebar takes them");
 }
+
+#[test]
+fn empty_folders_are_in_the_tree_with_no_notes() {
+    use knotes_app::folder_tree_with;
+    let tree = folder_tree_with(["Work/a.md"], ["Empty", "Work/New/Deeper", "Work"]);
+    assert_eq!(names(&tree), [("Empty", 0), ("Work", 1)]);
+    let work = &tree.children[1];
+    assert_eq!(names(work), [("New", 0)]);
+    assert_eq!(names(&work.children[0]), [("Deeper", 0)]);
+}
