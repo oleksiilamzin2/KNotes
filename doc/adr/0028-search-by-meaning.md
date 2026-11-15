@@ -171,3 +171,12 @@ paths.
   pieces of a few lines (a table's rows with its header), 54 → 55 of 65 but MRR 0.72 → 0.69,
   and the mother's note on blood pressure fell from fourth to fifth. What fixed the list's
   ranking was the words: the list's mode by meaning is hybrid (ADR 0015).
+- Also tried and left out: a note's frontmatter aliases with its title ("Барсик, Кіт"): no
+  change (list 54 of 65, MRR 0.75 → 0.74); the list's words falling back to all but one when
+  none holds them all: MRR 0.75 → 0.72 (0.73 unpinned); Qwen3-Embedding-0.6B (Q8_0, 639 MB,
+  Apache 2.0) in EmbeddingGemma's place: by meaning 0.77, MRR 0.55 (0.78 and 0.58 with all
+  1024 dimensions), against EmbeddingGemma's 0.83 and 0.72–0.75 at 256. Running it took its
+  own prompts (an English instruction before a query: `Instruct: …\nQuery:…`, a document as
+  it is), pooling from the last token (`<|endoftext|>`, which its tokenizer adds) and a KV
+  cache shared by the passages of a decode (`with_kv_unified(true)`: split, each of 32
+  sequences got 64 tokens).
