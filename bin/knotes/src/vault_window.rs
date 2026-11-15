@@ -11,7 +11,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path,
+    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path, space_notes_folder,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -2174,9 +2174,12 @@ impl VaultWindow {
         let (vault, folder) = {
             let state = self.state.borrow();
             let Some(vault) = state.vault.clone() else { return };
-            let folder = match &state.selection {
-                SidebarItem::Folder(path) => path.clone(),
-                _ => new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER),
+            // The folder selected, else the inbox; in a space one of its folders (ADR 0030).
+            let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
+            let folder = match (&state.selection, &state.space_folders) {
+                (SidebarItem::Folder(path), _) => path.clone(),
+                (SidebarItem::Rest, _) | (_, None) => inbox,
+                (_, Some(space)) => space_notes_folder(&inbox, space, &state.folders),
             };
             (vault, folder)
         };

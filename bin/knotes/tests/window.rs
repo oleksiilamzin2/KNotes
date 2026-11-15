@@ -3042,3 +3042,10 @@ fn a_new_folder_is_made_from_a_folder_s_menu_or_the_sidebar_s_and_named_in_place
     let rules = std::fs::read_to_string(vault.path().join("Нова тека/.knotes.json")).unwrap_or_else(|_| panic!("{out}"));
     assert_eq!(serde_json::from_str::<serde_json::Value>(&rules).unwrap(), serde_json::json!({"space": "work"}));
 }
+
+#[test]
+fn in_a_space_a_new_note_goes_to_one_of_its_folders() {
+    let vault = spaced_vault();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_ACTION", "new")]);
+    assert!(vault.path().join("Work/Без назви.md").exists(), "the inbox is not the space's: its folder: {out}");
+}

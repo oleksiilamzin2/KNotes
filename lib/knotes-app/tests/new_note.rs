@@ -40,3 +40,16 @@ fn a_new_folder_gets_a_name_no_folder_beside_it_has() {
     assert_eq!(unique_folder_path("Work", "Нова тека", |p| p == "Work/Нова тека"), "Work/Нова тека 2");
     assert_eq!(unique_folder_path("Work", "Нова тека", |p| p == "Work/Нова тека" || p == "Work/Нова тека 2"), "Work/Нова тека 3");
 }
+
+#[test]
+fn in_a_space_a_new_note_goes_to_the_inbox_if_it_is_the_space_s_else_to_its_first_folder() {
+    use knotes_app::{SpaceFolders, folder_tree, space_notes_folder};
+    use knotes_spaces::Spaces;
+    let tree = folder_tree(["Work/a.md", "Areas/Job/b.md", "Вхідні/c.md"]);
+    let spaces = Spaces::from_texts(&[(String::new(), r#"{"spaces": [{"id": "work"}, {"id": "empty"}]}"#.into()), ("Work".into(), r#"{"space": "work"}"#.into()), ("Areas/Job".into(), r#"{"space": "work"}"#.into())]);
+    let work = SpaceFolders::new(&tree, &spaces, "work");
+    assert_eq!(space_notes_folder("Вхідні", &work, &tree), "Areas/Job", "the first of its folders at the top");
+    let with_inbox = Spaces::from_texts(&[(String::new(), r#"{"spaces": [{"id": "work"}]}"#.into()), ("Work".into(), r#"{"space": "work"}"#.into()), ("Вхідні".into(), r#"{"space": "work"}"#.into())]);
+    assert_eq!(space_notes_folder("Вхідні", &SpaceFolders::new(&tree, &with_inbox, "work"), &tree), "Вхідні");
+    assert_eq!(space_notes_folder("Вхідні", &SpaceFolders::new(&tree, &spaces, "empty"), &tree), "Вхідні", "a space with no folder: the inbox");
+}

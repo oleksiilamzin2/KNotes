@@ -75,3 +75,13 @@ pub fn unique_folder_path(parent: &str, name: &str, exists: impl Fn(&str) -> boo
     }
     path
 }
+
+/// Where a new note goes in a space when no folder is selected (ADR 0030): the inbox if it is
+/// one of the space's folders, else the space's first folder at the top of its tree (the inbox
+/// when the space has none).
+pub fn space_notes_folder(inbox: &str, space: &crate::SpaceFolders, tree: &crate::FolderNode) -> String {
+    if space.holds_folder(inbox) {
+        return inbox.to_owned();
+    }
+    tree.split(space).0.children.first().map_or_else(|| inbox.to_owned(), |first| first.path.clone())
+}
