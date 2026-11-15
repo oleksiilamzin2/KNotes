@@ -76,7 +76,7 @@ fn reply(output: Vec<Value>) -> (u16, String) {
 }
 
 fn chat<'a>(fake: &'a Fake, token: &'a Token) -> Chat<'a> {
-    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None), today: "Saturday, 2026-11-14 (UTC+02:00)".into(), effort: None }
+    Chat { transport: fake, token, model: "gpt-5.5".into(), cache_key: "conversation-1".into(), retry_after: vec![Duration::ZERO, Duration::ZERO], compact_at: compact_at(None), today: "Saturday, 2026-11-14 (UTC+02:00)".into(), effort: None, space: None }
 }
 
 /// Sends `text` and gives the outcome with the events on the way.
@@ -164,6 +164,20 @@ fn after_six_tool_calls_the_model_is_reminded_once_to_answer_what_has_not_turned
     let last = input.last().unwrap()["content"][0]["text"].as_str().unwrap().to_string();
     assert!(last.starts_with("7 tool calls so far") && last.contains("does not have it") && last.contains("a list or a period"), "after the outputs: {last}");
     assert_eq!(reminders(3), 1, "once a turn");
+}
+
+#[test]
+fn the_window_s_space_is_told_each_turn_before_the_question() {
+    let fake = Fake::answering(vec![reply(vec![message("ok")])]);
+    let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
+    let chat = Chat { space: Some("Робота".into()), ..chat(&fake, &token) };
+    let (result, _) = send(&chat, &mut items, "що в планах?", None, &tools);
+    assert_eq!(result, Ok(()));
+    let input = fake.body(0)["input"].as_array().unwrap().clone();
+    let told = input[input.len() - 2]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+    assert_eq!(input[input.len() - 2]["role"], "developer");
+    assert!(told.contains("«Робота»") && told.contains("first"), "{told}");
+    assert_eq!(fake.body(0)["instructions"], INSTRUCTIONS, "not in the instructions: their cached start stays");
 }
 
 #[test]

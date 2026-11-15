@@ -42,6 +42,8 @@ pub struct Turn {
     pub compact_at: u64,
     pub text: String,
     pub open: Option<String>,
+    /// The window's space, its id and name (ADR 0030).
+    pub space: Option<(String, String)>,
     pub model: String,
     /// How hard the model reasons; none, its own default.
     pub effort: Option<String>,
@@ -126,7 +128,10 @@ impl ChatWorker {
                             let result = match &tools {
                                 None => Err(ChatError::Failed("the vault's index is not ready yet".into())),
                                 Some(tools) => {
-                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today(), effort: turn.effort.clone() };
+                                    // The window's space: its finds first, and the model told (ADR 0030).
+                                    tools.set_space(turn.space.as_ref().map(|(id, _)| id.clone()));
+                                    let space = turn.space.as_ref().map(|(_, name)| name.clone());
+                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today(), effort: turn.effort.clone(), space };
                                     chat.send(&mut items, &mut memory, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)
                                 }
                             };
@@ -259,6 +264,14 @@ impl Transport for ScriptTransport {
         let (status, body) = if request.url.ends_with("/models") {
             (200, json!({"models": [{"slug": "probe-model", "display_name": "Probe Model", "visibility": "list"}]}).to_string())
         } else {
+            // What the model was told of the window before the question (`chat-told:`).
+            let sent: Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            if let Some(input) = sent["input"].as_array() {
+                let told = input.iter().rev().skip_while(|i| i["role"] != "user").skip(1).take_while(|i| i["role"] == "developer").filter_map(|i| i["content"][0]["text"].as_str()).collect::<Vec<_>>();
+                if !told.is_empty() {
+                    println!("chat-told: {}", told.join(" | "));
+                }
+            }
             self.0.lock().unwrap().pop_front().ok_or_else(|| ChatError::Network("no answer left".into()))?
         };
         Ok(HttpResponse { status, body: Box::new(std::io::Cursor::new(body.into_bytes())) })

@@ -3066,3 +3066,13 @@ fn the_settings_spaces_tab_lists_the_vault_s_spaces_and_edits_them() {
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "spaces"), ("KNOTES_PROBE_SETTINGS_SPACES", "delete:0")]);
     assert_eq!(root().as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["home", "novyi-prostir"]);
 }
+
+#[test]
+fn the_chat_is_told_the_window_s_space() {
+    let vault = spaced_vault();
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &[chat_reply(&[chat_message("ok")])]);
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "що в планах?"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
+    let told = out.lines().find_map(|l| l.strip_prefix("chat-told: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(told.contains("«Робота»"), "{told}");
+}

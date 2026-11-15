@@ -1633,6 +1633,7 @@ impl VaultWindow {
         self.space_switcher.set_spaces(state.spaces.list(), state.space.as_deref());
         self.list.set_spaces(Arc::clone(&state.spaces), state.space.clone());
         self.sidebar.set_spaces(Arc::clone(&state.spaces), state.space.clone());
+        self.chat.set_space(state.space.as_ref().and_then(|id| state.spaces.get(id)).map(|s| (s.id.clone(), s.name.clone())));
     }
 
     /// The list's marked notes, for the probe.

@@ -64,6 +64,7 @@ pub fn turns(questions: Vec<Question>, model: &str, model_name: &str, effort: Op
                 compact_at,
                 text: q.question.clone(),
                 open: q.open.clone(),
+                space: None,
                 model: model.to_string(),
                 effort: effort.clone(),
                 cache_key: format!("eval-{}", q.id),

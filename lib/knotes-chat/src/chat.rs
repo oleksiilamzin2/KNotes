@@ -76,6 +76,8 @@ pub struct Chat<'a> {
     /// How hard the model reasons over the user's questions (`reasoning.effort`); none, its own
     /// default. Summaries are left at the default.
     pub effort: Option<String>,
+    /// The space the user's window works in (ADR 0030), told each turn; none outside one.
+    pub space: Option<String>,
 }
 
 impl Chat<'_> {
@@ -102,9 +104,16 @@ impl Chat<'_> {
     #[allow(clippy::too_many_arguments)]
     fn turn(&self, items: &mut Vec<Value>, memory: &mut Memory, text: &str, open: Option<&str>, tools: &dyn ToolBox, cancel: &AtomicBool, on_event: &mut dyn FnMut(ChatEvent)) -> Result<(), ChatError> {
         let before = items.len();
+        // What the window shows now, in one message before the question (a turn starts there).
+        let mut told = Vec::new();
         if let Some(path) = open.filter(|p| !tools.excluded(p)) {
-            let words = format!("The user has {path} open in Knotes; \"this note\", \"here\" and the like mean it.");
-            items.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]}));
+            told.push(format!("The user has {path} open in Knotes; \"this note\", \"here\" and the like mean it."));
+        }
+        if let Some(space) = &self.space {
+            told.push(format!("The user works in the space «{space}» (a named set of the vault's folders): search gives its documents first, others naming their space; ask about another space or the whole vault when the question is about it."));
+        }
+        if !told.is_empty() {
+            items.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": told.join(" ")}]}));
         }
         items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}));
         let size = match memory.tokens {

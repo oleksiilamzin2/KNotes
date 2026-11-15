@@ -241,6 +241,8 @@ struct State {
     document: Option<String>,
     /// The document is offered to the model (the chip under the field not crossed out).
     document_on: bool,
+    /// The window's space (ADR 0030): its id and name, told to the model each turn.
+    space: Option<(String, String)>,
     models: Vec<Model>,
     model: String,
     /// How hard the model is asked to reason; none, its own default.
@@ -469,6 +471,7 @@ impl ChatPanel {
             current: Conversation::new(&model),
             document: None,
             document_on: true,
+            space: None,
             models: Vec::new(),
             model,
             effort,
@@ -560,6 +563,12 @@ impl ChatPanel {
             Ok(turns) => turns.into_iter().for_each(|turn| self.worker.send(turn)),
             Err(e) => eprintln!("knotes: cannot start the test questions: {e}"),
         }
+    }
+
+    /// The window's space (its id and name), told to the model each turn; none for the whole
+    /// vault.
+    pub fn set_space(&self, space: Option<(String, String)>) {
+        self.state.borrow_mut().space = space;
     }
 
     /// The document open (a vault path), offered to the model unless crossed out.
@@ -974,6 +983,7 @@ impl ChatPanel {
                 compact_at: compact_at_for(&state.models, &state.model),
                 text,
                 open: state.document.clone().filter(|_| state.document_on),
+                space: state.space.clone(),
                 model: state.model.clone(),
                 effort: effort_for(&state.models, &state.model, state.effort.as_ref()),
                 cache_key: state.current.id.clone(),
