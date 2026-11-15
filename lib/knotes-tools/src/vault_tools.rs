@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use knotes_core::{BlockHit, ContentQuery, DocumentPages, FolderRulesStore, MeaningSearch, NoteParser, Span, TitleSearch, VaultReader, Within};
 use knotes_md::MarkdownParser;
 use knotes_search::TitleIndex;
+use knotes_spaces::{Space, Spaces};
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
@@ -24,6 +25,8 @@ pub const NO_AI_TAG: &str = "no-ai";
 struct Kept {
     notes: HashSet<String>,
     folders: HashMap<String, bool>,
+    /// The vault's spaces (ADR 0030), read from the same rules files.
+    spaces: Spaces,
 }
 
 impl Kept {
@@ -79,12 +82,14 @@ pub struct VaultTools<I, F, D> {
     /// Search by meaning, merged into search's finds when there (ADR 0028), and which of its
     /// finds are near enough to give.
     meaning: Option<(Box<dyn MeaningSearch>, Closeness)>,
+    /// The space the app's window works in (ADR 0030).
+    space: RefCell<Option<String>>,
 }
 
 impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultTools<I, F, D> {
     pub fn new(index: I, files: F, documents: D) -> Self {
         let titles = RefCell::new((Instant::now(), titles_of(&index)));
-        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None), meaning: None }
+        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None), meaning: None, space: RefCell::new(None) }
     }
 
     /// Search finds blocks by meaning too, merged with those by words (ADR 0028), the ones not
@@ -143,11 +148,30 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         }
         let list: Vec<&str> = folders.iter().map(String::as_str).collect();
         let rules = self.files.read_rules(&list).unwrap_or_default();
+        let spaces = Spaces::from_texts(&rules);
         let folders = rules
             .into_iter()
             .filter_map(|(folder, text)| Some((composed(&folder), serde_json::from_str::<Value>(&text).ok()?.get("ai")?.as_bool()?)))
             .collect();
-        Kept { notes, folders }
+        Kept { notes, folders, spaces }
+    }
+
+    /// The space a tool's `space` argument names, by its name (any case) or id; none when not
+    /// given.
+    fn space_arg(&self, args: &Value, kept: &Kept) -> Result<Option<Space>, ToolError> {
+        let Some(asked) = args.get("space").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else { return Ok(None) };
+        let lower = asked.to_lowercase();
+        let found = kept.spaces.list().iter().find(|s| s.id == asked || s.name.to_lowercase() == lower);
+        match found {
+            Some(space) => Ok(Some(space.clone())),
+            None if kept.spaces.is_empty() => Err(ToolError::BadArguments(format!("no space {asked:?}: the vault has no spaces"))),
+            None => Err(ToolError::BadArguments(format!("no space {asked:?}; the vault's spaces: {}", kept.spaces.list().iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")))),
+        }
+    }
+
+    /// The window's space (ADR 0030), whose finds search gives first; none outside the app.
+    pub fn set_space(&self, id: Option<String>) {
+        *self.space.borrow_mut() = id;
     }
 
     /// The tags with how many shared notes have each (the marking tag left out).
@@ -192,7 +216,21 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         let (offset, limit) = paging(args, 10, 30);
         // One more than the page, to tell whether more follow.
         let wanted = offset + limit + 1;
-        let find = |text: &str, within: Within, scope: Option<&[String]>| self.index.search(&ContentQuery { text, within, prefixes: true, scope, limit: wanted }).map_err(failed);
+        let kept = self.kept();
+        // A space asked for (ADR 0030): every way of finding keeps to its documents.
+        let space = self.space_arg(args, &kept)?;
+        let in_space: Option<Vec<String>> = space.as_ref().map(|space| {
+            let catalog = self.index.catalog().unwrap_or_default();
+            catalog.into_iter().map(|e| e.path).filter(|p| kept.spaces.of(p).is_some_and(|s| s.id == space.id)).collect()
+        });
+        let find = |text: &str, within: Within, scope: Option<&[String]>| {
+            let both: Option<Vec<String>> = match (scope, in_space.as_deref()) {
+                (Some(scope), Some(space)) => Some(scope.iter().filter(|p| space.contains(p)).cloned().collect()),
+                _ => None,
+            };
+            let scope = both.as_deref().or(scope).or(in_space.as_deref());
+            self.index.search(&ContentQuery { text, within, prefixes: true, scope, limit: wanted }).map_err(failed)
+        };
         let mut hits = Hits::default();
         // Fragments holding every word, then (while too few) ever looser ways: the notes holding
         // them across their blocks; the documents whose title or aliases hold them; the same by
@@ -204,7 +242,11 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         let named = self.named();
         if hits.0.len() < wanted {
             let words: Vec<String> = query.split_whitespace().map(name_form).collect();
-            let titled: Vec<BlockHit> = named.iter().filter(|(_, names)| words.iter().all(|w| names.iter().any(|n| n.starts_with(w.as_str())))).map(|(path, _)| title_hit(path)).collect();
+            let titled: Vec<BlockHit> = named
+                .iter()
+                .filter(|(path, names)| words.iter().all(|w| names.iter().any(|n| n.starts_with(w.as_str()))) && in_space.as_ref().is_none_or(|space| space.contains(path)))
+                .map(|(path, _)| title_hit(path))
+                .collect();
             hits.add("title", titled, None, false);
         }
         let stemmed = stems(&query);
@@ -240,19 +282,24 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         // does not hold would fill the page with unrelated notes), the two lists merged; each
         // block found by meaning says how far it stood out. A failing search by meaning (its
         // helper gone, no model) leaves search by words as it is.
-        let kept = self.kept();
         // Whether a document the AI may read holds the words (or their stems): told when none
         // does, so the model can tell a search worth rewording from one with nothing to find.
         let by_words = hits.0.iter().any(|(_, hit, _)| !kept.holds(&hit.path));
         let mut standing: HashMap<(String, u32), f64> = HashMap::new();
         if let Some((meaning, closeness)) = &self.meaning
-            && let Ok(near) = meaning.nearest(&asked, wanted, None)
+            && let Ok(near) = meaning.nearest(&asked, wanted, in_space.as_deref())
         {
             let near = closeness.keep(near);
             standing = near.iter().map(|h| ((h.path.clone(), h.ord), -h.score)).collect();
             hits.0 = merged(std::mem::take(&mut hits.0), near);
         }
         hits.0.retain(|(_, hit, via)| !kept.holds(&hit.path) && via.as_deref().is_none_or(|v| v.starts_with("missing:") || !kept.holds(v)));
+        // The window's space first, the rest in the order found (ADR 0030).
+        if space.is_none()
+            && let Some(id) = self.space.borrow().as_deref()
+        {
+            hits.0.sort_by_key(|(_, hit, _)| kept.spaces.of(&hit.path).is_none_or(|s| s.id != id));
+        }
         let (hits, next) = page(hits.0, offset, limit);
         let results: Vec<Value> = hits
             .into_iter()
@@ -261,6 +308,9 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "modified": self.modified(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
                 if let Some(s) = standing.get(&(hit.path.clone(), hit.ord)) {
                     result["closeness"] = json!((s * 10.0).round() / 10.0);
+                }
+                if let Some(space) = kept.spaces.of(&hit.path) {
+                    result["space"] = json!(space.name);
                 }
                 // A partial find names the word it lacks; a linked one, the document it came through.
                 if let Some((key, value)) = via.as_deref().map(|v| v.strip_prefix("missing:").map_or(("via", v), |w| ("missing", w))) {
@@ -508,8 +558,9 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         };
         let (after, before) = (day("changed_after")?, day("changed_before")?);
         let kept = self.kept();
+        let space = self.space_arg(args, &kept)?;
         let mut rows = self.index.note_rows().map_err(failed)?;
-        rows.retain(|r| !kept.holds(&r.path));
+        rows.retain(|r| !kept.holds(&r.path) && space.as_ref().is_none_or(|space| kept.spaces.of(&r.path).is_some_and(|s| s.id == space.id)));
         let seconds = |ns: i64| ns.div_euclid(1_000_000_000);
         if let Some(after) = after {
             rows.retain(|r| seconds(r.mtime_ns) >= after);
@@ -531,7 +582,18 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             _ => rows.sort_by_key(|r| std::cmp::Reverse(r.mtime_ns)),
         }
         let total = rows.len();
-        let notes: Vec<Value> = rows.into_iter().skip(offset).take(limit).map(|r| json!({"path": r.path, "title": title_of(&r.path), "kind": kind_of(&r.path), "modified": utc_minute(seconds(r.mtime_ns))})).collect();
+        let notes: Vec<Value> = rows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|r| {
+                let mut note = json!({"path": r.path, "title": title_of(&r.path), "kind": kind_of(&r.path), "modified": utc_minute(seconds(r.mtime_ns))});
+                if let Some(space) = kept.spaces.of(&r.path) {
+                    note["space"] = json!(space.name);
+                }
+                note
+            })
+            .collect();
         let next = (offset + limit < total).then_some(offset + limit);
         Ok(json!({"notes": notes, "total": total, "next_offset": next}))
     }
@@ -569,6 +631,27 @@ fn describe(index: &impl ToolIndex, kept: &Kept, tags: &[(String, usize)]) -> St
         sorted.sort();
         text.push_str(&format!(" Top-level folders (files in each): {}{more}", sorted.join(", ")));
         text.push_str(&if top > 0 { format!("; {top} files at the top.") } else { ".".to_string() });
+    }
+    // The spaces (ADR 0030), each with the folders whose rules put them in it.
+    if !kept.spaces.is_empty() {
+        let mut all: BTreeSet<&str> = BTreeSet::new();
+        for entry in &catalog {
+            let mut path = entry.path.as_str();
+            while let Some((folder, _)) = path.rsplit_once('/') {
+                all.insert(folder);
+                path = folder;
+            }
+        }
+        let listed: Vec<String> = kept
+            .spaces
+            .list()
+            .iter()
+            .map(|space| {
+                let folders: Vec<&str> = all.iter().copied().filter(|f| kept.spaces.own(f).flatten().is_some_and(|s| s.id == space.id)).collect();
+                format!("{} ({})", space.name, folders.join(", "))
+            })
+            .collect();
+        text.push_str(&format!(" Spaces (named sets of folders the user works in; search and list_notes take one as `space`): {}.", listed.join(", ")));
     }
     let mut tags = tags.to_vec();
     tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));

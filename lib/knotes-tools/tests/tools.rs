@@ -475,3 +475,44 @@ fn short_function_words_are_left_out_of_the_words_searched() {
     assert_eq!(without_question_words("18 листопада о 9"), "18 листопада 9", "numbers stay, however short");
     assert_eq!(without_question_words("і в на"), "і в на", "a query of them alone is searched as it is");
 }
+
+/// A vault with two spaces: Work (Робота) and Home (Дім), and a note in neither, each about apples.
+fn spaced() -> Vault {
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), ".knotes.json", r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}, {"id": "home", "name": "Дім", "color": "green"}]}"#);
+    write(dir.path(), "Work/.knotes.json", r#"{"space": "work"}"#);
+    write(dir.path(), "Home/.knotes.json", r#"{"space": "home"}"#);
+    write(dir.path(), "Home/Apples.md", "Apples for the pie.");
+    write(dir.path(), "Work/Apples.md", "Apples in the report.");
+    write(dir.path(), "Apples.md", "Apples at the top.");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    Vault { _dirs: (dir, idx), tools }
+}
+
+#[test]
+fn finds_name_their_space_and_a_space_narrows_search_and_lists() {
+    let v = spaced();
+    let found = call(&v, "search", json!({"query": "apples"}));
+    let spaces: Vec<(String, Value)> = found["results"].as_array().unwrap().iter().map(|r| (r["path"].as_str().unwrap().to_string(), r["space"].clone())).collect();
+    assert!(spaces.contains(&("Home/Apples.md".into(), json!("Дім"))) && spaces.contains(&("Work/Apples.md".into(), json!("Робота"))), "{spaces:?}");
+    assert!(spaces.contains(&("Apples.md".into(), Value::Null)), "in no space: no field");
+    assert_eq!(paths(&call(&v, "search", json!({"query": "apples", "space": "Дім"})), "results"), ["Home/Apples.md"], "by name");
+    assert_eq!(paths(&call(&v, "search", json!({"query": "apples", "space": "work"})), "results"), ["Work/Apples.md"], "by id");
+    assert_eq!(paths(&call(&v, "list_notes", json!({"space": "Робота"})), "notes"), ["Work/Apples.md"]);
+    assert_eq!(call(&v, "list_notes", json!({"space": "Робота"}))["notes"][0]["space"], "Робота");
+    let wrong = v.tools.call("search", &json!({"query": "apples", "space": "Сад"}));
+    assert!(matches!(&wrong, Err(knotes_tools::ToolError::BadArguments(e)) if e.contains("Робота") && e.contains("Дім")), "the spaces named: {wrong:?}");
+}
+
+#[test]
+fn the_window_s_space_comes_first_and_the_vault_s_description_names_the_spaces() {
+    let v = spaced();
+    v.tools.set_space(Some("home".into()));
+    assert_eq!(paths(&call(&v, "search", json!({"query": "apples"})), "results")[0], "Home/Apples.md", "the window's space first");
+    v.tools.set_space(Some("work".into()));
+    assert_eq!(paths(&call(&v, "search", json!({"query": "apples"})), "results")[0], "Work/Apples.md");
+    let overview = v.tools.overview();
+    assert!(overview.contains("Spaces") && overview.contains("Робота (Work)") && overview.contains("Дім (Home)"), "{overview}");
+}

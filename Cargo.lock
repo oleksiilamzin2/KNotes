@@ -809,6 +809,7 @@ dependencies = [
  "knotes-md",
  "knotes-pdf",
  "knotes-search",
+ "knotes-spaces",
  "knotes-vault",
  "knotes-vectors",
  "serde_json",
