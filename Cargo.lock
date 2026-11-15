@@ -775,6 +775,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "knotes-spaces"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "knotes-synth"
 version = "0.1.0"
 dependencies = [
