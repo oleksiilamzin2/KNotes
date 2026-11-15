@@ -118,7 +118,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(3), panel"
+        "toggle-sidebar, sidebar-mode(3), space, sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(3), panel"
     );
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
@@ -1123,7 +1123,7 @@ fn a_folder_is_renamed_from_the_sidebar_with_the_links_into_it() {
 fn the_toolbar_shows_the_open_notes_name_and_renames_it() {
     let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md")]);
     assert!(out.contains("note-title: Old"), "{out}");
-    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
+    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(3), space, sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
     let (vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "toolbar-rename=From toolbar")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("From toolbar.md")).ok().as_deref(), Some("# Old\n\ntext"), "the first line is content, not the name: {out}");
     assert!(out.contains("note-title: From toolbar"), "{out}");
@@ -2946,6 +2946,7 @@ fn a_space_keeps_the_sidebar_and_the_list_to_its_folders_and_is_remembered() {
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "work")]);
     let line = |name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("no {name}: {out}")).to_string();
     assert_eq!(line("space: "), "Робота | spaces: Робота, Дім");
+    assert_eq!(line("space-menu: "), "Уся база | ✓ Робота | Дім | — | Налаштувати простори…", "chosen through the toolbar's menu");
     assert_eq!(line("sidebar: "), "Усі нотатки (2) | Без тегів (1) | · | Work (1)", "the space's folders, no inbox outside it");
     let list = line("list: ");
     assert!(list.contains("a ~") && list.contains("b ~") && !list.contains("c ~") && !list.contains("top ~"), "{list}");
@@ -2954,4 +2955,13 @@ fn a_space_keeps_the_sidebar_and_the_list_to_its_folders_and_is_remembered() {
     let whole = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "")]);
     assert!(whole.contains("space: — |"), "the whole vault: {whole}");
     assert!(whole.contains("Усі нотатки (4)"), "{whole}");
+}
+
+#[test]
+fn a_vault_without_spaces_shows_no_space_switcher() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let out = probe_with(&[vault.path()], None);
+    assert!(out.contains("space-menu: (hidden)"), "{out}");
+    assert!(out.contains("space: — | spaces: \n") || out.lines().any(|l| l == "space: — | spaces: "), "{out}");
 }

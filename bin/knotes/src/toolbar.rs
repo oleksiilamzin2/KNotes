@@ -9,7 +9,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSImage, NSMenu, NSMenuToolbarItem, NSSearchField, NSSegmentedControl, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
+    NSImage, NSMenu, NSMenuItem, NSMenuToolbarItem, NSSearchField, NSSegmentedControl, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
     NSToolbarItem, NSToolbarItemGroup, NSToolbarItemGroupSelectionMode, NSToolbarSidebarTrackingSeparatorItemIdentifier,
     NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
 };
@@ -17,10 +17,13 @@ use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString,
 use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLineBreakMode, NSResponder, NSTextField, NSTextFieldDelegate, NSTextView, NSView};
 
 use knotes_app::{PanelMode, SearchMode, SidebarMode};
+use knotes_spaces::Space;
 
 use crate::strings;
 
 pub const SIDEBAR_MODE: &str = "knotes.sidebar-mode";
+/// The space switcher (ADR 0030), beside the sidebar's switch.
+pub const SPACE: &str = "knotes.space";
 pub const LIST_SEPARATOR: &str = "knotes.list-separator";
 pub const SEARCH: &str = "knotes.search";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
@@ -40,10 +43,19 @@ type OnPanelMode = Box<dyn Fn(PanelMode)>;
 type OnSearch = Box<dyn Fn(String)>;
 type OnToggleSearch = Box<dyn Fn()>;
 type OnSearchMode = Box<dyn Fn(SearchMode)>;
+type OnSpace = Box<dyn Fn(Option<String>)>;
+type OnSpaceSettings = Box<dyn Fn()>;
 
 pub struct Ivars {
     split_view: Retained<NSSplitView>,
     list_menu: Retained<NSMenu>,
+    /// The space switcher's menu and item (once the toolbar has made it), the spaces it offers
+    /// and the window's (ADR 0030), and what choosing calls.
+    space_menu: Retained<NSMenu>,
+    space_item: RefCell<Option<Retained<NSMenuToolbarItem>>>,
+    spaces: RefCell<(Vec<Space>, Option<String>)>,
+    on_space: RefCell<Option<OnSpace>>,
+    on_space_settings: RefCell<Option<OnSpaceSettings>>,
     /// Called with `true` for forward, `false` for back.
     on_navigate: RefCell<Option<OnNavigate>>,
     on_new_note: RefCell<Option<OnNewNote>>,
@@ -121,6 +133,21 @@ define_class!(
         #[unsafe(method(newNote:))]
         fn new_note(&self, _sender: Option<&AnyObject>) {
             if let Some(callback) = self.ivars().on_new_note.borrow().as_ref() {
+                callback();
+            }
+        }
+
+        #[unsafe(method(chooseSpace:))]
+        fn space_chosen(&self, sender: &NSMenuItem) {
+            let id = sender.representedObject().and_then(|o| o.downcast::<NSString>().ok()).map(|s| s.to_string()).filter(|s| !s.is_empty());
+            if let Some(callback) = self.ivars().on_space.borrow().as_ref() {
+                callback(id);
+            }
+        }
+
+        #[unsafe(method(spaceSettings:))]
+        fn space_settings(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_space_settings.borrow().as_ref() {
                 callback();
             }
         }
@@ -213,6 +240,11 @@ impl ToolbarDelegate {
         let this = Self::alloc(mtm).set_ivars(Ivars {
             split_view,
             list_menu,
+            space_menu: NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(strings::SPACE)),
+            space_item: RefCell::new(None),
+            spaces: RefCell::new((Vec::new(), None)),
+            on_space: RefCell::new(None),
+            on_space_settings: RefCell::new(None),
             on_navigate: RefCell::new(None),
             on_new_note: RefCell::new(None),
             on_sidebar_mode: RefCell::new(None),
@@ -269,6 +301,88 @@ impl ToolbarDelegate {
         self.ivars().sidebar_shown.set(shown);
         if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
             group.setHidden(!shown);
+        }
+        self.show_spaces();
+    }
+
+    pub fn on_space(&self, callback: impl Fn(Option<String>) + 'static) {
+        *self.ivars().on_space.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_space_settings(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_space_settings.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The spaces the switcher offers and the window's (ADR 0030); hidden while the vault has
+    /// none (or the sidebar is collapsed).
+    pub fn set_spaces(&self, spaces: &[Space], current: Option<&str>) {
+        *self.ivars().spaces.borrow_mut() = (spaces.to_vec(), current.map(str::to_owned));
+        self.show_spaces();
+    }
+
+    /// The switcher's menu: the whole vault, the spaces with their dots (the window's ticked),
+    /// and the settings; its image the window's space's dot.
+    fn show_spaces(&self) {
+        let mtm = self.mtm();
+        let target: &AnyObject = self.as_ref();
+        let (spaces, current) = self.ivars().spaces.borrow().clone();
+        let menu = &self.ivars().space_menu;
+        menu.removeAllItems();
+        let entry = |title: &str, action: Sel, id: Option<&str>, ticked: bool| {
+            let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), &NSString::new()) };
+            unsafe { item.setTarget(Some(target)) };
+            if let Some(id) = id {
+                // SAFETY: an NSString, which the menu item keeps as it is.
+                unsafe { item.setRepresentedObject(Some(NSString::from_str(id).as_ref())) };
+            }
+            item.setState(if ticked { objc2_app_kit::NSControlStateValueOn } else { objc2_app_kit::NSControlStateValueOff });
+            item
+        };
+        menu.addItem(&entry(strings::WHOLE_VAULT, sel!(chooseSpace:), Some(""), current.is_none()));
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        for space in &spaces {
+            let item = entry(&space.name, sel!(chooseSpace:), Some(&space.id), current.as_deref() == Some(space.id.as_str()));
+            item.setImage(crate::space_ui::dot(space.color, 11.0, &space.name).as_deref());
+            menu.addItem(&item);
+        }
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        menu.addItem(&entry(strings::SPACE_SETTINGS, sel!(spaceSettings:), None, false));
+        if let Some(item) = self.ivars().space_item.borrow().as_ref() {
+            let shown = current.as_ref().and_then(|id| spaces.iter().find(|s| s.id == *id));
+            let image = match shown {
+                Some(space) => crate::space_ui::dot(space.color, 13.0, &space.name),
+                None => symbol("square.stack", strings::WHOLE_VAULT),
+            };
+            item.setImage(image.as_deref());
+            let label = shown.map_or(strings::WHOLE_VAULT, |s| s.name.as_str());
+            item.setToolTip(Some(&NSString::from_str(&format!("{}: {label}", strings::SPACE))));
+            item.setHidden(spaces.is_empty() || !self.ivars().sidebar_shown.get());
+        }
+    }
+
+    /// The switcher for the probe: "Уся база | ✓ Робота | Дім | — | Налаштувати простори…",
+    /// or "(hidden)".
+    pub fn probe_space_menu(&self) -> String {
+        if self.ivars().space_item.borrow().as_ref().is_none_or(|i| i.isHidden()) {
+            return "(hidden)".into();
+        }
+        let menu = &self.ivars().space_menu;
+        let items: Vec<String> = (0..menu.numberOfItems())
+            .filter_map(|i| menu.itemAtIndex(i))
+            .enumerate()
+            .filter(|(i, item)| !(item.isSeparatorItem() && *i == 1))
+            .map(|(_, item)| if item.isSeparatorItem() { "—".to_string() } else { format!("{}{}", if item.state() == objc2_app_kit::NSControlStateValueOn { "✓ " } else { "" }, item.title()) })
+            .collect();
+        items.join(" | ")
+    }
+
+    /// Chooses a space from the switcher's menu, as a click does (probe mode).
+    pub fn probe_choose_space(&self, id: Option<&str>) {
+        let menu = &self.ivars().space_menu;
+        let wanted = id.unwrap_or("");
+        let at = (0..menu.numberOfItems()).find(|&i| menu.itemAtIndex(i).and_then(|item| item.representedObject()).and_then(|o| o.downcast::<NSString>().ok()).is_some_and(|s| s.to_string() == wanted));
+        if let Some(at) = at {
+            menu.performActionForItemAtIndex(at);
         }
     }
 
@@ -360,6 +474,15 @@ impl ToolbarDelegate {
                     item.setAction(Some(sel!(toggleSearch:)));
                 }
                 Some(item)
+            }
+            SPACE => {
+                let item = NSMenuToolbarItem::initWithItemIdentifier(NSMenuToolbarItem::alloc(mtm), id);
+                item.setLabel(&NSString::from_str(strings::SPACE));
+                item.setShowsIndicator(false);
+                item.setMenu(&self.ivars().space_menu);
+                *self.ivars().space_item.borrow_mut() = Some(item.clone());
+                self.show_spaces();
+                Some(Retained::into_super(item))
             }
             LIST_OPTIONS => {
                 let item = NSMenuToolbarItem::initWithItemIdentifier(NSMenuToolbarItem::alloc(mtm), id);
@@ -529,6 +652,7 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
     NSArray::from_retained_slice(&[
         system[0].copy(),
         custom(SIDEBAR_MODE),
+        custom(SPACE),
         system[1].copy(),
         // No flexible space before the list options: the title already takes the free width,
         // and with the sidebar collapsed every point is needed for the separator to stay on

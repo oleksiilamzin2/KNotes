@@ -3,6 +3,10 @@
 pub const ALL_NOTES: &str = "Усі нотатки";
 pub const FOLDERS: &str = "Теки";
 pub const TAGS: &str = "Теги";
+/// The space switcher in the toolbar (ADR 0030).
+pub const SPACE: &str = "Простір";
+pub const WHOLE_VAULT: &str = "Уся база";
+pub const SPACE_SETTINGS: &str = "Налаштувати простори…";
 pub const TODAY: &str = "Сьогодні";
 pub const YESTERDAY: &str = "Вчора";
 pub const PREVIOUS_7_DAYS: &str = "Попередні 7 днів";

@@ -515,6 +515,19 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        // The space switcher (ADR 0030): a space chosen, or its settings asked for.
+        let weak_space: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_space(move |id| {
+            if let Some(window) = weak_space.upgrade() {
+                window.set_space(id);
+            }
+        });
+        let weak_settings: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_space_settings(move || {
+            if let Some(window) = weak_settings.upgrade() {
+                crate::settings_window::show(MainThreadMarker::from(&*window.window));
+            }
+        });
         // The tabs/folders/tags switch; the choice lasts the session (every launch starts on the
         // folders).
         let weak_mode: Weak<Self> = Rc::downgrade(&this);
@@ -1082,6 +1095,7 @@ impl VaultWindow {
             self.state.borrow_mut().space = self.saved_space();
         }
         self.state.borrow_mut().fit_space();
+        self.show_spaces();
         let new_links = {
             let mut state = self.state.borrow_mut();
             let fresh = !state.links.as_ref().is_some_and(|l| Arc::ptr_eq(l, &snapshot.links));
@@ -1123,7 +1137,8 @@ impl VaultWindow {
             probe::toggle_sidebar_requested(&self.window);
             probe::panel_requested(&self.window);
             if let Some(space) = probe::requested_space() {
-                self.set_space(space);
+                // Through the toolbar's menu, as a click.
+                self.toolbar_delegate.probe_choose_space(space.as_deref());
             }
             if let Some(item) = probe::requested_selection() {
                 self.highlight(&item);
@@ -1445,6 +1460,7 @@ impl VaultWindow {
             state.fit_space();
         }
         self.save_space();
+        self.show_spaces();
         self.rebuild_sidebar();
         let mut selection = self.state.borrow().selection.clone();
         if !self.exists(&selection) {
@@ -1453,6 +1469,17 @@ impl VaultWindow {
         }
         self.highlight(&selection);
         self.refresh_list();
+    }
+
+    /// The toolbar's switcher offers the vault's spaces, the window's ticked.
+    fn show_spaces(&self) {
+        let state = self.state.borrow();
+        self.toolbar_delegate.set_spaces(state.spaces.list(), state.space.as_deref());
+    }
+
+    /// The switcher's menu, for the probe.
+    pub fn probe_space_menu(&self) -> String {
+        self.toolbar_delegate.probe_space_menu()
     }
 
     /// The space and the spaces, for the probe: "Робота | spaces: Робота, Дім" (— for none).
