@@ -44,11 +44,16 @@ and in the lists alike.
   header (no date headers there), and list search its finds the same way; a new note goes to
   the space's first folder unless a folder is selected. The chat is told the current space each turn (a developer
   message, as the open document is: the cached start of the conversation stays) and its search
-  gives the space's documents first, each result naming its space; `search` and `list_notes`
-  take a `space` argument. The MCP server knows no current space: it searches the whole vault,
+  gives the space's documents first, each result naming its space (one message with the document
+  open: a turn starts at the developer message before the question); `search` and `list_notes`
+  take a `space` argument (a name or an id), which narrows every way search finds, by meaning
+  too; the vault's description lists the spaces with their folders. In the list, search by
+  meaning runs apart in the space's notes, then in the whole list, so the rest of the vault can
+  neither take the space's places nor raise its bar. The MCP server knows no current space: it searches the whole vault,
   names each result's space and takes the same argument.
 - **The mark**: a dot of the space's colour beside a file of another space (in «Уся база» beside
-  every file in one): in the list, the folder tree, the tabs and the links panel.
+  every file in one): in the list, the tabs, and the folder tree beside a folder whose own
+  rules set another space.
 - **Managed** in Settings, a «Простори» tab (add, rename, colour, remove), and from a folder's
   menu in the sidebar («Простір ▸»); a pop-up at the foot of the sidebar switches (the spaces
   with their dots, «Уся база»; the owner's choice over a toolbar menu), hidden while the vault
@@ -61,4 +66,6 @@ and in the lists alike.
 - Spaces are listed in the root `.knotes.json`, which also passes its `list.*` settings on to
   every folder; the two never mix (`spaces` is read only from the root).
 - Later, if the first step holds: a space's own inbox, tabs and recent notes; the graph by
-  space; marks on links in the editor.
+  space; marks on links in the editor and in the links panel.
+- The settings' «Простори» tab edits the front window's vault, writing its root's rules file
+  (rename keeps the id; a space removed leaves its folders' keys, which then count as none).
