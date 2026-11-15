@@ -58,6 +58,18 @@ fn nested_tag_query_matches_children_only_by_segment() {
 }
 
 #[test]
+fn every_tag_comes_with_the_notes_that_have_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    upsert(&mut index, "a.md", "#area/sub #todo\n");
+    upsert(&mut index, "b.md", "#Area\n");
+    let mut tagged = index.tagged_notes().unwrap();
+    tagged.sort();
+    let tagged: Vec<(&str, &str)> = tagged.iter().map(|(t, p)| (t.as_str(), p.as_str())).collect();
+    assert_eq!(tagged, [("area", "b.md"), ("area/sub", "a.md"), ("todo", "a.md")], "as written, lowercased; parents not added");
+}
+
+#[test]
 fn upsert_replaces_previous_version() {
     let dir = tempfile::tempdir().unwrap();
     let mut index = SqliteIndex::open(dir.path()).unwrap();
