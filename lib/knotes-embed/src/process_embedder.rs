@@ -42,6 +42,23 @@ impl ProcessEmbedder {
     }
 }
 
+impl ProcessEmbedder {
+    /// Starts the helper ahead of a request (it loads its model as it starts), unless it is
+    /// running; never waits, not even for a request under way (the helper is running then).
+    pub fn warm(&self) {
+        let Ok(mut running) = self.running.try_lock() else { return };
+        if let Some(helper) = running.as_mut()
+            && !matches!(helper.child.try_wait(), Ok(Some(_)))
+        {
+            return;
+        }
+        if let Some(gone) = running.take() {
+            gone.stop();
+        }
+        *running = self.start().ok();
+    }
+}
+
 impl Running {
     /// The helper's answer to `line`; none when it has gone.
     fn ask(&mut self, line: &str) -> Option<String> {

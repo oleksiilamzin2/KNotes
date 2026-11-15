@@ -574,6 +574,7 @@ impl ChatPanel {
     pub fn focus(&self) {
         if let (true, Some(window)) = (self.account.is_signed_in(), self.view.window()) {
             window.makeFirstResponder(Some(&self.composer));
+            self.worker.warm_up();
         }
     }
 
@@ -928,6 +929,9 @@ impl ChatPanel {
 
     fn composer_changed(&self) {
         let empty = self.composer.string().length() == 0;
+        if !empty {
+            self.worker.warm_up();
+        }
         self.placeholder.setHidden(!empty);
         let busy = self.state.borrow().turn.is_some();
         let symbol = if busy { "stop.circle.fill" } else { "arrow.up.circle.fill" };

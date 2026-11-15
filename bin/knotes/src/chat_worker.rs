@@ -61,6 +61,7 @@ pub struct ChatWorker {
     jobs: mpsc::Sender<Job>,
     /// Wakes the thread keeping the open vault's vectors (none without the embedding model).
     vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    embedder: Option<Arc<ProcessEmbedder>>,
 }
 
 impl ChatWorker {
@@ -74,6 +75,7 @@ impl ChatWorker {
         };
         let vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>> = Arc::default();
         let wake = Arc::clone(&vectors_wake);
+        let warmed = embedder.clone();
         std::thread::Builder::new()
             .name("knotes-chat".into())
             .spawn(move || {
@@ -129,7 +131,15 @@ impl ChatWorker {
                 }
             })
             .expect("the chat's thread starts");
-        Self { jobs, vectors_wake }
+        Self { jobs, vectors_wake, embedder: warmed }
+    }
+
+    /// The user is writing a question: the embedding model is loaded meanwhile, so the turn's
+    /// first search by meaning does not wait for it (ADR 0028). Never waits itself.
+    pub fn warm_up(&self) {
+        if let Some(embedder) = &self.embedder {
+            embedder.warm();
+        }
     }
 
     /// The vault's index has changed: its vectors are to be brought up to it.
