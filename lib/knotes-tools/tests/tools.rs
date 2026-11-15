@@ -449,6 +449,16 @@ fn a_note_comes_with_the_notes_near_it_in_meaning_that_no_link_shows() {
 }
 
 #[test]
+fn search_says_when_no_document_holds_the_words() {
+    let v = with_meaning(Near(Some(vec![("Fruit/Pear.md", 0, 3.0)])));
+    let found = call(&v, "search", json!({"query": "wedding"}));
+    assert_eq!(found["words_found"], false, "only finds by meaning: {found}");
+    assert_eq!(found["results"][0]["match"], "meaning");
+    let found = call(&v, "search", json!({"query": "apple"}));
+    assert_eq!(found.get("words_found"), None, "a find by words: {found}");
+}
+
+#[test]
 fn search_goes_on_by_words_when_search_by_meaning_fails() {
     let v = with_meaning(Near(None));
     assert_eq!(paths(&call(&v, "search", json!({"query": "apple"})), "results"), ["Fruit/Apple.md"]);

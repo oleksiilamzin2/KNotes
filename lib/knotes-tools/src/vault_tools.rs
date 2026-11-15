@@ -240,6 +240,10 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         // does not hold would fill the page with unrelated notes), the two lists merged; each
         // block found by meaning says how far it stood out. A failing search by meaning (its
         // helper gone, no model) leaves search by words as it is.
+        let kept = self.kept();
+        // Whether a document the AI may read holds the words (or their stems): told when none
+        // does, so the model can tell a search worth rewording from one with nothing to find.
+        let by_words = hits.0.iter().any(|(_, hit, _)| !kept.holds(&hit.path));
         let mut standing: HashMap<(String, u32), f64> = HashMap::new();
         if let Some((meaning, closeness)) = &self.meaning
             && let Ok(near) = meaning.nearest(&asked, wanted, None)
@@ -248,7 +252,6 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             standing = near.iter().map(|h| ((h.path.clone(), h.ord), -h.score)).collect();
             hits.0 = merged(std::mem::take(&mut hits.0), near);
         }
-        let kept = self.kept();
         hits.0.retain(|(_, hit, via)| !kept.holds(&hit.path) && via.as_deref().is_none_or(|v| v.starts_with("missing:") || !kept.holds(v)));
         let (hits, next) = page(hits.0, offset, limit);
         let results: Vec<Value> = hits
@@ -266,7 +269,11 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 result
             })
             .collect();
-        Ok(json!({"results": results, "next_offset": next}))
+        let mut found = json!({"results": results, "next_offset": next});
+        if !by_words {
+            found["words_found"] = json!(false);
+        }
+        Ok(found)
     }
 
     /// The documents with the words of their titles and aliases (composed, lower case), for
