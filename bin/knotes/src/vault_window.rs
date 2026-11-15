@@ -1600,9 +1600,16 @@ impl VaultWindow {
             }
         };
         let spaces = Arc::clone(&self.state.borrow().spaces);
+        let parent = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
+        // Every space: said here unless the parent says it already.
+        if choice == FolderChoice::EverySpace {
+            let wanted = if spaces.shared(parent) { FolderSpace::Inherit } else { FolderSpace::Shared };
+            write(folder, set_folder_space(&rules_of(folder), wanted));
+            return;
+        }
         let id = match choice {
             FolderChoice::Space(id) => Some(id),
-            FolderChoice::NoSpace => None,
+            FolderChoice::NoSpace | FolderChoice::EverySpace => None,
             FolderChoice::NewSpace => {
                 let Some(name) = rename_dialog::ask_space_name(MainThreadMarker::from(&*self.window)) else { return };
                 let mut list = spaces.list().to_vec();
@@ -1616,10 +1623,10 @@ impl VaultWindow {
                 Some(id)
             }
         };
-        let parent = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
-        let inherited = spaces.of_folder(parent).map(|s| s.id.clone());
+        // The parent's space, unless it is in every space (then this folder must say its own).
+        let inherited = (!spaces.shared(parent)).then(|| spaces.of_folder(parent).map(|s| s.id.clone()));
         let wanted = match &id {
-            _ if inherited == id => FolderSpace::Inherit,
+            _ if inherited.as_ref() == Some(&id) => FolderSpace::Inherit,
             Some(id) => FolderSpace::In(id),
             None => FolderSpace::None,
         };

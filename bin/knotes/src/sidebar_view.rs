@@ -33,6 +33,8 @@ type OnRenameEnd = Box<dyn Fn()>;
 pub enum FolderChoice {
     Space(String),
     NoSpace,
+    /// Every space (ADR 0030).
+    EverySpace,
     /// A new space, named in a dialog.
     NewSpace,
 }
@@ -185,6 +187,7 @@ define_class!(
             let Some((choice, folder)) = spec.split_once('\u{1}') else { return };
             let choice = match choice {
                 "none" => FolderChoice::NoSpace,
+                "shared" => FolderChoice::EverySpace,
                 "new" => FolderChoice::NewSpace,
                 id => FolderChoice::Space(id.strip_prefix("s:").unwrap_or(id).to_owned()),
             };
@@ -358,6 +361,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(strings::SPACE));
         let spaces = Arc::clone(&self.ivars().spaces.borrow().0);
         let current = spaces.of_folder(folder).map(|s| s.id.clone());
+        let shared = spaces.shared(folder);
         let entry = |title: &str, choice: &str, ticked: bool| {
             // SAFETY: the source outlives the menu (the outline keeps it) and implements the action.
             let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(sel!(chooseFolderSpace:)), ns_string!("")) };
@@ -374,7 +378,8 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             item.setImage(crate::space_ui::dot(space.color, 11.0, &space.name).as_deref());
             menu.addItem(&item);
         }
-        menu.addItem(&entry(strings::NO_SPACE, "none", current.is_none()));
+        menu.addItem(&entry(strings::NO_SPACE, "none", current.is_none() && !shared));
+        menu.addItem(&entry(strings::EVERY_SPACE, "shared", shared));
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&entry(strings::NEW_SPACE, "new", false));
         menu

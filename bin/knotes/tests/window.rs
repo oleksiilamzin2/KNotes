@@ -2973,7 +2973,7 @@ fn a_folder_s_menu_puts_it_in_a_space_or_a_new_one_writing_only_what_differs_fro
     let vault = spaced_vault();
     let rules = |folder: &str| std::fs::read_to_string(vault.path().join(folder).join(".knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Home=work")]);
-    assert!(out.contains("sidebar-space-menu: Робота | ✓ Дім | Без простору | — | Новий простір…"), "{out}");
+    assert!(out.contains("sidebar-space-menu: Робота | ✓ Дім | Без простору | У всіх просторах | — | Новий простір…"), "{out}");
     assert_eq!(rules("Home"), Some(serde_json::json!({"space": "work"})));
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Work/Radar=new"), ("KNOTES_PROBE_SPACE_NAME", "Проєкт Радар")]);
     let root = rules("").unwrap();
@@ -3078,4 +3078,21 @@ fn the_chat_is_told_the_window_s_space() {
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "що в планах?"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
     let told = out.lines().find_map(|l| l.strip_prefix("chat-told: ")).unwrap_or_else(|| panic!("{out}"));
     assert!(told.contains("«Робота»"), "{told}");
+}
+
+#[test]
+fn a_folder_put_in_every_space_from_its_menu_shows_in_each() {
+    let vault = spaced_vault();
+    std::fs::create_dir_all(vault.path().join("Контакти")).unwrap();
+    std::fs::write(vault.path().join("Контакти/Анна.md"), "Анна").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Контакти=shared")]);
+    assert!(out.contains("sidebar-space-menu: Робота | Дім | ✓ Без простору | У всіх просторах | — | Новий простір…"), "{out}");
+    let rules = std::fs::read_to_string(vault.path().join("Контакти/.knotes.json")).unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&rules).unwrap(), serde_json::json!({"space": "*"}));
+    for space in ["work", "home"] {
+        let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", space)]);
+        let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}"));
+        let rest = sidebar.find("Решта бази").unwrap();
+        assert!(sidebar[..rest].contains("Контакти (1)"), "{space}: among its own folders: {sidebar}");
+    }
 }

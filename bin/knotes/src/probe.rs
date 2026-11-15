@@ -712,7 +712,7 @@ pub fn folder_space_requested(sidebar: &crate::sidebar_view::SidebarSource) {
         .collect();
     println!("sidebar-space-menu: {}", titles.join(" | "));
     let wanted = match choice {
-        "none" | "new" => choice.to_owned(),
+        "none" | "new" | "shared" => choice.to_owned(),
         id => format!("s:{id}"),
     };
     let Some(item) = items.iter().find(|i| i.representedObject().and_then(|o| o.downcast::<NSString>().ok()).is_some_and(|s| s.to_string().split('\u{1}').next() == Some(wanted.as_str()))) else { return };

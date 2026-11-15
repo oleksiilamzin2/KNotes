@@ -11,6 +11,7 @@ pub const REST_OF_VAULT: &str = "Решта бази";
 pub const SPACE_SETTINGS: &str = "Налаштувати простори…";
 /// A folder's menu in the sidebar: its space.
 pub const NO_SPACE: &str = "Без простору";
+pub const EVERY_SPACE: &str = "У всіх просторах";
 pub const NEW_SPACE: &str = "Новий простір…";
 pub const NEW_SPACE_QUESTION: &str = "Назва нового простору";
 pub const CREATE: &str = "Створити";
