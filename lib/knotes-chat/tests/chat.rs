@@ -151,6 +151,22 @@ fn a_tool_call_is_run_and_its_output_sent_back_with_the_reasoning() {
 }
 
 #[test]
+fn after_six_tool_calls_the_model_is_reminded_once_to_answer_what_has_not_turned_up() {
+    let call = |i: usize| json!({"id": format!("fc_{i}"), "type": "function_call", "status": "completed", "call_id": format!("call_{i}"), "name": "search", "arguments": "{\"query\":\"x\"}"});
+    let fake = Fake::answering(vec![reply((0..4).map(call).collect()), reply((4..7).map(call).collect()), reply((7..10).map(call).collect()), reply(vec![message("Not in the notes")])]);
+    let (token, tools, mut items) = (Token::default(), Tools::default(), Vec::new());
+    let (result, _) = send(&chat(&fake, &token), &mut items, "when is my gym?", None, &tools);
+    assert_eq!(result, Ok(()));
+    let reminders = |n: usize| fake.body(n)["input"].as_array().unwrap().iter().filter(|i| i["role"] == "developer" && i["content"][0]["text"].as_str().unwrap_or("").contains("tool calls so far")).count();
+    assert_eq!(reminders(1), 0, "after four calls");
+    assert_eq!(reminders(2), 1, "after seven");
+    let input = fake.body(2)["input"].as_array().unwrap().clone();
+    let last = input.last().unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(last.starts_with("7 tool calls so far") && last.contains("does not have it") && last.contains("a list or a period"), "after the outputs: {last}");
+    assert_eq!(reminders(3), 1, "once a turn");
+}
+
+#[test]
 fn plan_errors_come_out_as_what_to_do_about_them() {
     let failed = sse(&[json!({"type": "response.failed", "response": {"error": {"code": "subscription_sharing_usage_limit_exceeded", "message": "limit"}}})]);
     let error = |status: u16, code: &str| (status, json!({"error": {"code": code, "message": "words", "param": "tools[0]"}}).to_string());

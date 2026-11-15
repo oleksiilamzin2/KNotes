@@ -23,7 +23,11 @@ period, look through all of them before answering. Search a date first as the us
 \"жовтень\"); if nothing comes, try the forms notes often use (2026-11-18, 18.11.2026, 18.11, 2026-10). Prefer figures written in the notes (readings, tables, receipts) \
 to working them out from others; if you must estimate, say so and from what. When notes disagree, say so, which says what and when each last changed (modified). When the user says \
 \"this\" or \"here\" and no document is open, ask which note they mean. Tools give results a page at a time: when a result has next_offset, call the tool again with it as \
-offset to see more; read a long note or PDF on from next_block or next_page. Answer in the language the user writes in. Be concise.";
+offset to see more; read a long note or PDF on from next_block or next_page. Know when to stop. Search by meaning (finds marked `meaning`) already tries other wordings and languages, \
+so do not try synonyms one by one yourself. If two or three searches bring nothing about what was asked (`words_found` false, the \
+finds by meaning about something else), the vault does not have it: say so at once, naming what is nearest if it helps, and never \
+spend more than eight tool calls on something not found. A question about several notes, a list or a period is different: read \
+every note that bears on it. Answer in the language the user writes in. Be concise.";
 
 /// What the model is told when it summarizes a conversation's older part.
 pub const SUMMARY_INSTRUCTIONS: &str = "You summarize the earlier part of a conversation between a user and the assistant of \
@@ -38,6 +42,11 @@ type Reply = (Vec<Value>, Option<u64>, Option<u64>);
 const NAMESPACE: &str = "vault";
 /// Replies with tool calls one turn may take before it gives up.
 const MAX_STEPS: usize = 16;
+/// Tool calls in one turn after which the model is reminded to answer what it has not found:
+/// told so at the start, it still searched on through synonyms, folders and days (22–26 calls
+/// for what the vault does not hold); told when it gets there, it stops. At 8 it had often made
+/// 11 by then, calling four at once.
+const REMIND_AT: usize = 6;
 
 /// What a turn shows on the way.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +117,7 @@ impl Chat<'_> {
             memory.preamble = Some(self.preamble(tools));
             memory.tokens = None;
         }
+        let mut made = 0;
         for _ in 0..MAX_STEPS {
             let (output, input_tokens, cached) = self.respond(&context(items, memory), tools, cancel, on_event)?;
             if cached.is_some() {
@@ -122,7 +132,9 @@ impl Chat<'_> {
             if calls.is_empty() {
                 return Ok(());
             }
+            let before = made;
             for call in calls {
+                made += 1;
                 if cancel.load(Ordering::Relaxed) {
                     return Err(ChatError::Cancelled);
                 }
@@ -138,6 +150,10 @@ impl Chat<'_> {
                 on_event(ChatEvent::ToolDone { name, failed: output.is_err() });
                 let output = output.unwrap_or_else(|e| json!({"error": e})).to_string();
                 items.push(json!({"type": "function_call_output", "call_id": call["call_id"], "output": output}));
+            }
+            if before < REMIND_AT && made >= REMIND_AT {
+                let words = format!("{made} tool calls so far. If what was asked has not turned up, the vault most likely does not have it: answer now, saying so and naming what is nearest. Go on only to read the notes a list or a period needs.");
+                items.push(json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": words}]}));
             }
         }
         Err(ChatError::TooManySteps)
