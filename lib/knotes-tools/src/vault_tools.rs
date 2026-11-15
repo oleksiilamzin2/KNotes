@@ -686,6 +686,12 @@ const QUESTION_WORDS: &[&str] = &[
     "був", "була", "було", "були", "буде", "когда", "что", "как", "где", "кто", "почему", "зачем", "сколько", "какой", "какая", "какое", "какие", "или", "это",
     "мой", "мне", "меня", "был", "была", "было", "when", "what", "how", "where", "who", "why", "which", "the", "is", "are", "was", "were", "of", "to", "in", "on",
     "for", "and", "or", "do", "does", "did", "my", "our",
+    // Prepositions, conjunctions, particles and pronouns: as starts of words ("за" finds "заміна",
+    // "закрити") they bring in notes that have nothing to do with the query.
+    "і", "й", "в", "у", "з", "із", "зі", "за", "на", "до", "по", "о", "об", "під", "над", "між", "через", "без", "біля", "після", "перед", "якщо", "щоб", "бо",
+    "а", "не", "ні", "ж", "же", "б", "би", "то", "хоч", "ось", "там", "тут", "я", "ти", "він", "вона", "воно", "вони", "ви", "його", "її", "їх", "їм", "нам", "вам",
+    "кого", "кому", "чим", "чого", "и", "во", "с", "со", "к", "ко", "от", "из", "ни", "бы", "если", "нет", "a", "an", "at", "by", "be", "as", "it", "if", "so",
+    "no", "not", "from", "with", "about", "we", "you", "i", "me", "us", "they", "them", "he", "she", "his", "her", "their", "this", "that", "there", "into", "can",
 ];
 
 /// `query` without its question and function words, unless it holds nothing else.

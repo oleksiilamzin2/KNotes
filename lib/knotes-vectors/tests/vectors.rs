@@ -102,6 +102,8 @@ fn the_nearest_blocks_come_first() {
     let near: Vec<String> = snapshot.nearest(&query, 2, 2, None).into_iter().map(|h| h.path).collect();
     assert_eq!(near, ["0.md", "2.md"]);
     assert!(snapshot.nearest(&query, 3, 3, None)[0].score < snapshot.nearest(&query, 3, 3, None)[2].score, "lower the nearer");
+    let standing: Vec<f64> = snapshot.nearest(&query, 3, 3, None).iter().map(|h| -h.score).collect();
+    assert!(standing[0] > 1.0 && standing[2] < 0.0, "the nearest stands out of the three, the farthest falls behind: {standing:?}");
     assert_eq!(snapshot.len(), 3);
 }
 

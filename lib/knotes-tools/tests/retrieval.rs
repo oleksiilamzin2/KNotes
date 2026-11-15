@@ -38,6 +38,8 @@ struct Query {
     text: String,
     expected: Vec<String>,
     by_meaning: bool,
+    /// Asks for what the vault does not hold (`"kind": "none"`): the list should show nothing.
+    no_answer: bool,
 }
 
 #[derive(Default)]
@@ -74,6 +76,11 @@ struct Run {
     missed: Vec<String>,
     /// How many documents a query found, all told (the list shows them all).
     shown: usize,
+    /// The queries with no answer in the vault, and the documents found for them all told.
+    no_answer: usize,
+    shown_for_none: usize,
+    /// What the queries with no answer found, the first few each.
+    found_for_none: Vec<String>,
 }
 
 impl Run {
@@ -83,7 +90,15 @@ impl Run {
         println!("  {}", self.words.line("by words"));
         println!("  {}", self.meaning.line("by meaning"));
         println!("  documents found a query: {:.1}", self.shown as f64 / self.all.queries.max(1) as f64);
+        println!("  documents found a query with no answer ({}): {:.1}", self.no_answer, self.none_shown());
+        println!("  Found with no answer:\n{}", self.found_for_none.join("\n"));
         println!("  Not in the first five:\n{}", self.missed.join("\n"));
+    }
+}
+
+impl Run {
+    fn none_shown(&self) -> f64 {
+        self.shown_for_none as f64 / self.no_answer.max(1) as f64
     }
 }
 
@@ -94,7 +109,7 @@ fn tools_find<I: ToolIndex>(tools: &VaultTools<I, FsVault, PdfTexts>, query: &st
 }
 
 fn run(queries: &[Query], find: impl Fn(&str) -> Vec<String>) -> Run {
-    let mut run = Run { all: Score::default(), words: Score::default(), meaning: Score::default(), missed: Vec::new(), shown: 0 };
+    let mut run = Run { all: Score::default(), words: Score::default(), meaning: Score::default(), missed: Vec::new(), shown: 0, no_answer: 0, shown_for_none: 0, found_for_none: Vec::new() };
     for query in queries {
         let mut paths: Vec<String> = Vec::new();
         for path in find(&query.text) {
@@ -103,6 +118,14 @@ fn run(queries: &[Query], find: impl Fn(&str) -> Vec<String>) -> Run {
             if !paths.contains(&path) {
                 paths.push(path);
             }
+        }
+        if query.no_answer {
+            run.no_answer += 1;
+            run.shown_for_none += paths.len();
+            if !paths.is_empty() {
+                run.found_for_none.push(format!("    \"{}\" ({}) → {}", query.text, paths.len(), paths.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
+            }
+            continue;
         }
         run.shown += paths.len();
         let rank = paths.iter().position(|p| query.expected.contains(p)).map(|i| i + 1);
@@ -163,6 +186,7 @@ fn search_finds_what_the_model_looked_for() {
             assert!(with_meaning.meaning.recall() >= floors.meaning, "search by meaning got worse with {}: {}", model.key(), with_meaning.meaning.line("by meaning"));
             assert!(list.words.recall() >= WORDS_RECALL && list.meaning.recall() >= floors.list, "the list's search got worse with {}: {} {}", model.key(), list.words.line("by words"), list.meaning.line("by meaning"));
             assert!(list.shown as f64 / list.all.queries as f64 <= floors.shown, "the list's search lists more noise with {}: {}", model.key(), list.shown);
+            assert!(list.none_shown() <= floors.shown_for_none, "the list's search lists more for what the vault does not hold with {}: {:.1}", model.key(), list.none_shown());
         }
     }
     if own.is_none() {
@@ -176,18 +200,20 @@ struct Floors {
     meaning: f64,
     list: f64,
     shown: f64,
+    /// How many documents the list may show a query with no answer in the vault, on average.
+    shown_for_none: f64,
 }
 
 /// Each model's scores (2026-11-15, 512 dimensions): a change to search may raise them, never
 /// lower them.
 fn floors(model: MeaningModel) -> Floors {
     match model {
-        // 63 of 65 by meaning (MRR 0.81, 0.83 in pieces of 400), the list 63 of 65 (MRR 0.83,
-        // 0.86 in pieces) showing 7.4 a query.
-        MeaningModel::E5Large => Floors { meaning: 0.96, list: 0.96, shown: 7.6 },
-        // 62 of 65 (MRR 0.78, 0.82 in pieces), the list 62 of 65 (MRR 0.81, 0.86 in pieces)
-        // showing 6.3 a query.
-        MeaningModel::EmbeddingGemma2 => Floors { meaning: 0.95, list: 0.95, shown: 6.8 },
+        // 63 of 65 by meaning (MRR 0.82 in pieces of 400), the list 63 of 65 (MRR 0.86) showing
+        // 3.9 a query, and 3.9 a query with no answer.
+        MeaningModel::E5Large => Floors { meaning: 0.96, list: 0.96, shown: 4.2, shown_for_none: 4.2 },
+        // 62 of 65 (MRR 0.82), the list 62 of 65 (MRR 0.86) showing 3.7 a query, 4.9 with no
+        // answer.
+        MeaningModel::EmbeddingGemma2 => Floors { meaning: 0.95, list: 0.95, shown: 4.0, shown_for_none: 5.2 },
     }
 }
 
@@ -202,6 +228,7 @@ fn read_queries(path: &Path) -> Vec<Query> {
             text: q["query"].as_str().unwrap().to_string(),
             expected: q["expected"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().nfc().collect()).collect(),
             by_meaning: q["kind"] == "meaning",
+            no_answer: q["kind"] == "none",
         })
         .collect()
 }

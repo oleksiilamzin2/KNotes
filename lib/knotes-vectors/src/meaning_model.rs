@@ -66,16 +66,16 @@ impl MeaningModel {
         }
     }
 
-    /// For the note list's search by meaning: how near (cosine) a block must be to be listed when
-    /// the query's words are not in its note, and how far behind the nearest it may be. Each
-    /// model scores on a scale of its own, tuned on the benchmark (2026-11-15): e5 scores every
-    /// note 0.7–0.9, so behind by 0.10 listed 31 documents a query, by 0.03 7 with nothing lost,
-    /// by 0.025 one answer was lost; EmbeddingGemma 2 listed 18.6 by 0.10, 6.3 by 0.05, and lost
-    /// one by 0.04.
+    /// For the note list's search by meaning: how far a block must stand out from all the blocks
+    /// (in standard deviations) to be listed when the query's words are not in its note, and how
+    /// far behind the nearest it may be. Tuned on the benchmark (2026-11-15) with 14 queries the
+    /// vault holds no answer to: cosine thresholds listed 11.8 (e5) and 15.3 (EmbeddingGemma 2)
+    /// notes for them, more than for queries it answers, as unrelated notes crowd together; these
+    /// list 3.9 and 4.9 and find as much (a floor of 1.9 cost e5 an answer, of 1.8 EmbeddingGemma 2).
     pub fn closeness(self) -> (f64, f64) {
         match self {
-            Self::E5Large => (0.70, 0.03),
-            Self::EmbeddingGemma2 => (0.30, 0.05),
+            Self::E5Large => (1.8, 1.6),
+            Self::EmbeddingGemma2 => (1.7, 1.5),
         }
     }
 }

@@ -74,6 +74,18 @@ git until it is released, both models in the bundle.
   EmbeddingGemma 2 0.78 → 0.82 / 0.81 → 0.86, nothing lost, the list's noise about the same;
   pieces of 240 and 320 lost answers with EmbeddingGemma 2, of 600 with e5. The way of embedding
   is v2 for both, so every store is embedded again.
+- **The list shows little for what the vault does not hold** (2026-11-15, the owner: queries
+  that find nothing listed a heap of unrelated notes). The benchmark got 14 queries the vault
+  has no answer to (sushi, a sole trader's tax return, bitcoin…), counted apart: with cosine
+  thresholds the list showed 11.8 notes for each with e5 and 15.3 with EmbeddingGemma 2, more
+  than for queries it answers, since unrelated notes crowd together (e5 scores them 0.7–0.8).
+  A find by meaning is now scored by how far it stands out from all the blocks searched, in
+  standard deviations, and the list's thresholds are in those: e5 1.8 and 1.6 behind the
+  nearest, EmbeddingGemma 2 1.7 and 1.5, which list 3.9 and 4.9 notes for queries with no
+  answer, 3.9 and 3.7 for those answered (7.4 and 6.3 before), finding as much. Question and
+  function words left out of the words searched now include prepositions, conjunctions,
+  particles and pronouns ("за" found every word starting with it). The benchmark holds a ceiling
+  on what the list shows for queries with no answer.
 
 ## Consequences
 

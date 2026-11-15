@@ -415,3 +415,15 @@ fn search_goes_on_by_words_when_search_by_meaning_fails() {
     let v = with_meaning(Near(None));
     assert_eq!(paths(&call(&v, "search", json!({"query": "apple"})), "results"), ["Fruit/Apple.md"]);
 }
+
+#[test]
+fn short_function_words_are_left_out_of_the_words_searched() {
+    use knotes_tools::without_question_words;
+    assert_eq!(without_question_words("скільки газу пішло за вересень"), "газу пішло вересень", "\"за\" would find every word starting with it");
+    assert_eq!(without_question_words("ліки від тиску і серця в мами"), "ліки тиску серця мами");
+    assert_eq!(without_question_words("кого кликати якщо вибиває пробки"), "кликати вибиває пробки");
+    assert_eq!(without_question_words("что делать если нет света"), "делать света");
+    assert_eq!(without_question_words("who feeds the cat when we travel"), "feeds cat travel");
+    assert_eq!(without_question_words("18 листопада о 9"), "18 листопада 9", "numbers stay, however short");
+    assert_eq!(without_question_words("і в на"), "і в на", "a query of them alone is searched as it is");
+}

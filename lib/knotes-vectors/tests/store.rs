@@ -19,7 +19,7 @@ fn a_note_s_vectors_are_kept_with_its_date_and_come_back_as_a_snapshot() {
     store.remove("b.md").unwrap();
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot.len(), 1);
-    assert_eq!(snapshot.nearest(&[4; DIMS], 5, 5, None), [BlockHit { score: -f64::from(4 * 4 * DIMS as i32), ..block("a.md", 0, None) }]);
+    assert_eq!(snapshot.nearest(&[4; DIMS], 5, 5, None), [BlockHit { score: 0.0, ..block("a.md", 0, None) }], "one block stands out from none");
 }
 
 #[test]

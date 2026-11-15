@@ -6,9 +6,10 @@ use knotes_core::{BlockHit, ContentQuery, ContentSearch, MeaningSearch, Within};
 
 use crate::without_question_words;
 
-/// Which finds by meaning the list shows when the query's words are not in their notes: those at
-/// least `near_enough` (cosine) and no more than `behind_nearest` below the nearest. Each model
-/// scores on a scale of its own (`MeaningModel::closeness`, tuned on the benchmark).
+/// Which finds by meaning the list shows when the query's words are not in their notes: those
+/// standing out from all the blocks by at least `near_enough` standard deviations, and no more
+/// than `behind_nearest` of them behind the nearest (`MeaningSearch` scores are minus how far a
+/// block stands out; `MeaningModel::closeness`, tuned on the benchmark).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Closeness {
     pub near_enough: f64,
@@ -25,9 +26,8 @@ pub fn notes_by_meaning(index: &impl ContentSearch, meaning: &dyn MeaningSearch,
     let words = without_question_words(query);
     let lexical = index.search(&ContentQuery { text: &words, within: Within::Note, prefixes: true, scope, limit }).unwrap_or_default();
     let near = meaning.nearest(query, limit, scope).unwrap_or_default();
-    let full = 127.0 * 127.0;
-    let nearest = near.first().map_or(0.0, |h| -h.score / full);
-    let near_enough = closeness.near_enough.max(nearest - closeness.behind_nearest) * full;
+    let nearest = near.first().map_or(0.0, |h| -h.score);
+    let near_enough = closeness.near_enough.max(nearest - closeness.behind_nearest);
     // Each note's best block and its score; the first note by words stays first.
     let mut found: Vec<(BlockHit, f64)> = Vec::new();
     let mut add = |hit: BlockHit, rank: usize| {

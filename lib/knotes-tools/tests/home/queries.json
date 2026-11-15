@@ -100,5 +100,19 @@
   {"query": "son's passport expiry date", "expected": ["Документи/Паспорти й документи.md", "Сім'я/Марко.md", "Подорожі/Чорногорія 2027 — план.md"], "kind": "meaning"},
   {"query": "сколько стоит интернет в месяц", "expected": ["Дім/Інтернет і Wi-Fi.md", "Дім/Комунальні платежі.md", "Документи/Договір НетХата.pdf"], "kind": "meaning"},
   {"query": "когда менять анод в водонагревателе", "expected": ["Дім/Техніка/Бойлер.md", "Документи/Інструкція бойлер.pdf"], "kind": "meaning"},
-  {"query": "аллергия у ребенка на орехи", "expected": ["Сім'я/Софійка.md"], "kind": "meaning"}
+  {"query": "аллергия у ребенка на орехи", "expected": ["Сім'я/Софійка.md"], "kind": "meaning"},
+  {"query": "рецепт суші з лососем", "expected": [], "kind": "none"},
+  {"query": "податкова декларація ФОП", "expected": [], "kind": "none"},
+  {"query": "ремонт двигуна мотоцикла", "expected": [], "kind": "none"},
+  {"query": "курс біткоїна", "expected": [], "kind": "none"},
+  {"query": "лекції з квантової фізики", "expected": [], "kind": "none"},
+  {"query": "тренування в спортзалі", "expected": [], "kind": "none"},
+  {"query": "вивчення японської мови", "expected": [], "kind": "none"},
+  {"query": "весілля друзів у червні", "expected": [], "kind": "none"},
+  {"query": "інвестиції в акції Apple", "expected": [], "kind": "none"},
+  {"query": "how to bake sourdough bread", "expected": [], "kind": "none"},
+  {"query": "погода на вихідні", "expected": [], "kind": "none"},
+  {"query": "переїзд за кордон", "expected": [], "kind": "none"},
+  {"query": "графік змін на роботі", "expected": [], "kind": "none"},
+  {"query": "квитки на концерт", "expected": [], "kind": "none"}
 ]

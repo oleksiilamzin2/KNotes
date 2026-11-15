@@ -155,7 +155,7 @@ mod tests {
                 .iter()
                 .filter(|(path, ..)| scope.is_none_or(|s| s.iter().any(|p| p == path)))
                 .take(limit)
-                .map(|(path, start, end, near)| BlockHit { path: path.to_string(), ord: 0, span: Span { start: *start, end: *end }, heading: None, score: -near * 127.0 * 127.0 })
+                .map(|(path, start, end, near)| BlockHit { path: path.to_string(), ord: 0, span: Span { start: *start, end: *end }, heading: None, score: -near })
                 .collect())
         }
     }
