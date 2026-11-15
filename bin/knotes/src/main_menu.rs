@@ -47,6 +47,8 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     submenu(mtm, &bar, s::APP, &[
         Some(item(mtm, s::ABOUT, sel!(orderFrontStandardAboutPanel:), "", none)),
         None,
+        Some(item(mtm, s::SETTINGS, sel!(showSettings:), ",", cmd(none))),
+        None,
         Some(item(mtm, s::HIDE, sel!(hide:), "h", cmd(none))),
         Some(item(mtm, s::HIDE_OTHERS, sel!(hideOtherApplications:), "h", cmd(NSEventModifierFlags::Option))),
         Some(item(mtm, s::SHOW_ALL, sel!(unhideAllApplications:), "", none)),

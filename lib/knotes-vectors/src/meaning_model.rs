@@ -1,3 +1,6 @@
+/// The setting turning search by meaning off.
+pub const OFF: &str = "off";
+
 /// The embedding models search by meaning can run on, the user's choice in the settings
 /// (ADR 0029). Both ship in the bundle; each keeps its vectors in a store of its own, so going
 /// back to one already embedded with is instant.
@@ -25,6 +28,21 @@ impl MeaningModel {
 
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|m| m.key() == key)
+    }
+
+    /// The model a setting names: none for `off` (search by meaning turned off), the default
+    /// when there is no setting or one this version does not know.
+    pub fn from_setting(setting: Option<&str>) -> Option<Self> {
+        match setting {
+            Some(OFF) => None,
+            Some(key) => Some(Self::from_key(key).unwrap_or(Self::DEFAULT)),
+            None => Some(Self::DEFAULT),
+        }
+    }
+
+    /// The setting for `model` (none: off).
+    pub fn setting(model: Option<Self>) -> &'static str {
+        model.map_or(OFF, Self::key)
     }
 
     /// Its file, in the bundle's Resources (the repository's `models/` while developing).

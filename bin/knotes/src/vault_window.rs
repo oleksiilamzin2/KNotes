@@ -262,6 +262,7 @@ impl VaultWindow {
         let list_menu = ListMenu::new(mtm);
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
         search_bar.set_target(toolbar.as_ref());
+        search_bar.set_meaning_on(crate::meaning::model().is_some());
         toolbar::install(&window, &toolbar);
         let state = State {
             selection: SidebarItem::AllNotes,
@@ -951,6 +952,19 @@ impl VaultWindow {
         // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
         unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&embeds), not_found) };
         true
+    }
+
+    /// Another model was chosen for search by meaning, or none (ADR 0029): the chat takes it, the
+    /// search's switch shows whether there is one, and a search by meaning under way runs again
+    /// (by file names, when search by meaning is off).
+    pub fn meaning_changed(&self) {
+        self.chat.meaning_changed();
+        let on = crate::meaning::model().is_some();
+        self.search_bar.set_meaning_on(on);
+        let query = self.search_bar.field.stringValue().to_string();
+        if parse_search(&query).0 == SearchMode::Meaning {
+            if on { self.search(&query) } else { self.set_search_mode(SearchMode::Files) }
+        }
     }
 
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
@@ -2600,7 +2614,7 @@ impl VaultWindow {
             *self.search_worker.borrow_mut() = Some(worker);
         }
         if let Some(worker) = self.search_worker.borrow().as_ref() {
-            let (near_enough, behind_nearest) = knotes_vectors::MeaningModel::DEFAULT.closeness();
+            let (near_enough, behind_nearest) = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
             worker.request(SearchRequest { generation, mode, query, scope, titles, closeness: knotes_tools::Closeness { near_enough, behind_nearest } });
         }
     }

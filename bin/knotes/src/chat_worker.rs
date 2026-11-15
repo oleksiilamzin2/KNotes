@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use knotes_chat::{Chat, ChatError, ChatEvent, ChatGptAccount, CredentialStore, HttpRequest, HttpResponse, Memory, Transport};
-use knotes_embed::{EmbedError, Embedder, Passage, ProcessEmbedder, Vector};
+use knotes_embed::{EmbedError, Embedder, Passage, Vector};
 use knotes_index::SqliteIndex;
 use knotes_pdf::PdfTexts;
 use knotes_tools::VaultTools;
@@ -54,6 +54,8 @@ pub struct Turn {
 
 enum Job {
     Vault(PathBuf, PathBuf),
+    /// Another model chosen for search by meaning (or none).
+    Meaning,
     Turn(Box<Turn>),
 }
 
@@ -61,53 +63,61 @@ pub struct ChatWorker {
     jobs: mpsc::Sender<Job>,
     /// Wakes the thread keeping the open vault's vectors (none without the embedding model).
     vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>>,
-    embedder: Option<Arc<ProcessEmbedder>>,
 }
 
 impl ChatWorker {
     pub fn new(account: Arc<Account>) -> Self {
         let (jobs, receiver) = mpsc::channel::<Job>();
-        let embedder = crate::meaning::embedder();
         let vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>> = Arc::default();
         let wake = Arc::clone(&vectors_wake);
-        let warmed = embedder.clone();
         std::thread::Builder::new()
             .name("knotes-chat".into())
             .spawn(move || {
                 let mut vault: Option<(PathBuf, PathBuf)> = None;
                 let mut tools: Option<VaultTools<SqliteIndex, FsVault, PdfTexts>> = None;
                 let mut vectors_stop = Arc::new(AtomicBool::new(false));
+                // The thread keeping the vectors of `dir` with the model chosen, the last one's
+                // ended (its sender dropped).
+                let restart_vectors = |dir: &PathBuf, stop: &mut Arc<AtomicBool>| {
+                    stop.store(true, Ordering::Relaxed);
+                    *stop = Arc::new(AtomicBool::new(false));
+                    let mut wake = wake.lock().unwrap_or_else(|e| e.into_inner());
+                    *wake = None;
+                    if let (Some(model), Some(embedder)) = (crate::meaning::model(), crate::meaning::embedder()) {
+                        let (sender, receiver) = mpsc::channel();
+                        *wake = Some(sender);
+                        keep_vectors(dir.clone(), embedder as Arc<dyn Embedder>, model, receiver, VECTORS_QUIET, Arc::clone(stop));
+                    }
+                };
                 for job in receiver {
                     match job {
                         Job::Vault(root, index_dir) => {
-                            vectors_stop.store(true, Ordering::Relaxed);
-                            vectors_stop = Arc::new(AtomicBool::new(false));
-                            // The last vault's thread ends with its sender dropped here.
-                            let mut wake = wake.lock().unwrap_or_else(|e| e.into_inner());
-                            *wake = None;
-                            if let Some(embedder) = &embedder {
-                                let (sender, receiver) = mpsc::channel();
-                                *wake = Some(sender);
-                                keep_vectors(index_dir.clone(), Arc::clone(embedder) as Arc<dyn Embedder>, receiver, VECTORS_QUIET, Arc::clone(&vectors_stop));
-                            }
+                            restart_vectors(&index_dir, &mut vectors_stop);
                             vault = Some((root, index_dir));
                             tools = None;
                         }
+                        Job::Meaning => {
+                            if let Some((_, dir)) = &vault {
+                                restart_vectors(dir, &mut vectors_stop);
+                            }
+                            tools = None;
+                        }
                         Job::Turn(mut turn) => {
+                            let meaning = crate::meaning::model().zip(crate::meaning::embedder());
                             if tools.is_none()
                                 && let Some((root, dir)) = &vault
                             {
                                 tools = SqliteIndex::open_reader(dir).ok().map(|index| {
                                     let tools = VaultTools::new(index, FsVault::new(root), PdfTexts::new(root));
-                                    match (&embedder, VectorStore::open_reader(dir, &MeaningModel::DEFAULT.store_file())) {
-                                        (Some(embedder), Ok(store)) => tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::clone(embedder) as Arc<dyn Embedder>, store))),
-                                        _ => tools,
+                                    match meaning.as_ref().and_then(|(model, embedder)| VectorStore::open_reader(dir, &model.store_file()).ok().map(|store| (embedder, store))) {
+                                        Some((embedder, store)) => tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::clone(embedder) as Arc<dyn Embedder>, store))),
+                                        None => tools,
                                     }
                                 });
                             }
                             // What the user has just written, embedded before the model searches.
-                            if let (Some(embedder), Some((_, dir))) = (&embedder, &vault)
-                                && let Err(e) = embed_waiting(dir, &**embedder)
+                            if let (Some((model, embedder)), Some((_, dir))) = (&meaning, &vault)
+                                && let Err(e) = embed_waiting(dir, &**embedder, *model)
                             {
                                 eprintln!("knotes: search by meaning: {e}");
                             }
@@ -126,15 +136,21 @@ impl ChatWorker {
                 }
             })
             .expect("the chat's thread starts");
-        Self { jobs, vectors_wake, embedder: warmed }
+        Self { jobs, vectors_wake }
     }
 
     /// The user is writing a question: the embedding model is loaded meanwhile, so the turn's
     /// first search by meaning does not wait for it (ADR 0028). Never waits itself.
     pub fn warm_up(&self) {
-        if let Some(embedder) = &self.embedder {
+        if let Some(embedder) = crate::meaning::embedder() {
             embedder.warm();
         }
+    }
+
+    /// Another model was chosen for search by meaning (or none): the vectors are kept with it
+    /// from now on, and the next turn's tools search with it.
+    pub fn meaning_changed(&self) {
+        let _ = self.jobs.send(Job::Meaning);
     }
 
     /// The vault's index has changed: its vectors are to be brought up to it.
@@ -157,12 +173,12 @@ impl ChatWorker {
 /// once, then each time it is woken (the index changed) and the index has stayed unchanged for
 /// `quiet`, or when a document left for being written settles. Asleep otherwise: nothing is
 /// looked at while nothing changes. Ends when its waker is dropped (another vault opened).
-fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<()>, quiet: Duration, stop: Arc<AtomicBool>) -> Option<std::thread::JoinHandle<()>> {
+fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, model: MeaningModel, wake: mpsc::Receiver<()>, quiet: Duration, stop: Arc<AtomicBool>) -> Option<std::thread::JoinHandle<()>> {
     let spawned = std::thread::Builder::new().name("knotes-vectors".into()).spawn(move || {
         let paced = Paced(embedder);
         let mut told = false;
         loop {
-            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &store(&dir)?, &paced, now_ns(), Which::Settled, &stop)) {
+            let next = match SqliteIndex::open_reader(&dir).and_then(|index| update(&index, &store(&dir, model)?, &paced, now_ns(), Which::Settled, &stop)) {
                 Ok(updated) => updated.next,
                 Err(e) => {
                     if !told {
@@ -188,14 +204,13 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, wake: mpsc::Receiver<
 
 /// Embeds at once the documents of the vault indexed in `dir` changed too lately for the
 /// background (still settling), so the turn's search finds what the user has just written.
-fn embed_waiting(dir: &Path, embedder: &dyn Embedder) -> Result<Updated, knotes_core::BoxError> {
+fn embed_waiting(dir: &Path, embedder: &dyn Embedder, model: MeaningModel) -> Result<Updated, knotes_core::BoxError> {
     let index = SqliteIndex::open_reader(dir)?;
-    update(&index, &store(dir)?, embedder, now_ns(), Which::Waiting, &AtomicBool::new(false))
+    update(&index, &store(dir, model)?, embedder, now_ns(), Which::Waiting, &AtomicBool::new(false))
 }
 
-/// The store of the model's vectors for the vault indexed in `dir`.
-fn store(dir: &Path) -> Result<VectorStore, knotes_core::BoxError> {
-    let model = MeaningModel::DEFAULT;
+/// The store of `model`'s vectors for the vault indexed in `dir`.
+fn store(dir: &Path, model: MeaningModel) -> Result<VectorStore, knotes_core::BoxError> {
     VectorStore::open(dir, &model.store_file(), model.embedding())
 }
 
@@ -293,7 +308,7 @@ mod tests {
         add(&mut index, "Backlog.md", "Long settled, never embedded.");
         add_at(&mut index, "Typing.md", "Just written.", super::now_ns());
         let embedder = Counting::default();
-        let updated = super::embed_waiting(dir.path(), &embedder).unwrap();
+        let updated = super::embed_waiting(dir.path(), &embedder, knotes_vectors::MeaningModel::DEFAULT).unwrap();
         assert_eq!((updated.documents, embedder.0.load(Ordering::Relaxed)), (1, 1));
         let store = knotes_vectors::VectorStore::open_reader(dir.path(), &knotes_vectors::MeaningModel::DEFAULT.store_file()).unwrap();
         assert_eq!(store.dates().unwrap().keys().collect::<Vec<_>>(), ["Typing.md"]);
@@ -306,7 +321,7 @@ mod tests {
         add(&mut index, "a.md", "First note.");
         let embedder = Arc::new(Counting::default());
         let (wake, woken) = mpsc::channel();
-        let thread = super::keep_vectors(dir.path().to_path_buf(), Arc::clone(&embedder) as Arc<dyn Embedder>, woken, Duration::from_millis(50), Arc::new(AtomicBool::new(false))).unwrap();
+        let thread = super::keep_vectors(dir.path().to_path_buf(), Arc::clone(&embedder) as Arc<dyn Embedder>, knotes_vectors::MeaningModel::DEFAULT, woken, Duration::from_millis(50), Arc::new(AtomicBool::new(false))).unwrap();
         let embedded = || embedder.0.load(Ordering::Relaxed);
         wait_for(|| embedded() == 1);
         add(&mut index, "b.md", "Second note.");

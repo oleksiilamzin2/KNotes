@@ -749,6 +749,29 @@ fn the_third_segment_searches_by_meaning() {
 }
 
 #[test]
+fn the_settings_offer_two_models_for_search_by_meaning_or_none() {
+    let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SETTINGS", "1")]);
+    let settings = out.lines().find(|l| l.starts_with("settings: ")).unwrap_or_default();
+    assert!(settings.contains("| meaning: e5-large-instruct — точніший |"), "the default: {settings}");
+    assert!(settings.ends_with("choices: e5-large-instruct — точніший / EmbeddingGemma 2 — легший / Вимкнено"), "{settings}");
+    assert!(out.contains("search-meaning-segment: on"), "{out}");
+}
+
+#[test]
+fn search_by_meaning_turned_off_greys_its_segment_and_stays_off() {
+    let home = tempfile::tempdir().unwrap();
+    let notes = [("a.md", "a")];
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS_MEANING", "off")], home.path());
+    assert!(out.contains("| meaning: Вимкнено |") && out.contains("search-meaning-segment: off"), "{out}");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS", "1")], home.path());
+    assert!(out.contains("| meaning: Вимкнено |") && out.contains("search-meaning-segment: off"), "kept: {out}");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS_MEANING", "embeddinggemma-2")], home.path());
+    assert!(out.contains("| meaning: EmbeddingGemma 2 — легший |") && out.contains("search-meaning-segment: on"), "{out}");
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS", "1")], home.path());
+    assert!(out.contains("| meaning: EmbeddingGemma 2 — легший |"), "kept: {out}");
+}
+
+#[test]
 fn word_forms_are_found_and_an_empty_search_restores_the_list() {
     let (_vault, out) = probe_notes(
         &[("a.md", "Пишемо українською мовою"), ("b.md", "інше")],

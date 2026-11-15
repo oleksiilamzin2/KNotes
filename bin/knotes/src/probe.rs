@@ -772,6 +772,10 @@ pub fn schedule(with_sidebar: bool) {
                 for line in window.chat.probe_lines() {
                     println!("{line}");
                 }
+                for line in crate::settings_window::probe_lines() {
+                    println!("{line}");
+                }
+                println!("search-meaning-segment: {}", if window.search_bar.meaning_on() { "on" } else { "off" });
                 if std::env::var_os("KNOTES_PROBE_CHAT_FIELD_CLICKS").is_some() {
                     window.window.displayIfNeeded();
                     println!("{}", window.chat.probe_field_clicks());
@@ -800,6 +804,9 @@ pub fn schedule(with_sidebar: bool) {
                 }
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PNG") {
                     render_png(&window.window, &path.to_string_lossy());
+                }
+                if let (Some(path), Some(settings)) = (std::env::var_os("KNOTES_PROBE_SETTINGS_PNG"), crate::settings_window::probe_window()) {
+                    render_png(&settings, &path.to_string_lossy());
                 }
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PANEL_PNG")
                     && let Some(panel) = window.window.childWindows().and_then(|c| c.firstObject())
@@ -902,6 +909,14 @@ pub fn toolbar_rename_requested(window: &NSWindow) {
 /// the report: `KNOTES_PROBE_TAB_CLOSE=a.md`, a click on the cross of that document's tab;
 /// `KNOTES_PROBE_TAB_TRIP=b.md`, that document's tab clicked, then the tab shown before.
 fn tabs_requested(window: &VaultWindow) {
+    // `KNOTES_PROBE_SETTINGS=1`: the settings window shown; `KNOTES_PROBE_SETTINGS_MEANING=off`
+    // (or a model's key): that chosen for search by meaning, as a click in its menu would.
+    if std::env::var_os("KNOTES_PROBE_SETTINGS").is_some() {
+        crate::settings_window::show(window.window.mtm());
+    }
+    if let Ok(setting) = std::env::var("KNOTES_PROBE_SETTINGS_MEANING") {
+        crate::settings_window::probe_choose(window.window.mtm(), &setting);
+    }
     // The chat, before the report: `KNOTES_PROBE_CHAT_NEW=1` starts a new conversation,
     // `KNOTES_PROBE_CHAT_CHOOSE=1` chooses the list's second, `KNOTES_PROBE_CHAT_CLICK_LINK=1`
     // clicks the first note link in the conversation.

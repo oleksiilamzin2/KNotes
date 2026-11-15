@@ -58,7 +58,8 @@ impl SearchWorker {
             .name("knotes-search".into())
             .spawn(move || {
                 let mut reader: Option<SqliteIndex> = None;
-                let mut meaning: Option<MeaningIndex> = None;
+                // Search by meaning over the chosen model's vectors, and the model it was made for.
+                let mut meaning: Option<(Option<knotes_vectors::MeaningModel>, MeaningIndex)> = None;
                 while let Ok(mut request) = incoming.recv() {
                     // Queries typed meanwhile replace this one: only the latest matters.
                     while let Ok(newer) = incoming.try_recv() {
@@ -67,11 +68,15 @@ impl SearchWorker {
                     if reader.is_none() {
                         reader = SqliteIndex::open_reader(&index_dir).ok();
                     }
-                    if meaning.is_none() && request.mode == SearchMode::Meaning {
-                        meaning = crate::meaning::embedder()
-                            .and_then(|embedder| VectorStore::open_reader(&index_dir, &knotes_vectors::MeaningModel::DEFAULT.store_file()).ok().map(|store| MeaningIndex::over_store(embedder as Arc<dyn Embedder>, store)));
+                    // Made at the first search by meaning, and again for another model chosen.
+                    let model = crate::meaning::model();
+                    if request.mode == SearchMode::Meaning && meaning.as_ref().is_none_or(|(made_for, _)| *made_for != model) {
+                        meaning = model.zip(crate::meaning::embedder()).and_then(|(model, embedder)| {
+                            VectorStore::open_reader(&index_dir, &model.store_file()).ok().map(|store| (Some(model), MeaningIndex::over_store(embedder as Arc<dyn Embedder>, store)))
+                        });
                     }
-                    deliver(search(&request, reader.as_ref(), meaning.as_ref().map(|m| m as &dyn MeaningSearch)));
+                    let meaning = meaning.as_ref().filter(|(made_for, _)| *made_for == model).map(|(_, m)| m as &dyn MeaningSearch);
+                    deliver(search(&request, reader.as_ref(), meaning));
                 }
             })
             .expect("search thread starts");

@@ -247,4 +247,9 @@ fn each_model_keeps_its_vectors_apart_under_its_key() {
     assert!(MeaningModel::ALL.iter().all(|m| MeaningModel::from_key(m.key()) == Some(*m)));
     assert_eq!(MeaningModel::from_key("off"), None);
     assert_eq!(MeaningModel::DEFAULT, MeaningModel::E5Large);
+    assert_eq!(MeaningModel::from_setting(None), Some(MeaningModel::DEFAULT), "until the user chooses");
+    assert_eq!(MeaningModel::from_setting(Some("off")), None);
+    assert_eq!(MeaningModel::from_setting(Some("embeddinggemma-2")), Some(MeaningModel::EmbeddingGemma2));
+    assert_eq!(MeaningModel::from_setting(Some("a model of a later version")), Some(MeaningModel::DEFAULT));
+    assert_eq!(MeaningModel::setting(None), "off");
 }

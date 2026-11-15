@@ -521,6 +521,11 @@ impl ChatPanel {
         self.worker.index_changed();
     }
 
+    /// Another model was chosen for search by meaning (ADR 0029).
+    pub fn meaning_changed(&self) {
+        self.worker.meaning_changed();
+    }
+
     pub fn set_vault(&self, vault: PathBuf, index_dir: PathBuf) {
         self.worker.set_vault(vault, index_dir.clone());
         let conversations = Conversations::new(index_dir.join("conversations"));

@@ -44,6 +44,9 @@ define_class!(
             let mtm = self.mtm();
             let app = NSApplication::sharedApplication(mtm);
             main_menu::install(&app, mtm);
+            // Another model for search by meaning: every window's chat and search take it.
+            let this = objc2::Message::retain(self);
+            crate::settings_window::on_meaning_change(move || this.meaning_changed());
             let start = std::env::args_os()
                 .nth(1)
                 .or_else(|| std::env::var_os("KNOTES_VAULT"))
@@ -161,6 +164,12 @@ define_class!(
             }
         }
 
+        /// Knotes → Settings (Cmd+,).
+        #[unsafe(method(showSettings:))]
+        fn show_settings(&self, _sender: Option<&AnyObject>) {
+            crate::settings_window::show(self.mtm());
+        }
+
         /// File → Save: writes the unsaved notes of all windows (autosave would in 2 s anyway).
         #[unsafe(method(saveDocument:))]
         fn save_document(&self, _sender: Option<&AnyObject>) {
@@ -182,6 +191,15 @@ impl AppDelegate {
         let vaults = self.ivars().vaults.borrow();
         let is_front = |v: &&OpenVault| front.as_ref().is_some_and(|f| std::ptr::eq(&*v.window.window, &**f));
         vaults.iter().find(is_front).or_else(|| vaults.first()).map(|v| Rc::clone(&v.window))
+    }
+
+    fn meaning_changed(&self) {
+        for vault in self.ivars().vaults.borrow().iter() {
+            vault.window.meaning_changed();
+        }
+        if let Some(window) = self.ivars().empty.borrow().as_ref() {
+            window.meaning_changed();
+        }
     }
 
     fn save_all(&self) {

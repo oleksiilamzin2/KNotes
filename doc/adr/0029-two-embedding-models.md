@@ -1,0 +1,73 @@
+# 0029. Two embedding models to choose in the settings: e5-large-instruct and EmbeddingGemma 2
+
+Status: accepted, 2026-11-15. Supersedes ADR 0028's choice of model (EmbeddingGemma-300M);
+the rest of ADR 0028 stands.
+
+## Context
+
+ADR 0028 built search by meaning on EmbeddingGemma-300M. Measured on the benchmark's 65 queries
+by meaning (ADR 0028, "Measured (2026-11-15)"), it found 54 of 65 (MRR 0.72) at 256 dimensions;
+tuning around it gave little, and Qwen3-Embedding-0.6B and Nemotron-3-Embed-1B did worse. A web
+search for newer small multilingual models (2026-11-15) named EmbeddingGemma 2 (Google, September
+2026, Apache 2.0, a 310 MB Q8_0 GGUF from ggml-org), multilingual-e5-large-instruct (Microsoft,
+MIT, 603 MB) and BGE-M3 (BAAI, MIT, 635 MB). Measured the same way (the tools' search with
+meaning merged in; the list's search):
+
+| Model | Dimensions | By meaning | MRR |
+|---|---|---|---|
+| EmbeddingGemma-300M | 256 | 0.83 | 0.72 |
+| EmbeddingGemma 2 | 256 / 768 | 0.92 / 0.94 | 0.76 / 0.78 |
+| multilingual-e5-large-instruct | 256 / 512 / 1024 | 0.91 / 0.97 / 0.98 | 0.76 / 0.80 / 0.80 |
+| BGE-M3 | 256 / 512 / 1024 | 0.82 / 0.91 / 0.95 | 0.71 / 0.78 / 0.81 |
+
+On an M5 Pro EmbeddingGemma-300M embedded 780 blocks a second, EmbeddingGemma 2 480, e5 430,
+BGE-M3 460; a query took 15–23 ms with each. EmbeddingGemma 2 needs a llama.cpp newer than the
+one `llama-cpp-2` 0.1.161 (crates.io, 2026-11-03) bundles: its architecture, `gemma-embedding2`,
+came in llama.cpp's PR #30054 (2026-10-06); llama-cpp-rs's `main` carries llama.cpp of
+2026-11-04 since 2026-11-11 (commit d94c594), not yet released. The owner asked for a choice
+between e5 and EmbeddingGemma 2 in the settings, on a «Пошук» tab, with llama-cpp-2 taken from
+git until it is released, both models in the bundle.
+
+## Decision
+
+- **Models:** multilingual-e5-large-instruct (the default: 63 of 65) and EmbeddingGemma 2
+  (lighter: 310 MB against 603), both Q8_0 GGUF in `Contents/Resources`, fetched by
+  `scripts/setup.sh` with their SHA-256s. EmbeddingGemma-300M and the Gemma Terms of Use go:
+  EmbeddingGemma 2 is under Apache 2.0, e5 under MIT; `licenses/` carries both licenses and
+  llama.cpp's.
+- **llama.cpp:** `llama-cpp-2` from git, llama-cpp-rs commit d94c594, until a crates.io release
+  carries it. Built and measured on that commit; EmbeddingGemma-300M scored the same on it.
+- **Prompts:** EmbeddingGemma 2 takes EmbeddingGemma's; e5 an English instruction before a
+  query (`Instruct: …\nQuery: …`) and a document as it is. The helper tells the model from its
+  name, or its file's when the file names none. e5's window is 512 tokens (its training), the
+  helper takes the smaller of 2048 and the model's.
+- **Vectors 512 wide for both** (e5 63 of 65 at 512, 64 at 1024; twice the memory of 256:
+  about 100 MB for 200 000 blocks). One `Vector` type, so no model needs its own.
+- **A store a model:** `vectors-<key>.sqlite` beside the index, so going back to a model already
+  embedded with is instant. `MeaningModel` (knotes-vectors) names each model's key, file,
+  store, way of embedding and the list's thresholds.
+- **The list's thresholds a model**, tuned on the benchmark (each scores on a scale of its own;
+  the old ones listed 31 notes a query with e5): e5 0.70 and 0.03 behind the nearest (all 63
+  found, 7.0 notes a query; 0.025 lost one), EmbeddingGemma 2 0.30 and 0.05 (62 found, 6.3 a
+  query; 0.04 lost one).
+- **The settings:** Knotes → Налаштування… (Cmd+,) opens a window of tabs, «Пошук» for now:
+  «Пошук за змістом:» e5-large-instruct, EmbeddingGemma 2 or Вимкнено, kept as `meaningModel`
+  in `settings-v2.json` (none: the default; `off`). Choosing replaces the app's one helper; the
+  chat worker restarts the thread keeping the vectors with the new model and rebuilds its tools
+  at the next turn; the list's search remakes its search by meaning when the model it was made
+  for is no longer the one chosen; off greys the switch's «За змістом» segment (a search by
+  meaning under way goes back to file names). The MCP server reads the same setting.
+
+## Consequences
+
+- The bundle is about 945 MB (debug), the two models 913 MB of it.
+- A git dependency until llama-cpp-2 0.1.162: to be replaced by the release (and checked against
+  the benchmark) when it comes.
+- e5 is weak one way across languages: a Ukrainian query put an English note on car insurance
+  third of four in the embedder's test (EmbeddingGemma 2 first); the benchmark's English
+  queries found their Ukrainian notes.
+- The benchmark runs both models and holds floors for each: e5 by meaning 0.96 in both
+  searches, at most 7.5 notes a query in the list; EmbeddingGemma 2 0.95, 6.8.
+- 56 of the 65 queries by meaning were written by the developer from the vault's text: the
+  comparison between models is fair (the same queries, no model tuned to them), the absolute
+  numbers on real notes may be lower.

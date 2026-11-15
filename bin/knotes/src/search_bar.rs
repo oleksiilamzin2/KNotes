@@ -96,6 +96,15 @@ impl SearchBar {
         });
     }
 
+    /// Search by meaning on or off (its segment enabled), as the settings say (ADR 0029).
+    pub fn set_meaning_on(&self, on: bool) {
+        self.mode.setEnabled_forSegment(on, 2);
+    }
+
+    pub fn meaning_on(&self) -> bool {
+        self.mode.isEnabledForSegment(2)
+    }
+
     /// Puts `text` in the field with the cursor at its end.
     pub fn set_text(&self, text: &str) {
         self.field.setStringValue(&NSString::from_str(text));

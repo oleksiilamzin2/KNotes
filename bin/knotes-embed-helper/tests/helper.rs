@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use knotes_embed::{Embedder, Passage, ProcessEmbedder, similarity};
 
 fn model() -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/embeddinggemma-300M-Q8_0.gguf");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/embeddinggemma-2-Q8_0.gguf");
     assert!(path.exists(), "no model at {}: run scripts/setup.sh", path.display());
     path
 }

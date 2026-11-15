@@ -24,6 +24,8 @@ pub struct AppSettings {
     /// How hard the chat's model reasons (`reasoning.effort`), as last chosen; none, the model's
     /// own default.
     pub chat_effort: Option<String>,
+    /// The model search by meaning runs on (`MeaningModel::key`), `off`, or none: the default.
+    pub meaning_model: Option<String>,
 }
 
 impl AppSettings {
@@ -40,6 +42,7 @@ impl AppSettings {
             }),
             chat_model: value.get("chatModel").and_then(Value::as_str).map(str::to_string),
             chat_effort: value.get("chatEffort").and_then(Value::as_str).map(str::to_string),
+            meaning_model: value.get("meaningModel").and_then(Value::as_str).map(str::to_string),
         }
     }
 
@@ -52,6 +55,7 @@ impl AppSettings {
             "windowFrame": self.window_frame,
             "chatModel": self.chat_model,
             "chatEffort": self.chat_effort,
+            "meaningModel": self.meaning_model,
         });
         let tmp = app_data.join(format!("{SETTINGS_FILE}.tmp"));
         fs::write(&tmp, serde_json::to_string_pretty(&value).map_err(io::Error::other)? + "\n")?;
