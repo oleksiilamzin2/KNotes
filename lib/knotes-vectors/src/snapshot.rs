@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use knotes_core::BlockHit;
-use knotes_embed::{Vector, similarity};
+use knotes_embed::{DIMS, Vector, quantize, similarity};
 
 /// Blocks and their vectors, in memory, searched by brute force (256 bytes a block: 200 000
 /// blocks are about 51 MB and a few milliseconds).
@@ -32,11 +32,35 @@ impl Snapshot {
     /// similarity says little (e5 scores unrelated notes 0.7–0.8, EmbeddingGemma 2 0.2–0.4); a
     /// block that answers the query stands out from the crowd, and with no answer none does.
     pub fn nearest(&self, query: &Vector, limit: usize, per_document: usize, scope: Option<&HashSet<&str>>) -> Vec<BlockHit> {
+        self.ranked(query, limit, per_document, |path| scope.is_none_or(|paths| paths.contains(path)))
+    }
+
+    /// The `limit` documents nearest the document at `path` (the mean of its blocks' vectors),
+    /// each once as its nearest block, the document itself never, scored as `nearest` scores
+    /// (among the other documents' blocks); none when it has no vectors.
+    pub fn near_document(&self, path: &str, limit: usize) -> Vec<BlockHit> {
+        let mut sum = [0.0f32; DIMS];
+        let mut any = false;
+        for (_, vector) in self.blocks.iter().zip(&self.vectors).filter(|(b, _)| b.path == path) {
+            any = true;
+            for (s, x) in sum.iter_mut().zip(vector) {
+                *s += f32::from(*x);
+            }
+        }
+        if !any {
+            return Vec::new();
+        }
+        self.ranked(&quantize(&sum), limit, 1, |other| other != path)
+    }
+
+    /// The `limit` blocks nearest `query` among those of the documents `searched`, no more than
+    /// `per_document` of one, scored by how far they stand out from all of those.
+    fn ranked(&self, query: &Vector, limit: usize, per_document: usize, searched: impl Fn(&str) -> bool) -> Vec<BlockHit> {
         let mut scored: Vec<(i32, usize)> = self
             .vectors
             .iter()
             .enumerate()
-            .filter(|(i, _)| scope.is_none_or(|paths| paths.contains(self.blocks[*i].path.as_str())))
+            .filter(|(i, _)| searched(self.blocks[*i].path.as_str()))
             .map(|(i, v)| (similarity(query, v), i))
             .collect();
         let n = scored.len().max(1) as f64;

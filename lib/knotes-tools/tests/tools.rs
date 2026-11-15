@@ -319,6 +319,7 @@ fn a_note_comes_with_the_notes_linked_to_and_from_it() {
     let v = vault();
     let related = call(&v, "related", json!({"path": "Projects/Radar.md"}));
     assert!(related["text"].as_str().unwrap().contains("The radar project"), "{related}");
+    assert_eq!(related.get("near_in_meaning"), None, "no search by meaning, no such list");
     let to: Vec<&str> = related["links_to"].as_array().unwrap().iter().map(|n| n["path"].as_str().unwrap()).collect();
     assert_eq!(to, ["Boris.md", "budget.pdf"]);
     assert!(related["links_to"][0]["start"].as_str().unwrap().starts_with("Works on [[Radar]]"), "{related}");
@@ -388,7 +389,12 @@ struct Near(Option<Vec<(&'static str, u32, f64)>>);
 impl knotes_core::MeaningSearch for Near {
     fn nearest(&self, _query: &str, limit: usize, _scope: Option<&[String]>) -> Result<Vec<knotes_core::BlockHit>, knotes_core::BoxError> {
         let hits = self.0.as_ref().ok_or("the helper is gone")?;
-        Ok(hits.iter().take(limit).map(|(path, ord, standing)| knotes_core::BlockHit { path: path.to_string(), ord: *ord, span: knotes_core::Span { start: 0, end: 0 }, heading: None, score: -standing }).collect())
+        Ok(hits.iter().take(limit).map(|(path, ord, standing)| knotes_core::BlockHit { path: path.to_string(), ord: *ord, span: knotes_core::Span { start: 0, end: 200 }, heading: None, score: -standing }).collect())
+    }
+
+    /// The same list, the document asked about left out.
+    fn near_document(&self, path: &str, limit: usize) -> Result<Vec<knotes_core::BlockHit>, knotes_core::BoxError> {
+        Ok(self.nearest("", usize::MAX, None)?.into_iter().filter(|h| h.path != path).take(limit).collect())
     }
 }
 
@@ -396,10 +402,14 @@ impl knotes_core::MeaningSearch for Near {
 const CLOSE: knotes_tools::Closeness = knotes_tools::Closeness { near_enough: 1.5, behind_nearest: 1.0 };
 
 fn with_meaning(near: Near) -> Vault {
+    notes_with_meaning(&[("Fruit/Apple.md", "Apple trees bloom in May."), ("Fruit/Pear.md", "Pears ripen in September."), ("Diary.md", "Picked fruit for the jam. #no-ai")], near)
+}
+
+fn notes_with_meaning(notes: &[(&str, &str)], near: Near) -> Vault {
     let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    write(dir.path(), "Fruit/Apple.md", "Apple trees bloom in May.");
-    write(dir.path(), "Fruit/Pear.md", "Pears ripen in September.");
-    write(dir.path(), "Diary.md", "Picked fruit for the jam. #no-ai");
+    for (path, text) in notes {
+        write(dir.path(), path, text);
+    }
     let mut index = SqliteIndex::open(idx.path()).unwrap();
     Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
     let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs).with_meaning(Box::new(near), CLOSE);
@@ -426,6 +436,16 @@ fn search_leaves_out_finds_by_meaning_that_hardly_stand_out_and_says_how_far_the
     let v = with_meaning(Near(Some(vec![("Fruit/Apple.md", 0, 1.0)])));
     let found = call(&v, "search", json!({"query": "apple"}));
     assert_eq!(found["results"][0].get("closeness"), None, "found by words only");
+}
+
+#[test]
+fn a_note_comes_with_the_notes_near_it_in_meaning_that_no_link_shows() {
+    let notes = [("Apple.md", "Apple trees bloom in May. See [[Orchard]]."), ("Orchard.md", "Rows of trees."), ("Pear.md", "Pears ripen in September."), ("Jam.md", "Picked fruit for the jam. #no-ai"), ("Plum.md", "Plums.")];
+    let v = notes_with_meaning(&notes, Near(Some(vec![("Apple.md", 0, 9.0), ("Orchard.md", 0, 3.5), ("Pear.md", 0, 3.04), ("Jam.md", 0, 2.9), ("Plum.md", 0, 2.1)])));
+    let related = call(&v, "related", json!({"path": "Apple.md"}));
+    assert_eq!(related["near_in_meaning"], json!([{"path": "Pear.md", "title": "Pear", "closeness": 3.0, "text": "Pears ripen in September."}]), "the linked note, the kept one and the far one left out: {related}");
+    let v = notes_with_meaning(&notes, Near(None));
+    assert_eq!(call(&v, "related", json!({"path": "Apple.md"}))["links_to"][0]["path"], "Orchard.md", "links still, search by meaning failing");
 }
 
 #[test]

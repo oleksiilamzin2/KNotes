@@ -61,7 +61,7 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "related",
-            description: "A document with the notes it links to (each with how it starts) and the notes linking to it (each with the line that links), in one call: what is connected with a person, a project, a thing.",
+            description: "A document with the notes it links to (each with how it starts) and the notes linking to it (each with the line that links), in one call: what is connected with a person, a project, a thing. When the app searches by meaning, also the notes near it in meaning that no link shows (`near_in_meaning`, each with its nearest fragment and `closeness`, as search gives it): about the same thing though unlinked.",
             parameters: json!({"type": "object", "properties": {"path": path}, "required": ["path"], "additionalProperties": false}),
         },
         ToolSpec {

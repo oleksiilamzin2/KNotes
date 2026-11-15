@@ -158,6 +158,10 @@ mod tests {
                 .map(|(path, start, end, near)| BlockHit { path: path.to_string(), ord: 0, span: Span { start: *start, end: *end }, heading: None, score: -near })
                 .collect())
         }
+
+        fn near_document(&self, _path: &str, _limit: usize) -> Result<Vec<BlockHit>, BoxError> {
+            Ok(Vec::new())
+        }
     }
 
     fn index_of(dir: &std::path::Path, notes: &[(&str, &str)]) -> SqliteIndex {

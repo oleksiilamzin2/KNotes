@@ -95,6 +95,15 @@ git until it is released, both models in the bundle.
   decimal), so the model can tell a match from a neighbour: on the benchmark 50–59% of the
   answers' blocks stood at 3 or more, 7–17% of the rest; below 2.5 mostly the rest. The benchmark
   holds the same ceiling on the tools' search.
+- **`related` gives the notes near in meaning** (2026-11-15): it gave links only, so a note no
+  link joins was connected with nothing. Now, with search by meaning, also up to 10 notes near
+  the document (the mean of its blocks' vectors against the other documents' blocks, each note
+  once as its nearest block, with `closeness`), those its links show and those kept from the AI
+  left out (`near_in_meaning`). One note to another stands out more than a query to a block:
+  the query's thresholds gave 4.5 notes a note on the benchmark's vault (a car beside a washing
+  machine), so documents take their own, 2.2 and 1.2 behind the nearest, for both models: 2.6
+  notes a note with e5, 2.7 with EmbeddingGemma 2, by reading mostly about the same thing (no
+  benchmark measures it yet).
 
 ## Consequences
 

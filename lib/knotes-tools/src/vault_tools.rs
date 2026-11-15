@@ -52,6 +52,13 @@ impl Kept {
 
 /// How many linked documents `related` gives each way.
 const RELATED: usize = 30;
+/// How many documents near in meaning `related` gives.
+const NEAR: usize = 10;
+/// Which documents near in meaning `related` gives: one note to another stands out more than a
+/// query to a block, so the query's thresholds gave 4.5 notes a note on the benchmark's vault,
+/// a washing machine beside a car's insurance and tyres; these give 2.6 with e5 and 2.7 with
+/// EmbeddingGemma 2, mostly what is about the same (2026-11-15).
+const NEAR_DOCUMENT: Closeness = Closeness { near_enough: 2.2, behind_nearest: 1.2 };
 /// How deep search and title search page (offset and page together); past it, a narrower
 /// query does better.
 const DEEPEST: usize = 300;
@@ -247,7 +254,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         let results: Vec<Value> = hits
             .into_iter()
             .map(|(found, hit, via)| {
-                let text = self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..hit.span.end as usize).map(cut)).unwrap_or_default();
+                let text = self.fragment(&hit);
                 let mut result = json!({"path": hit.path, "title": title_of(&hit.path), "kind": kind_of(&hit.path), "modified": self.modified(&hit.path), "heading": hit.heading, "block": hit.ord, "text": text, "match": found});
                 if let Some(s) = standing.get(&(hit.path.clone(), hit.ord)) {
                     result["closeness"] = json!((s * 10.0).round() / 10.0);
@@ -402,6 +409,18 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 from.push(back.source);
             }
         }
+        // The notes near it in meaning that its links do not show, each once as its nearest
+        // block, those merely near the subject left out (when the app searches by meaning).
+        let near = self.meaning.as_ref().map(|(meaning, _)| {
+            let asked = (NEAR + to.len() + from.len()).min(DEEPEST);
+            NEAR_DOCUMENT
+                .keep(meaning.near_document(&path, asked).unwrap_or_default())
+                .into_iter()
+                .filter(|h| !to.contains(&h.path) && !from.contains(&h.path) && !kept.holds(&h.path))
+                .take(NEAR)
+                .map(|h| json!({"path": h.path, "title": title_of(&h.path), "closeness": (-h.score * 10.0).round() / 10.0, "text": cut_to(&self.fragment(&h), 200)}))
+                .collect::<Vec<Value>>()
+        });
         let links_to: Vec<Value> = to
             .iter()
             .take(RELATED)
@@ -416,7 +435,16 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 json!({"path": p, "title": title_of(p), "line": line})
             })
             .collect();
-        Ok(json!({"path": path, "title": title_of(&path), "text": cut_to(&body_of(&text), 600), "links_to": links_to, "linked_from": linked_from, "more_to": to.len().saturating_sub(RELATED), "more_from": from.len().saturating_sub(RELATED)}))
+        let mut related = json!({"path": path, "title": title_of(&path), "text": cut_to(&body_of(&text), 600), "links_to": links_to, "linked_from": linked_from, "more_to": to.len().saturating_sub(RELATED), "more_from": from.len().saturating_sub(RELATED)});
+        if let Some(near) = near {
+            related["near_in_meaning"] = json!(near);
+        }
+        Ok(related)
+    }
+
+    /// A found block's text, cut (its end within the note's text: the vectors may be older).
+    fn fragment(&self, hit: &BlockHit) -> String {
+        self.index.note_text(&hit.path).ok().flatten().and_then(|t| t.get(hit.span.start as usize..(hit.span.end as usize).min(t.len())).map(cut)).unwrap_or_default()
     }
 
     fn list_tasks(&self, args: &Value) -> Result<Value, ToolError> {

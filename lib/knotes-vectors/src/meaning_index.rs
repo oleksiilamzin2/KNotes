@@ -60,4 +60,9 @@ impl MeaningSearch for MeaningIndex {
         let scope: Option<HashSet<&str>> = scope.map(|paths| paths.iter().map(String::as_str).collect());
         Ok(snapshot.nearest(&vector, limit, PER_DOCUMENT, scope.as_ref()))
     }
+
+    fn near_document(&self, path: &str, limit: usize) -> Result<Vec<BlockHit>, BoxError> {
+        self.refresh()?;
+        Ok(self.snapshot.read().map_err(|_| "the vectors' lock was poisoned")?.near_document(path, limit))
+    }
 }

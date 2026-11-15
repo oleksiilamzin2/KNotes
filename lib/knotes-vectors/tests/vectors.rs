@@ -124,6 +124,22 @@ fn no_more_than_so_many_blocks_of_one_document_are_found() {
 }
 
 #[test]
+fn the_documents_near_a_document_are_found_by_all_its_blocks_each_once_itself_never() {
+    let mut snapshot = Snapshot::default();
+    let blocks = [("Boiler.md", 0, "boiler anode"), ("Boiler.md", 1, "pressure valve"), ("Heating.md", 0, "radiator valve pressure"), ("Heating.md", 1, "boiler anode magnesium"), ("Garden.md", 0, "garden roses"), ("Roses.md", 0, "roses pruning")];
+    let vectors = Words.embed(&blocks.map(|(_, _, text)| Passage::Query(text.into()))).unwrap();
+    for ((path, ord, _), v) in blocks.into_iter().zip(vectors) {
+        snapshot.push(hit(path, ord, 0, 1, None), v);
+    }
+    let found = snapshot.near_document("Boiler.md", 5);
+    let paths: Vec<&str> = found.iter().map(|h| h.path.as_str()).collect();
+    assert_eq!(paths.len(), 3, "each other document once: {paths:?}");
+    assert_eq!(paths[0], "Heating.md", "the nearest to its blocks together");
+    assert!(-found[0].score > 0.5 && -found[2].score < 0.0, "the nearest stands out, the farthest falls behind: {found:?}");
+    assert!(snapshot.near_document("Missing.md", 5).is_empty(), "no vectors, nothing near");
+}
+
+#[test]
 fn a_search_in_a_list_finds_the_list_s_documents_only() {
     let mut snapshot = Snapshot::default();
     let vectors = Words.embed(&[Passage::Query("boiler anode".into()), Passage::Query("boiler pressure".into())]).unwrap();
