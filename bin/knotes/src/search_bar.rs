@@ -1,25 +1,30 @@
 //! The search row at the top of the note list column (ADR 0015): shown by the magnifying
 //! glass in the toolbar, it spans the column under the toolbar while the list scrolls
-//! beneath it. A field in the toolbar itself would not fit next to the list title.
+//! beneath it. A field in the toolbar itself would not fit next to the list title. The field
+//! takes the column's width, the mode switch the row under it: beside the field, three
+//! segments left it a few letters wide.
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, sel};
 use knotes_app::SearchMode;
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSControlSize, NSLayoutConstraint, NSScrollView, NSSearchField, NSSegmentSwitchTracking, NSSegmentedControl, NSView};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSControlSize, NSLayoutConstraint, NSScrollView, NSSearchField, NSSegmentDistribution, NSSegmentSwitchTracking, NSSegmentedControl, NSView};
 use objc2_foundation::{NSArray, NSEdgeInsets, NSString};
 
 use crate::strings;
 
-/// Height of the search row, field and padding.
-const BAR_HEIGHT: f64 = 40.0;
+/// Height of the search row: the field, the switch under it and padding.
+const BAR_HEIGHT: f64 = 64.0;
 const SIDE_PADDING: f64 = 12.0;
+/// Space above the field, between it and the switch.
+const GAP: f64 = 6.0;
 
 pub struct SearchBar {
     /// The list column: the search row over the note list's scroll view.
     pub column: Retained<NSView>,
     pub field: Retained<NSSearchField>,
-    /// Files or content: rewrites the query's operator (`content:`), which stays the truth.
+    /// Files, content or meaning: rewrites the query's operator (`content:`, `meaning:`), which
+    /// stays the truth.
     pub mode: Retained<NSSegmentedControl>,
     bar: Retained<NSView>,
     scroll: Retained<NSScrollView>,
@@ -50,6 +55,7 @@ impl SearchBar {
         let mode = unsafe { NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&labels, NSSegmentSwitchTracking::SelectOne, None, None, mtm) };
         mode.setSelectedSegment(0);
         mode.setControlSize(NSControlSize::Small);
+        mode.setSegmentDistribution(NSSegmentDistribution::FillEqually);
         mode.setTranslatesAutoresizingMaskIntoConstraints(false);
         bar.addSubview(&mode);
         let safe = column.safeAreaLayoutGuide();
@@ -59,10 +65,11 @@ impl SearchBar {
             bar.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
             bar.heightAnchor().constraintEqualToConstant(BAR_HEIGHT),
             field.leadingAnchor().constraintEqualToAnchor_constant(&bar.leadingAnchor(), SIDE_PADDING),
-            field.trailingAnchor().constraintEqualToAnchor_constant(&mode.leadingAnchor(), -8.0),
-            field.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
+            field.trailingAnchor().constraintEqualToAnchor_constant(&bar.trailingAnchor(), -SIDE_PADDING),
+            field.topAnchor().constraintEqualToAnchor_constant(&bar.topAnchor(), GAP),
+            mode.leadingAnchor().constraintEqualToAnchor_constant(&bar.leadingAnchor(), SIDE_PADDING),
             mode.trailingAnchor().constraintEqualToAnchor_constant(&bar.trailingAnchor(), -SIDE_PADDING),
-            mode.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
+            mode.topAnchor().constraintEqualToAnchor_constant(&field.bottomAnchor(), GAP),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
         Self { column, field, mode, bar, scroll }

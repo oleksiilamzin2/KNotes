@@ -739,6 +739,11 @@ fn the_third_segment_searches_by_meaning() {
     assert!(out.contains("search-mode: meaning"), "{out}");
     // The probe never starts the model: nothing is found, and nothing breaks.
     assert!(out.contains("subtitle: 0 нотаток"), "{out}");
+    // The switch sits under the field, which keeps the column's width (beside three segments it
+    // was a few letters wide).
+    let layout = out.lines().find_map(|l| l.strip_prefix("search-layout: ")).unwrap_or_default();
+    let width = |name: &str| layout.split(", ").find_map(|p| p.strip_prefix(name)).and_then(|w| w.trim().parse::<f64>().ok()).unwrap_or(0.0);
+    assert!(layout.ends_with("switch under the field: true") && width("field ") > 200.0 && width("field ") == width("switch "), "{layout}");
     let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SEARCH", "meaning: де радар")]);
     assert!(out.contains("search-mode: meaning"), "the switch follows the typed operator: {out}");
 }

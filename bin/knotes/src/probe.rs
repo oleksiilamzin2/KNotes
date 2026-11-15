@@ -557,6 +557,10 @@ fn report_search(window: &NSWindow) {
     if let (Some(switch), Some(field)) = (search_switch(window), search_field(window)) {
         println!("search-mode: {}", ["files", "content", "meaning"].get(switch.selectedSegment() as usize).unwrap_or(&"files"));
         println!("search-field: {}", field.stringValue());
+        // The field's and the switch's widths, and whether the switch sits under the field
+        // (frames in the row's coordinates, which grow upwards).
+        let (f, s) = (field.frame(), switch.frame());
+        println!("search-layout: field {:.0}, switch {:.0}, switch under the field: {}", f.size.width, s.size.width, s.origin.y + s.size.height <= f.origin.y);
         // The field editor sits in a clip view as wide as the field's text area; the end of the
         // text is in view when the clip shows the editor's right edge.
         if let Some(editor) = field.currentEditor().and_then(|e| e.downcast::<objc2_app_kit::NSTextView>().ok())
