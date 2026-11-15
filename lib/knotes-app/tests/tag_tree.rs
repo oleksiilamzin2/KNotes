@@ -14,3 +14,16 @@ fn nests_tags_by_slash_with_counts() {
     assert_eq!(kids, [("project/radar", "radar", 2), ("project/ui", "ui", 2)]);
     assert_eq!(project.children[0].children[0].tag, "project/radar/fmcw");
 }
+
+#[test]
+fn in_a_space_the_tags_split_into_its_own_and_those_only_outside_it() {
+    use knotes_app::split_tags;
+    let tagged: Vec<(String, String)> = [("radar", "Work/a.md"), ("radar", "Home/b.md"), ("area/job", "Work/a.md"), ("area/home", "Home/b.md"), ("cooking", "Home/c.md"), ("cooking", "top.md")]
+        .iter()
+        .map(|(t, p)| (t.to_string(), p.to_string()))
+        .collect();
+    let (space, rest) = split_tags(&tagged, &|path: &str| path.starts_with("Work/"));
+    let shown = |nodes: &[TagNode]| nodes.iter().map(|n| (n.name.clone(), n.notes, n.children.iter().map(|c| (c.name.clone(), c.notes)).collect::<Vec<_>>())).collect::<Vec<_>>();
+    assert_eq!(shown(&space), [("area".into(), 1, vec![("job".into(), 1)]), ("radar".into(), 1, vec![])], "counted within the space");
+    assert_eq!(shown(&rest), [("area/home".into(), 1, vec![]), ("cooking".into(), 2, vec![])], "only outside it; a child whose parent is in the space at the top, by its whole tag");
+}
