@@ -77,6 +77,12 @@ impl Spaces {
         None
     }
 
+    /// What the folder's own rules say: a space, none (`null` or an unknown id), or nothing at
+    /// all (`None`: it takes its parent's).
+    pub fn own(&self, folder: &str) -> Option<Option<&Space>> {
+        self.folders.get(composed(folder).as_ref()).map(|space| space.map(|i| &self.list[i]))
+    }
+
     /// The space of a document: its folder's.
     pub fn of(&self, path: &str) -> Option<&Space> {
         self.of_folder(path.rsplit_once('/').map_or("", |(folder, _)| folder))

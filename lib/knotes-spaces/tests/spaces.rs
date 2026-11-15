@@ -73,3 +73,11 @@ fn colours_go_by_their_names() {
     assert_eq!(SpaceColor::ALL.len(), 9);
     assert_eq!(SpaceColor::from_name("BLUE"), SpaceColor::Gray, "names are lower case");
 }
+
+#[test]
+fn what_a_folder_s_own_rules_say_is_told_apart_from_what_it_takes() {
+    let spaces = vault(&[("Робота", r#"{"space": "work"}"#), ("Робота/Архів", r#"{"space": null}"#)]);
+    assert_eq!(spaces.own("Робота").map(|s| s.map(|s| s.id.as_str())), Some(Some("work")));
+    assert_eq!(spaces.own("Робота/Архів").map(|s| s.map(|s| s.id.as_str())), Some(None), "says none");
+    assert_eq!(spaces.own("Робота/Проєкти"), None, "says nothing: takes its parent's");
+}
