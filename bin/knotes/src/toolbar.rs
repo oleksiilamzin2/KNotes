@@ -172,7 +172,11 @@ define_class!(
         /// The files/content switch in the search row.
         #[unsafe(method(searchModeChanged:))]
         fn search_mode_changed(&self, sender: &NSSegmentedControl) {
-            let mode = if sender.selectedSegment() == 1 { SearchMode::Content } else { SearchMode::Files };
+            let mode = match sender.selectedSegment() {
+                1 => SearchMode::Content,
+                2 => SearchMode::Meaning,
+                _ => SearchMode::Files,
+            };
             if let Some(callback) = self.ivars().on_search_mode.borrow().as_ref() {
                 callback(mode);
             }

@@ -730,6 +730,20 @@ fn the_switch_rewrites_the_query_operator() {
 }
 
 #[test]
+fn the_third_segment_searches_by_meaning() {
+    let (_vault, out) = probe_notes(
+        &SEARCH_NOTES,
+        &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_SEARCH", "radar"), ("KNOTES_PROBE_SEARCH_MODE", "meaning")],
+    );
+    assert!(out.contains("search-field: meaning: radar"), "{out}");
+    assert!(out.contains("search-mode: meaning"), "{out}");
+    // The probe never starts the model: nothing is found, and nothing breaks.
+    assert!(out.contains("subtitle: 0 нотаток"), "{out}");
+    let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SEARCH", "meaning: де радар")]);
+    assert!(out.contains("search-mode: meaning"), "the switch follows the typed operator: {out}");
+}
+
+#[test]
 fn word_forms_are_found_and_an_empty_search_restores_the_list() {
     let (_vault, out) = probe_notes(
         &[("a.md", "Пишемо українською мовою"), ("b.md", "інше")],

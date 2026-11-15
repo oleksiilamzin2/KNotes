@@ -67,12 +67,7 @@ pub struct ChatWorker {
 impl ChatWorker {
     pub fn new(account: Arc<Account>) -> Self {
         let (jobs, receiver) = mpsc::channel::<Job>();
-        // None in the probe (its windows never start the model) or without the helper and model.
-        let embedder: Option<Arc<ProcessEmbedder>> = if crate::probe::enabled() {
-            None
-        } else {
-            std::env::current_exe().ok().and_then(|exe| knotes_session::embedder_files(&exe)).map(|(helper, model)| Arc::new(ProcessEmbedder::new(helper, model)))
-        };
+        let embedder = crate::meaning::embedder();
         let vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>> = Arc::default();
         let wake = Arc::clone(&vectors_wake);
         let warmed = embedder.clone();

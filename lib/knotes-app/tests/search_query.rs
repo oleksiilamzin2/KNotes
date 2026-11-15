@@ -25,3 +25,11 @@ fn block_asks_for_every_word_in_one_block() {
     assert_eq!(with_search_mode("block: radar", SearchMode::Content), "content: radar");
     assert_eq!(with_search_mode("radar", SearchMode::Block), "block: radar");
 }
+
+#[test]
+fn meaning_searches_the_notes_by_what_they_say_whatever_their_words() {
+    assert_eq!(parse_search("meaning: чим годувати кота"), (SearchMode::Meaning, "чим годувати кота"));
+    assert_eq!(parse_search("Meaning:кіт"), (SearchMode::Meaning, "кіт"));
+    assert_eq!(with_search_mode("content: кіт", SearchMode::Meaning), "meaning: кіт");
+    assert_eq!(with_search_mode("meaning: кіт", SearchMode::Files), "кіт");
+}

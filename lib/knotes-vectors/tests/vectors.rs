@@ -59,9 +59,9 @@ fn the_nearest_blocks_come_first() {
         snapshot.push(hit(&format!("{i}.md"), 0, 0, 1, None), v);
     }
     let query = Words.embed(&[Passage::Query("anode of the boiler".into())]).unwrap()[0];
-    let near: Vec<String> = snapshot.nearest(&query, 2, 2).into_iter().map(|h| h.path).collect();
+    let near: Vec<String> = snapshot.nearest(&query, 2, 2, None).into_iter().map(|h| h.path).collect();
     assert_eq!(near, ["0.md", "2.md"]);
-    assert!(snapshot.nearest(&query, 3, 3)[0].score < snapshot.nearest(&query, 3, 3)[2].score, "lower the nearer");
+    assert!(snapshot.nearest(&query, 3, 3, None)[0].score < snapshot.nearest(&query, 3, 3, None)[2].score, "lower the nearer");
     assert_eq!(snapshot.len(), 3);
 }
 
@@ -77,8 +77,20 @@ fn no_more_than_so_many_blocks_of_one_document_are_found() {
         snapshot.push(hit("Long.md", i as u32, 0, 1, None), near(i));
     }
     snapshot.push(hit("Other.md", 0, 0, 1, None), near(5));
-    let found: Vec<(String, u32)> = snapshot.nearest(&near(0), 3, 2).into_iter().map(|h| (h.path, h.ord)).collect();
+    let found: Vec<(String, u32)> = snapshot.nearest(&near(0), 3, 2, None).into_iter().map(|h| (h.path, h.ord)).collect();
     assert_eq!(found, [("Long.md".to_string(), 0), ("Long.md".to_string(), 1), ("Other.md".to_string(), 0)], "the long note's two nearest, then the next note");
+}
+
+#[test]
+fn a_search_in_a_list_finds_the_list_s_documents_only() {
+    let mut snapshot = Snapshot::default();
+    let vectors = Words.embed(&[Passage::Query("boiler anode".into()), Passage::Query("boiler pressure".into())]).unwrap();
+    snapshot.push(hit("Home/Boiler.md", 0, 0, 1, None), vectors[0]);
+    snapshot.push(hit("Work/Pump.md", 0, 0, 1, None), vectors[1]);
+    let query = Words.embed(&[Passage::Query("boiler anode".into())]).unwrap()[0];
+    let home: std::collections::HashSet<&str> = ["Work/Pump.md"].into();
+    let found: Vec<String> = snapshot.nearest(&query, 5, 2, Some(&home)).into_iter().map(|h| h.path).collect();
+    assert_eq!(found, ["Work/Pump.md"], "the nearer note is outside the list");
 }
 
 #[test]
@@ -93,7 +105,7 @@ fn the_vault_s_blocks_are_embedded_and_searched_by_meaning() {
     let snapshot = embed_notes(&index, &Words).unwrap();
     assert_eq!(snapshot.len(), 2);
     let meaning = MeaningIndex::new(Arc::new(Words), snapshot);
-    let found = meaning.nearest("when to replace the anode", 1).unwrap();
+    let found = meaning.nearest("when to replace the anode", 1, None).unwrap();
     assert_eq!((found[0].path.as_str(), found[0].heading.as_deref()), ("Home/Boiler.md", Some("Boiler")));
 }
 
@@ -144,7 +156,7 @@ fn only_documents_changed_since_they_were_embedded_are_embedded_again() {
     assert_eq!(update(&index, &store, &model, LATER, Which::Settled, &stop).unwrap().documents, 0, "told to stop");
 
     let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
-    assert_eq!(meaning.nearest("apple trees", 1).unwrap()[0].path, "Garden.md");
+    assert_eq!(meaning.nearest("apple trees", 1, None).unwrap()[0].path, "Garden.md");
 }
 
 #[test]
@@ -163,7 +175,7 @@ fn only_the_blocks_whose_text_changed_go_to_the_model() {
     let updated = update(&index, &store, &model, LATER, Which::Settled, &go).unwrap();
     assert_eq!((updated.documents, updated.passages, model.take()), (1, 1, 1), "the garden's block alone");
     let meaning = MeaningIndex::over_store(Arc::new(Words), VectorStore::open_reader(vectors.path()).unwrap());
-    assert_eq!(meaning.nearest("change the oil", 1).unwrap()[0].heading.as_deref(), Some("Car"), "the kept vectors still found");
+    assert_eq!(meaning.nearest("change the oil", 1, None).unwrap()[0].heading.as_deref(), Some("Car"), "the kept vectors still found");
 }
 
 #[test]

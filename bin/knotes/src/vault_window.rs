@@ -2578,6 +2578,12 @@ impl VaultWindow {
             let (mode, text) = parse_search(&query);
             (mode, text.to_owned())
         };
+        // Search by meaning asked: its model loads while the query is still being typed.
+        if mode == knotes_app::SearchMode::Meaning
+            && let Some(embedder) = crate::meaning::embedder()
+        {
+            embedder.warm();
+        }
         if self.search_worker.borrow().is_none() {
             let Some(index_dir) = index_dir else { return };
             let Some(mtm) = MainThreadMarker::new() else { return };

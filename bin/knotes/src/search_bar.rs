@@ -45,7 +45,7 @@ impl SearchBar {
         }
         field.setTranslatesAutoresizingMaskIntoConstraints(false);
         bar.addSubview(&field);
-        let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::SEARCH_FILES), NSString::from_str(strings::SEARCH_CONTENT)]);
+        let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::SEARCH_FILES), NSString::from_str(strings::SEARCH_CONTENT), NSString::from_str(strings::SEARCH_MEANING)]);
         // SAFETY: labels and no target yet (`set_target` sets it).
         let mode = unsafe { NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&labels, NSSegmentSwitchTracking::SelectOne, None, None, mtm) };
         mode.setSelectedSegment(0);
@@ -85,6 +85,7 @@ impl SearchBar {
             SearchMode::Files => 0,
             // `block:` is a stricter content search.
             SearchMode::Content | SearchMode::Block => 1,
+            SearchMode::Meaning => 2,
         });
     }
 

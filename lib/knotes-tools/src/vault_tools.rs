@@ -229,7 +229,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         }
         // Finds by meaning beside them, the two lists merged; a failing search by meaning (its
         // helper gone, no model) leaves search by words as it is.
-        if let Some(near) = self.meaning.as_ref().and_then(|m| m.nearest(&asked, wanted).ok()) {
+        if let Some(near) = self.meaning.as_ref().and_then(|m| m.nearest(&asked, wanted, None).ok()) {
             hits.0 = merged(std::mem::take(&mut hits.0), near);
         }
         let kept = self.kept();

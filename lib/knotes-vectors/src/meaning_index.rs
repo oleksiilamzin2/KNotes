@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 
 use knotes_core::{BlockHit, BoxError, MeaningSearch};
@@ -49,13 +50,14 @@ impl MeaningIndex {
 }
 
 impl MeaningSearch for MeaningIndex {
-    fn nearest(&self, query: &str, limit: usize) -> Result<Vec<BlockHit>, BoxError> {
+    fn nearest(&self, query: &str, limit: usize, scope: Option<&[String]>) -> Result<Vec<BlockHit>, BoxError> {
         self.refresh()?;
         let snapshot = self.snapshot.read().map_err(|_| "the vectors' lock was poisoned")?;
         if snapshot.is_empty() {
             return Ok(Vec::new());
         }
         let vector = self.embedder.embed(&[Passage::Query(query.to_string())])?.remove(0);
-        Ok(snapshot.nearest(&vector, limit, PER_DOCUMENT))
+        let scope: Option<HashSet<&str>> = scope.map(|paths| paths.iter().map(String::as_str).collect());
+        Ok(snapshot.nearest(&vector, limit, PER_DOCUMENT, scope.as_ref()))
     }
 }

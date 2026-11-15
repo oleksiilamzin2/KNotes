@@ -515,7 +515,7 @@ pub fn search_requested(window: &NSWindow) {
         return;
     }
     field.setStringValue(&NSString::from_str(&query));
-    // KNOTES_PROBE_SEARCH_MODE=content: then a click on that segment of the switch.
+    // KNOTES_PROBE_SEARCH_MODE=content (or meaning): then a click on that segment of the switch.
     let switch_to = std::env::var("KNOTES_PROBE_SEARCH_MODE").ok();
     if let Some(action) = field.action() {
         let target = field.target();
@@ -525,7 +525,11 @@ pub fn search_requested(window: &NSWindow) {
     if let Some(mode) = switch_to
         && let Some(switch) = search_switch(window)
     {
-        switch.setSelectedSegment(if mode == "content" { 1 } else { 0 });
+        switch.setSelectedSegment(match mode.as_str() {
+            "content" => 1,
+            "meaning" => 2,
+            _ => 0,
+        });
         if let Some(action) = switch.action() {
             let target = switch.target();
             // SAFETY: the switch's own action and target, with the switch as sender.
@@ -551,7 +555,7 @@ fn search_switch(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit:
 /// text (where typing goes on) is inside the field's visible text area.
 fn report_search(window: &NSWindow) {
     if let (Some(switch), Some(field)) = (search_switch(window), search_field(window)) {
-        println!("search-mode: {}", if switch.selectedSegment() == 1 { "content" } else { "files" });
+        println!("search-mode: {}", ["files", "content", "meaning"].get(switch.selectedSegment() as usize).unwrap_or(&"files"));
         println!("search-field: {}", field.stringValue());
         // The field editor sits in a clip view as wide as the field's text area; the end of the
         // text is in view when the clip shows the editor's right edge.

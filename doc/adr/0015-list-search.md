@@ -40,3 +40,13 @@ first titles and text together, then Obsidian's operators with file names by def
   with little room; the first try, filtering by temporary block tables and ranking every
   match, took 44–55 ms).
 - No keyboard shortcut yet: Cmd+F is left for finding inside the open note.
+
+## Search by meaning (2026-11-15)
+
+At the owner's word the switch has a third segment, «За змістом», and the operator `meaning:`
+(ADR 0028): the notes nearest the query in meaning, whatever their words, within the selected
+list (the scope goes to the search by meaning, not filtered after it, so a folder's notes are
+found however many nearer notes lie outside it), each once with its nearest block shown, at
+most 40 blocks (two of a note). Notes kept from the AI are shown: the search is the user's own.
+The model starts loading as soon as the mode is chosen. Without the model (the probe, a build
+without it) nothing is found.

@@ -162,3 +162,7 @@ paths.
   Policy taken from their pages, and llama.cpp's MIT license; the bundle carries them in
   `Resources/Licenses`, and `Credits.rtf` (RTF without colours, so it reads in dark mode too)
   says it in the About window.
+- The note list's search has a third mode, by meaning (ADR 0015). `MeaningSearch` takes a scope,
+  the selected list's documents (the chat's tools pass none). One helper serves the whole app:
+  `meaning::embedder()`, shared by the chat, the list's search and the thread keeping the
+  vectors.

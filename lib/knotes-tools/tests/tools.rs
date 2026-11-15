@@ -385,7 +385,7 @@ fn found_and_read_notes_say_when_they_last_changed() {
 struct Near(Option<Vec<(&'static str, u32)>>);
 
 impl knotes_core::MeaningSearch for Near {
-    fn nearest(&self, _query: &str, limit: usize) -> Result<Vec<knotes_core::BlockHit>, knotes_core::BoxError> {
+    fn nearest(&self, _query: &str, limit: usize, _scope: Option<&[String]>) -> Result<Vec<knotes_core::BlockHit>, knotes_core::BoxError> {
         let hits = self.0.as_ref().ok_or("the helper is gone")?;
         Ok(hits.iter().take(limit).map(|(path, ord)| knotes_core::BlockHit { path: path.to_string(), ord: *ord, span: knotes_core::Span { start: 0, end: 0 }, heading: None, score: 0.0 }).collect())
     }

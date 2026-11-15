@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use knotes_core::BlockHit;
 use knotes_embed::{Vector, similarity};
 
@@ -23,10 +25,16 @@ impl Snapshot {
         self.blocks.is_empty()
     }
 
-    /// The `limit` blocks nearest `query`, no more than `per_document` of one document, nearest
-    /// first, each scored minus its similarity.
-    pub fn nearest(&self, query: &Vector, limit: usize, per_document: usize) -> Vec<BlockHit> {
-        let mut scored: Vec<(i32, usize)> = self.vectors.iter().enumerate().map(|(i, v)| (similarity(query, v), i)).collect();
+    /// The `limit` blocks nearest `query`, no more than `per_document` of one document, among the
+    /// documents of `scope` when given, nearest first, each scored minus its similarity.
+    pub fn nearest(&self, query: &Vector, limit: usize, per_document: usize, scope: Option<&HashSet<&str>>) -> Vec<BlockHit> {
+        let mut scored: Vec<(i32, usize)> = self
+            .vectors
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| scope.is_none_or(|paths| paths.contains(self.blocks[*i].path.as_str())))
+            .map(|(i, v)| (similarity(query, v), i))
+            .collect();
         // Enough candidates that the cap per document still leaves `limit`, as a rule.
         let candidates = (limit * 8).min(scored.len());
         if candidates == 0 || limit == 0 {
