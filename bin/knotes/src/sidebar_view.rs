@@ -25,6 +25,8 @@ type OnSelect = Box<dyn Fn(SidebarItem)>;
 type OnDrop = Box<dyn Fn(String, String)>;
 type OnClose = Box<dyn Fn(String)>;
 type OnFolderSpace = Box<dyn Fn(String, FolderChoice)>;
+type OnNewFolder = Box<dyn Fn(String)>;
+type OnRenameEnd = Box<dyn Fn()>;
 
 /// A space chosen from a folder's menu (ADR 0030).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +53,10 @@ pub struct Ivars {
     /// choosing a space in a folder's menu calls.
     spaces: RefCell<(Arc<Spaces>, Option<String>)>,
     on_folder_space: RefCell<Option<OnFolderSpace>>,
+    /// Called with the folder a new folder is made in (`""`: the vault's root).
+    on_new_folder: RefCell<Option<OnNewFolder>>,
+    /// Called when editing a folder's name ends, renamed or not.
+    on_rename_end: RefCell<Option<OnRenameEnd>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -187,6 +193,15 @@ define_class!(
             }
         }
 
+        /// A folder's menu, or the sidebar's below its rows: a new folder in it, or at the top.
+        #[unsafe(method(newFolder:))]
+        fn new_folder(&self, item: &NSMenuItem) {
+            let parent = item.representedObject().and_then(|o| o.downcast::<NSString>().ok()).and_then(|k| SidebarItem::from_key(&k.to_string())).and_then(|i| drop_folder(&i).map(str::to_owned)).unwrap_or_default();
+            if let Some(callback) = self.ivars().on_new_folder.borrow().as_ref() {
+                callback(parent);
+            }
+        }
+
         #[unsafe(method(renameFolder:))]
         fn rename_folder(&self, _sender: Option<&AnyObject>) {
             if let Some((row, _)) = self.menu_folder() {
@@ -234,6 +249,8 @@ impl SidebarSource {
             on_close_others: RefCell::new(None),
             spaces: RefCell::new((Arc::new(Spaces::default()), None)),
             on_folder_space: RefCell::new(None),
+            on_new_folder: RefCell::new(None),
+            on_rename_end: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -311,8 +328,10 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     pub fn fill_menu(&self, menu: &NSMenu, item: Option<&SidebarItem>) {
         menu.removeAllItems();
         let entries: &[(&str, Sel)] = match item {
-            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:))],
+            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:))],
             Some(SidebarItem::Tab(_)) => &[(strings::CLOSE_TAB, sel!(closeTabFromMenu:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))],
+            // Below the rows: a new folder at the vault's top.
+            None => &[(strings::NEW_FOLDER, sel!(newFolder:))],
             _ => &[],
         };
         for &(title, action) in entries {
@@ -387,6 +406,19 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         marked.join(" | ")
     }
 
+    pub fn on_new_folder(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_new_folder.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_rename_end(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_rename_end.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Whether a folder's name is being edited (the sidebar waits to be rebuilt).
+    pub fn is_renaming(&self) -> bool {
+        self.ivars().renaming.borrow().is_some()
+    }
+
     pub fn on_folder_space(&self, callback: impl Fn(String, FolderChoice) + 'static) {
         *self.ivars().on_folder_space.borrow_mut() = Some(Box::new(callback));
     }
@@ -410,6 +442,8 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let cell = outline.viewAtColumn_row_makeIfNecessary(0, row, true).and_then(|v| v.downcast::<NSTableCellView>().ok());
         // SAFETY: the cell views are built by `cell` with their text field set.
         let Some(name) = cell.and_then(|cell| unsafe { cell.textField() }) else { return };
+        // The folder's own name, though its row shows a path (one hanging away from its parent).
+        name.setStringValue(&NSString::from_str(folder.rsplit('/').next().unwrap_or(&folder)));
         name.setEditable(true);
         name.setSelectable(true);
         // SAFETY: the source outlives the outline's cells (it is the outline's data source).
@@ -439,10 +473,12 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         }
         if !commit || name.trim().is_empty() || name == old {
             field.setStringValue(&NSString::from_str(&old));
-            return;
-        }
-        if let Some(callback) = self.ivars().on_rename.borrow().as_ref() {
+        } else if let Some(callback) = self.ivars().on_rename.borrow().as_ref() {
             callback(folder, name);
+        }
+        // The sidebar, which waited while the name was edited, shows its rows again.
+        if let Some(callback) = self.ivars().on_rename_end.borrow().as_ref() {
+            callback();
         }
     }
 

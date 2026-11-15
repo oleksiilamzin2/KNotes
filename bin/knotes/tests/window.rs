@@ -199,7 +199,7 @@ fn the_chat_asks_to_sign_in_with_chatgpt_first() {
 fn main_menu_has_the_standard_menus() {
     let out = probe();
     assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
-    assert!(out.contains("file-menu: Нова нотатка ⌘N | Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
+    assert!(out.contains("file-menu: Нова нотатка ⌘N | Нова тека ⇧⌘N | Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
 }
 
 #[test]
@@ -3028,4 +3028,17 @@ fn an_empty_folder_shows_in_the_sidebar() {
     std::fs::write(vault.path().join("a.md"), "a").unwrap();
     let out = probe_with(&[vault.path()], None);
     assert!(out.contains("| · | Empty (0)"), "{out}");
+}
+
+#[test]
+fn a_new_folder_is_made_from_a_folder_s_menu_or_the_sidebar_s_and_named_in_place() {
+    let vault = spaced_vault();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "new-folder=Work"), ("KNOTES_PROBE_FOLDER_NAME", "Звіти")]);
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Простір"), "{out}");
+    assert!(vault.path().join("Work/Звіти").is_dir() && !vault.path().join("Work/Нова тека").exists(), "made and renamed: {out}");
+    // At the top of a space: the new folder joins it.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_ACTION", "new-folder=")]);
+    assert!(out.contains("sidebar-renaming: Нова тека"), "named in place: {out}");
+    let rules = std::fs::read_to_string(vault.path().join("Нова тека/.knotes.json")).unwrap_or_else(|_| panic!("{out}"));
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&rules).unwrap(), serde_json::json!({"space": "work"}));
 }

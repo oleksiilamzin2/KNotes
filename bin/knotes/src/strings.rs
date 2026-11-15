@@ -14,6 +14,9 @@ pub const NO_SPACE: &str = "Без простору";
 pub const NEW_SPACE: &str = "Новий простір…";
 pub const NEW_SPACE_QUESTION: &str = "Назва нового простору";
 pub const CREATE: &str = "Створити";
+/// A new folder's name, and the commands that make one.
+pub const NEW_FOLDER: &str = "Нова тека";
+pub const NEW_SUBFOLDER: &str = "Нова підтека";
 pub const TODAY: &str = "Сьогодні";
 pub const YESTERDAY: &str = "Вчора";
 pub const PREVIOUS_7_DAYS: &str = "Попередні 7 днів";

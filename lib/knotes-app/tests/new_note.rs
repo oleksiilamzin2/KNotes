@@ -32,3 +32,11 @@ fn names_taken_get_a_number() {
     assert_eq!(unique_note_path("Вхідні", "Без назви", exists), "Вхідні/Без назви 2.md");
     assert_eq!(unique_note_path("", "Ідея", exists), "Ідея.md");
 }
+
+#[test]
+fn a_new_folder_gets_a_name_no_folder_beside_it_has() {
+    use knotes_app::unique_folder_path;
+    assert_eq!(unique_folder_path("", "Нова тека", |_| false), "Нова тека");
+    assert_eq!(unique_folder_path("Work", "Нова тека", |p| p == "Work/Нова тека"), "Work/Нова тека 2");
+    assert_eq!(unique_folder_path("Work", "Нова тека", |p| p == "Work/Нова тека" || p == "Work/Нова тека 2"), "Work/Нова тека 3");
+}

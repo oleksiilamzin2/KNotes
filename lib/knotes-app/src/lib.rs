@@ -34,7 +34,7 @@ pub use link_rewrite::{Moves, relink};
 pub use natural_order::{natural_cmp, natural_key};
 pub use search_list::{ContentMatch, found_snippet, found_words, search_list, search_prefixes};
 pub use search_query::{SearchMode, parse_search, with_search_mode};
-pub use new_note::{note_file_stem, unique_note_path};
+pub use new_note::{note_file_stem, unique_folder_path, unique_note_path};
 pub use relink_plan::{Relinks, plan_relinks};
 pub use note_list::{Clock, DateGroup, ListFilter, ListItem, ListOption, ListSettings, SortOrder, build_note_list, days_from_civil, list_scope, title_of};
 pub use outline::{Outline, OutlineEntry, OutlinePlace};

@@ -62,3 +62,16 @@ pub fn unique_note_path(folder: &str, stem: &str, exists: impl Fn(&str) -> bool)
     }
     path
 }
+
+/// A new folder's path in `parent`: `name`, numbered from 2 when a folder there has it (as
+/// Finder numbers "untitled folder 2").
+pub fn unique_folder_path(parent: &str, name: &str, exists: impl Fn(&str) -> bool) -> String {
+    let base = if parent.is_empty() { name.to_owned() } else { format!("{parent}/{name}") };
+    let mut path = base.clone();
+    let mut n = 2;
+    while exists(&path) {
+        path = format!("{base} {n}");
+        n += 1;
+    }
+    path
+}

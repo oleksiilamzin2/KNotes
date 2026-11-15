@@ -674,6 +674,30 @@ pub fn folder_rename_requested(sidebar: &crate::sidebar_view::SidebarSource, out
     }
 }
 
+/// `KNOTES_PROBE_ACTION=new-folder=Folder` (empty: at the top): «Нова підтека» from the
+/// folder's menu, or «Нова тека» from the sidebar's below its rows; the name then typed in its
+/// row from `KNOTES_PROBE_FOLDER_NAME`, if given.
+pub fn new_folder_requested(sidebar: &crate::sidebar_view::SidebarSource, outline: &objc2_app_kit::NSOutlineView) {
+    let Some(parent) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("new-folder=").map(str::to_owned)) else { return };
+    let Some(menu) = outline.menu() else { return };
+    let item = (!parent.is_empty()).then(|| knotes_app::SidebarItem::Folder(parent.clone()));
+    sidebar.fill_menu(&menu, item.as_ref());
+    let items = menu.itemArray();
+    println!("sidebar-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
+    let Some(entry) = items.iter().find(|i| i.action() == Some(objc2::sel!(newFolder:))) else { return };
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: the menu item's own target and action, sent as a click would.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(entry.action().expect("menu action"), entry.target().as_deref(), Some(&entry)) };
+    let Some(field) = sidebar.renaming_field() else { return };
+    println!("sidebar-renaming: {}", field.stringValue());
+    if let Ok(name) = std::env::var("KNOTES_PROBE_FOLDER_NAME") {
+        field.setStringValue(&NSString::from_str(&name));
+        if let Some(window) = outline.window() {
+            window.makeFirstResponder(Some(outline));
+        }
+    }
+}
+
 /// `KNOTES_PROBE_ACTION=folder-space=Folder=work` (or `none`, `new` with
 /// `KNOTES_PROBE_SPACE_NAME`): a choice in the folder's «Простір ▸» menu (ADR 0030), its items
 /// printed first.

@@ -128,6 +128,15 @@ define_class!(
             }
         }
 
+        /// File → New Folder (Shift+Cmd+N): in the folder selected in the window in front, else
+        /// at the vault's top.
+        #[unsafe(method(newFolder:))]
+        fn new_folder_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.new_folder(None);
+            }
+        }
+
         /// File → Close Tab (Cmd+W): the tab shown in the window in front; the window itself
         /// when it has no tab.
         #[unsafe(method(closeTab:))]

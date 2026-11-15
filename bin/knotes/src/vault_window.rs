@@ -11,7 +11,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags,
+    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
@@ -56,6 +56,8 @@ struct State {
     rows: Arc<Vec<NoteRow>>,
     rules: Arc<HashMap<String, FolderRules>>,
     folders: Arc<FolderNode>,
+    /// Every folder of the vault, empty ones too (the snapshot's list).
+    folder_paths: Arc<Vec<String>>,
     tags: Arc<Vec<TagNode>>,
     /// Notes without any tag (the "Untagged" row).
     untagged: usize,
@@ -150,6 +152,8 @@ pub struct VaultWindow {
     tabs_restored: Cell<bool>,
     /// Whether the last launch's space came back (on the first snapshot).
     space_restored: Cell<bool>,
+    /// The sidebar waits while a folder's name is edited: rebuilt when it ends.
+    sidebar_waiting: Cell<bool>,
     /// The next document opened goes in a new tab (the list's menu asked for it).
     new_tab_next: Cell<bool>,
     /// The next document is opened from the note (a link or a preview clicked in it).
@@ -297,6 +301,7 @@ impl VaultWindow {
             rows: Arc::new(Vec::new()),
             rules: Arc::new(HashMap::new()),
             folders: Arc::new(FolderNode::default()),
+            folder_paths: Arc::new(Vec::new()),
             tags: Arc::new(Vec::new()),
             untagged: 0,
             index_dir: None,
@@ -339,6 +344,7 @@ impl VaultWindow {
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
             space_restored: Cell::new(false),
+            sidebar_waiting: Cell::new(false),
             new_tab_next: Cell::new(false),
             from_note: Cell::new(false),
             panel_mode: Cell::new(PanelMode::Ai),
@@ -528,6 +534,20 @@ impl VaultWindow {
         this.space_switcher.on_settings(move || {
             if let Some(window) = weak_settings.upgrade() {
                 crate::settings_window::show(MainThreadMarker::from(&*window.window));
+            }
+        });
+        let weak_new_folder: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_new_folder(move |parent| {
+            if let Some(window) = weak_new_folder.upgrade() {
+                window.new_folder(Some(parent));
+            }
+        });
+        let weak_rename_end: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_rename_end(move || {
+            if let Some(window) = weak_rename_end.upgrade() {
+                window.rebuild_sidebar();
+                let selection = window.state.borrow().selection.clone();
+                window.highlight(&selection);
             }
         });
         let weak_folder_space: Weak<Self> = Rc::downgrade(&this);
@@ -944,6 +964,12 @@ impl VaultWindow {
     }
 
     fn rebuild_sidebar(&self) {
+        // Rebuilding would end the editing of a folder's name; done when it ends.
+        if self.sidebar.is_renaming() {
+            self.sidebar_waiting.set(true);
+            return;
+        }
+        self.sidebar_waiting.set(false);
         let model = {
             let state = self.state.borrow();
             if state.sidebar_mode == SidebarMode::Tabs {
@@ -1105,6 +1131,7 @@ impl VaultWindow {
             state.rows = Arc::clone(&snapshot.rows);
             state.rules = Arc::clone(&snapshot.rules);
             state.folders = Arc::clone(&snapshot.folders);
+            state.folder_paths = Arc::clone(&snapshot.folder_paths);
             state.tags = Arc::clone(&snapshot.tags);
             state.untagged = snapshot.untagged;
             state.catalog = Arc::clone(&snapshot.catalog);
@@ -1199,6 +1226,7 @@ impl VaultWindow {
             probe::drag_requested(&self.list, &self.table, &self.sidebar);
             probe::folder_rename_requested(&self.sidebar, &self.outline);
             probe::folder_space_requested(&self.sidebar);
+            probe::new_folder_requested(&self.sidebar, &self.outline);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -1489,6 +1517,69 @@ impl VaultWindow {
         }
         self.highlight(&selection);
         self.refresh_list();
+    }
+
+    /// A new folder in `parent` (none: the folder selected in the sidebar, else the vault's
+    /// top), "Нова тека" numbered if taken, its name then edited in its row. Made at the top of
+    /// a space, it joins the space (ADR 0030).
+    pub fn new_folder(&self, parent: Option<String>) {
+        let Some(vault) = self.vault() else { return };
+        let parent = parent.unwrap_or_else(|| match &self.state.borrow().selection {
+            SidebarItem::Folder(path) => path.clone(),
+            _ => String::new(),
+        });
+        let path = unique_folder_path(&parent, strings::NEW_FOLDER, |p| vault.join(p).exists());
+        if let Err(e) = std::fs::create_dir_all(vault.join(&path)) {
+            eprintln!("knotes: cannot make the folder {path}: {e}");
+            return;
+        }
+        let space = self.state.borrow().space.clone().filter(|_| parent.is_empty());
+        if let Some(id) = &space {
+            let text = set_folder_space("", FolderSpace::In(id)).unwrap_or_default();
+            if let Err(e) = FsVault::new(&vault).write_rules(&path, &text) {
+                eprintln!("knotes: cannot write {path}/.knotes.json: {e}");
+            }
+        }
+        // Shown now, not when the watcher's snapshot comes: with its rules, in its space.
+        {
+            let mut state = self.state.borrow_mut();
+            let mut folders = (*state.folder_paths).clone();
+            folders.push(path.clone());
+            state.folders = Arc::new(folder_tree_with(state.catalog.iter().map(|e| e.path.as_str()), folders.iter().map(String::as_str)));
+            state.folder_paths = Arc::new(folders);
+            if let Some(id) = &space {
+                let rules = Arc::make_mut(&mut state.rules);
+                if let Ok(parsed) = FolderRules::parse(&serde_json::json!({"space": id}).to_string()) {
+                    rules.insert(path.clone(), parsed);
+                }
+                state.spaces = Arc::new(Spaces::from_rules(state.rules.iter().map(|(folder, rules)| (folder.as_str(), rules.object()))));
+            }
+            state.fit_space();
+        }
+        self.rebuild_sidebar();
+        let item = SidebarItem::Folder(path.clone());
+        // Its parents opened, so its row shows.
+        let mut at = parent.as_str();
+        let mut opened = Vec::new();
+        while !at.is_empty() {
+            opened.push(at.to_owned());
+            at = at.rsplit_once('/').map_or("", |(up, _)| up);
+        }
+        if self.state.borrow().space.is_some() && !self.state.borrow().space_folders.as_ref().is_some_and(|s| s.holds_folder(&path)) {
+            // SAFETY: an item object of this outline view.
+            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&SidebarItem::Rest))) };
+        }
+        for folder in opened.iter().rev() {
+            // SAFETY: as above.
+            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&SidebarItem::Folder(folder.clone())))) };
+        }
+        self.highlight(&item);
+        self.select(item.clone());
+        // SAFETY: an item object of this outline view.
+        let row = unsafe { self.outline.rowForItem(Some(&self.sidebar.object_for(&item))) };
+        if row >= 0 {
+            self.sidebar.begin_rename(row);
+        }
     }
 
     /// A folder's menu put it in a space, in none, or in a new space named in a dialog (ADR
