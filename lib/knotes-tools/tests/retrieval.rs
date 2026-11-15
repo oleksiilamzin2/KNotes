@@ -2,8 +2,10 @@
 //! model really wrote on the household vault (`tests/home`), each with the documents holding the
 //! answer, run through the `search` tool. Recall@5: the share of queries with one of those in the
 //! first five documents; MRR: the mean of 1 / its rank (top ten). Queries marked "meaning" share no
-//! words with their documents: search by words is not expected to find them; they measure what
-//! search by meaning would add.
+//! words with their documents (other words, a retelling, another language, dates told in words):
+//! search by words is not expected to find them; they measure search by meaning. Nine were the
+//! model's own; 56 more were written on 2026-11-15 from the vault's text, so that a change to
+//! search by meaning can be told from noise (ADR 0028).
 //!
 //! Run twice: by words alone, then with search by meaning (EmbeddingGemma, ADR 0028; the model
 //! comes from `scripts/setup.sh`) merged in.
@@ -25,16 +27,16 @@ use knotes_vault::FsVault;
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
-/// The household vault's scores (2026-11-14: by words 30 of 35, all 30 of 43; with titles, stems
-/// and links 33 of 35 and 33 of 43; with three wordings the model wrote next, 33 of 37 and 33 of
-/// 46; leaving question words out, five-letter stems and all-but-one-word finds, 36 of 37 and 37
-/// of 46): a change to search may raise them, never lower them.
+/// The household vault's scores by words (2026-11-14: 30 of 35; with titles, stems and links 33
+/// of 35; with three wordings the model wrote next, 33 of 37; leaving question words out,
+/// five-letter stems and all-but-one-word finds, 36 of 37): a change to search may raise them,
+/// never lower them.
 const WORDS_RECALL: f64 = 0.97;
-const ALL_RECALL: f64 = 0.80;
-/// With search by meaning merged in (2026-11-14, EmbeddingGemma Q8_0 over 100 blocks): by words
-/// 37 of 37, by meaning 6 of 9 (1 of 9 by words alone), all 43 of 46.
-const MEANING_RECALL: f64 = 0.66;
-const ALL_WITH_MEANING: f64 = 0.93;
+/// With search by meaning merged in (EmbeddingGemma Q8_0 over 100 blocks): 2026-11-14, by words
+/// 37 of 37, by meaning 6 of 9; 2026-11-15, on 65 queries by meaning (5 found by words alone),
+/// 53 of 65 (MRR 0.71), all 90 of 102.
+const MEANING_RECALL: f64 = 0.81;
+const ALL_WITH_MEANING: f64 = 0.88;
 
 struct Query {
     text: String,
@@ -138,7 +140,6 @@ fn search_finds_what_the_model_looked_for() {
     if own.is_none() {
         for (name, run) in [("by words", &by_words), ("with meaning", &with_meaning)] {
             assert!(run.words.recall() >= WORDS_RECALL, "search by words got worse {name}: {}", run.words.line("by words"));
-            assert!(run.all.recall() >= ALL_RECALL, "search got worse {name}: {}", run.all.line("all"));
         }
         assert!(with_meaning.meaning.recall() >= MEANING_RECALL, "search by meaning got worse: {}", with_meaning.meaning.line("by meaning"));
         assert!(with_meaning.all.recall() >= ALL_WITH_MEANING, "search with meaning got worse: {}", with_meaning.all.line("all"));

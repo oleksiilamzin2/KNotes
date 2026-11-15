@@ -129,6 +129,18 @@ Checked on 2026-11-14:
   left for being written settles, and lets a run of changes end (2 s without one) before a
   pass. While nothing changes it never wakes. Another vault drops its waker, which ends it.
 
-Still to do: a set of 40–60 queries by meaning before calling the quality settled; the M1's
+## Measured (2026-11-15): 65 queries by meaning
+
+The benchmark's queries by meaning grew from the model's 9 to 65: 56 written from the vault's
+text, sharing no words (nor stems search catches) with what answers them — other words,
+retellings, slang, dates told in words; 48 in Ukrainian, 5 in English, 3 in Russian. Search by
+words alone finds 5 of them. With meaning merged in: 53 of 65 (MRR 0.71), by words still 37 of
+37, all 90 of 102; these are the floors now. Missed: the vague "термін дії"; October's
+electricity twice (the readings are dated `2026-10-01`); slang and idioms ("гума" for tyres,
+"скоби" for braces, "вибиває пробки"); a neighbour with a hammer drill in a list of three
+neighbours; "pills mother takes for her heart", the flat's water taps, a sea-sick son and a
+driving licence's date, each beaten by a note nearby in meaning.
+
+Still to do: the M1's
 numbers, and whether hours of first indexing on a large vault keep the window smooth; heading
 paths; the Gemma Terms of Use notice in the app.
