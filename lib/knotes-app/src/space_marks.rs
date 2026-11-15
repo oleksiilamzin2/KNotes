@@ -6,11 +6,8 @@ pub fn space_mark<'a>(spaces: &'a Spaces, current: Option<&str>, path: &str) -> 
     spaces.of(path).filter(|space| current != Some(space.id.as_str()))
 }
 
-/// The space whose mark a folder's row shows: in the whole vault, the space its own rules set
-/// (its subfolders, which take it, go unmarked); none in a space, which shows its folders only.
+/// The space whose mark a folder's row shows: the space its own rules set (its subfolders, which
+/// take it, go unmarked), unless it is the window's (a folder under «Решта бази» shows its).
 pub fn folder_space_mark<'a>(spaces: &'a Spaces, current: Option<&str>, folder: &str) -> Option<&'a Space> {
-    if current.is_some() {
-        return None;
-    }
-    spaces.own(folder).flatten()
+    spaces.own(folder).flatten().filter(|space| current != Some(space.id.as_str()))
 }

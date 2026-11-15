@@ -24,9 +24,10 @@ fn a_file_shows_its_space_s_mark_in_the_whole_vault_and_only_another_space_s_in_
 }
 
 #[test]
-fn a_folder_shows_a_mark_where_its_space_is_set_in_the_whole_vault() {
+fn a_folder_shows_a_mark_where_its_space_is_set_unless_it_is_the_window_s() {
     let spaces = vault();
     assert_eq!(folder_space_mark(&spaces, None, "Work").map(|s| s.id.as_str()), Some("work"));
     assert_eq!(folder_space_mark(&spaces, None, "Work/Radar"), None, "a subfolder takes it: no mark on each");
-    assert_eq!(folder_space_mark(&spaces, Some("work"), "Work"), None, "in a space its folders go unmarked");
+    assert_eq!(folder_space_mark(&spaces, Some("work"), "Work"), None, "in a space its own folders go unmarked");
+    assert_eq!(folder_space_mark(&spaces, Some("work"), "Home").map(|s| s.id.as_str()), Some("home"), "another space's, under «Решта бази», marked");
 }
