@@ -11,10 +11,22 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 /// FSEvents watcher with debouncing: changes arriving within `debounce` of the first one
 /// form one batch. Hidden paths (`.obsidian`, `.git`, dotfiles) are dropped, except the
 /// per-folder rules files `.knotes.json`.
-/// Dropping the watcher stops the background thread.
+/// Dropping the watcher stops the background thread, and returns at once: FSEvents is stopped
+/// on a thread of its own. Stopping spins until the stream's run loop idles and asks fseventsd,
+/// which answers its clients in turn and took seconds when they were many and slow (tests run
+/// from a folder of half a million build files); a vault closing need not wait for it.
 pub struct FsWatcher {
-    _watcher: RecommendedWatcher,
+    watcher: Option<RecommendedWatcher>,
     batches: Option<Receiver<Vec<String>>>,
+}
+
+impl Drop for FsWatcher {
+    fn drop(&mut self) {
+        if let Some(watcher) = self.watcher.take() {
+            // Should no thread start, the closure, and the watcher with it, goes here.
+            let _ = thread::Builder::new().name("knotes-watch-stop".into()).spawn(move || drop(watcher));
+        }
+    }
 }
 
 impl FsWatcher {
@@ -42,7 +54,7 @@ impl FsWatcher {
         .map_err(io::Error::other)?;
         watcher.watch(&root, RecursiveMode::Recursive).map_err(io::Error::other)?;
         thread::Builder::new().name("knotes-watch".into()).spawn(move || debounce_loop(&root, &raw_rx, &on_batch, debounce))?;
-        Ok(Self { _watcher: watcher, batches: None })
+        Ok(Self { watcher: Some(watcher), batches: None })
     }
 }
 
