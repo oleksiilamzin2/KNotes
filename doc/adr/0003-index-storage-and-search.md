@@ -54,3 +54,10 @@ with a single-writer lock. It stays an option if FTS5 misses the budgets in ADR 
   measured.
 - Semantic (embedding) search is not part of this decision; it can be added next to
   FTS5 later.
+
+## Later (2026-11-16)
+
+- The index being a cache, one SQLite finds damaged (`SQLITE_CORRUPT`, `SQLITE_NOTADB`: a crash,
+  a disk fault) is deleted and built again from the vault, when it is opened and when a sync
+  meets the damage later (the session closes its connection first, then `SqliteIndex::recreate`);
+  it was an error, and the vault could not be opened until its data was removed by hand.

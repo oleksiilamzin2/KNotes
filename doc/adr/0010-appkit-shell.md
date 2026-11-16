@@ -42,3 +42,14 @@ named Knotes with bundle id `app.knotes.Knotes`.
   disk, not from the snapshot's copy, and a file that does not parse is left as it is (it lost
   its other keys to `{"list": …}`); the user is told. A vault that cannot be opened is said, in
   Ukrainian when another window or Knotes holds it.
+- 2026-11-16: indexing goes on after a failure. A sync, a snapshot or index upkeep that fails is
+  said in the window (once for each reason) and tried again with the next change, or 30 s after;
+  it ended the indexing thread, and the window showed the last snapshot without a word (empty
+  when the first one failed). A folder below the vault that cannot be listed (not allowed, or
+  deleted while walked) counts as empty, and a rules file that cannot be read is skipped as one
+  that does not parse: either failed the whole vault, before its first snapshot. A vault
+  FSEvents does not watch is still indexed (the window says that outside changes are seen when
+  it is opened again). When FSEvents says events were lost (`need_rescan`), the batch holds
+  `RESCAN` (`""`): the vault is synced, and the window looks at the note open and the embedded
+  notes on disk. A file registered but not read yet keeps its date less a nanosecond, not 0:
+  it was listed on 01.01.1970.
