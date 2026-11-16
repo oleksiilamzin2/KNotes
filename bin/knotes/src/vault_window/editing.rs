@@ -103,8 +103,8 @@ pub(super) fn pasteboard_images(pasteboard: &NSPasteboard, vault: &Path) -> Vec<
     vec![PastedImage::New { name: pasted_image_name(&stamp), bytes }]
 }
 
-/// Writes the disk version of `path` as "Name (конфлікт date time).md" next to it.
-pub(super) fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) -> Option<String> {
+/// Writes the disk version of `path` as "Name (конфлікт date time).md" next to it; its path.
+pub(super) fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) -> std::io::Result<String> {
     let formatter = NSDateFormatter::new();
     formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm")));
     let stamp = formatter.stringFromDate(&NSDate::now()).to_string();
@@ -113,13 +113,8 @@ pub(super) fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) -> Opt
         formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm.ss")));
         copy = conflict_path(path, &formatter.stringFromDate(&NSDate::now()).to_string());
     }
-    match vault.write_note(&copy, disk) {
-        Ok(()) => Some(copy),
-        Err(e) => {
-            eprintln!("knotes: cannot keep conflict copy {copy}: {e}");
-            None
-        }
-    }
+    vault.write_note(&copy, disk)?;
+    Ok(copy)
 }
 
 impl VaultWindow {
@@ -134,13 +129,18 @@ impl VaultWindow {
             return false;
         }
         let store = FsVault::new(&vault);
+        let mut failed = Vec::new();
         let paths: Vec<String> = found
             .into_iter()
             .filter_map(|image| match image {
                 PastedImage::InVault(path) => Some(path),
-                PastedImage::New { name, bytes } => store.add_attachment(&name, &bytes).inspect_err(|e| eprintln!("knotes: cannot add {name}: {e}")).ok(),
+                PastedImage::New { name, bytes } => store.add_attachment(&name, &bytes).inspect_err(|e| failed.push((name.clone(), e.to_string()))).ok(),
             })
             .collect();
+        if let Some((name, error)) = failed.first() {
+            let names: Vec<&str> = failed.iter().map(|(n, _)| n.as_str()).collect();
+            self.tell_failed(&strings::attach_failed(name), &strings::failed_files(error, &names[1..]));
+        }
         if paths.is_empty() {
             return true;
         }
@@ -179,14 +179,14 @@ impl VaultWindow {
         });
         let path = unique_folder_path(&parent, strings::NEW_FOLDER, |p| vault.join(p).exists());
         if let Err(e) = std::fs::create_dir_all(vault.join(&path)) {
-            eprintln!("knotes: cannot make the folder {path}: {e}");
+            self.tell_failed(strings::NEW_FOLDER_FAILED, &e);
             return;
         }
         let space = self.state.borrow().space.clone().filter(|_| parent.is_empty());
         if let Some(id) = &space {
             let text = set_folder_space("", FolderSpace::In(id)).unwrap_or_default();
             if let Err(e) = FsVault::new(&vault).write_rules(&path, &text) {
-                eprintln!("knotes: cannot write {path}/.knotes.json: {e}");
+                self.tell_failed(&strings::folder_space_failed(strings::NEW_FOLDER), &e);
             }
         }
         // Shown now, not when the watcher's snapshot comes: with its rules, in its space.
@@ -274,7 +274,7 @@ impl VaultWindow {
         }
         let path = unique_note_path(&folder, strings::UNTITLED, |p| vault.join(p).exists());
         if let Err(e) = FsVault::new(&vault).write_note(&path, "") {
-            eprintln!("knotes: cannot create {path}: {e}");
+            self.tell_failed(strings::NEW_NOTE_FAILED, &e);
             return;
         }
         if !self.open_note(&path, true) {
@@ -359,6 +359,11 @@ impl VaultWindow {
         alert.addButtonWithTitle(&NSString::from_str(strings::STAY));
         alert.addButtonWithTitle(&NSString::from_str(strings::DISCARD_CHANGES)).setHasDestructiveAction(true);
         alert.runModal() == NSAlertSecondButtonReturn
+    }
+
+    /// Says a file operation failed: `title`, and why, in a sheet on the window.
+    pub(super) fn tell_failed(&self, title: &str, why: &dyn std::fmt::Display) {
+        rename_dialog::tell_failure(objc2::MainThreadOnly::mtm(&*self.window), Some(&self.window), title, &why.to_string());
     }
 
     /// Says the note at `path` is shown read only and empty: it could not be read (`error`).
@@ -481,7 +486,16 @@ impl VaultWindow {
         // Written first, the embedded notes' edits too, so the links are planned on what the
         // notes hold. Unwritten edits stay in the editor and follow the note to its new path.
         let _ = self.write_all();
-        let plan = self.relinks(&moves);
+        let parent = |path: &str| path.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_owned());
+        let plan = match self.relinks(&moves) {
+            Ok(plan) => plan,
+            // Moved without them, the links to it would break.
+            Err(e) => {
+                let name = folder.map(|(from, _)| from.rsplit('/').next().unwrap_or(from).to_owned()).or_else(|| moves.keys().next().map(|p| document_name(p).to_owned()));
+                self.tell_failed(&strings::links_unknown(&name.unwrap_or_default()), &strings::links_unknown_details(&e));
+                return false;
+            }
+        };
         let update = plan.links == 0
             || match rename_dialog::ask_link_update(objc2::MainThreadOnly::mtm(&*self.window), plan.links, plan.edits.len()) {
                 LinkUpdate::Update => true,
@@ -494,28 +508,40 @@ impl VaultWindow {
             match vault.move_note(from, to) {
                 Ok(()) => moved = moves.clone(),
                 Err(e) => {
-                    eprintln!("knotes: cannot move {from} to {to}: {e}");
+                    let name = from.rsplit('/').next().unwrap_or(from);
+                    self.tell_failed(&if parent(from) == parent(to) { strings::rename_failed(name) } else { strings::move_failed(name) }, &e);
                     return false;
                 }
             }
         }
+        let mut failures = Vec::new();
         for (from, to) in moves.iter().filter(|_| folder.is_none()) {
             match vault.move_note(from, to) {
                 Ok(()) => {
                     moved.insert(from.clone(), to.clone());
                 }
-                Err(e) => eprintln!("knotes: cannot move {from} to {to}: {e}"),
+                Err(e) => failures.push((from.as_str(), to.as_str(), e)),
             }
+        }
+        if let Some((from, to, e)) = failures.first() {
+            let title = match failures.len() {
+                1 if parent(from) == parent(to) => strings::rename_failed(document_name(from)),
+                1 => strings::move_failed(document_name(from)),
+                _ => strings::MOVES_FAILED.to_owned(),
+            };
+            let names: Vec<&str> = failures.iter().skip(usize::from(failures.len() == 1)).map(|(from, _, _)| document_name(from)).collect();
+            self.tell_failed(&title, &strings::failed_files(&e.to_string(), &names));
         }
         if moved.is_empty() && folder.is_none() {
             return false;
         }
         let failed = |path: &str| moves.iter().any(|(from, to)| to == path && !moved.contains_key(from));
         let edits: Vec<&(String, String)> = if update { plan.edits.iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
-        for (path, text) in &edits {
-            if let Err(e) = vault.write_note(path, text) {
-                eprintln!("knotes: cannot update links in {path}: {e}");
-            }
+        // The files moved: a note whose links could not be updated is said, its links broken.
+        let unlinked: Vec<(&str, std::io::Error)> = edits.iter().filter_map(|(path, text)| vault.write_note(path, text).err().map(|e| (path.as_str(), e))).collect();
+        if let Some((_, e)) = unlinked.first() {
+            let names: Vec<&str> = unlinked.iter().map(|(path, _)| document_name(path)).collect();
+            self.tell_failed(strings::LINKS_FAILED, &strings::failed_files(&e.to_string(), &names));
         }
         for (from, to) in &moved {
             self.state.borrow_mut().history.rename(from, to);
@@ -570,22 +596,20 @@ impl VaultWindow {
         new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
     }
 
-    /// The link edits `moves` call for, worked out from the index and the files.
-    pub(super) fn relinks(&self, moves: &Moves) -> Relinks {
+    /// The link edits `moves` call for, worked out from the index and the files; why not, when
+    /// the index cannot say which notes link to them.
+    pub(super) fn relinks(&self, moves: &Moves) -> Result<Relinks, String> {
         // Just written (`relocate` writes them first), their newest links not indexed yet.
         let fresh: Vec<String> = self.open_path().into_iter().chain(self.embeds.paths()).collect();
         let mut state = self.state.borrow_mut();
         self.ensure_reader(&mut state);
         let (Some(reader), Some(before), Some(vault)) = (state.reader.as_ref(), state.links.clone(), state.vault.clone()) else {
-            return Relinks::default();
+            return Ok(Relinks::default());
         };
         let after = LinkTargets::new(state.catalog.iter().map(|e| moves.get(&e.path).map_or(e.path.as_str(), String::as_str)));
         let files = FsVault::new(&vault);
         // A note not in UTF-8 is left as it is: written back, it would lose its bytes.
-        plan_relinks(moves, reader, &|p| files.read_utf8(p).ok(), &MarkdownParser::new(), &*before, &after, &fresh).unwrap_or_else(|e| {
-            eprintln!("knotes: cannot plan link updates: {e}");
-            Relinks::default()
-        })
+        plan_relinks(moves, reader, &|p| files.read_utf8(p).ok(), &MarkdownParser::new(), &*before, &after, &fresh).map_err(|e| e.to_string())
     }
 
     /// Renames a new note's file after its first line, once (ADR 0011).
@@ -602,7 +626,11 @@ impl VaultWindow {
         if path != old
             && let Err(e) = FsVault::new(&vault).move_note(&old, &path)
         {
-            eprintln!("knotes: cannot rename {old} to {path}: {e}");
+            // Not tried again at each save: the note keeps its file's name.
+            if let Some(editing) = self.editing.borrow_mut().as_mut() {
+                editing.document.named();
+            }
+            self.tell_failed(&strings::name_failed(&stem), &e);
             return;
         }
         if let Some(editing) = self.editing.borrow_mut().as_mut() {
@@ -631,12 +659,19 @@ impl VaultWindow {
             let mut copy = None;
             match vault.read_text(&editing.path) {
                 Ok(disk) => match editing.document.on_disk(&disk, &text) {
-                    DiskChange::Conflict => copy = keep_conflict_copy(&vault, &editing.path, &disk).map(|c| (c, false)),
+                    // The version from outside kept beside it, or not overwritten: the edits stay unsaved.
+                    DiskChange::Conflict => match keep_conflict_copy(&vault, &editing.path, &disk) {
+                        Ok(kept) => copy = Some((kept, false)),
+                        Err(e) => return Err((editing.path.clone(), e)),
+                    },
                     DiskChange::Ignore if !editing.document.is_dirty() => return Ok(()),
                     _ => {}
                 },
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    let Some(kept) = keep_conflict_copy(&vault, &editing.path, &text) else { return Err((editing.path.clone(), e)) };
+                    let kept = match keep_conflict_copy(&vault, &editing.path, &text) {
+                        Ok(kept) => kept,
+                        Err(copy_error) => return Err((editing.path.clone(), if copy_error.kind() == e.kind() { e } else { copy_error })),
+                    };
                     editing.document.discarded();
                     editing.read_only = true;
                     copy = Some((kept, true));
@@ -736,14 +771,19 @@ impl VaultWindow {
             DiskChange::Conflict => {
                 // The editor's text keeps the note's name; the copy holds the other side.
                 let vault = FsVault::new(&vault);
-                let copy = keep_conflict_copy(&vault, path, &disk);
+                let copy = match keep_conflict_copy(&vault, path, &disk) {
+                    Ok(copy) => copy,
+                    // Not kept, so not overwritten: the editor's edits stay unsaved (leaving asks).
+                    Err(e) => {
+                        self.tell_save_failed(path, &e);
+                        return;
+                    }
+                };
                 let written = self.editing.borrow_mut().as_mut().map(|editing| write(&vault, editing, &text));
                 if let Some(Err(e)) = written {
                     self.tell_save_failed(path, &e);
                 }
-                if let Some(copy) = copy {
-                    self.tell_conflict(path, &copy);
-                }
+                self.tell_conflict(path, &copy);
             }
         }
     }

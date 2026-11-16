@@ -266,7 +266,9 @@ impl AppDelegate {
         let session = match VaultSession::open(&path, &app_data()) {
             Ok(session) => session,
             Err(e) => {
-                eprintln!("knotes: cannot open {}: {e}", path.display());
+                let busy = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::ResourceBusy);
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                crate::rename_dialog::tell_failure(mtm, None, &strings::open_failed(&name), &if busy { strings::VAULT_BUSY.to_owned() } else { e.to_string() });
                 return;
             }
         };

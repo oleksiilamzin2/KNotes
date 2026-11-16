@@ -138,7 +138,7 @@ impl VaultWindow {
     pub(super) fn write_embeds(&self) -> Result<(), SaveFailure> {
         let Some(vault) = self.vault() else { return Ok(()) };
         let files = FsVault::new(&vault);
-        let saved = self.embeds.save(&files, |path, text| keep_conflict_copy(&files, path, text));
+        let saved = self.embeds.save(&files, |path, text| keep_conflict_copy(&files, path, text).ok());
         for (path, copy, gone) in &saved.copies {
             if *gone {
                 self.tell_copy(strings::GONE_TITLE, &strings::gone_details(knotes_app::title_of(copy)), copy, "vanished-notice");

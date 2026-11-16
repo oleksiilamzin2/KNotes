@@ -32,11 +32,13 @@ impl VaultWindow {
     pub(super) fn set_folder_space(&self, folder: &str, choice: FolderChoice) {
         let Some(vault) = self.vault() else { return };
         let files = FsVault::new(&vault);
-        let rules_of = |folder: &str| files.read_rules(&[folder]).ok().and_then(|r| r.into_iter().next()).map(|(_, text)| text).unwrap_or_default();
+        // A rules file that cannot be read is not written over as if it were empty.
+        let rules_of = |folder: &str| files.read_rules(&[folder]).map(|r| r.into_iter().next().map(|(_, text)| text).unwrap_or_default()).map_err(|e| e.to_string());
         let write = |folder: &str, text: Result<String, String>| match text.map_err(std::io::Error::other).and_then(|text| files.write_rules(folder, &text)) {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("knotes: cannot write {folder}/.knotes.json: {e}");
+                let file = if folder.is_empty() { knotes_app::RULES_FILE.to_owned() } else { format!("{folder}/{}", knotes_app::RULES_FILE) };
+                self.tell_failed(&strings::folder_space_failed(folder.rsplit('/').next().unwrap_or(folder)), &strings::failed_files(&e.to_string(), &[&file]));
                 false
             }
         };
@@ -45,7 +47,7 @@ impl VaultWindow {
         // Every space: said here unless the parent says it already.
         if choice == FolderChoice::EverySpace {
             let wanted = if spaces.shared(parent) { FolderSpace::Inherit } else { FolderSpace::Shared };
-            write(folder, set_folder_space(&rules_of(folder), wanted));
+            write(folder, rules_of(folder).and_then(|text| set_folder_space(&text, wanted)));
             return;
         }
         let id = match choice {
@@ -58,7 +60,7 @@ impl VaultWindow {
                 // The first colour no space has, else round the palette.
                 let color = SpaceColor::ALL.into_iter().find(|c| list.iter().all(|s| s.color != *c)).unwrap_or(SpaceColor::ALL[list.len() % SpaceColor::ALL.len()]);
                 list.push(Space { id: id.clone(), name, color });
-                if !write("", set_spaces(&rules_of(""), &list)) {
+                if !write("", rules_of("").and_then(|text| set_spaces(&text, &list))) {
                     return;
                 }
                 Some(id)
@@ -71,7 +73,7 @@ impl VaultWindow {
             Some(id) => FolderSpace::In(id),
             None => FolderSpace::None,
         };
-        write(folder, set_folder_space(&rules_of(folder), wanted));
+        write(folder, rules_of(folder).and_then(|text| set_folder_space(&text, wanted)));
     }
 
     /// The switcher offers the vault's spaces, the window's selected; the list and the sidebar

@@ -4,7 +4,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSComboBox, NSTextField};
+use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSComboBox, NSTextField, NSWindow};
 use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
 
 use crate::{probe, strings};
@@ -85,4 +85,24 @@ pub fn ask_space_name(mtm: MainThreadMarker) -> Option<String> {
 /// A typed folder as a vault path: no slashes at its ends, `/` the root.
 fn folder_of(typed: &str) -> String {
     typed.trim().trim_matches('/').to_owned()
+}
+
+/// Says a file operation failed: `title`, and why (`details`), in a sheet on `window`, or in a
+/// dialog of its own without one. In probe mode the line `failed: title: details`.
+pub fn tell_failure(mtm: MainThreadMarker, window: Option<&NSWindow>, title: &str, details: &str) {
+    eprintln!("knotes: {title}: {details}");
+    if probe::enabled() {
+        println!("failed: {title}: {details}");
+        return;
+    }
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(details));
+    alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+    match window {
+        Some(window) => alert.beginSheetModalForWindow_completionHandler(window, None),
+        None => {
+            alert.runModal();
+        }
+    }
 }

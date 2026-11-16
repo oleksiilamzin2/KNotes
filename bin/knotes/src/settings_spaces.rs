@@ -298,10 +298,15 @@ impl SpacesTab {
     fn write(&self, list: &[Space]) {
         let Some(vault) = self.ivars().vault.borrow().clone() else { return };
         let files = FsVault::new(&vault);
-        let text = files.read_rules(&[""]).ok().and_then(|r| r.into_iter().next()).map(|(_, text)| text).unwrap_or_default();
-        match set_spaces(&text, list).map_err(std::io::Error::other).and_then(|text| files.write_rules("", &text)) {
-            Ok(()) => {}
-            Err(e) => eprintln!("knotes: cannot write the spaces: {e}"),
+        // A rules file that cannot be read is not written over as if it were empty.
+        let written = files
+            .read_rules(&[""])
+            .map(|r| r.into_iter().next().map(|(_, text)| text).unwrap_or_default())
+            .map_err(|e| e.to_string())
+            .and_then(|text| set_spaces(&text, list))
+            .and_then(|text| files.write_rules("", &text).map_err(|e| e.to_string()));
+        if let Err(e) = written {
+            crate::rename_dialog::tell_failure(self.mtm(), None, strings::SPACES_FAILED, &e);
         }
         *self.ivars().shown.borrow_mut() = None;
         self.refresh();

@@ -146,7 +146,7 @@ impl VaultWindow {
         }
         let new = knotes_app::make_link(&text, range, &links.link_text(&document, source));
         if let Err(e) = files.write_note(source, &new) {
-            eprintln!("knotes: cannot make a link in {source}: {e}");
+            self.tell_failed(&strings::mention_failed(document_name(source)), &e);
         }
         self.refresh_connections();
     }

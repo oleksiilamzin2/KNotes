@@ -3545,3 +3545,48 @@ fn a_link_just_typed_follows_the_note_it_names_when_that_is_renamed() {
     assert!(out.contains("rename-question: 1 1"), "{out}");
     assert_eq!(read(vault.path(), "a.md"), "draft [[New]]");
 }
+
+/// A vault whose `Locked` folder (holding `n.md`) cannot be written, the probe run on it; the
+/// folder writable again before the vault goes.
+fn probe_read_only(env: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let vault = tempfile::tempdir().unwrap();
+    let locked = vault.path().join("Locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("n.md"), "n").unwrap();
+    std::fs::write(vault.path().join("other.md"), "other").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let out = probe_env(&[vault.path()], None, env);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (vault, out)
+}
+
+#[test]
+fn a_note_that_cannot_be_deleted_says_so() {
+    // It said nothing: the note simply stayed.
+    let (vault, out) = probe_read_only(&[("KNOTES_PROBE_OPEN", "Locked/n.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);
+    assert!(out.contains("failed: Не вдалося видалити «n»: Permission denied"), "{out}");
+    assert!(vault.path().join("Locked/n.md").exists());
+}
+
+#[test]
+fn a_note_that_cannot_be_renamed_says_so() {
+    let (vault, out) = probe_read_only(&[("KNOTES_PROBE_ACTION", "list-rename-path=Locked/n.md=New")]);
+    assert!(out.contains("failed: Не вдалося перейменувати «n»: Permission denied"), "{out}");
+    assert!(vault.path().join("Locked/n.md").exists());
+}
+
+#[test]
+fn a_folder_whose_space_cannot_be_written_says_so() {
+    let rules = r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}]}"#;
+    use std::os::unix::fs::PermissionsExt;
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join(".knotes.json"), rules).unwrap();
+    let locked = vault.path().join("Locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("n.md"), "n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-space=Locked=work")]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(out.contains("failed: Не вдалося змінити простір теки «Locked»: Permission denied"), "{out}");
+}

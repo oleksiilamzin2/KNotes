@@ -23,7 +23,7 @@ impl VaultWindow {
             }
         }
         if let Err(e) = FsVault::new(&vault).trash(path, now_ms()) {
-            eprintln!("knotes: cannot delete {path}: {e}");
+            self.tell_failed(&strings::delete_failed(document_name(path)), &e);
             return;
         }
         self.refresh_trash();
@@ -54,7 +54,8 @@ impl VaultWindow {
     pub fn restore(&self, id: &str) {
         let Some(vault) = self.vault() else { return };
         if let Err(e) = FsVault::new(&vault).restore(id) {
-            eprintln!("knotes: cannot restore {id}: {e}");
+            let name = self.state.borrow().trash.iter().find(|entry| entry.id == id).map(|entry| document_name(&entry.path).to_owned()).unwrap_or_default();
+            self.tell_failed(&strings::restore_failed(&name), &e);
         }
         self.refresh_trash();
     }
@@ -83,10 +84,11 @@ impl VaultWindow {
                 all
             }
         };
-        for id in ids {
-            if let Err(e) = files.purge(&id) {
-                eprintln!("knotes: cannot delete {id} for good: {e}");
-            }
+        let failed: Vec<(String, std::io::Error)> = ids.iter().filter_map(|id| files.purge(id).err().map(|e| (id.clone(), e))).collect();
+        if let Some((_, e)) = failed.first() {
+            let trash = Arc::clone(&self.state.borrow().trash);
+            let names: Vec<&str> = failed.iter().filter_map(|(id, _)| trash.iter().find(|entry| &entry.id == id).map(|entry| document_name(&entry.path))).collect();
+            self.tell_failed(strings::PURGE_FAILED, &strings::failed_files(&e.to_string(), &names));
         }
         self.refresh_trash();
     }

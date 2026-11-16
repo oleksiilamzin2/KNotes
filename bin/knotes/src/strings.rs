@@ -299,6 +299,60 @@ pub fn gone_details(copy: &str) -> String {
     format!("Незбережені зміни збережено поруч як «{copy}».")
 }
 
+/// File operations that failed; a sheet says why (`failed_files` for several).
+pub fn delete_failed(name: &str) -> String {
+    format!("Не вдалося видалити «{name}»")
+}
+pub fn restore_failed(name: &str) -> String {
+    format!("Не вдалося відновити «{name}»")
+}
+pub const PURGE_FAILED: &str = "Не вдалося видалити назавжди";
+pub fn rename_failed(name: &str) -> String {
+    format!("Не вдалося перейменувати «{name}»")
+}
+pub fn move_failed(name: &str) -> String {
+    format!("Не вдалося перемістити «{name}»")
+}
+pub const MOVES_FAILED: &str = "Не вдалося перемістити частину файлів";
+pub const LINKS_FAILED: &str = "Не вдалося оновити всі посилання";
+pub fn links_unknown(name: &str) -> String {
+    format!("Не вдалося знайти посилання на «{name}»")
+}
+pub fn links_unknown_details(error: &str) -> String {
+    format!("{error}. Нічого не перейменовано, щоб посилання не зламалися.")
+}
+pub fn name_failed(name: &str) -> String {
+    format!("Не вдалося назвати нотатку «{name}»")
+}
+pub const NEW_NOTE_FAILED: &str = "Не вдалося створити нотатку";
+pub const NEW_FOLDER_FAILED: &str = "Не вдалося створити теку";
+pub fn create_failed(name: &str) -> String {
+    format!("Не вдалося створити «{name}»")
+}
+pub fn attach_failed(name: &str) -> String {
+    format!("Не вдалося додати «{name}»")
+}
+pub fn mention_failed(name: &str) -> String {
+    format!("Не вдалося зробити посилання в «{name}»")
+}
+pub fn folder_space_failed(name: &str) -> String {
+    format!("Не вдалося змінити простір теки «{name}»")
+}
+pub const SPACES_FAILED: &str = "Не вдалося зберегти простори";
+pub const TRASH_DAYS_FAILED: &str = "Не вдалося зберегти, скільки днів зберігати видалене";
+pub fn open_failed(name: &str) -> String {
+    format!("Не вдалося відкрити «{name}»")
+}
+pub const VAULT_BUSY: &str = "Цю базу вже відкрито в іншому вікні або в іншому запущеному Knotes.";
+/// Why, and the files it was about: "Permission denied. «a», «b»".
+pub fn failed_files(error: &str, names: &[&str]) -> String {
+    if names.is_empty() {
+        return error.to_owned();
+    }
+    let names: Vec<String> = names.iter().map(|n| format!("«{n}»")).collect();
+    format!("{error}. {}", names.join(", "))
+}
+
 /// A list option not saved: the folder's rules file does not parse, or cannot be written.
 pub const LIST_OPTION_NOT_SAVED: &str = "Налаштування списку не збережено";
 pub fn rules_file_error(file: &str, error: &str) -> String {

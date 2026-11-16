@@ -147,10 +147,18 @@ impl TrashTab {
     /// Writes `days` (a day to ten years) into the root's rules file, its other keys kept.
     fn write(&self, days: u32) {
         let Some(vault) = self.ivars().vault.borrow().clone() else { return };
-        let Some(mut rules) = self.root() else { return };
-        rules.set_trash_days(days.clamp(1, MOST_DAYS));
-        if let Err(e) = FsVault::new(&vault).write_rules("", &rules.to_json()) {
-            eprintln!("knotes: cannot write the days deleted things are kept: {e}");
+        let files = FsVault::new(&vault);
+        // The file as it is: one that cannot be read or does not parse is left, and said.
+        let written = files
+            .read_rules(&[""])
+            .map_err(|e| e.to_string())
+            .and_then(|found| FolderRules::parse(found.into_iter().next().map(|(_, text)| text).filter(|text| !text.trim().is_empty()).as_deref().unwrap_or("{}")))
+            .and_then(|mut rules| {
+                rules.set_trash_days(days.clamp(1, MOST_DAYS));
+                files.write_rules("", &rules.to_json()).map_err(|e| e.to_string())
+            });
+        if let Err(e) = written {
+            crate::rename_dialog::tell_failure(self.mtm(), None, strings::TRASH_DAYS_FAILED, &e);
         }
         self.refresh();
     }

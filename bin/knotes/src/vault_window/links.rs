@@ -117,7 +117,7 @@ impl VaultWindow {
         if !vault.join(&path).exists()
             && let Err(e) = fs.write_note(&path, "")
         {
-            eprintln!("knotes: cannot create {path}: {e}");
+            self.tell_failed(&strings::create_failed(document_name(&path)), &e);
             return None;
         }
         Some(path)
