@@ -66,10 +66,14 @@ impl Snapshot {
         let folders = folder_tree_with(catalog.iter().map(|e| e.path.as_str()), folder_paths.iter().map(String::as_str));
         // The tags count from every note's (no query of their own), only when they changed.
         let tagged = index.tagged_notes()?;
+        let count_all = |tagged: &[(String, String)]| count_tags(tagged.iter().map(|(tag, path)| (tag.as_str(), path.as_str())));
+        let mut counts = None;
         let (tagged, tags) = match previous.filter(|p| *p.tagged == tagged) {
             Some(p) => (Arc::clone(&p.tagged), Arc::clone(&p.tags)),
             None => {
-                let tags = tag_tree(&count_tags(tagged.iter().map(|(tag, path)| (tag.as_str(), path.as_str()))));
+                let counted = count_all(&tagged);
+                let tags = tag_tree(&counted);
+                counts = Some(counted);
                 (Arc::new(tagged), Arc::new(tags))
             }
         };
@@ -101,7 +105,11 @@ impl Snapshot {
         };
         let space_tags = match previous.filter(same) {
             Some(p) => Arc::clone(&p.space_tags),
-            None => Arc::new(spaces.list().iter().zip(space_folders).map(|(space, folders)| SpaceTags::count(&space.id, folders, &tagged, &untagged)).collect()),
+            None => {
+                let all = counts.unwrap_or_else(|| count_all(&tagged));
+                let ids = spaces.list().iter().map(|space| space.id.clone());
+                Arc::new(SpaceTags::count_all(ids.zip(space_folders).collect(), &tagged, &untagged, &all))
+            }
         };
         let trash = rules_store.trashed_with(previous.map_or(&[], |p| p.trash.as_slice())).unwrap_or_default();
         let trash = match previous.filter(|p| *p.trash == trash) {

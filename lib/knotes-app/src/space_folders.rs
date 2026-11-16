@@ -34,4 +34,8 @@ impl SpaceFolders {
     pub fn holds_folder(&self, folder: &str) -> bool {
         self.folders.contains(folder)
     }
+
+    pub fn folders(&self) -> impl Iterator<Item = &str> {
+        self.folders.iter().map(String::as_str)
+    }
 }

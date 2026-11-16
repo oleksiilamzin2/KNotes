@@ -73,7 +73,7 @@ pub fn count_tags<'a>(tagged: impl IntoIterator<Item = (&'a str, &'a str)>) -> V
 pub fn split_tags(tagged: &[(String, String)], within: &dyn Fn(&str) -> bool) -> (Vec<TagNode>, Vec<TagNode>) {
     // Asked once a note: its tags come together.
     let mut last: Option<(&str, bool)> = None;
-    let (mut inside, mut outside) = (Vec::new(), Vec::new());
+    let mut inside = Vec::new();
     for (tag, path) in tagged {
         let held = match last {
             Some((at, held)) if at == path => held,
@@ -83,15 +83,24 @@ pub fn split_tags(tagged: &[(String, String)], within: &dyn Fn(&str) -> bool) ->
                 held
             }
         };
-        if held { &mut inside } else { &mut outside }.push((tag.as_str(), path.as_str()));
+        if held {
+            inside.push((tag.as_str(), path.as_str()));
+        }
     }
-    let inside = count_tags(inside);
+    let all = count_tags(tagged.iter().map(|(tag, path)| (tag.as_str(), path.as_str())));
+    space_tag_trees(&count_tags(inside), &all)
+}
+
+/// A space's tags from its counts (`count_tags` of its notes'), and the rest from the vault's
+/// (`all`): those with no note in the space, so counted as in the vault, one whose parent is in
+/// the space at the top under its whole tag.
+pub fn space_tag_trees(inside: &[(String, usize)], all: &[(String, usize)]) -> (Vec<TagNode>, Vec<TagNode>) {
     let in_space: HashSet<&str> = inside.iter().map(|(tag, _)| tag.as_str()).collect();
-    let outside: Vec<(String, usize)> = count_tags(outside).into_iter().filter(|(tag, _)| !in_space.contains(tag.as_str())).collect();
+    let outside: Vec<(String, usize)> = all.iter().filter(|(tag, _)| !in_space.contains(tag.as_str())).cloned().collect();
     let mut rest = tag_tree(&outside);
     for node in &mut rest {
         node.name = node.tag.clone();
     }
     rest.sort_by(|a, b| natural_cmp(&a.name, &b.name));
-    (tag_tree(&inside), rest)
+    (tag_tree(inside), rest)
 }
