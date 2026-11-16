@@ -29,7 +29,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString,
-    NSValue,
+    NSUndoManager, NSValue,
 };
 
 pub const STYLE_KEY: &str = "knotes.style";
@@ -187,6 +187,8 @@ pub struct Ivars {
     embedded: Cell<bool>,
     /// Each embedded note's box height (by `embed_key`): the room its line keeps.
     embed_heights: RefCell<HashMap<String, f64>>,
+    /// An embedded note's own undo steps (the window's would undo the note around it).
+    undo: RefCell<Option<Retained<NSUndoManager>>>,
     /// The table the pointer is over (where it starts), and the row and column under it.
     hovered_table: Cell<Option<TableHover>>,
     /// The code block under the pointer (its start): its copy button shows.
@@ -336,6 +338,12 @@ define_class!(
     }
 
     unsafe impl NSTextViewDelegate for LivePreview {
+        /// An embedded note undoes its own edits; the note's view the window's (as without this).
+        #[unsafe(method_id(undoManagerForTextView:))]
+        fn undo_manager_for(&self, view: &NSTextView) -> Option<Retained<NSUndoManager>> {
+            self.ivars().undo.borrow().clone().or_else(|| view.window().and_then(|w| w.undoManager()))
+        }
+
         /// Every edit is announced here (AppKit calls the single-range variant only when this one
         /// is missing). One range is applied to the Rust copy; several (Replace All) resync it.
         #[unsafe(method(textView:shouldChangeTextInRanges:replacementStrings:))]
@@ -441,6 +449,7 @@ impl LivePreview {
             hovered_image: Cell::new(None),
             embedded: Cell::new(false),
             embed_heights: RefCell::new(HashMap::new()),
+            undo: RefCell::new(None),
             table_editing: Cell::new(false),
             menu_actions: RefCell::new(Vec::new()),
             table_scroll: RefCell::new(HashMap::new()),
@@ -697,6 +706,7 @@ impl LivePreview {
     /// column or a scroll view to follow.
     pub fn attach_embedded(&self, view: &NSTextView) {
         self.ivars().embedded.set(true);
+        *self.ivars().undo.borrow_mut() = Some(NSUndoManager::new(MainThreadMarker::from(view)));
         view.setPostsFrameChangedNotifications(true);
         let observer: &AnyObject = self.as_ref();
         // SAFETY: the observer lives as long as the view (both kept together by the window), and
@@ -918,10 +928,16 @@ impl LivePreview {
 
     /// Whether a paragraph shows differently with the cursor in it: it has markup or a quote's
     /// prefix.
-    /// The paragraph whose markup shows: the cursor's; none in an embedded note being read
+    /// The cursor's paragraph shows its markup, or none (an embedded note given up the keys).
+    pub fn refocus(&self, view: &NSTextView) {
+        self.reveal_cursor_paragraph(view);
+    }
+
+    /// The paragraph whose markup shows: the cursor's; none in an embedded note without the keys
     /// (ADR 0034).
     fn cursor_paragraph(&self, storage: &NSTextStorage, view: &NSTextView) -> (usize, usize) {
-        if self.ivars().embedded.get() && !view.isEditable() {
+        let focused = view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, view as *const _ as *const u8));
+        if self.ivars().embedded.get() && !focused {
             return NOWHERE;
         }
         paragraph(storage, view.selectedRange())

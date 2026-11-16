@@ -40,7 +40,7 @@ use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
 use crate::rename_dialog::{self, LinkUpdate};
-use crate::note_embeds::{Content, NoteEmbeds};
+use crate::note_embeds::{Callbacks, Content, NoteEmbeds};
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view::{self, NoteTextView};
 use crate::find_bar::FindBar;
@@ -216,6 +216,8 @@ pub struct VaultWindow {
     editing: RefCell<Option<Editing>>,
     /// Bumped on every edit: a scheduled autosave runs only if no edit came after it.
     edits: Cell<u64>,
+    /// The same for edits in embedded notes (ADR 0034).
+    embed_edits: Cell<u64>,
     this: RefCell<Weak<Self>>,
     completion: CompletionPanel,
     /// UTF-16 start of the text an accepted completion replaces, and what it completes.
@@ -406,6 +408,7 @@ impl VaultWindow {
             highlighting: Cell::new(false),
             editing: RefCell::new(None),
             edits: Cell::new(0),
+            embed_edits: Cell::new(0),
             this: RefCell::new(Weak::new()),
             completion: CompletionPanel::new(mtm),
             completion_from: Cell::new(0),
@@ -2101,24 +2104,74 @@ impl VaultWindow {
             return;
         };
         let links = self.state.borrow().links.clone();
-        let weak = self.this.borrow().clone();
-        let on_link: Rc<dyn Fn(&Link)> = Rc::new(move |link| {
-            if let Some(window) = weak.upgrade() {
-                window.follow_link(link);
-            }
-        });
+        let (link_weak, edit_weak, focus_weak) = (self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone());
+        let callbacks = Callbacks {
+            on_link: Rc::new(move |link| {
+                if let Some(window) = link_weak.upgrade() {
+                    window.follow_link(link);
+                }
+            }),
+            on_edit: Rc::new(move |key| {
+                if let Some(window) = edit_weak.upgrade() {
+                    window.embeds.edited(key, &window.note_text, &window.live_preview);
+                    window.save_embeds_later();
+                }
+            }),
+            on_focus: Rc::new(move |key, taken| {
+                if let Some(window) = focus_weak.upgrade() {
+                    window.embeds.refocus(key);
+                    if !taken {
+                        window.save_embeds();
+                    }
+                }
+            }),
+        };
         let resolver = links.clone().map(|l| l as Arc<dyn LinkResolver>);
         let files = FsVault::new(&vault);
-        self.embeds.sync(&self.note_text, &self.live_preview, resolver, &on_link, reload, |link| {
+        self.embeds.sync(&self.note_text, &self.live_preview, resolver, &callbacks, reload, |link| {
             let path = links.as_ref()?.resolve(link.kind, &link.target, &source)?;
             // A note embedding itself would hold itself without end.
             if FileKind::from_path(&path) != FileKind::Markdown || path == source {
                 return None;
             }
-            let text = files.read_text(&path).ok()?;
-            let part = embedded_part(&text, link.subpath.as_deref())?;
-            Some(Content { path, text: text[part].to_owned() })
+            let full = files.read_text(&path).ok()?;
+            let range = embedded_part(&full, link.subpath.as_deref())?;
+            Some(Content { path, full, range, subpath: link.subpath.clone() })
         });
+    }
+
+    /// Writes what was typed in embedded notes back into them (ADR 0034).
+    pub fn save_embeds(&self) {
+        if let Some(vault) = self.vault() {
+            self.embeds.save(&FsVault::new(&vault));
+        }
+    }
+
+    /// An edit in an embedded note: written once the user pauses, as the note's own.
+    fn save_embeds_later(&self) {
+        let edit = self.embed_edits.get() + 1;
+        self.embed_edits.set(edit);
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        let when = DispatchTime::try_from(AUTOSAVE_DELAY).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(window) = target.get(mtm).upgrade()
+                && window.embed_edits.get() == edit
+            {
+                window.save_embeds();
+            }
+        });
+    }
+
+    /// Types `text` at the end of the `n`th embedded note, as the user would there (probe mode).
+    pub fn probe_type_in_embed(&self, n: usize, text: &str) {
+        let Some(view) = self.embeds.view(n) else { return };
+        self.window.makeFirstResponder(Some(&view));
+        view.setSelectedRange(NSRange::new(view.string().length(), 0));
+        let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(text), not_found) };
     }
 
     /// The embedded notes' views, for the probe.
@@ -2534,6 +2587,7 @@ impl VaultWindow {
     /// note opens, the window closes, the app quits).
     pub fn leave(&self) {
         self.write_edits();
+        self.save_embeds();
         self.name_new_note(true);
         self.remember_place();
         self.save_tabs();
@@ -2542,6 +2596,7 @@ impl VaultWindow {
     /// Autosave and File → Save; names a new note whose first line is finished.
     pub fn save(&self) {
         self.write_edits();
+        self.save_embeds();
         self.name_new_note(false);
     }
 

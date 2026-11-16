@@ -1465,6 +1465,10 @@ fn report_note(window: &VaultWindow) {
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
+    if let Ok(text) = std::env::var("KNOTES_PROBE_EMBED_TYPE") {
+        window.probe_type_in_embed(0, &text);
+        window.save_embeds();
+    }
     for line in window.describe_embeds() {
         println!("{line}");
     }

@@ -1,14 +1,18 @@
 //! Notes embedded in the open note (ADR 0034): `![[note]]` alone on its line shows that note
 //! (or its section, or block) in a box, in a text view of its own lying over the room its line
-//! keeps, styled by a live preview of its own. The views are the note view's subviews, so they
-//! scroll with it; after each layout of the note they follow their boxes.
+//! keeps, styled by a live preview of its own, and edited there: the edit goes back into its
+//! note. The views are the note view's subviews, so they scroll with it; after each layout of
+//! the note they follow their boxes.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use knotes_core::{Link, LinkResolver};
+use knotes_core::{Link, LinkResolver, NoteWriter, VaultReader};
+use knotes_editor::splice_part;
+use knotes_vault::FsVault;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -21,16 +25,35 @@ use crate::note_view::{self, NoteTextView};
 /// Room between a box's edge and its note's text.
 pub const PAD: f64 = 12.0;
 
-/// What an embed shows: its note's vault path and the part's text.
+/// What an embed shows: its note's vault path, the note as read and the part's range in it.
 pub struct Content {
     pub path: String,
-    pub text: String,
+    pub full: String,
+    pub range: Range<usize>,
+    pub subpath: Option<String>,
 }
+
+/// What an embedded note's view tells the window: an edit (its key), or the keys taken or given
+/// up.
+pub struct Callbacks {
+    pub on_link: Rc<dyn Fn(&Link)>,
+    pub on_edit: Rc<dyn Fn(&str)>,
+    pub on_focus: OnFocus,
+}
+
+/// Gets an embed's key and whether its view took the keys (true) or gave them up.
+pub type OnFocus = Rc<dyn Fn(&str, bool)>;
 
 struct Shown {
     key: String,
     path: String,
+    /// The part shown as read or last written, the note it is in then, and its range there.
     text: String,
+    full: String,
+    range: Range<usize>,
+    subpath: Option<String>,
+    /// Edited since last written.
+    dirty: bool,
     view: Retained<NoteTextView>,
     preview: Retained<LivePreview>,
     /// The text's width and height it was measured at.
@@ -48,17 +71,9 @@ pub struct NoteEmbeds {
 impl NoteEmbeds {
     /// Shows the notes `host` embeds alone on their lines. `content` gives a link's note and part
     /// (none: not a note of the vault, which stays a link); it is asked for embeds new here, and
-    /// for all when `reload` (their notes changed). Views are kept for embeds still there, made
-    /// for new ones, and go with the rest.
-    pub fn sync(
-        &self,
-        host: &NoteTextView,
-        host_preview: &LivePreview,
-        links: Option<Arc<dyn LinkResolver>>,
-        on_link: &Rc<dyn Fn(&Link)>,
-        reload: bool,
-        content: impl Fn(&Link) -> Option<Content>,
-    ) {
+    /// for all when `reload` (their notes changed) but those being edited. Views are kept for
+    /// embeds still there, made for new ones, and go with the rest.
+    pub fn sync(&self, host: &NoteTextView, host_preview: &LivePreview, links: Option<Arc<dyn LinkResolver>>, callbacks: &Callbacks, reload: bool, content: impl Fn(&Link) -> Option<Content>) {
         let mtm = MainThreadMarker::from(host);
         let new_links = match (&links, self.links.borrow().as_ref()) {
             (Some(new), Some(old)) => !Arc::ptr_eq(new, old),
@@ -71,7 +86,8 @@ impl NoteEmbeds {
         for (key, link, _) in host_preview.embeds(&host.string()) {
             let kept = old.iter().position(|s| s.key == key).map(|i| old.swap_remove(i));
             let mut entry = match kept {
-                Some(entry) if !reload => entry,
+                // Being edited: what is typed stays (it goes back into its note when written).
+                Some(entry) if !reload || entry.dirty || focused(&entry.view) => entry,
                 kept => {
                     let Some(content) = content(&link) else {
                         if let Some(gone) = kept {
@@ -79,13 +95,17 @@ impl NoteEmbeds {
                         }
                         continue;
                     };
-                    let mut entry = kept.unwrap_or_else(|| made(mtm, host, key.clone(), on_link));
-                    if entry.text != content.text || entry.path != content.path {
-                        entry.preview.show(&entry.view, &content.path, &content.text);
-                        entry.text = content.text;
+                    let mut entry = kept.unwrap_or_else(|| made(mtm, host, key.clone(), callbacks));
+                    let text = content.full[content.range.clone()].to_owned();
+                    if entry.text != text || entry.path != content.path {
+                        entry.preview.show(&entry.view, &content.path, &text);
+                        entry.text = text;
                         entry.path = content.path;
                         entry.width = 0.0;
                     }
+                    entry.full = content.full;
+                    entry.range = content.range;
+                    entry.subpath = content.subpath;
                     if let Some(links) = links.clone().filter(|_| new_links || entry.width == 0.0) {
                         entry.preview.set_links(&entry.view, links);
                     }
@@ -101,10 +121,52 @@ impl NoteEmbeds {
         for gone in old {
             gone.view.removeFromSuperview();
         }
-        let heights: HashMap<String, f64> = shown.iter().map(|s| (s.key.clone(), s.height + 2.0 * PAD)).collect();
         *self.shown.borrow_mut() = shown;
-        host_preview.set_embed_heights(host, heights);
-        self.position(host, host_preview);
+        self.keep_rooms(host, host_preview);
+    }
+
+    /// The embed `key` edited: measured again (its box grows or shrinks with it) and marked to be
+    /// written.
+    pub fn edited(&self, key: &str, host: &NoteTextView, host_preview: &LivePreview) {
+        let grew = {
+            let mut shown = self.shown.borrow_mut();
+            let Some(entry) = shown.iter_mut().find(|s| s.key == key) else { return };
+            entry.dirty = true;
+            let height = measure(&entry.view, entry.width);
+            std::mem::replace(&mut entry.height, height) != height
+        };
+        if grew {
+            self.keep_rooms(host, host_preview);
+        }
+    }
+
+    /// The embed `key` took the keys or gave them up: its markup shows or hides.
+    pub fn refocus(&self, key: &str) {
+        if let Some(entry) = self.shown.borrow().iter().find(|s| s.key == key) {
+            entry.preview.refocus(&entry.view);
+        }
+    }
+
+    /// Writes the edited embeds back into their notes: where their parts were while a note is as
+    /// last read, else where they are now; one whose part is gone is left (and said).
+    pub fn save(&self, files: &FsVault) {
+        for entry in self.shown.borrow_mut().iter_mut().filter(|s| s.dirty) {
+            let text = entry.view.string().to_string();
+            let file = files.read_text(&entry.path).unwrap_or_else(|_| entry.full.clone());
+            let Some((written, range)) = splice_part(&file, &entry.full, entry.range.clone(), entry.subpath.as_deref(), &text) else {
+                eprintln!("knotes: {} no longer holds the embedded part; not written", entry.path);
+                continue;
+            };
+            match files.write_note(&entry.path, &written) {
+                Ok(()) => {
+                    entry.full = written;
+                    entry.range = range;
+                    entry.text = text;
+                    entry.dirty = false;
+                }
+                Err(e) => eprintln!("knotes: cannot save {}: {e}", entry.path),
+            }
+        }
     }
 
     /// Puts each view over its box as the note is laid out now; one whose box is not laid out
@@ -140,6 +202,11 @@ impl NoteEmbeds {
         }
     }
 
+    /// The view of the `n`th embed shown (probe mode).
+    pub fn view(&self, n: usize) -> Option<Retained<NoteTextView>> {
+        self.shown.borrow().get(n).map(|s| s.view.clone())
+    }
+
     /// Each embed shown, for the probe: its note, its view's frame, its text and its styles.
     pub fn describe(&self) -> Vec<String> {
         self.shown
@@ -148,17 +215,25 @@ impl NoteEmbeds {
             .flat_map(|s| {
                 let f = s.view.frame();
                 let hidden = if s.view.isHidden() { " hidden" } else { "" };
+                let text = s.view.string().to_string().replace('\n', "⏎");
                 [
-                    format!("embed: {} {:.1} {:.1} {:.1} {:.1}{hidden} | {}", s.path, f.origin.x, f.origin.y, f.size.width, f.size.height, s.text.replace('\n', "⏎")),
+                    format!("embed: {} {:.1} {:.1} {:.1} {:.1}{hidden} | {text}", s.path, f.origin.x, f.origin.y, f.size.width, f.size.height),
                     format!("embed-editor: {}", LivePreview::describe(&s.view)),
                 ]
             })
             .collect()
     }
+
+    /// Each box keeps the room of its view's text.
+    fn keep_rooms(&self, host: &NoteTextView, host_preview: &LivePreview) {
+        let heights: HashMap<String, f64> = self.shown.borrow().iter().map(|s| (s.key.clone(), s.height + 2.0 * PAD)).collect();
+        host_preview.set_embed_heights(host, heights);
+        self.position(host, host_preview);
+    }
 }
 
 /// A view and its live preview for the embed `key`, over `host`.
-fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, on_link: &Rc<dyn Fn(&Link)>) -> Shown {
+fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, callbacks: &Callbacks) -> Shown {
     let view = note_view::embed_view(mtm);
     let preview = LivePreview::new(mtm);
     view.setDelegate(Some(ProtocolObject::from_ref(&*preview)));
@@ -167,10 +242,25 @@ fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, on_link: &Rc<dy
     view.on_click(move |view, index, cmd| clicks.click(view, index, cmd));
     let hovers = preview.clone();
     view.on_hover(move |index| hovers.clickable(index));
-    let follow = on_link.clone();
+    let follow = callbacks.on_link.clone();
     preview.on_link(move |link| follow(link));
+    let (edit, edited_key) = (callbacks.on_edit.clone(), key.clone());
+    preview.on_change(move || edit(&edited_key));
+    let (focus, focused_key) = (callbacks.on_focus.clone(), key.clone());
+    view.on_focus(move |taken| focus(&focused_key, taken));
+    let (look, text) = (preview.clone(), objc2::rc::Weak::new(&*view));
+    view.on_appearance(move || {
+        if let Some(text) = text.load() {
+            look.appearance_changed(&text);
+        }
+    });
     host.addSubview(&view);
-    Shown { key, path: String::new(), text: String::new(), view, preview, width: 0.0, height: 0.0 }
+    Shown { key, path: String::new(), text: String::new(), full: String::new(), range: 0..0, subpath: None, dirty: false, view, preview, width: 0.0, height: 0.0 }
+}
+
+/// Whether `view` has the keys.
+fn focused(view: &NSTextView) -> bool {
+    view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, view as *const _ as *const u8))
 }
 
 /// The width an embedded note's text takes in `host`: its column less the box's padding.

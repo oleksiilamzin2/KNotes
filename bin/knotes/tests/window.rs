@@ -1223,6 +1223,19 @@ fn a_note_embedded_alone_on_its_line_shows_styled_in_a_box_and_its_line_hides() 
 }
 
 #[test]
+fn an_embedded_note_is_edited_in_place_and_the_edit_goes_back_into_its_note() {
+    let notes = [("a.md", "Top\n\n![[b#Part]]\n\nend"), ("b.md", "# B\n\n## Part\n\nPart text.\n\n## Next\n\nN.\n")];
+    let height = |out: &str| embeds(out).0[0].split(" | ").next().unwrap().split_whitespace().nth(4).unwrap().parse::<f64>().unwrap();
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let before = height(&out);
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_TYPE", " More.\n\nAnother line.")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("b.md")).unwrap(), "# B\n\n## Part\n\nPart text. More.\n\nAnother line.\n\n## Next\n\nN.\n", "in its section's place: {out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "Top\n\n![[b#Part]]\n\nend", "the note around it untouched");
+    assert!(height(&out) > before, "its box grew: {before} → {}", height(&out));
+    assert!(out.contains("text: Top⏎⏎![[b#Part]]⏎⏎end\n"), "{out}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");

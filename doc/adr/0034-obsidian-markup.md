@@ -40,4 +40,12 @@ be edited in place.
   embed inside an embedded note stays a link (no recursion); a note embedding itself too.
   Typing reads no embedded note again: only an embed new on the page, or the notes a snapshot
   says changed, are read; a new column width measures them again after the layout.
-  Editing in place comes next.
+- **Editing an embedded note in place**: a click puts the cursor in its view, which then shows
+  the markup of the cursor's paragraph (none while it has not the keys) and takes edits as the
+  note's own view does, with its own undo steps (the window's would undo the note around it).
+  Its box grows and shrinks with its text. The edit goes back into its note 2 s after the last
+  key, when the view gives up the keys, when the note around it is left, and on Cmd+S: in the
+  part's place while that note is as last read or written (its own heading may have changed in
+  the edit), else where the part is now (`splice_part`); a part gone from it is not written,
+  and said. While an embed is edited (or has the keys) a snapshot does not read it again over
+  what is typed; another box of the same note follows once written.

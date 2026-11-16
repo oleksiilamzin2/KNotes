@@ -22,6 +22,8 @@ use objc2_quick_look_ui::QLPreviewPanel;
 /// Gets the text view, the character index under a click and whether Cmd is held; returns
 /// true when it handled the click (the text view then ignores it).
 type OnClick = Box<dyn Fn(&NSTextView, usize, bool) -> bool>;
+/// Gets whether the view took the keys (true) or gave them up.
+type OnFocus = Box<dyn Fn(bool)>;
 /// Whether a plain click on a character acts (the pointer shows a hand there).
 type OnHover = Box<dyn Fn(usize) -> bool>;
 /// Gets the find action Edit → Find… and its neighbours ask for.
@@ -59,6 +61,8 @@ pub struct Ivars {
     on_appearance: RefCell<Option<Box<dyn Fn()>>>,
     /// Called after TextKit lays out what shows: views over the text (embedded notes) follow.
     on_layout: RefCell<Option<Box<dyn Fn()>>>,
+    /// Called when the view takes the keys (true) or gives them up.
+    on_focus: RefCell<Option<OnFocus>>,
     /// The tracking area that reports mouse moves over the view.
     moves: RefCell<Option<Retained<NSTrackingArea>>>,
     /// Called with the find action (`NSTextFinderAction`) Edit → Find… and its neighbours ask
@@ -104,6 +108,26 @@ define_class!(
                 self.addTrackingArea(&area);
                 *self.ivars().moves.borrow_mut() = Some(area);
             }
+        }
+
+        #[unsafe(method(becomeFirstResponder))]
+        fn become_first_responder(&self) -> bool {
+            // SAFETY: the superclass's own answer.
+            let taken: bool = unsafe { msg_send![super(self), becomeFirstResponder] };
+            if let Some(callback) = self.ivars().on_focus.borrow().as_ref().filter(|_| taken) {
+                callback(true);
+            }
+            taken
+        }
+
+        #[unsafe(method(resignFirstResponder))]
+        fn resign_first_responder(&self) -> bool {
+            // SAFETY: as above.
+            let given: bool = unsafe { msg_send![super(self), resignFirstResponder] };
+            if let Some(callback) = self.ivars().on_focus.borrow().as_ref().filter(|_| given) {
+                callback(false);
+            }
+            given
         }
 
         #[unsafe(method(textViewportLayoutControllerDidLayout:))]
@@ -279,6 +303,11 @@ pub fn finder_tag(sender: Option<&AnyObject>) -> isize {
 }
 
 impl NoteTextView {
+    /// Called when the view takes the keys (true) or gives them up.
+    pub fn on_focus(&self, callback: impl Fn(bool) + 'static) {
+        *self.ivars().on_focus.borrow_mut() = Some(Box::new(callback));
+    }
+
     /// Called after each layout of what shows (ADR 0034: embedded notes' views follow it).
     pub fn on_layout(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_layout.borrow_mut() = Some(Box::new(callback));
@@ -508,7 +537,8 @@ pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<Not
 }
 
 /// The text view of a note embedded in another (ADR 0034): TextKit 2 as the note's own, no
-/// scroll view of its own (it is as tall as its text, inside the note's), clear behind, read only.
+/// scroll view of its own (it is as tall as its text, inside the note's), clear behind, edited
+/// in place as the note's own text is.
 pub fn embed_view(mtm: MainThreadMarker) -> Retained<NoteTextView> {
     let this = NoteTextView::alloc(mtm).set_ivars(Ivars::default());
     // SAFETY: NSTextView's designated initializer; TextKit 2 (ADR 0012).
@@ -523,9 +553,14 @@ pub fn embed_view(mtm: MainThreadMarker) -> Retained<NoteTextView> {
         container.setContainerSize(NSSize::new(0.0, f64::MAX));
     }
     text.setDrawsBackground(false);
-    text.setEditable(false);
+    text.setEditable(true);
     text.setSelectable(true);
     text.setRichText(false);
+    text.setAllowsUndo(true);
+    text.setAutomaticQuoteSubstitutionEnabled(false);
+    text.setAutomaticDashSubstitutionEnabled(false);
+    text.setAutomaticTextReplacementEnabled(false);
+    text.setContinuousSpellCheckingEnabled(true);
     text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
     text
 }
