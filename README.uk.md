@@ -125,16 +125,13 @@ claude mcp add knotes -- /Applications/Knotes.app/Contents/MacOS/knotes-mcp ~/ш
 Тести:
 
 ```sh
-# Усе, чому не потрібні ні моделі, ні вікно:
-cargo test --workspace --exclude knotes --exclude knotes-llama --exclude knotes-embed-helper --exclude knotes-tools
-cargo test -p knotes-tools --test tools
-
-# Тести вікна багато разів запускають справжній застосунок (на екрані блимають вікна):
-cargo test -p knotes --test window
-
-# Бенчмарки пошуку потребують моделей зі scripts/setup.sh:
-cargo test -p knotes-tools --test retrieval
+cargo test --workspace                   # усе, разом із тестами вікна
+cargo test --workspace --exclude knotes  # без тестів вікна: набагато швидше
 ```
+
+Тести вікна сотні разів запускають справжній застосунок; його вікна тоді прозорі, а іконки в
+Dock немає, тож вони йдуть у фоні й не заважають працювати. Тести, яким потрібні моделі для
+пошуку за змістом, пропускаються (і кажуть про це), доки `scripts/setup.sh` їх не завантажить.
 
 Бенчмарки на синтетичному сховищі:
 

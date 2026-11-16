@@ -125,16 +125,13 @@ file, with what was measured. Start with
 Tests:
 
 ```sh
-# Everything that needs neither the models nor the window:
-cargo test --workspace --exclude knotes --exclude knotes-llama --exclude knotes-embed-helper --exclude knotes-tools
-cargo test -p knotes-tools --test tools
-
-# The window tests launch the real app many times (windows flash on screen):
-cargo test -p knotes --test window
-
-# The search benchmarks need the models from scripts/setup.sh:
-cargo test -p knotes-tools --test retrieval
+cargo test --workspace                   # everything, the window tests included
+cargo test --workspace --exclude knotes  # without the window tests: much faster
 ```
+
+The window tests launch the real app hundreds of times; its windows are transparent then and it
+shows no Dock icon, so they run in the background without getting in your way. Tests that need
+the search-by-meaning models are skipped, and say so, until `scripts/setup.sh` has fetched them.
 
 Benchmarks on a synthetic vault:
 
