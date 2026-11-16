@@ -49,6 +49,10 @@ be edited in place.
   the edit), else where the part is now (`splice_part`); a part gone from it is not written,
   and said. While an embed is edited (or has the keys) a snapshot does not read it again over
   what is typed; another box of the same note follows once written.
+- **An embedded note behaves as the note itself**: its links resolve (and a missing note is
+  made) from it, not from the note around it; links and tags complete in it, links written as
+  from it; Cmd+F finds in it too, its occurrences in their place in the note (at its line),
+  stepping through them selects them there; the note list's preview leaves embeds out.
 - **Opening an embedded note**: a button at its box's top right (an arrow out of a square, dim;
   its text leaves it room) opens the note at the embedded heading or block, its edits written
   first. A heading or block (from the button or a `[[note#Heading]]` link) is scrolled to the

@@ -1285,6 +1285,18 @@ fn links_and_tags_complete_in_an_embedded_note_too() {
 }
 
 #[test]
+fn cmd_f_finds_in_embedded_notes_too_in_their_place() {
+    let notes = [("a.md", "radar top\n\n![[b]]\n\nradar end"), ("b.md", "inner radar here")];
+    let find = |steps: &str| probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_FIND", "radar"), ("KNOTES_PROBE_FIND_STEPS", steps)]).1;
+    let out = find("0");
+    assert!(out.contains("find: 1 з 3\n"), "the embedded one counted: {out}");
+    let out = find("1");
+    assert!(out.contains("find: 2 з 3\n") && out.contains("embed-selection: 6 5\n"), "the second, in the embedded note: {out}");
+    let out = find("2");
+    assert!(out.contains("find: 3 з 3\n") && out.contains("selection: 19 5\n"), "then after it: {out}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");

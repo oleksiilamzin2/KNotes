@@ -287,6 +287,11 @@ impl NoteEmbeds {
         }
     }
 
+    /// Each embed's key, view and live preview, to find in (Cmd+F).
+    pub fn finders(&self) -> Vec<(String, Retained<NSTextView>, Retained<LivePreview>)> {
+        self.shown.borrow().iter().map(|s| (s.key.clone(), Retained::into_super(s.view.clone()), s.preview.clone())).collect()
+    }
+
     /// The view of the embed `key` and its note's path.
     pub fn view_of(&self, key: &str) -> Option<(Retained<NSTextView>, String)> {
         self.shown.borrow().iter().find(|s| s.key == key).map(|s| (Retained::into_super(s.view.clone()), s.path.clone()))
@@ -312,7 +317,9 @@ impl NoteEmbeds {
                 let hidden = if s.view.isHidden() { " hidden" } else { "" };
                 let text = s.view.string().to_string().replace('\n', "⏎");
                 let b = s.button.frame();
+                let selection = s.view.selectedRange();
                 [
+                    format!("embed-selection: {} {}", selection.location, selection.length),
                     format!("embed: {} {:.1} {:.1} {:.1} {:.1}{hidden} | {text}", s.path, f.origin.x, f.origin.y, f.size.width, f.size.height),
                     format!("embed-editor: {}", LivePreview::describe(&s.view)),
                     format!("embed-open: {:.1} {:.1} {:.1} {:.1}", b.origin.x, b.origin.y, b.size.width, b.size.height),

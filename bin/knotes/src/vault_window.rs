@@ -93,6 +93,13 @@ struct State {
     trash: Arc<Vec<TrashEntry>>,
 }
 
+/// An occurrence Cmd+F found (UTF-16): in the note, or in an embedded note's view.
+#[derive(Clone)]
+struct Found {
+    view: Option<Retained<NSTextView>>,
+    range: (usize, usize),
+}
+
 /// What the list under the cursor completes (ADR 0013, 0033).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Completing {
@@ -167,7 +174,7 @@ pub struct VaultWindow {
     /// The recently deleted entry shown, read where it is kept (ADR 0032): nothing open then.
     previewing: RefCell<Option<TrashEntry>>,
     /// The occurrences found in the note (UTF-16) and the one selected.
-    find_matches: RefCell<Vec<(usize, usize)>>,
+    find_matches: RefCell<Vec<Found>>,
     /// Set to call off the search under way in the PDF shown.
     pdf_find: RefCell<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     find_current: Cell<Option<usize>>,
@@ -2125,6 +2132,10 @@ impl VaultWindow {
                     window.embeds.edited(key, &window.note_text, &window.live_preview);
                     window.save_embeds_later();
                     window.complete_in_embed(key);
+                    // An edit drops the highlights: the occurrences are found again, in place.
+                    if window.find_bar.is_shown() {
+                        window.find_text(&window.find_bar.text(), false);
+                    }
                 }
             }),
             on_cursor: Rc::new({
@@ -3214,6 +3225,9 @@ impl VaultWindow {
             viewer.set_found(Vec::new(), None);
         }
         self.live_preview.clear_found(&self.note_text);
+        for (_, view, preview) in self.embeds.finders() {
+            preview.clear_found(&view);
+        }
         self.find_matches.borrow_mut().clear();
         self.find_current.set(None);
         self.window.makeFirstResponder(Some(&self.note_text));
@@ -3226,15 +3240,26 @@ impl VaultWindow {
             self.find_in_pdf(query, jump);
             return;
         }
-        let text = self.note_text.string().to_string();
-        let found = knotes_app::find_all(&text, query);
-        let bounds: Vec<usize> = found.iter().flat_map(|r| [r.start, r.end]).collect();
-        let units = utf16_offsets(&text, &bounds);
-        let matches: Vec<(usize, usize)> = units.chunks(2).map(|p| (p[0], p[1])).collect();
-        self.live_preview.highlight(&self.note_text, &matches);
+        let found_in = |view: &NSTextView| {
+            let text = view.string().to_string();
+            let bounds: Vec<usize> = knotes_app::find_all(&text, query).iter().flat_map(|r| [r.start, r.end]).collect();
+            utf16_offsets(&text, &bounds).chunks(2).map(|p| (p[0], p[1])).collect::<Vec<(usize, usize)>>()
+        };
+        let own = found_in(&self.note_text);
+        self.live_preview.highlight(&self.note_text, &own);
+        // In document order: an embedded note's at its line's place (ADR 0034).
+        let mut placed: Vec<(usize, usize, Found)> = own.into_iter().map(|range| (range.0, 0, Found { view: None, range })).collect();
+        let lines: HashMap<String, usize> = self.live_preview.embeds(&self.note_text.string()).into_iter().map(|(key, _, range)| (key, range.0)).collect();
+        for (key, view, preview) in self.embeds.finders() {
+            let ranges = found_in(&view);
+            preview.highlight(&view, &ranges);
+            let at = lines.get(&key).copied().unwrap_or(usize::MAX);
+            placed.extend(ranges.into_iter().enumerate().map(|(i, range)| (at, i + 1, Found { view: Some(view.clone()), range })));
+        }
+        placed.sort_by_key(|(at, nth, _)| (*at, *nth));
         let cursor = self.note_text.selectedRange().location;
-        let current = (!matches.is_empty()).then(|| matches.iter().position(|m| m.0 >= cursor).unwrap_or(0));
-        *self.find_matches.borrow_mut() = matches;
+        let current = (!placed.is_empty()).then(|| placed.iter().position(|(at, _, _)| *at >= cursor).unwrap_or(0));
+        *self.find_matches.borrow_mut() = placed.into_iter().map(|(_, _, found)| found).collect();
         self.find_current.set(current);
         if jump && let Some(i) = current {
             self.select_match(i);
@@ -3361,11 +3386,13 @@ impl VaultWindow {
 
     /// Selects occurrence `i`, scrolls it into view and points at it.
     fn select_match(&self, i: usize) {
-        let Some(&(from, to)) = self.find_matches.borrow().get(i) else { return };
-        let range = objc2_foundation::NSRange::new(from, to - from);
-        self.note_text.setSelectedRange(range);
-        self.note_text.scrollRangeToVisible(range);
-        self.note_text.showFindIndicatorForRange(range);
+        let Some(found) = self.find_matches.borrow().get(i).cloned() else { return };
+        let range = objc2_foundation::NSRange::new(found.range.0, found.range.1 - found.range.0);
+        // In an embedded note: its view scrolls the note's, being inside it.
+        let view = found.view.unwrap_or_else(|| Retained::into_super(self.note_text.clone()));
+        view.setSelectedRange(range);
+        view.scrollRangeToVisible(range);
+        view.showFindIndicatorForRange(range);
     }
 
     /// The magnifying glass: shows the search row, or hides it and drops the search.
