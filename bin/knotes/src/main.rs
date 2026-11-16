@@ -16,6 +16,7 @@ mod list_menu;
 mod live_preview;
 mod main_menu;
 mod meaning;
+mod note_embeds;
 mod note_list_view;
 mod note_view;
 mod outline_panel;

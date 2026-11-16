@@ -17,7 +17,7 @@ use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, pl
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
-use knotes_editor::{DiskChange, Document, LinkCompletion, TagCompletion, conflict_path, link_completion, note_headings, subpath_offset, tag_completion, tag_typed, utf16_offsets};
+use knotes_editor::{DiskChange, Document, LinkCompletion, TagCompletion, embedded_part, conflict_path, link_completion, note_headings, subpath_offset, tag_completion, tag_typed, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
@@ -40,6 +40,7 @@ use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
 use crate::rename_dialog::{self, LinkUpdate};
+use crate::note_embeds::{Content, NoteEmbeds};
 use crate::note_list_view::{self, NoteListSource};
 use crate::note_view::{self, NoteTextView};
 use crate::find_bar::FindBar;
@@ -172,6 +173,8 @@ pub struct VaultWindow {
     find_current: Cell<Option<usize>>,
     /// Delegate of `note_text`, kept alive here.
     live_preview: Retained<LivePreview>,
+    /// The notes the open note embeds, in views of their own over it (ADR 0034).
+    embeds: NoteEmbeds,
     /// The chat with the model (ADR 0027), in the right panel.
     pub chat: Rc<ChatPanel>,
     /// The outline of the document open, in the right panel beside the chat.
@@ -380,6 +383,7 @@ impl VaultWindow {
             pdf_find: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
             find_current: Cell::new(None),
             live_preview,
+            embeds: NoteEmbeds::default(),
             chat,
             outline_panel,
             connections_panel,
@@ -500,9 +504,26 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.note_text.on_layout(move || {
+            if let Some(window) = weak.upgrade()
+                && window.embeds.position(&window.note_text, &window.live_preview)
+            {
+                // The column's width changed: measured again after this layout, not inside it.
+                let Some(mtm) = MainThreadMarker::new() else { return };
+                let target = MainThreadBound::new(Rc::downgrade(&window), mtm);
+                DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(window) = target.get(mtm).upgrade() {
+                        window.sync_embeds(false);
+                    }
+                });
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.live_preview.on_change(move || {
             if let Some(window) = weak.upgrade() {
                 window.edited();
+                window.sync_embeds(false);
                 window.update_completion();
                 window.outline_later();
                 // An edit drops the highlights: the occurrences are found again, in place.
@@ -1233,10 +1254,15 @@ impl VaultWindow {
                 Arc::clone(&snapshot.links)
             })
         };
+        // Embedded notes read again when links resolve anew or their notes changed (ADR 0034).
+        let embeds_changed = new_links.is_some() || snapshot.changed.iter().any(|p| self.embeds.shows(p));
         if let Some(links) = new_links {
             self.live_preview.set_links(&self.note_text, links);
         } else {
             self.live_preview.files_changed(&self.note_text, &snapshot.changed);
+        }
+        if embeds_changed {
+            self.sync_embeds(true);
         }
         // Deleted documents lose their tabs.
         if let Some(vault) = self.vault() {
@@ -1523,6 +1549,7 @@ impl VaultWindow {
         *self.editing.borrow_mut() = None;
         self.show_pdf(None);
         self.live_preview.show(&self.note_text, "", "");
+        self.embeds.clear();
         self.show_note_column();
         self.refresh_panel();
         self.update_navigation();
@@ -1776,6 +1803,7 @@ impl VaultWindow {
             self.show_pdf_file(Some(&kept));
         }
         self.live_preview.show(&self.note_text, &entry.path, &text);
+        self.embeds.clear();
         *self.previewing.borrow_mut() = Some(entry);
         self.show_note_column();
         self.scroll_note_to(0);
@@ -1930,6 +1958,7 @@ impl VaultWindow {
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
         self.show_note_column();
         self.live_preview.show(&self.note_text, path, &text);
+        self.sync_embeds(true);
         // Where it was when its tab was left; words found by a search, below, win.
         if let Some(place) = self.show_tab(path) {
             self.scroll_note_to(place.top.0);
@@ -1962,6 +1991,7 @@ impl VaultWindow {
         // focus stays there.
         let from_note = self.from_note.replace(false) || self.window.firstResponder().is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, &*self.note_text as *const _ as *const u8));
         *self.editing.borrow_mut() = None;
+        self.embeds.clear();
         self.show_pdf(Some(path));
         self.show_note_column();
         if from_note && let Some(viewer) = self.pdf_view.borrow().as_ref() {
@@ -2063,6 +2093,39 @@ impl VaultWindow {
 
     /// Follows a clicked link: opens the note it resolves to (creating a missing one), then
     /// moves to its `#heading` or `^block`; external links open in their app (ADR 0013).
+    /// The notes the open note embeds alone on their lines, in boxes (ADR 0034); their notes read
+    /// again when `reload`, else only embeds new since the last time.
+    fn sync_embeds(&self, reload: bool) {
+        let (Some(source), Some(vault)) = (self.open_path(), self.vault()) else {
+            self.embeds.clear();
+            return;
+        };
+        let links = self.state.borrow().links.clone();
+        let weak = self.this.borrow().clone();
+        let on_link: Rc<dyn Fn(&Link)> = Rc::new(move |link| {
+            if let Some(window) = weak.upgrade() {
+                window.follow_link(link);
+            }
+        });
+        let resolver = links.clone().map(|l| l as Arc<dyn LinkResolver>);
+        let files = FsVault::new(&vault);
+        self.embeds.sync(&self.note_text, &self.live_preview, resolver, &on_link, reload, |link| {
+            let path = links.as_ref()?.resolve(link.kind, &link.target, &source)?;
+            // A note embedding itself would hold itself without end.
+            if FileKind::from_path(&path) != FileKind::Markdown || path == source {
+                return None;
+            }
+            let text = files.read_text(&path).ok()?;
+            let part = embedded_part(&text, link.subpath.as_deref())?;
+            Some(Content { path, text: text[part].to_owned() })
+        });
+    }
+
+    /// The embedded notes' views, for the probe.
+    pub fn describe_embeds(&self) -> Vec<String> {
+        self.embeds.describe()
+    }
+
     fn follow_link(&self, link: &Link) {
         if link.kind == LinkKind::External {
             open_url(&link.target);

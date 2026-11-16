@@ -1465,6 +1465,9 @@ fn report_note(window: &VaultWindow) {
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
+    for line in window.describe_embeds() {
+        println!("{line}");
+    }
     if std::env::var("KNOTES_PROBE_PDF_WIDTH").is_ok() {
         println!("pdf-drawn: {}", window.pdf_drawn().join(" "));
     }

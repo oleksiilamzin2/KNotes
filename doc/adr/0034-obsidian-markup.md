@@ -28,3 +28,16 @@ be edited in place.
   away from the cursor; a definition keeps `[^label]:` in view, muted. A click on a reference
   away from the cursor's paragraph (anywhere with Cmd) puts the cursor after its definition's
   `]:`; a click on a definition's label, after its first reference. Labels match ignoring case.
+- **Embedded notes**: `![[note]]` alone on its line, resolving to a note of the vault, shows
+  the note without its frontmatter; `![[note#Heading]]` its section (the heading to the next
+  one as high); `![[note#^id]]` its block (the paragraph, a list item alone, the anchor left
+  out). The line's source hides away from the cursor and keeps a box's room (a tinted rounded
+  box, drawn by its layout fragment); with the cursor on it the source shows and the box goes
+  below it. The note shows in a text view of its own over the box, styled by a live preview of
+  its own, with nothing revealed while it is read. These views are the note view's subviews,
+  so they scroll with it with no lag (ADR 0017's layers lagged, being over it); after each
+  layout of the note (its viewport controller's `didLayout`) they follow their boxes. An
+  embed inside an embedded note stays a link (no recursion); a note embedding itself too.
+  Typing reads no embedded note again: only an embed new on the page, or the notes a snapshot
+  says changed, are read; a new column width measures them again after the layout.
+  Editing in place comes next.

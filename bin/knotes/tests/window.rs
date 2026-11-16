@@ -1188,6 +1188,40 @@ fn a_footnote_shows_its_label_raised_and_a_click_goes_to_its_definition_and_back
     assert!(out.contains("cursor: 8\n"), "back after the reference: {out}");
 }
 
+/// The embedded notes' lines (`embed: path x y w h | text`) and their boxes (`x y w h`).
+fn embeds(out: &str) -> (Vec<String>, Vec<Vec<f64>>) {
+    let shown = out.lines().filter_map(|l| l.strip_prefix("embed: ")).map(str::to_owned).collect();
+    let boxes = out
+        .lines()
+        .filter_map(|l| l.strip_prefix("decoration: embed"))
+        .map(|l| l.trim_start_matches("-below").split_whitespace().filter_map(|n| n.parse().ok()).collect())
+        .collect();
+    (shown, boxes)
+}
+
+#[test]
+fn a_note_embedded_alone_on_its_line_shows_styled_in_a_box_and_its_line_hides() {
+    let notes = [("a.md", "Top\n\n![[b]]\n\nMid\n\n![[b#Part]]\n\n![[a]]\n\nend"), ("b.md", "---\ntags: [x]\n---\n# B\n\nIntro **bold**.\n\n## Part\n\nPart text.\n")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let (shown, boxes) = embeds(&out);
+    assert_eq!(shown.len(), 2, "itself not embedded: {out}");
+    assert!(shown[0].starts_with("b.md ") && shown[0].ends_with("| # B⏎⏎Intro **bold**.⏎⏎## Part⏎⏎Part text."), "no frontmatter: {}", shown[0]);
+    assert!(shown[1].ends_with("| ## Part⏎⏎Part text."), "the section alone: {}", shown[1]);
+    let editors: Vec<&str> = out.lines().filter_map(|l| l.strip_prefix("embed-editor: ")).collect();
+    assert!(editors[0].starts_with("[hidden]# |[heading1]B") && editors[0].contains("[strong]bold"), "its styles, no markup shown: {}", editors[0]);
+    let editor = out.lines().find_map(|l| l.strip_prefix("editor: ")).unwrap();
+    assert!(editor.contains("[embed]![[b]]") && editor.contains("[embed]![[b#Part]]") && editor.contains("[hidden]![[|[wikilink]a|"), "itself stays a link: {editor}");
+    // Each view lies inside its box.
+    let frame: Vec<f64> = shown[0].split(" | ").next().unwrap().split_whitespace().skip(1).filter_map(|n| n.parse().ok()).collect();
+    assert_eq!(boxes.len(), 2, "{out}");
+    assert!(frame[0] > boxes[0][0] && frame[1] > boxes[0][1] && frame[1] + frame[3] < boxes[0][1] + boxes[0][3], "{frame:?} in {:?}", boxes[0]);
+    // The cursor on the embed's line: its source shows, the box below it.
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "7")]);
+    assert!(out.contains("decoration: embed-below"), "{out}");
+    let editor = out.lines().find_map(|l| l.strip_prefix("editor: ")).unwrap();
+    assert!(editor.contains("![[") && !editor.contains("[embed]![[b]]"), "{editor}");
+}
+
 #[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);

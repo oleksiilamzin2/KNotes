@@ -57,6 +57,8 @@ pub struct Ivars {
     on_hover: RefCell<Option<OnHover>>,
     /// Called when the view turns light or dark.
     on_appearance: RefCell<Option<Box<dyn Fn()>>>,
+    /// Called after TextKit lays out what shows: views over the text (embedded notes) follow.
+    on_layout: RefCell<Option<Box<dyn Fn()>>>,
     /// The tracking area that reports mouse moves over the view.
     moves: RefCell<Option<Retained<NSTrackingArea>>>,
     /// Called with the find action (`NSTextFinderAction`) Edit → Find… and its neighbours ask
@@ -101,6 +103,15 @@ define_class!(
                 let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, options, Some(self), None) };
                 self.addTrackingArea(&area);
                 *self.ivars().moves.borrow_mut() = Some(area);
+            }
+        }
+
+        #[unsafe(method(textViewportLayoutControllerDidLayout:))]
+        fn did_layout(&self, controller: &objc2_app_kit::NSTextViewportLayoutController) {
+            // SAFETY: NSTextView implements this delegate method (checked: it responds to it).
+            let _: () = unsafe { msg_send![super(self), textViewportLayoutControllerDidLayout: controller] };
+            if let Some(callback) = self.ivars().on_layout.borrow().as_ref() {
+                callback();
             }
         }
 
@@ -268,6 +279,11 @@ pub fn finder_tag(sender: Option<&AnyObject>) -> isize {
 }
 
 impl NoteTextView {
+    /// Called after each layout of what shows (ADR 0034: embedded notes' views follow it).
+    pub fn on_layout(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_layout.borrow_mut() = Some(Box::new(callback));
+    }
+
     pub fn on_find(&self, callback: impl Fn(isize) + 'static) {
         *self.ivars().on_find.borrow_mut() = Some(Box::new(callback));
     }
@@ -489,4 +505,27 @@ pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<Not
     text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
     scroll.setDocumentView(Some(&text));
     (scroll, text)
+}
+
+/// The text view of a note embedded in another (ADR 0034): TextKit 2 as the note's own, no
+/// scroll view of its own (it is as tall as its text, inside the note's), clear behind, read only.
+pub fn embed_view(mtm: MainThreadMarker) -> Retained<NoteTextView> {
+    let this = NoteTextView::alloc(mtm).set_ivars(Ivars::default());
+    // SAFETY: NSTextView's designated initializer; TextKit 2 (ADR 0012).
+    let text: Retained<NoteTextView> = unsafe { msg_send![super(this), initUsingTextLayoutManager: true] };
+    text.setMinSize(NSSize::new(0.0, 0.0));
+    text.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
+    text.setVerticallyResizable(true);
+    text.setHorizontallyResizable(false);
+    text.setTextContainerInset(NSSize::new(0.0, 0.0));
+    if let Some(container) = unsafe { text.textContainer() } {
+        container.setWidthTracksTextView(true);
+        container.setContainerSize(NSSize::new(0.0, f64::MAX));
+    }
+    text.setDrawsBackground(false);
+    text.setEditable(false);
+    text.setSelectable(true);
+    text.setRichText(false);
+    text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
+    text
 }
