@@ -77,3 +77,16 @@ fn notes_moved_together_keep_the_links_between_them() {
     assert_eq!(new, "[[b]] [b](b.md) [[new/b]]");
     assert_eq!(changed, 1, "only the full path changes");
 }
+
+#[test]
+fn a_markdown_link_to_a_note_that_stays_is_left_as_written() {
+    // Rewritten for another note's rename: `./x.md` lost its `./`, `X.md` took the file's case
+    // and `%78.md` was decoded, each counted in "Update N links?".
+    let paths = ["a.md", "x.md", "Old.md"];
+    let text = "[x](./x.md) [y](X.md) [z](%78.md) [[Old]]";
+    let moves = Moves::from([("Old.md".to_owned(), "New.md".to_owned())]);
+    let after = LinkTargets::new(["a.md", "x.md", "New.md"]);
+    let (new, changed) = relink(text, &resolved(text, "a.md", &paths), "a.md", &moves, &after);
+    assert_eq!(new, "[x](./x.md) [y](X.md) [z](%78.md) [[New]]");
+    assert_eq!(changed, 1);
+}

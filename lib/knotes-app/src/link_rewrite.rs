@@ -27,7 +27,9 @@ pub fn relink(text: &str, links: &[OutLink], source: &str, moves: &Moves, after:
         let target_after = moved(target);
         let new = match out_link.link.kind {
             LinkKind::Wiki if target_after != target => wikilink(raw, &source_after, target, &target_after, after),
-            LinkKind::Markdown => markdown_link(raw, (source, &source_after), target, &target_after),
+            // Only with where it points, or where it is written from (a relative path): a link
+            // to a note that stays, in a note that stays, is left as written (`./`, case, `%xx`).
+            LinkKind::Markdown if target_after != target || source_after != source => markdown_link(raw, (source, &source_after), target, &target_after),
             _ => None,
         };
         if let Some(new) = new.filter(|new| new != raw) {
