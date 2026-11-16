@@ -327,6 +327,11 @@ impl NoteEmbeds {
         shown.iter().any(|s| s.width != width)
     }
 
+    /// The notes the embeds shown show.
+    pub fn paths(&self) -> Vec<String> {
+        self.shown.borrow().iter().map(|s| s.path.clone()).collect()
+    }
+
     /// Whether `path` is the note of an embed shown.
     pub fn shows(&self, path: &str) -> bool {
         self.shown.borrow().iter().any(|s| s.path == path)

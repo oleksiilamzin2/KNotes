@@ -3534,3 +3534,14 @@ fn edits_in_an_embed_whose_line_is_deleted_are_still_written() {
     assert_eq!(read(vault.path(), "b.md"), "Body. More.", "{out}");
     assert_eq!(read(vault.path(), "a.md"), "Top\n\nend");
 }
+
+#[test]
+fn a_link_just_typed_follows_the_note_it_names_when_that_is_renamed() {
+    // Written by the rename itself a moment before, the note's new link was not in the index yet:
+    // the rename did not see it, and it broke.
+    let notes = [("a.md", "draft"), ("Old.md", "old")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", " [[Old]]"), ("KNOTES_PROBE_ACTION", "list-rename-path=Old.md=New")]);
+    assert!(vault.path().join("New.md").exists(), "{out}");
+    assert!(out.contains("rename-question: 1 1"), "{out}");
+    assert_eq!(read(vault.path(), "a.md"), "draft [[New]]");
+}

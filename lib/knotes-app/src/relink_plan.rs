@@ -16,9 +16,10 @@ pub struct Relinks {
 }
 
 /// The edits `moves` call for: in every note linking to a moved note (found through `graph`,
-/// the index), and in the moved notes themselves. Links are parsed again from the text `read`
-/// gives (the index may lag behind it) and resolved with `before`; `after` resolves links
-/// once the moves are made.
+/// the index), in the moved notes themselves, and in the notes `fresh`, just written (the note
+/// open, those it embeds), whose links the index may not know yet. Links are parsed again from
+/// the text `read` gives (the index may lag behind it) and resolved with `before`; `after`
+/// resolves links once the moves are made.
 pub fn plan_relinks(
     moves: &Moves,
     graph: &dyn LinkGraph,
@@ -26,8 +27,9 @@ pub fn plan_relinks(
     parser: &dyn NoteParser,
     before: &dyn LinkResolver,
     after: &dyn LinkResolver,
+    fresh: &[String],
 ) -> Result<Relinks, BoxError> {
-    let mut sources: BTreeSet<String> = moves.keys().cloned().collect();
+    let mut sources: BTreeSet<String> = moves.keys().chain(fresh).cloned().collect();
     for from in moves.keys() {
         sources.extend(graph.backlinks(from)?.into_iter().map(|b| b.source));
     }

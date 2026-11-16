@@ -35,7 +35,21 @@ impl LinkGraph for Vault {
 fn plan(vault: &Vault, moves: &[(&str, &str)]) -> knotes_app::Relinks {
     let moves: Moves = moves.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
     let after = LinkTargets::new(vault.0.iter().map(|n| moves.get(n.0).map_or(n.0, String::as_str)));
-    plan_relinks(&moves, vault, &|p| vault.read(p), &MarkdownParser::new(), &vault.targets(), &after).unwrap()
+    plan_relinks(&moves, vault, &|p| vault.read(p), &MarkdownParser::new(), &vault.targets(), &after, &[]).unwrap()
+}
+
+#[test]
+fn a_note_just_written_is_relinked_before_the_index_knows_its_links() {
+    // The index has `a.md` as it was; its file, just written from the editor, links to Old.
+    let indexed = Vault(vec![("a.md", "draft"), ("Old.md", "o")]);
+    let read = |p: &str| if p == "a.md" { Some("draft [[Old]]".to_owned()) } else { indexed.read(p) };
+    let moves = Moves::from([("Old.md".to_owned(), "New.md".to_owned())]);
+    let after = LinkTargets::new(["a.md", "New.md"]);
+    let plan = |fresh: &[String]| plan_relinks(&moves, &indexed, &read, &MarkdownParser::new(), &indexed.targets(), &after, fresh).unwrap();
+    assert_eq!(plan(&[]).edits, [], "the index alone misses it");
+    let plan = plan(&["a.md".to_owned()]);
+    assert_eq!(plan.edits, [("a.md".to_owned(), "draft [[New]]".to_owned())]);
+    assert_eq!(plan.links, 1);
 }
 
 #[test]

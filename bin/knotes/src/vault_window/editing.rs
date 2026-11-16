@@ -572,6 +572,8 @@ impl VaultWindow {
 
     /// The link edits `moves` call for, worked out from the index and the files.
     pub(super) fn relinks(&self, moves: &Moves) -> Relinks {
+        // Just written (`relocate` writes them first), their newest links not indexed yet.
+        let fresh: Vec<String> = self.open_path().into_iter().chain(self.embeds.paths()).collect();
         let mut state = self.state.borrow_mut();
         self.ensure_reader(&mut state);
         let (Some(reader), Some(before), Some(vault)) = (state.reader.as_ref(), state.links.clone(), state.vault.clone()) else {
@@ -580,7 +582,7 @@ impl VaultWindow {
         let after = LinkTargets::new(state.catalog.iter().map(|e| moves.get(&e.path).map_or(e.path.as_str(), String::as_str)));
         let files = FsVault::new(&vault);
         // A note not in UTF-8 is left as it is: written back, it would lose its bytes.
-        plan_relinks(moves, reader, &|p| files.read_utf8(p).ok(), &MarkdownParser::new(), &*before, &after).unwrap_or_else(|e| {
+        plan_relinks(moves, reader, &|p| files.read_utf8(p).ok(), &MarkdownParser::new(), &*before, &after, &fresh).unwrap_or_else(|e| {
             eprintln!("knotes: cannot plan link updates: {e}");
             Relinks::default()
         })
