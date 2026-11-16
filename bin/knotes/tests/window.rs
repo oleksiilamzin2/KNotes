@@ -1264,6 +1264,15 @@ fn an_embed_s_button_at_its_top_right_opens_its_note_at_its_part() {
 }
 
 #[test]
+fn a_link_in_an_embedded_note_goes_where_it_goes_from_that_note() {
+    let notes = [("a.md", "Top\n\n![[sub/b]]\n\nend"), ("sub/b.md", "See [c](c.md) here."), ("sub/c.md", "the right c")];
+    // Character 6 of the embedded text is in the link's text.
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_CLICK", "6")]);
+    assert!(out.contains("note: sub/c.md |"), "from sub/b.md, not from a.md: {out}");
+    assert!(!vault.path().join("c.md").exists(), "no note made where a.md would have it");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");

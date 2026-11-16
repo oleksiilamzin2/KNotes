@@ -2112,9 +2112,9 @@ impl VaultWindow {
         let (link_weak, edit_weak, focus_weak) = (self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone());
         let open_weak = self.this.borrow().clone();
         let callbacks = Callbacks {
-            on_link: Rc::new(move |link| {
+            on_link: Rc::new(move |link, from| {
                 if let Some(window) = link_weak.upgrade() {
-                    window.follow_link(link);
+                    window.follow_link_from(link, Some(from));
                 }
             }),
             on_edit: Rc::new(move |key| {
@@ -2179,6 +2179,11 @@ impl VaultWindow {
         }
     }
 
+    /// A click on character `index` of the `n`th embedded note (probe mode).
+    pub fn probe_click_in_embed(&self, n: usize, index: usize) {
+        self.embeds.probe_click(n, index);
+    }
+
     /// Opens the note of the `n`th embed, as its button does (probe mode).
     pub fn probe_open_embed(&self, n: usize) {
         if let Some(key) = self.embeds.key(n) {
@@ -2226,11 +2231,18 @@ impl VaultWindow {
     }
 
     fn follow_link(&self, link: &Link) {
+        self.follow_link_from(link, None);
+    }
+
+    /// Follows `link` as written in the note at `from` (an embedded note, ADR 0034), or in the
+    /// open note: it resolves from there, and a missing note is made from there.
+    fn follow_link_from(&self, link: &Link, from: Option<&str>) {
         if link.kind == LinkKind::External {
             open_url(&link.target);
             return;
         }
-        let Some(source) = self.open_path() else { return };
+        let Some(open) = self.open_path() else { return };
+        let source = from.map_or_else(|| open.clone(), str::to_owned);
         let Some(links) = self.state.borrow().links.clone() else { return };
         let path = match links.resolve(link.kind, &link.target, &source) {
             Some(path) => path,
@@ -2247,7 +2259,7 @@ impl VaultWindow {
             self.from_note.set(false);
             return;
         }
-        if path != source {
+        if path != open {
             self.open_note(&path, true);
             self.highlight_open_note();
         }

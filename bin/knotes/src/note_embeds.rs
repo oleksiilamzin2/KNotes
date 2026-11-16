@@ -72,12 +72,16 @@ pub struct Content {
 /// What an embedded note's view tells the window: an edit (its key), or the keys taken or given
 /// up.
 pub struct Callbacks {
-    pub on_link: Rc<dyn Fn(&Link)>,
+    /// A link followed in an embedded note, with that note's path (links go from there).
+    pub on_link: OnLink,
     pub on_edit: Rc<dyn Fn(&str)>,
     pub on_focus: OnFocus,
     /// The open button pressed: the embed's key.
     pub on_open: Rc<dyn Fn(&str)>,
 }
+
+/// Gets a link and the path of the embedded note it is written in.
+pub type OnLink = Rc<dyn Fn(&Link, &str)>;
 
 /// Gets an embed's key and whether its view took the keys (true) or gave them up.
 pub type OnFocus = Rc<dyn Fn(&str, bool)>;
@@ -271,6 +275,14 @@ impl NoteEmbeds {
         Some((NSPoint::new(b.origin.x + b.size.width / 2.0, b.origin.y + b.size.height / 2.0), NSPoint::new(v.origin.x + 4.0, v.origin.y + v.size.height / 2.0)))
     }
 
+    /// A click on character `index` of the `n`th embed's text, as the mouse gives it (probe mode).
+    pub fn probe_click(&self, n: usize, index: usize) {
+        let entry = self.shown.borrow().get(n).map(|s| (s.view.clone(), s.preview.clone()));
+        if let Some((view, preview)) = entry {
+            preview.click(&view, index, false);
+        }
+    }
+
     /// The key of the `n`th embed shown (probe mode).
     pub fn key(&self, n: usize) -> Option<String> {
         self.shown.borrow().get(n).map(|s| s.key.clone())
@@ -318,8 +330,12 @@ fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, callbacks: &Cal
     view.on_click(move |view, index, cmd| clicks.click(view, index, cmd));
     let hovers = preview.clone();
     view.on_hover(move |index| hovers.clickable(index));
-    let follow = callbacks.on_link.clone();
-    preview.on_link(move |link| follow(link));
+    let (follow, from) = (callbacks.on_link.clone(), objc2::rc::Weak::new(&*preview));
+    preview.on_link(move |link| {
+        if let Some(from) = from.load() {
+            follow(link, &from.path());
+        }
+    });
     let (edit, edited_key) = (callbacks.on_edit.clone(), key.clone());
     preview.on_change(move || edit(&edited_key));
     let (focus, focused_key) = (callbacks.on_focus.clone(), key.clone());

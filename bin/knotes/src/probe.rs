@@ -1395,6 +1395,10 @@ fn report_list(table: &NSTableView) {
 
 /// Open note (from the text view itself), history buttons (from the toolbar) and list selection.
 fn report_note(window: &VaultWindow) {
+    // `KNOTES_PROBE_EMBED_CLICK=index`: a click on that character of the first embedded note.
+    if let Some(index) = std::env::var("KNOTES_PROBE_EMBED_CLICK").ok().and_then(|n| n.parse().ok()) {
+        window.probe_click_in_embed(0, index);
+    }
     // `KNOTES_PROBE_EMBED_OPEN=n`: the `n`th embed's open button.
     if let Some(n) = std::env::var("KNOTES_PROBE_EMBED_OPEN").ok().and_then(|n| n.parse().ok()) {
         window.probe_open_embed(n);

@@ -702,6 +702,11 @@ impl LivePreview {
         }
     }
 
+    /// The vault path of the note shown.
+    pub fn path(&self) -> String {
+        self.ivars().path.borrow().clone()
+    }
+
     /// Styles a note embedded in another, in `view` (ADR 0034): as `attach`, without the centred
     /// column or a scroll view to follow.
     pub fn attach_embedded(&self, view: &NSTextView) {
