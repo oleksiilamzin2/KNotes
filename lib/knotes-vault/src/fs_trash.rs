@@ -39,8 +39,9 @@ impl TrashStore for FsVault {
         }
         let notes = if folder { notes_in(&source) } else { usize::from(FileKind::from_path(path) == FileKind::Markdown) };
         let entry = json!({"path": path, "folder": folder, "deleted": now_ms, "notes": notes, "rules": rules});
-        fs::write(dir.join(ENTRY), entry.to_string())?;
-        if let Err(e) = fs::rename(&source, dir.join(name_of(path))) {
+        // Not made after all: no empty entry is left behind (one without `entry.json` is never
+        // listed, so never deleted for good either).
+        if let Err(e) = fs::write(dir.join(ENTRY), entry.to_string()).and_then(|()| fs::rename(&source, dir.join(name_of(path)))) {
             let _ = fs::remove_dir_all(&dir);
             return Err(e);
         }
@@ -79,7 +80,11 @@ impl TrashStore for FsVault {
         }
         let target = free_place(&self.root, &entry.path, entry.folder);
         fs::rename(dir.join(name_of(&entry.path)), self.root.join(&target))?;
-        fs::remove_dir_all(&dir)?;
+        // Restored: what is left of the entry goes, or at least its `entry.json`, so that it is
+        // not listed as still deleted, with nothing in it to restore.
+        if fs::remove_dir_all(&dir).is_err() {
+            let _ = fs::remove_file(dir.join(ENTRY));
+        }
         Ok(target)
     }
 

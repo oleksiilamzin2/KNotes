@@ -123,3 +123,37 @@ fn entries_already_known_are_not_read_again_only_the_new_and_the_gone_change_the
     let c = vault.trash("c.md", NOW + 2).unwrap();
     assert_eq!(vault.trashed_with(&known).unwrap(), [c, a], "the new read, the gone dropped, the known kept; the newest first");
 }
+
+#[test]
+fn a_restore_is_done_once_the_file_is_back_whatever_is_left_of_its_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "Plan.md", "the plan");
+    let vault = FsVault::new(dir.path());
+    let entry = vault.trash("Plan.md", NOW).unwrap();
+    // Something in the entry that cannot be deleted: the entry's folder stays.
+    let stuck = dir.path().join(".knotes/trash").join(&entry.id).join("stuck");
+    write(&stuck, "x", "x");
+    fs::set_permissions(&stuck, fs::Permissions::from_mode(0o555)).unwrap();
+    let restored = vault.restore(&entry.id);
+    fs::set_permissions(&stuck, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(restored.unwrap(), "Plan.md");
+    assert_eq!(fs::read_to_string(dir.path().join("Plan.md")).unwrap(), "the plan");
+    assert!(vault.trashed().unwrap().is_empty(), "not listed as still deleted");
+}
+
+#[test]
+fn a_deletion_that_fails_leaves_no_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "Locked/Plan.md", "the plan");
+    write(dir.path(), "a.md", "a");
+    let vault = FsVault::new(dir.path());
+    vault.trash("a.md", NOW).unwrap();
+    let locked = dir.path().join("Locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    let deleted = vault.trash("Locked/Plan.md", NOW + 1);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(deleted.is_err());
+    assert_eq!(fs::read_dir(dir.path().join(".knotes/trash")).unwrap().count(), 1, "only a.md's entry");
+}
