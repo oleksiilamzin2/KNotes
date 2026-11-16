@@ -35,3 +35,8 @@ fn parser_fills_the_snippet() {
 fn the_preview_leaves_out_comments_and_the_signs_of_highlights() {
     assert_eq!(knotes_md::snippet("Це ==важлива== думка %%таємне #тег%% далі, a == b", 200), "Це важлива думка далі, a == b");
 }
+
+#[test]
+fn the_preview_leaves_out_what_is_embedded() {
+    assert_eq!(knotes_md::snippet("Top\n\n![[b#Part]]\n\n![alt text](pic.png)\n\nend", 200), "Top end");
+}

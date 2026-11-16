@@ -10,9 +10,9 @@ use crate::{comment_ranges, mark_ranges};
 /// Bytes of the note looked at: the preview is the start of the note.
 const PREFIX_BYTES: usize = 4096;
 
-/// Text of the note without frontmatter, headings, code and comments, markup removed (a
-/// highlight's signs too) and whitespace collapsed, at most `max_chars` characters. Links show
-/// their text.
+/// Text of the note without frontmatter, headings, code, comments and embeds (a note's or an
+/// image's), markup removed (a highlight's signs too) and whitespace collapsed, at most
+/// `max_chars` characters. Links show their text.
 pub fn snippet(source: &str, max_chars: usize) -> String {
     let prefix = &source[..source.floor_char_boundary(PREFIX_BYTES)];
     let dropped = comments_and_signs(prefix);
@@ -20,8 +20,8 @@ pub fn snippet(source: &str, max_chars: usize) -> String {
     let mut skip = 0u32;
     for (event, range) in Parser::new_ext(prefix, OPTIONS).into_offset_iter() {
         match event {
-            Event::Start(Tag::Heading { .. } | Tag::CodeBlock(_) | Tag::MetadataBlock(_)) => skip += 1,
-            Event::End(TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::MetadataBlock(_)) => skip -= 1,
+            Event::Start(Tag::Heading { .. } | Tag::CodeBlock(_) | Tag::MetadataBlock(_) | Tag::Image { .. }) => skip += 1,
+            Event::End(TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::MetadataBlock(_) | TagEnd::Image) => skip -= 1,
             // Text meeting a comment or a highlight's sign: the source around them.
             Event::Text(_) if skip == 0 && dropped.iter().any(|d| d.start < range.end && range.start < d.end) => {
                 let mut at = range.start;
