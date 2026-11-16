@@ -363,3 +363,11 @@ fn footnote_references_show_their_label_raised_and_definitions_their_label_muted
     assert_eq!(notes, [("[^1]", "1", false), ("[^long]", "long", false), ("[^1]:", "1", true), ("[^long]:", "long", true)]);
     assert!(!styles("No such[^9] note.").iter().any(|(s, _)| *s == Style::FootnoteRef), "a reference with no definition stays text");
 }
+
+#[test]
+fn notes_embedded_alone_on_their_line_are_listed_for_their_frames() {
+    let src = "a\n![[Other note]]\n![[Doc#Part|Alias]]\ntext ![[inline]] x\n![[pic.png]]\n![[doc.pdf]]\n";
+    let found = highlight(src);
+    let embeds: Vec<(&str, &str, Option<&str>)> = found.embeds.iter().map(|e| (&src[e.range.clone()], e.link.target.as_str(), e.link.subpath.as_deref())).collect();
+    assert_eq!(embeds, [("![[Other note]]", "Other note", None), ("![[Doc#Part|Alias]]", "Doc", Some("Part"))], "not inline, not images or PDFs");
+}

@@ -70,6 +70,14 @@ pub struct CodeRun {
     pub language: String,
 }
 
+/// A note embedded alone on its line, `![[note]]`, `![[note#Heading]]`, `![[note#^block]]`
+/// (ADR 0034): shown in a frame of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteEmbedRun {
+    pub range: Range<usize>,
+    pub link: Link,
+}
+
 /// A footnote's reference `[^label]`, or its definition's `[^label]:`: what a click follows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FootnoteRun {
@@ -108,6 +116,9 @@ pub struct Highlight {
     pub tables: Vec<TableRun>,
     /// Footnote references and definitions (ADR 0034), sorted by start.
     pub footnotes: Vec<FootnoteRun>,
+    /// Embeds alone on their line of what may be notes (not images, PDFs or canvases): the
+    /// window shows those resolving to notes in frames (ADR 0034), sorted by start.
+    pub embeds: Vec<NoteEmbedRun>,
 }
 
 /// A column's alignment, from the delimiter row (`:--`, `:-:`, `--:`).
@@ -201,6 +212,7 @@ impl Highlight {
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
             .chain(self.footnotes.iter().flat_map(|f| [f.range.start, f.range.end]))
+            .chain(self.embeds.iter().flat_map(|e| [e.range.start, e.range.end]))
             .chain(self.tables.iter().flat_map(|t| {
                 [t.range.start, t.range.end, t.delimiter.start, t.delimiter.end]
                     .into_iter()
@@ -238,6 +250,7 @@ impl Highlight {
                 .collect(),
             images: self.images.iter().map(|i| ImageRun { range: map(i.range.start)..map(i.range.end), ..i.clone() }).collect(),
             footnotes: self.footnotes.iter().map(|f| FootnoteRun { range: map(f.range.start)..map(f.range.end), ..f.clone() }).collect(),
+            embeds: self.embeds.iter().map(|e| NoteEmbedRun { range: map(e.range.start)..map(e.range.end), link: e.link.clone() }).collect(),
             tables: self
                 .tables
                 .iter()
@@ -422,6 +435,13 @@ pub fn highlight(source: &str) -> Highlight {
     }
     h.links.sort_by_key(|l| l.range.start);
     h.images = h.links.iter().filter_map(|l| image(source, l)).collect();
+    h.embeds = h
+        .links
+        .iter()
+        .filter(|l| l.link.embed && l.link.kind != LinkKind::External && !matches!(FileKind::from_path(&l.link.target), FileKind::Image | FileKind::Pdf | FileKind::Canvas))
+        .filter(|l| alone_on_line(source, &l.range))
+        .map(|l| NoteEmbedRun { range: l.range.clone(), link: l.link.clone() })
+        .collect();
     verbatim.sort_by_key(|r| r.start);
     comments(&mut h, source, &verbatim);
     marks(&mut h, source, &verbatim);
@@ -452,6 +472,7 @@ fn comments(h: &mut Highlight, source: &str, verbatim: &[Range<usize>]) {
     h.callouts.retain(|c| !inside(c.range.start));
     h.tables.retain(|t| !inside(t.range.start));
     h.footnotes.retain(|f| !inside(f.range.start));
+    h.embeds.retain(|e| !inside(e.range.start));
     for comment in comments {
         h.markup.push(comment.start..comment.start + 2);
         let text = &source[comment.clone()];
@@ -474,6 +495,13 @@ fn marks(h: &mut Highlight, source: &str, verbatim: &[Range<usize>]) {
     }
 }
 
+/// Whether `range` is all its line holds but spaces.
+fn alone_on_line(source: &str, range: &Range<usize>) -> bool {
+    let line_start = source[..range.start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = source[range.end..].find('\n').map_or(source.len(), |i| range.end + i);
+    source[line_start..range.start].trim().is_empty() && source[range.end..line_end].trim().is_empty()
+}
+
 /// The image or PDF `l` embeds, when it is one in the vault alone on its line.
 fn image(source: &str, l: &LinkRun) -> Option<ImageRun> {
     let link = &l.link;
@@ -483,9 +511,7 @@ fn image(source: &str, l: &LinkRun) -> Option<ImageRun> {
     }
     let pdf = kind == FileKind::Pdf;
     let page = link.subpath.as_deref().and_then(|s| s.strip_prefix("page=")).and_then(|p| p.parse().ok()).filter(|_| pdf);
-    let line_start = source[..l.range.start].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = source[l.range.end..].find('\n').map_or(source.len(), |i| l.range.end + i);
-    if !source[line_start..l.range.start].trim().is_empty() || !source[l.range.end..line_end].trim().is_empty() {
+    if !alone_on_line(source, &l.range) {
         return None;
     }
     // `300` or `300x200`, after the alias's or alt text's last `|`.

@@ -19,10 +19,10 @@ pub use code_highlight::{CodeHighlighter, CodeToken, highlight_code, load_code_g
 pub use completion::{LinkCompletion, link_completion};
 pub use formula::{FormulaCache, FormulaImage, FormulaStyle, render_formula};
 pub use document::{DiskChange, Document, conflict_path};
-pub use highlight::{Align, CalloutRun, CodeRun, FootnoteRun, FormulaRun, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRow, TableRun, highlight};
+pub use highlight::{Align, CalloutRun, CodeRun, FootnoteRun, FormulaRun, Highlight, ImageRun, LinkRun, ListKind, NoteEmbedRun, Run, Style, TableRow, TableRun, highlight};
 pub use image_width::set_image_width;
 pub use restyle::{Edit, changed_region};
-pub use subpath::{note_headings, subpath_offset};
+pub use subpath::{embedded_part, note_headings, subpath_offset};
 pub use table_edit::TableText;
 pub use tag_completion::{TagCompletion, tag_completion, tag_typed};
 pub use task_box::task_box_typed;
