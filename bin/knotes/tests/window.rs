@@ -3322,3 +3322,24 @@ fn the_settings_deleted_tab_sets_the_days_the_vault_keeps_them() {
     assert_eq!(root["spaces"].as_array().map(Vec::len), Some(2), "the rest of the file kept");
     assert!(out.contains(&format!("settings-trash: {name} | 14")), "{out}");
 }
+
+#[test]
+fn a_pdf_renamed_from_the_list_stays_a_pdf() {
+    // A PDF is listed among a search's results with a note's menu (ADR 0022): renaming it there
+    // made `Contract.md` of it.
+    let notes = [("a.md", "see [[doc.pdf]]")];
+    let (vault, out) = probe_images(&notes, &[("Docs/doc.pdf", PDF)], &[("KNOTES_PROBE_ACTION", "list-rename-path=Docs/doc.pdf=Contract")]);
+    assert!(std::fs::read(vault.path().join("Docs/Contract.pdf")).unwrap().starts_with(b"%PDF"), "{out}");
+    assert!(!vault.path().join("Docs/Contract.md").exists(), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Contract.pdf]]");
+}
+
+#[test]
+fn a_pdf_moved_from_the_list_keeps_its_name() {
+    // Dropped on a folder (or moved through the row's menu) it became `doc.pdf.md`.
+    let notes = [("a.md", "see [[Docs/doc.pdf]]"), ("Archive/b.md", "b")];
+    let (vault, out) = probe_images(&notes, &[("Docs/doc.pdf", PDF)], &[("KNOTES_PROBE_ACTION", "drop-path=Docs/doc.pdf=Archive")]);
+    assert!(std::fs::read(vault.path().join("Archive/doc.pdf")).unwrap().starts_with(b"%PDF"), "{out}");
+    assert!(!vault.path().join("Archive/doc.pdf.md").exists(), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Archive/doc.pdf]]");
+}

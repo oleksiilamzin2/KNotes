@@ -50,6 +50,17 @@ impl VaultWindow {
         if let (Some(name), Some(open)) = (probe::rename_requested(), self.open_path()) {
             self.rename_note(&open, &name);
         }
+        // A list row renamed, or dropped on a sidebar folder, by its path
+        // (`list-rename-path=Docs/a.pdf=New name`, `drop-path=Docs/a.pdf=Folder`): a PDF is listed
+        // only among a search's results, which come later; these reach what its row calls.
+        if let Ok(action) = std::env::var("KNOTES_PROBE_ACTION") {
+            if let Some((path, name)) = action.strip_prefix("list-rename-path=").and_then(|s| s.split_once('=')) {
+                self.rename_note(path, name);
+            }
+            if let Some((path, folder)) = action.strip_prefix("drop-path=").and_then(|s| s.split_once('=')) {
+                self.move_note_to(path, folder);
+            }
+        }
         probe::list_menu_requested(&self.list, &self.table);
         probe::drag_requested(&self.list, &self.table, &self.sidebar);
         probe::folder_rename_requested(&self.sidebar, &self.outline);

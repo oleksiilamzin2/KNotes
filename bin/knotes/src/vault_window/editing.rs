@@ -274,8 +274,12 @@ impl VaultWindow {
     }
 
     /// Renames the note at `old` to `name` in its folder (a number added when the name is
-    /// taken), with the links to it (ADR 0019). False when nothing moved.
+    /// taken), with the links to it (ADR 0019); a PDF keeps `.pdf`. False when nothing moved.
     pub fn rename_note(&self, old: &str, name: &str) -> bool {
+        // The list renames its PDFs (search results) through here too.
+        if FileKind::from_path(old) == FileKind::Pdf {
+            return self.rename_pdf(old, name);
+        }
         let (Some(stem), Some(vault)) = (note_file_stem(name), self.vault()) else { return false };
         let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
         // A change of case only is a rename of the same file.
@@ -301,7 +305,8 @@ impl VaultWindow {
         self.move_note_to(path, &folder);
     }
 
-    /// Moves the note at `path` into `folder` (`""`: the vault's root), with the links to it.
+    /// Moves the note (or PDF) at `path` into `folder` (`""`: the vault's root), with the
+    /// links to it; its file name stays, numbered when taken.
     pub fn move_note_to(&self, path: &str, folder: &str) {
         let Some(vault) = self.vault() else { return };
         let file = path.rsplit('/').next().unwrap_or(path);
@@ -309,7 +314,7 @@ impl VaultWindow {
         if wanted == path {
             return;
         }
-        let new = unique_note_path(folder, knotes_app::title_of(file), |p| vault.join(p).exists());
+        let new = unique_file_path(folder, file, |p| vault.join(p).exists());
         self.move_notes(Moves::from([(path.to_owned(), new)]));
     }
 

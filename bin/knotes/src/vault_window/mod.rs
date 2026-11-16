@@ -28,7 +28,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
     search_list, with_search_mode, build_note_list, new_notes_folder, ListItem, trash_days, SpaceFolders, SpaceList, SpaceTags, RestPart, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
-    note_file_stem, resolve_list_settings, unique_note_path,
+    note_file_stem, resolve_list_settings, unique_file_path, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;

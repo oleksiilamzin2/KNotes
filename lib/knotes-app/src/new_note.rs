@@ -63,6 +63,23 @@ pub fn unique_note_path(folder: &str, stem: &str, exists: impl Fn(&str) -> bool)
     path
 }
 
+/// The file `file` (a note, a PDF, any file) moved into `folder`: `folder/file`, or
+/// `folder/stem N.ext` with the first free number. Its extension stays, whatever it is.
+pub fn unique_file_path(folder: &str, file: &str, exists: impl Fn(&str) -> bool) -> String {
+    let (stem, extension) = match file.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (file, String::new()),
+    };
+    let base = if folder.is_empty() { stem.to_owned() } else { format!("{folder}/{stem}") };
+    let mut path = format!("{base}{extension}");
+    let mut n = 1;
+    while exists(&path) {
+        path = format!("{base} {n}{extension}");
+        n += 1;
+    }
+    path
+}
+
 /// A new folder's path in `parent`: `name`, numbered from 2 when a folder there has it (as
 /// Finder numbers "untitled folder 2").
 pub fn unique_folder_path(parent: &str, name: &str, exists: impl Fn(&str) -> bool) -> String {

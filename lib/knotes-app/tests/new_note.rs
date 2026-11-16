@@ -53,3 +53,14 @@ fn in_a_space_a_new_note_goes_to_the_inbox_if_it_is_the_space_s_else_to_its_firs
     assert_eq!(space_notes_folder("Вхідні", &SpaceFolders::new(&tree, &with_inbox, "work"), &tree), "Вхідні");
     assert_eq!(space_notes_folder("Вхідні", &SpaceFolders::new(&tree, &spaces, "empty"), &tree), "Вхідні", "a space with no folder: the inbox");
 }
+
+#[test]
+fn a_moved_file_keeps_its_extension() {
+    use knotes_app::unique_file_path;
+    assert_eq!(unique_file_path("Фінанси", "Поліс.pdf", |_| false), "Фінанси/Поліс.pdf");
+    assert_eq!(unique_file_path("Фінанси", "Поліс.pdf", |p| p == "Фінанси/Поліс.pdf"), "Фінанси/Поліс 1.pdf");
+    assert_eq!(unique_file_path("", "Note.md", |p| p == "Note.md"), "Note 1.md");
+    assert_eq!(unique_file_path("A", "Note.MD", |_| false), "A/Note.MD");
+    assert_eq!(unique_file_path("A", "README", |_| false), "A/README");
+    assert_eq!(unique_file_path("A", ".hidden", |_| false), "A/.hidden");
+}
