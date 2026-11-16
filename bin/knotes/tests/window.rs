@@ -1173,6 +1173,35 @@ fn inline_code_has_a_background_and_its_backticks_do_not() {
 }
 
 #[test]
+fn typing_a_tag_offers_the_vault_s_tags_and_return_inserts_one_with_a_space_after_it() {
+    let notes = [("b.md", "#project/radar #radar"), ("c.md", "#radar #cooking"), ("a.md", "")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "Plan #ra")]);
+    assert_eq!(completion(&out), "▸#radar — 2 | #project/radar — 1", "the start first, the most used first: {out}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "Plan #ra"), ("KNOTES_PROBE_KEYS", "down,return")]);
+    assert!(out.contains("note: a.md | Plan #project/radar "), "{out}");
+    assert!(out.contains("cursor: 20"), "after the space: {out}");
+    assert_eq!(completion(&out), "none");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "`code #ra")]);
+    assert_eq!(completion(&out), "none", "not in code");
+}
+
+#[test]
+fn in_the_frontmatter_the_tags_list_offers_tags_without_a_hash() {
+    let notes = [("b.md", "#radar"), ("a.md", "")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "---\ntags: [ra"), ("KNOTES_PROBE_KEYS", "return")]);
+    assert!(out.contains("note: a.md | ---⏎tags: [radar"), "no hash, no space: {out}");
+}
+
+#[test]
+fn in_a_space_its_tags_are_offered_first() {
+    let vault = spaced_vault();
+    std::fs::write(vault.path().join("Home/d.md"), "#rabbit").unwrap();
+    std::fs::write(vault.path().join("top.md"), "top #rabbit").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_TYPE", " #ra")]);
+    assert_eq!(completion(&out), "▸#radar — 1 | #rabbit — 2", "the space's first, though less used: {out}");
+}
+
+#[test]
 fn a_click_on_a_completion_row_inserts_that_note() {
     let notes = [("Note.md", "n"), ("A/Note.md", "n"), ("a.md", "")];
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "[[Note"), ("KNOTES_PROBE_COMPLETION_CLICK", "1")]);

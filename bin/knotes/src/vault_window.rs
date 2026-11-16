@@ -11,13 +11,13 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, ListItem, trash_days, SpaceFolders, SpaceList, SpaceTags, RestPart, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
+    search_list, with_search_mode, build_note_list, new_notes_folder, ListItem, trash_days, SpaceFolders, SpaceList, SpaceTags, RestPart, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
-use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
+use knotes_editor::{DiskChange, Document, LinkCompletion, TagCompletion, conflict_path, link_completion, note_headings, subpath_offset, tag_completion, tag_typed, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
@@ -91,6 +91,24 @@ struct State {
     /// The recently deleted, the newest first (ADR 0032).
     trash: Arc<Vec<TrashEntry>>,
 }
+
+/// What the list under the cursor completes (ADR 0013, 0033).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Completing {
+    Link,
+    /// A tag, in the text after `#` or in the frontmatter's list (no `#`, no space after).
+    Tag { frontmatter: bool },
+}
+
+/// What the text before the cursor asks to complete.
+enum CompletionTarget {
+    Link(LinkCompletion),
+    Tag(TagCompletion),
+}
+
+/// A frontmatter longer than this (UTF-16) is not looked for: the note is read from its start
+/// only up to here while typing.
+const FRONTMATTER_MOST: usize = 8192;
 
 /// The space's tags as the snapshot counted them (ADR 0030), or counted here while the window's
 /// folders are ahead of it (a folder just made or put in a space, before the snapshot after).
@@ -197,9 +215,12 @@ pub struct VaultWindow {
     edits: Cell<u64>,
     this: RefCell<Weak<Self>>,
     completion: CompletionPanel,
-    /// UTF-16 start of the text an accepted completion replaces.
+    /// UTF-16 start of the text an accepted completion replaces, and what it completes.
     completion_from: Cell<usize>,
-    /// The `[[` (UTF-16 location) whose list Esc closed: it stays closed while typing on.
+    completing: Cell<Completing>,
+    /// Where the list shown began (UTF-16: a link's `[[`, a tag's name), and the one Esc
+    /// closed: it stays closed while typing on.
+    completion_anchor: Cell<usize>,
     completion_dismissed: Cell<Option<usize>>,
     /// Set while a completion is inserted, so the edit does not reopen the list.
     accepting: Cell<bool>,
@@ -384,6 +405,8 @@ impl VaultWindow {
             this: RefCell::new(Weak::new()),
             completion: CompletionPanel::new(mtm),
             completion_from: Cell::new(0),
+            completing: Cell::new(Completing::Link),
+            completion_anchor: Cell::new(0),
             completion_dismissed: Cell::new(None),
             accepting: Cell::new(false),
             search_worker: RefCell::new(None),
@@ -2138,35 +2161,70 @@ impl VaultWindow {
         let view = &self.note_text;
         let selection = view.selectedRange();
         let ns = view.string();
-        let context = (selection.length == 0)
-            .then(|| {
-                let line = ns.paragraphRangeForRange(NSRange::new(selection.location, 0));
-                let before = ns.substringWithRange(NSRange::new(line.location, selection.location - line.location)).to_string();
-                link_completion(&before).map(|c| (line.location, before, c))
-            })
-            .flatten();
-        let Some((line, before, completion)) = context else {
+        let found = (selection.length == 0).then(|| self.completion_at(&ns, selection.location)).flatten();
+        let Some((anchor, from, target)) = found else {
             self.completion.hide();
             self.completion_dismissed.set(None);
             return;
         };
-        let units = |bytes: usize| line + before[..bytes].encode_utf16().count();
-        let open = units(before.rfind("[[").unwrap_or(0));
-        if self.completion_dismissed.get() == Some(open) {
+        if self.completion_dismissed.get() == Some(anchor) {
             return;
         }
-        let from = match &completion {
-            LinkCompletion::Title { from, .. } | LinkCompletion::Heading { from, .. } | LinkCompletion::Block { from, .. } => units(*from),
+        let (items, completing) = match &target {
+            CompletionTarget::Link(link) => (self.completion_items(link), Completing::Link),
+            CompletionTarget::Tag(tag) => (self.tag_items(tag), Completing::Tag { frontmatter: tag.frontmatter }),
         };
-        let items = self.completion_items(&completion);
-        if items.is_empty() {
+        // The tag typed in full and nothing else to offer: Return makes a new line again.
+        let typed_in_full = matches!((&target, items.as_slice()), (CompletionTarget::Tag(tag), [only]) if only.insert == tag.query);
+        if items.is_empty() || typed_in_full {
             self.completion.hide();
             return;
         }
         self.completion_from.set(from);
+        self.completion_anchor.set(anchor);
+        self.completing.set(completing);
         // SAFETY: the range lies inside the text; a null actual range is allowed.
         let cursor = unsafe { view.firstRectForCharacterRange_actualRange(NSRange::new(selection.location, 0), std::ptr::null_mut()) };
         self.completion.show(&self.window, cursor, items);
+    }
+
+    /// What the cursor at `cursor` (UTF-16) completes: a link inside `[[`, or a tag (in the text
+    /// after `#`, or in the frontmatter's tags); with where its list begins and where the
+    /// replaced part starts (UTF-16).
+    fn completion_at(&self, ns: &NSString, cursor: usize) -> Option<(usize, usize, CompletionTarget)> {
+        let line = ns.paragraphRangeForRange(NSRange::new(cursor, 0));
+        let before = ns.substringWithRange(NSRange::new(line.location, cursor - line.location)).to_string();
+        let units = |text: &str, start: usize, bytes: usize| start + text[..bytes].encode_utf16().count();
+        if let Some(link) = link_completion(&before) {
+            let open = units(&before, line.location, before.rfind("[[").unwrap_or(0));
+            let from = match &link {
+                LinkCompletion::Title { from, .. } | LinkCompletion::Heading { from, .. } | LinkCompletion::Block { from, .. } => *from,
+            };
+            return Some((open, units(&before, line.location, from), CompletionTarget::Link(link)));
+        }
+        // The note is read from its start only for a tag after `#`, or in a frontmatter.
+        let in_frontmatter = cursor <= FRONTMATTER_MOST && ns.hasPrefix(&NSString::from_str("---"));
+        if !tag_typed(&before) && !in_frontmatter {
+            return None;
+        }
+        let head = ns.substringWithRange(NSRange::new(0, cursor)).to_string();
+        let tag = tag_completion(&head)?;
+        let from = units(&head, 0, tag.from);
+        Some((from, from, CompletionTarget::Tag(tag)))
+    }
+
+    /// The tags to offer for the one typed (ADR 0033): in a space its own first.
+    fn tag_items(&self, tag: &TagCompletion) -> Vec<CompletionItem> {
+        let state = self.state.borrow();
+        let space = state.space.as_ref().and_then(|id| state.space_tags.iter().find(|counted| counted.id == *id));
+        suggest_tags(&tag.query, space.map_or(&[][..], |counted| counted.tags.as_slice()), &state.tags, MAX_ROWS)
+            .into_iter()
+            .map(|(name, notes)| CompletionItem {
+                title: if tag.frontmatter { name.to_owned() } else { format!("#{name}") },
+                detail: notes.to_string(),
+                insert: name.to_owned(),
+            })
+            .collect()
     }
 
     fn completion_items(&self, completion: &LinkCompletion) -> Vec<CompletionItem> {
@@ -2241,13 +2299,7 @@ impl VaultWindow {
             self.accept_completion();
         } else if command == sel!(cancelOperation:) {
             self.completion.hide();
-            let view = &self.note_text;
-            let ns = view.string();
-            let cursor = view.selectedRange().location;
-            let line = ns.paragraphRangeForRange(NSRange::new(cursor, 0));
-            let before = ns.substringWithRange(NSRange::new(line.location, cursor - line.location)).to_string();
-            let open = before.rfind("[[").map(|b| line.location + before[..b].encode_utf16().count());
-            self.completion_dismissed.set(open);
+            self.completion_dismissed.set(Some(self.completion_anchor.get()));
         } else {
             return false;
         }
@@ -2255,7 +2307,8 @@ impl VaultWindow {
     }
 
     /// Replaces the typed part with the chosen link (or heading), closing it with `]]` unless
-    /// the brackets already follow, and puts the cursor after them.
+    /// the brackets already follow, and puts the cursor after them; or with the chosen tag, a
+    /// space after it in the text unless one follows (none in the frontmatter's list).
     fn accept_completion(&self) {
         let Some(item) = self.completion.chosen() else { return };
         self.completion.hide();
@@ -2264,7 +2317,13 @@ impl VaultWindow {
         let from = self.completion_from.get().min(cursor);
         let ns = view.string();
         let closed = cursor + 2 <= ns.length() && ns.substringWithRange(NSRange::new(cursor, 2)).to_string() == "]]";
-        let text = if closed { item.insert } else { format!("{}]]", item.insert) };
+        let spaced = cursor < ns.length() && matches!(ns.characterAtIndex(cursor), 0x20 | 0x09 | 0x0A | 0x0D);
+        let (text, closed) = match self.completing.get() {
+            Completing::Link if closed => (item.insert, true),
+            Completing::Link => (format!("{}]]", item.insert), false),
+            Completing::Tag { frontmatter: false } if !spaced => (format!("{} ", item.insert), false),
+            Completing::Tag { .. } => (item.insert, false),
+        };
         self.accepting.set(true);
         view.setSelectedRange(NSRange::new(from, cursor - from));
         let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
