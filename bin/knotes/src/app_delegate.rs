@@ -104,6 +104,9 @@ define_class!(
             let Some(closing) = notification.object() else { return };
             if let Some(window) = closing.downcast_ref::<NSWindow>() {
                 remember_frame(window);
+                // Gone at once: AppKit's closing animation held the last window on screen,
+                // frozen, until the app had quit (measured: ~150 ms; ~30 ms without it).
+                window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
             }
             let is_closing = |v: &OpenVault| std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject);
             if let Some(vault) = self.ivars().vaults.borrow().iter().find(|v| is_closing(v)) {
