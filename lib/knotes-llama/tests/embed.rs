@@ -9,14 +9,19 @@ use knotes_llama::LlamaEmbedder;
 /// The models search by meaning runs on (ADR 0029): e5-large-instruct, EmbeddingGemma 2.
 const MODELS: [&str; 2] = ["multilingual-e5-large-instruct-q8_0.gguf", "embeddinggemma-2-Q8_0.gguf"];
 
-/// `file`'s model, of each test's own, dropped at its end (Metal checks at exit that all is freed).
-fn load(file: &str) -> LlamaEmbedder {
+/// `file`'s model, of each test's own, dropped at its end (Metal checks at exit that all is freed);
+/// none before `scripts/setup.sh` has fetched it: the test says so and is skipped, so that
+/// `cargo test --workspace` passes on a machine without the models.
+fn load(file: &str) -> Option<LlamaEmbedder> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models").join(file);
-    assert!(path.exists(), "no model at {}: run scripts/setup.sh", path.display());
-    LlamaEmbedder::load(&path).unwrap()
+    if !path.exists() {
+        eprintln!("skipped: no model at {} (scripts/setup.sh fetches it)", path.display());
+        return None;
+    }
+    Some(LlamaEmbedder::load(&path).unwrap())
 }
 
-fn model() -> LlamaEmbedder {
+fn model() -> Option<LlamaEmbedder> {
     load(MODELS[0])
 }
 
@@ -47,7 +52,7 @@ fn a_query_lands_nearest_the_block_that_means_it_in_other_words_or_another_langu
         block("Дім", "Лічильник електроенергії: 2026-10-01 день 14 230, ніч 6 115."),
     ];
     for file in MODELS {
-        let model = load(file);
+        let Some(model) = load(file) else { continue };
         assert_eq!(nearest(&model, "чим змащувати велосипедний ланцюг", &blocks), 0, "{file}: other forms of the words");
         // A Ukrainian query, an English note: e5 put the insurance third of four (2026-11-15),
         // though on the benchmark it found English queries' Ukrainian notes; EmbeddingGemma 2 first.
@@ -61,7 +66,7 @@ fn a_query_lands_nearest_the_block_that_means_it_in_other_words_or_another_langu
 #[test]
 fn a_batch_gives_the_vectors_one_at_a_time_gives() {
     let passages: Vec<Passage> = (0..5).map(|i| block("Нотатка", &format!("Абзац номер {i}: {}", "слово ".repeat(i * 7)))).collect();
-    let model = model();
+    let Some(model) = model() else { return };
     let together = model.embed(&passages).unwrap();
     assert_eq!(together.len(), 5);
     for (passage, vector) in passages.iter().zip(&together) {
@@ -77,7 +82,7 @@ fn a_batch_gives_the_vectors_one_at_a_time_gives() {
 fn how_fast_blocks_are_embedded() {
     let passages: Vec<Passage> = (0..256).map(|i| block("Щоденник", &format!("{i}. Сьогодні полагодили змішувач, купили анод для бойлера і домовилися з Василем на вівторок о дев'ятій."))).collect();
     let start = Instant::now();
-    let model = model();
+    let Some(model) = model() else { return };
     println!("loaded in {:.0} ms", start.elapsed().as_secs_f64() * 1000.0);
     model.embed(&passages[..8]).unwrap();
     let start = Instant::now();
