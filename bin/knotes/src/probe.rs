@@ -1005,8 +1005,12 @@ fn tabs_requested(window: &VaultWindow) {
     // edit made through it (ADR 0030).
     match std::env::var("KNOTES_PROBE_SETTINGS").as_deref() {
         Ok("spaces") => crate::settings_window::show_spaces(window.window.mtm(), window.vault()),
+        Ok("trash") => crate::settings_window::show_trash(window.window.mtm(), window.vault()),
         Ok(_) => crate::settings_window::show(window.window.mtm(), window.vault()),
         Err(_) => {}
+    }
+    if let Ok(days) = std::env::var("KNOTES_PROBE_SETTINGS_TRASH_DAYS") {
+        crate::settings_window::probe_trash_days(&days);
     }
     if let Ok(spec) = std::env::var("KNOTES_PROBE_SETTINGS_SPACES") {
         crate::settings_window::probe_spaces_edit(&spec);

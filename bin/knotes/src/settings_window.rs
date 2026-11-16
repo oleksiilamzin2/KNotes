@@ -18,6 +18,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
 use crate::settings_spaces::SpacesTab;
+use crate::settings_trash::TrashTab;
 use crate::strings;
 
 /// The tag of the item turning search by meaning off (a model's is its place in
@@ -43,6 +44,7 @@ struct Settings {
     status: Retained<NSTextField>,
     progress: Retained<NSProgressIndicator>,
     spaces: Retained<SpacesTab>,
+    trash: Retained<TrashTab>,
     tabs: Retained<NSTabViewController>,
     _target: Retained<SettingsTarget>,
 }
@@ -102,7 +104,8 @@ pub fn show(mtm: MainThreadMarker, vault: Option<PathBuf>) {
     SHOWN.with(|shown| {
         let mut shown = shown.borrow_mut();
         let settings = shown.get_or_insert_with(|| make(mtm));
-        settings.spaces.set_vault(vault);
+        settings.spaces.set_vault(vault.clone());
+        settings.trash.set_vault(vault);
         let tag = crate::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
         settings.popup.selectItemWithTag(tag);
         refresh(settings);
@@ -118,6 +121,26 @@ pub fn show_spaces(mtm: MainThreadMarker, vault: Option<PathBuf>) {
         if let Some(settings) = shown.borrow().as_ref() {
             settings.tabs.setSelectedTabViewItemIndex(1);
             settings.window.setTitle(&NSString::from_str(strings::SETTINGS_SPACES));
+        }
+    });
+}
+
+/// Shows the window on its «Видалені» tab.
+pub fn show_trash(mtm: MainThreadMarker, vault: Option<PathBuf>) {
+    show(mtm, vault);
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            settings.tabs.setSelectedTabViewItemIndex(2);
+            settings.window.setTitle(&NSString::from_str(strings::SETTINGS_TRASH));
+        }
+    });
+}
+
+/// Probe: days typed into the «Видалені» tab's field.
+pub fn probe_trash_days(days: &str) {
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            settings.trash.probe_type(days);
         }
     });
 }
@@ -344,13 +367,20 @@ fn make(mtm: MainThreadMarker) -> Settings {
     spaces_item.setLabel(&NSString::from_str(strings::SETTINGS_SPACES));
     spaces_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("square.stack"), None).as_deref());
     tabs.addTabViewItem(&spaces_item);
+    let (trash, trash_view) = TrashTab::make(mtm);
+    let trash_vc = NSViewController::new(mtm);
+    trash_vc.setView(&trash_view);
+    let trash_item = NSTabViewItem::tabViewItemWithViewController(&trash_vc);
+    trash_item.setLabel(&NSString::from_str(strings::SETTINGS_TRASH));
+    trash_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("trash"), None).as_deref());
+    tabs.addTabViewItem(&trash_item);
     let window = NSWindow::windowWithContentViewController(&tabs);
     window.setStyleMask(NSWindowStyleMask::Titled | NSWindowStyleMask::Closable);
     window.setTitle(&NSString::from_str(strings::SETTINGS_SEARCH));
     // SAFETY: the window is kept here; closing it must not release it.
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
-    Settings { window, popup, caches, status, progress, spaces, tabs, _target: target }
+    Settings { window, popup, caches, status, progress, spaces, trash, tabs, _target: target }
 }
 
 /// Probe: an edit made through the «Простори» tab's controls (see `SpacesTab::probe_edit`).
@@ -416,6 +446,7 @@ pub fn probe_lines() -> Vec<String> {
             format!("settings-progress: {status}"),
             format!("settings-spaces: {spaces}"),
             format!("settings-space-colors: {}", shown.borrow().as_ref().map(|s| s.spaces.probe_colors()).unwrap_or_default()),
+            format!("settings-trash: {}", shown.borrow().as_ref().map(|s| s.trash.probe_line()).unwrap_or_default()),
         ]
     })
 }

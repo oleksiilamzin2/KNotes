@@ -21,6 +21,17 @@ pub const RESTORE: &str = "Відновити";
 pub const DELETE_FOREVER: &str = "Видалити назавжди";
 pub const EMPTY_DELETED: &str = "Очистити нещодавно видалені…";
 
+/// The settings' «Видалені» tab.
+pub const SETTINGS_TRASH: &str = "Видалені";
+pub const TRASH_KEEP: &str = "Зберігати видалене";
+pub const TRASH_DAYS: &str = "днів";
+pub const TRASH_NOTE: &str = "Видалені нотатки, PDF і теки лежать у «Нещодавно видалених» (у прихованій теці .knotes/trash самої бази) і звідти відновлюються. Коли мине цей строк, вони видаляються назавжди.";
+
+/// "Нещодавно видалені бази «Дім»".
+pub fn trash_of(vault: &str) -> String {
+    format!("Нещодавно видалені бази «{vault}»")
+}
+
 /// Where a deleted note was: "з теки «Work»", or the vault's root.
 pub fn deleted_from(folder: Option<&str>) -> String {
     match folder {

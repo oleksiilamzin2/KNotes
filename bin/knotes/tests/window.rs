@@ -3128,3 +3128,16 @@ fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_empt
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-empty")]);
     assert_eq!(deleted_entries(vault.path()), 0, "gone for good");
 }
+
+#[test]
+fn the_settings_deleted_tab_sets_the_days_the_vault_keeps_them() {
+    let vault = spaced_vault();
+    let name = vault.path().file_name().unwrap().to_string_lossy().to_string();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "trash")]);
+    assert!(out.contains(&format!("settings-trash: {name} | 30")), "30 by default: {out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SETTINGS", "trash"), ("KNOTES_PROBE_SETTINGS_TRASH_DAYS", "14")]);
+    let root: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(vault.path().join(".knotes.json")).unwrap()).unwrap();
+    assert_eq!(root["trash"]["days"], 14, "{out}");
+    assert_eq!(root["spaces"].as_array().map(Vec::len), Some(2), "the rest of the file kept");
+    assert!(out.contains(&format!("settings-trash: {name} | 14")), "{out}");
+}

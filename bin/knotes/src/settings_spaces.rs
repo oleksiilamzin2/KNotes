@@ -161,7 +161,8 @@ impl SpacesTab {
             rows.trailingAnchor().constraintEqualToAnchor_constant(&view.trailingAnchor(), -24.0),
             add.topAnchor().constraintEqualToAnchor_constant(&rows.bottomAnchor(), 14.0),
             add.leadingAnchor().constraintEqualToAnchor(&title.leadingAnchor()),
-            view.bottomAnchor().constraintEqualToAnchor_constant(&add.bottomAnchor(), 24.0),
+            // Held at the top; the window, as tall as its tallest tab, leaves the room below.
+            view.bottomAnchor().constraintGreaterThanOrEqualToAnchor_constant(&add.bottomAnchor(), 24.0),
         ]));
         *this.ivars().title.borrow_mut() = Some(title);
         *this.ivars().rows.borrow_mut() = Some(rows);
