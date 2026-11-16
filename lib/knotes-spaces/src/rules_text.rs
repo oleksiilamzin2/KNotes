@@ -1,4 +1,5 @@
 use serde_json::{Map, Value, json};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::{FolderSpace, SHARED, Space};
 
@@ -30,7 +31,9 @@ pub fn set_folder_ai(rules: &str, ai: Option<bool>) -> Result<String, String> {
 pub fn set_file_ai(rules: &str, name: &str, ai: Option<bool>) -> Result<String, String> {
     let mut root = object(rules)?;
     let mut files = root.remove("files").and_then(|f| if let Value::Object(f) = f { Some(f) } else { None }).unwrap_or_default();
-    let mut entry = files.remove(name).and_then(|e| if let Value::Object(e) = e { Some(e) } else { None }).unwrap_or_default();
+    // The name as written there, composed or not (macOS writes some names decomposed).
+    let written = files.keys().find(|key| same_name(key, name)).cloned();
+    let mut entry = written.and_then(|key| files.remove(&key)).and_then(|e| if let Value::Object(e) = e { Some(e) } else { None }).unwrap_or_default();
     match ai {
         Some(ai) => {
             entry.insert("ai".into(), json!(ai));
@@ -46,6 +49,18 @@ pub fn set_file_ai(rules: &str, name: &str, ai: Option<bool>) -> Result<String, 
         root.insert("files".into(), Value::Object(files));
     }
     Ok(pretty(&root))
+}
+
+/// The file `name`'s own `ai` in a folder's rules file (ADR 0036), if it says one; none when
+/// the file does not parse.
+pub fn file_ai(rules: &str, name: &str) -> Option<bool> {
+    let root = object(rules).ok()?;
+    let (_, entry) = root.get("files")?.as_object()?.iter().find(|(key, _)| same_name(key, name))?;
+    entry.get("ai")?.as_bool()
+}
+
+fn same_name(a: &str, b: &str) -> bool {
+    a.nfc().eq(b.nfc())
 }
 
 /// The root's rules file listing `spaces`, in order, its other keys kept (none: no key).

@@ -3,13 +3,33 @@
 //! from the AI or show it again; the snapshot that follows the write marks it.
 
 use knotes_editor::{with_tag, without_tag};
-use knotes_spaces::{KeptFromAi, NO_AI_TAG, set_file_ai, set_folder_ai};
+use std::collections::BTreeMap;
+
+use knotes_spaces::{KeptFromAi, NO_AI_TAG, file_ai, set_file_ai, set_folder_ai};
 
 use super::*;
 
 /// The folder `path` is in (`""`: the vault's root).
 fn parent(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(folder, _)| folder)
+}
+
+/// A folder's rules file, as the user calls it.
+fn rules_file(folder: &str) -> String {
+    if folder.is_empty() { knotes_app::RULES_FILE.to_owned() } else { format!("{folder}/{}", knotes_app::RULES_FILE) }
+}
+
+/// `folder`'s rules text in `texts` (as read, and as it becomes), read the first time.
+fn rules_text<'t>(texts: &'t mut BTreeMap<String, (String, String)>, files: &FsVault, folder: &str) -> Result<&'t mut String, String> {
+    if !texts.contains_key(folder) {
+        let text = files.read_rules(&[folder]).map_err(|e| e.to_string())?.into_iter().next().map(|(_, text)| text).unwrap_or_default();
+        texts.insert(folder.to_owned(), (text.clone(), text));
+    }
+    Ok(&mut texts.get_mut(folder).expect("just read").1)
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// What a file's or a folder's own setting must be for it to be kept (`keep`) or shown, its
@@ -59,6 +79,49 @@ impl VaultWindow {
             let name = folder.rsplit('/').next().unwrap_or(folder);
             let file = if folder.is_empty() { knotes_app::RULES_FILE.to_owned() } else { format!("{folder}/{}", knotes_app::RULES_FILE) };
             self.tell_failed(&strings::ai_failed(name, keep), &strings::failed_files(&e, &[&file]));
+        }
+    }
+
+    /// The rules files, by folder, as they are once each file `moves` takes from one path to
+    /// another (a rename, a move, a restore under another name) carries its own setting for the
+    /// AI with it, as a note carries its tag: into its new folder's rules, out of its old one's
+    /// (kept there when `copy`). Only those that change. Else the file kept from the AI whose
+    /// new folder's rules cannot say so (unreadable, or not parsing), and why.
+    pub(super) fn carried_ai<'a>(&self, moves: impl IntoIterator<Item = (&'a str, &'a str)>, copy: bool) -> Result<Vec<(String, String)>, (String, String)> {
+        let Some(vault) = self.vault() else { return Ok(Vec::new()) };
+        let files = FsVault::new(&vault);
+        // Each folder's rules as read, and as they become.
+        let mut texts: BTreeMap<String, (String, String)> = BTreeMap::new();
+        for (from, to) in moves {
+            // Rules that cannot be read or parsed say nothing of the file.
+            let Some(own) = rules_text(&mut texts, &files, parent(from)).ok().and_then(|text| file_ai(text, file_name(from))) else { continue };
+            let carried = rules_text(&mut texts, &files, parent(to)).and_then(|text| set_file_ai(text, file_name(to), Some(own)).map(|edited| *text = edited));
+            match carried {
+                Ok(()) => {}
+                // Shared by its own setting: where it goes decides.
+                Err(_) if own => continue,
+                Err(e) => return Err((from.to_owned(), strings::ai_rules_unwritable(&rules_file(parent(to)), &e))),
+            }
+            if !copy && from != to && let Ok(text) = rules_text(&mut texts, &files, parent(from)) {
+                *text = set_file_ai(text, file_name(from), None).unwrap_or_else(|_| text.clone());
+            }
+        }
+        Ok(texts.into_iter().filter(|(_, (was, now))| was != now).map(|(folder, (_, now))| (folder, now)).collect())
+    }
+
+    /// Carries the moved files' own settings for the AI (`carried_ai`), saying so when a rules
+    /// file cannot be written: what it should keep from the AI is no longer kept.
+    pub(super) fn carry_ai<'a>(&self, moves: impl IntoIterator<Item = (&'a str, &'a str)> + Clone, copy: bool) {
+        let Some(vault) = self.vault() else { return };
+        let files = FsVault::new(&vault);
+        let failed = match self.carried_ai(moves.clone(), copy) {
+            Ok(texts) => texts.into_iter().find_map(|(folder, text)| files.write_rules(&folder, &text).err().map(|e| (rules_file(&folder), e.to_string()))),
+            Err((_, why)) => Some((String::new(), why)),
+        };
+        if let Some((file, why)) = failed {
+            let names: Vec<&str> = moves.into_iter().map(|(_, to)| document_name(to)).collect();
+            let why = if file.is_empty() { why } else { strings::failed_files(&why, &[&file]) };
+            self.tell_failed(&strings::ai_not_carried(&names.join(", ")), &why);
         }
     }
 

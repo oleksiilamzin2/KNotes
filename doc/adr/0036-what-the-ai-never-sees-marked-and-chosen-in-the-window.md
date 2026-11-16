@@ -39,12 +39,18 @@ those kept marked with a small grey struck-through brain.
   Such a file is not written over by the menu, which says what is wrong instead (ADR 0035).
 - The note open is tagged in the editor, as typed (Undo takes it back), and saved at once;
   another is rewritten on the disk, edits typed in an embedded copy of it written first.
+- **A file's own setting goes with it, as a note's tag does.** Renamed or moved in Knotes, its
+  entry leaves its old folder's rules for its new one's (else a PDF kept, once renamed, was
+  shared without a word). One kept is not moved where the new folder's rules cannot say so
+  (unreadable, or not parsing): the user is told why. Deleted, its entry stays, so that it is
+  kept again once restored; restored under another name (its own taken meanwhile), the new name
+  is kept as well. A folder's rules are inside it and go with it anyway.
 
 ## Consequences
 
 - Keeping something from the AI, and seeing what is kept, no longer needs JSON or a tag typed.
-- A PDF kept loses that when it is moved to another folder (its entry stays behind, naming a
-  file no longer there); a note's tag goes with it.
+- A file renamed or moved outside Knotes (in the Finder) leaves its entry behind, naming a file
+  no longer there, and is shared where it went; a note's tag goes with it wherever.
 - The marks follow the snapshot: they show once the watcher has seen the write (well under a
   second); the AI's tools look again at most every 10 s (ADR 0027).
 
@@ -60,3 +66,7 @@ those kept marked with a small grey struck-through brain.
   a hidden mark takes no room); the list's and the sidebar's menus call `toggle_ai` and
   `toggle_folder_ai` (`vault_window/ai.rs`). Probe mode prints `list-ai-marks:` and
   `sidebar-ai-marks:` and takes the actions `list-ai`, `folder-ai=Folder` and `ai-path=path`.
+- A file's own setting is carried by `carried_ai` (checked before a rename or move in
+  `relocate`, written after it by `carry_ai`; copied on a restore under another name), read and
+  set by `file_ai` and `set_file_ai`, which find a name written composed or not. Probe mode
+  takes `delete-path=path`.

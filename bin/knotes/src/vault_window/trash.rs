@@ -53,9 +53,19 @@ impl VaultWindow {
     /// Brings a deleted entry back where it was (ADR 0032).
     pub fn restore(&self, id: &str) {
         let Some(vault) = self.vault() else { return };
-        if let Err(e) = FsVault::new(&vault).restore(id) {
-            let name = self.state.borrow().trash.iter().find(|entry| entry.id == id).map(|entry| document_name(&entry.path).to_owned()).unwrap_or_default();
-            self.tell_failed(&strings::restore_failed(&name), &e);
+        let entry = self.state.borrow().trash.iter().find(|entry| entry.id == id).cloned();
+        match FsVault::new(&vault).restore(id) {
+            // Back under another name (its own taken): a setting of its own for the AI, which
+            // stayed with its old name while it was deleted, says the same of the new (ADR 0036).
+            Ok(restored) => {
+                if let Some(entry) = entry.filter(|entry| !entry.folder && entry.path != restored) {
+                    self.carry_ai([(entry.path.as_str(), restored.as_str())], true);
+                }
+            }
+            Err(e) => {
+                let name = entry.map(|entry| document_name(&entry.path).to_owned()).unwrap_or_default();
+                self.tell_failed(&strings::restore_failed(&name), &e);
+            }
         }
         self.refresh_trash();
     }

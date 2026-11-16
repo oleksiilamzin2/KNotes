@@ -1,4 +1,4 @@
-use knotes_spaces::{KeptFromAi, set_file_ai, set_folder_ai};
+use knotes_spaces::{KeptFromAi, file_ai, set_file_ai, set_folder_ai};
 use serde_json::{Map, Value, json};
 
 fn rules(value: Value) -> Map<String, Value> {
@@ -30,4 +30,19 @@ fn a_folder_and_a_file_get_their_own_setting_the_rest_of_the_file_kept() {
     assert_eq!(serde_json::from_str::<Value>(&file).unwrap(), json!({"space": "work", "files": {"a.pdf": {"ai": false}}}));
     assert_eq!(serde_json::from_str::<Value>(&set_file_ai(&file, "a.pdf", None).unwrap()).unwrap(), json!({"space": "work"}), "the last entry takes files with it");
     assert!(set_folder_ai("{ broken", Some(false)).is_err(), "a file that does not parse is not written over");
+}
+
+#[test]
+fn a_file_s_own_setting_is_read_and_set_by_its_name_composed_or_not() {
+    // «й» decomposed (и + U+0306), as macOS writes some names.
+    let decomposed = "Мі\u{438}\u{306}.pdf";
+    let text = format!(r#"{{"files": {{"{decomposed}": {{"ai": false}}, "b.pdf": {{"ai": true}}}}}}"#);
+    assert_eq!(file_ai(&text, "Мій.pdf"), Some(false));
+    assert_eq!(file_ai(&text, "b.pdf"), Some(true));
+    assert_eq!(file_ai(&text, "c.pdf"), None);
+    assert_eq!(file_ai("{\"files\": {\"a.pdf\": {\"ai\": false},}}", "a.pdf"), None, "a file that does not parse says nothing");
+    let gone = set_file_ai(&text, "Мій.pdf", None).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&gone).unwrap(), json!({"files": {"b.pdf": {"ai": true}}}), "its entry found as written");
+    let shared = set_file_ai(&text, "Мій.pdf", Some(true)).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&shared).unwrap()["files"].as_object().unwrap().len(), 2, "replaced, not written twice");
 }

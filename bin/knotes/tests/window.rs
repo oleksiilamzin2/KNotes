@@ -3757,3 +3757,52 @@ fn a_folder_whose_rules_do_not_parse_is_not_written_over_when_kept_from_the_ai()
     assert!(out.contains("failed: Не вдалося сховати «Щоденник» від ШІ"), "told: {out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("Щоденник/.knotes.json")).unwrap(), broken);
 }
+
+#[test]
+fn a_file_kept_from_the_ai_stays_kept_when_renamed_or_moved() {
+    let vault = ai_vault();
+    let rules = |folder: &str| std::fs::read_to_string(vault.path().join(folder).join(".knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
+    std::fs::write(vault.path().join("Docs/.knotes.json"), r#"{"space": "work", "files": {"a.pdf": {"ai": false}}}"#).unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "list-rename-path=Docs/a.pdf=Договір")]);
+    assert!(vault.path().join("Docs/Договір.pdf").exists());
+    assert_eq!(rules("Docs"), Some(serde_json::json!({"space": "work", "files": {"Договір.pdf": {"ai": false}}})), "the new name kept, the old one gone");
+    std::fs::create_dir(vault.path().join("Архів")).unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "drop-path=Docs/Договір.pdf=Архів")]);
+    assert!(vault.path().join("Архів/Договір.pdf").exists());
+    assert_eq!(rules("Docs"), Some(serde_json::json!({"space": "work"})));
+    assert_eq!(rules("Архів"), Some(serde_json::json!({"files": {"Договір.pdf": {"ai": false}}})), "its setting went with it");
+    // A note shown in a folder kept takes that with it as well.
+    std::fs::write(vault.path().join("Щоденник/.knotes.json"), r#"{"ai": false, "files": {"день.md": {"ai": true}}}"#).unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "list-rename-path=Щоденник/день.md=Вівторок")]);
+    assert_eq!(rules("Щоденник"), Some(serde_json::json!({"ai": false, "files": {"Вівторок.md": {"ai": true}}})));
+}
+
+#[test]
+fn a_file_kept_from_the_ai_is_not_moved_where_that_cannot_be_written() {
+    let vault = ai_vault();
+    std::fs::write(vault.path().join("Docs/.knotes.json"), r#"{"files": {"a.pdf": {"ai": false}}}"#).unwrap();
+    std::fs::create_dir(vault.path().join("Архів")).unwrap();
+    let broken = r#"{"space": "work",}"#;
+    std::fs::write(vault.path().join("Архів/.knotes.json"), broken).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "drop-path=Docs/a.pdf=Архів")]);
+    assert!(out.contains("failed: «a» не переміщено, щоб його не побачив ШІ"), "told: {out}");
+    assert!(vault.path().join("Docs/a.pdf").exists() && !vault.path().join("Архів/a.pdf").exists(), "not moved");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Архів/.knotes.json")).unwrap(), broken);
+    // A file with no setting of its own moves there as ever.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "drop-path=нотатка.md=Архів")]);
+    assert!(vault.path().join("Архів/нотатка.md").exists(), "{out}");
+}
+
+#[test]
+fn a_file_kept_from_the_ai_restored_under_another_name_stays_kept() {
+    let vault = ai_vault();
+    let rules = || std::fs::read_to_string(vault.path().join("Docs/.knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
+    std::fs::write(vault.path().join("Docs/.knotes.json"), r#"{"files": {"a.pdf": {"ai": false}}}"#).unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "delete-path=Docs/a.pdf")]);
+    assert!(!vault.path().join("Docs/a.pdf").exists());
+    assert_eq!(rules(), Some(serde_json::json!({"files": {"a.pdf": {"ai": false}}})), "kept while deleted: restored to its place, it is kept still");
+    std::fs::write(vault.path().join("Docs/a.pdf"), "%PDF-1.4 another").unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-restore")]);
+    assert!(vault.path().join("Docs/a 2.pdf").exists(), "back under another name");
+    assert_eq!(rules(), Some(serde_json::json!({"files": {"a.pdf": {"ai": false}, "a 2.pdf": {"ai": false}}})));
+}

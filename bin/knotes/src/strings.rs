@@ -345,6 +345,17 @@ pub fn mention_failed(name: &str) -> String {
 pub fn folder_space_failed(name: &str) -> String {
     format!("Не вдалося змінити простір теки «{name}»")
 }
+/// A file kept from the AI not moved: its new folder's rules cannot say it is kept.
+pub fn ai_not_moved(name: &str) -> String {
+    format!("«{name}» не переміщено, щоб його не побачив ШІ")
+}
+pub fn ai_rules_unwritable(file: &str, error: &str) -> String {
+    format!("Його сховано від ШІ, а «{file}» там, куди він іде, не вдається змінити: {error}")
+}
+/// Moved, but what kept it from the AI could not go with it.
+pub fn ai_not_carried(names: &str) -> String {
+    format!("«{names}» більше не сховано від ШІ")
+}
 /// "Не вдалося сховати «Щоденник» від ШІ", or show it.
 pub fn ai_failed(name: &str, keep: bool) -> String {
     if keep { format!("Не вдалося сховати «{name}» від ШІ") } else { format!("Не вдалося показати «{name}» ШІ") }

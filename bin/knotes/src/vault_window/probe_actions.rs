@@ -60,9 +60,13 @@ impl VaultWindow {
             if let Some((path, folder)) = action.strip_prefix("drop-path=").and_then(|s| s.split_once('=')) {
                 self.move_note_to(path, folder);
             }
-            // `ai-path=Docs/a.pdf`: what the row's «Сховати від ШІ» calls (ADR 0036).
+            // `ai-path=Docs/a.pdf`: what the row's «Сховати від ШІ» calls (ADR 0036);
+            // `delete-path=Docs/a.pdf`: what its «Видалити» calls.
             if let Some(path) = action.strip_prefix("ai-path=") {
                 self.toggle_ai(path);
+            }
+            if let Some(path) = action.strip_prefix("delete-path=") {
+                self.delete(path);
             }
         }
         probe::list_menu_requested(&self.list, &self.table);

@@ -496,6 +496,14 @@ impl VaultWindow {
                 return false;
             }
         };
+        // A file kept from the AI by a setting of its own keeps it where it goes (ADR 0036): not
+        // moved where that cannot be written, or the AI would see it.
+        if folder.is_none()
+            && let Err((path, why)) = self.carried_ai(moves.iter().map(|(from, to)| (from.as_str(), to.as_str())), false)
+        {
+            self.tell_failed(&strings::ai_not_moved(document_name(&path)), &why);
+            return false;
+        }
         let update = plan.links == 0
             || match rename_dialog::ask_link_update(objc2::MainThreadOnly::mtm(&*self.window), plan.links, plan.edits.len()) {
                 LinkUpdate::Update => true,
@@ -534,6 +542,10 @@ impl VaultWindow {
         }
         if moved.is_empty() && folder.is_none() {
             return false;
+        }
+        // A folder's rules go with it; a file's own setting is in its folder's (ADR 0036).
+        if folder.is_none() {
+            self.carry_ai(moved.iter().map(|(from, to)| (from.as_str(), to.as_str())), false);
         }
         let failed = |path: &str| moves.iter().any(|(from, to)| to == path && !moved.contains_key(from));
         let edits: Vec<&(String, String)> = if update { plan.edits.iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
