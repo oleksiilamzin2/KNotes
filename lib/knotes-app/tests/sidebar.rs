@@ -104,13 +104,13 @@ fn in_a_space_the_rest_of_the_vault_hangs_below_a_row_of_its_own() {
     let rest_tags = tag_tree(&[("cooking".to_owned(), 2)]);
     let rest = RestPart { folders: &rest_folders, tags: &rest_tags, notes: 3 };
     let s = Sidebar::new(&folders, &tags, SidebarMode::Folders, None, 0, &|_| true, Some(rest));
-    assert_eq!(s.children(None)[3..], [SidebarItem::Folder("Work".into()), SidebarItem::Rest], "after the space's tree");
+    assert_eq!(s.children(None)[3..], [SidebarItem::Folder("Work".into()), SidebarItem::RestGap, SidebarItem::Rest], "after the space's tree, a little apart");
     assert_eq!(s.count(&SidebarItem::Rest), Some(3));
     assert_eq!(s.children(Some(&SidebarItem::Rest)), [SidebarItem::Folder("Home".into())], "its folders below it");
     assert_eq!(s.children(Some(&SidebarItem::Folder("Home".into()))), [SidebarItem::Folder("Home/Kitchen".into())]);
     let rest = RestPart { folders: &rest_folders, tags: &rest_tags, notes: 3 };
     let t = Sidebar::new(&folders, &tags, SidebarMode::Tags, None, 0, &|_| true, Some(rest));
-    assert_eq!(t.children(None)[3..], [SidebarItem::Tag("radar".into()), SidebarItem::Rest]);
+    assert_eq!(t.children(None)[3..], [SidebarItem::Tag("radar".into()), SidebarItem::RestGap, SidebarItem::Rest]);
     assert_eq!(t.children(Some(&SidebarItem::Rest)), [SidebarItem::Tag("cooking".into())]);
     assert_eq!(SidebarItem::from_key(&SidebarItem::Rest.key()), Some(SidebarItem::Rest));
 }

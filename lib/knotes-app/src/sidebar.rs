@@ -11,6 +11,8 @@ pub enum SidebarItem {
     Untagged,
     /// Empty space between the fixed rows and the tree.
     Gap,
+    /// Empty space before the rest of the vault's row, in a space (ADR 0030).
+    RestGap,
     Folder(String),
     Tag(String),
     /// A document open as a tab (ADR 0024), by its vault path.
@@ -27,6 +29,7 @@ impl SidebarItem {
             Self::AllNotes => "all".into(),
             Self::Untagged => "untagged".into(),
             Self::Gap => "gap".into(),
+            Self::RestGap => "restgap".into(),
             Self::Folder(path) => format!("f:{path}"),
             Self::Tag(tag) => format!("t:{tag}"),
             Self::Tab(path) => format!("tab:{path}"),
@@ -39,6 +42,7 @@ impl SidebarItem {
             "all" => Some(Self::AllNotes),
             "untagged" => Some(Self::Untagged),
             "gap" => Some(Self::Gap),
+            "restgap" => Some(Self::RestGap),
             "rest" => Some(Self::Rest),
             _ => match key.split_once(':')? {
                 ("f", path) => Some(Self::Folder(path.into())),
@@ -140,7 +144,8 @@ impl Sidebar {
                 _ => rest.folders.children.iter().filter(|f| f.path != skip).map(|f| add_folder(f, &mut entries, skip, with_subfolders)).collect(),
             };
             entries.insert(SidebarItem::Rest, Entry { name: String::new(), count: Some(rest.notes), children });
-            top.push(SidebarItem::Rest);
+            entries.insert(SidebarItem::RestGap, fixed(None));
+            top.extend([SidebarItem::RestGap, SidebarItem::Rest]);
         }
         Self { top, entries, inbox: inbox_item }
     }

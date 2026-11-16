@@ -2947,7 +2947,7 @@ fn a_space_keeps_the_sidebar_and_the_list_to_its_folders_and_is_remembered() {
     let line = |name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("no {name}: {out}")).to_string();
     assert_eq!(line("space: "), "Робота | spaces: Робота, Дім");
     assert_eq!(line("space-menu: "), "Уся база | ✓ Робота | Дім | — | Налаштувати простори…", "chosen through the toolbar's menu");
-    assert_eq!(line("sidebar: "), "Усі нотатки (2) | Без тегів (1) | · | Work (1) | Решта бази (2)", "the space's folders (no inbox outside it), then the rest of the vault");
+    assert_eq!(line("sidebar: "), "Усі нотатки (2) | Без тегів (1) | · | Work (1) | · | Решта бази (2)", "the space's folders (no inbox outside it), then the rest of the vault");
     let list = line("list: ");
     let rest = list.find("[Решта бази]").unwrap_or_else(|| panic!("{list}"));
     let (space, others) = list.split_at(rest);
@@ -3018,7 +3018,7 @@ fn in_a_space_the_rest_of_the_vault_s_row_and_folders_list_the_notes_outside_it(
     let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
     assert!(list.contains("c ~") && !list.contains("[Решта бази]"), "a folder of the rest lists its notes: {list}");
     let tags = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SIDEBAR", "tags")]);
-    assert!(tags.contains("sidebar: Усі нотатки (2) | Без тегів (1) | · | radar (1) | Решта бази (2)"), "{tags}");
+    assert!(tags.contains("sidebar: Усі нотатки (2) | Без тегів (1) | · | radar (1) | · | Решта бази (2)"), "{tags}");
 }
 
 #[test]
