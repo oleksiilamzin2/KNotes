@@ -14,6 +14,40 @@ pub fn set_folder_space(rules: &str, space: FolderSpace) -> Result<String, Strin
     Ok(pretty(&root))
 }
 
+/// A folder's rules file with its own `ai` set (`None`: the key goes, the folder takes its
+/// parent's), its other keys kept (ADR 0036).
+pub fn set_folder_ai(rules: &str, ai: Option<bool>) -> Result<String, String> {
+    let mut root = object(rules)?;
+    match ai {
+        Some(ai) => root.insert("ai".into(), json!(ai)),
+        None => root.remove("ai"),
+    };
+    Ok(pretty(&root))
+}
+
+/// A folder's rules file with the file `name`'s own `ai` set under `files` (`None`: its entry
+/// goes, and `files` with its last entry), its other keys kept (ADR 0036).
+pub fn set_file_ai(rules: &str, name: &str, ai: Option<bool>) -> Result<String, String> {
+    let mut root = object(rules)?;
+    let mut files = root.remove("files").and_then(|f| if let Value::Object(f) = f { Some(f) } else { None }).unwrap_or_default();
+    let mut entry = files.remove(name).and_then(|e| if let Value::Object(e) = e { Some(e) } else { None }).unwrap_or_default();
+    match ai {
+        Some(ai) => {
+            entry.insert("ai".into(), json!(ai));
+        }
+        None => {
+            entry.remove("ai");
+        }
+    }
+    if !entry.is_empty() {
+        files.insert(name.to_owned(), Value::Object(entry));
+    }
+    if !files.is_empty() {
+        root.insert("files".into(), Value::Object(files));
+    }
+    Ok(pretty(&root))
+}
+
 /// The root's rules file listing `spaces`, in order, its other keys kept (none: no key).
 pub fn set_spaces(rules: &str, spaces: &[Space]) -> Result<String, String> {
     let mut root = object(rules)?;

@@ -5,7 +5,7 @@ use knotes_app::{FolderNode, FolderRules, SpaceFolders, SpaceTags, TagNode, coun
 use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex, TrashEntry, TrashStore};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
-use knotes_spaces::Spaces;
+use knotes_spaces::{KeptFromAi, NO_AI_TAG, Spaces};
 
 /// Everything the window shows about a vault at one moment; immutable and cheap to share.
 #[derive(Clone)]
@@ -26,6 +26,9 @@ pub struct Snapshot {
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// The vault's spaces and its folders' (ADR 0030), from the rules.
     pub spaces: Arc<Spaces>,
+    /// What the user keeps from the AI (ADR 0036): read as the AI's tools read it, a folder whose
+    /// rules cannot be read for sure kept.
+    pub ai: Arc<KeptFromAi>,
     /// Each space's tags, those only outside it and its untagged notes, in the order of
     /// `spaces`: counted here, off the main thread, and only when they may have changed.
     pub space_tags: Arc<Vec<SpaceTags>>,
@@ -85,15 +88,28 @@ impl Snapshot {
         let mut paths = Vec::new();
         collect_paths(&folders, &mut paths);
         // A folder's at a time: one that cannot be read is skipped as one that does not parse,
-        // not the whole snapshot (and the vault's indexing with it).
-        let rules = paths
-            .iter()
-            .flat_map(|folder| {
-                rules_store.read_rules(&[folder.as_str()]).unwrap_or_else(|e| {
+        // not the whole snapshot (and the vault's indexing with it). For the AI it is kept.
+        let no_ai = tagged.iter().filter(|(tag, _)| tag == NO_AI_TAG || tag.strip_prefix(NO_AI_TAG).is_some_and(|rest| rest.starts_with('/')));
+        let mut ai = KeptFromAi::new(no_ai.map(|(_, path)| path.as_str()), []);
+        let mut texts = Vec::new();
+        for folder in &paths {
+            match rules_store.read_rules(&[folder.as_str()]) {
+                Ok(found) => texts.extend(found),
+                Err(e) => {
                     eprintln!("knotes: ignoring {folder}/.knotes.json: {e}");
-                    Vec::new()
-                })
-            })
+                    ai.keep_folder(folder);
+                }
+            }
+        }
+        for (folder, text) in &texts {
+            ai.add_rules_text(folder, text);
+        }
+        let ai = match previous.filter(|p| *p.ai == ai) {
+            Some(p) => Arc::clone(&p.ai),
+            None => Arc::new(ai),
+        };
+        let rules = texts
+            .into_iter()
             .filter_map(|(folder, text)| match FolderRules::parse(&text) {
                 Ok(rules) => Some((folder, rules)),
                 Err(e) => {
@@ -135,6 +151,7 @@ impl Snapshot {
             untagged,
             rules: Arc::new(rules),
             spaces: Arc::new(spaces),
+            ai,
             space_tags,
             trash,
             changed,

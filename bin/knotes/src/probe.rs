@@ -629,6 +629,7 @@ pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: 
         (Some(name), _) => (objc2::sel!(renameNote:), Some(name.to_owned())),
         (None, a) if a.starts_with("list-move=") => (objc2::sel!(moveNote:), None),
         (None, "list-delete") => (objc2::sel!(deleteNote:), None),
+        (None, "list-ai") => (objc2::sel!(toggleAi:), None),
         (None, "list-restore") => (objc2::sel!(restoreDeleted:), None),
         (None, "list-purge") => (objc2::sel!(purgeDeleted:), None),
         (None, "list-empty") => (objc2::sel!(emptyDeleted:), None),
@@ -728,12 +729,18 @@ pub fn new_folder_requested(sidebar: &crate::sidebar_view::SidebarSource, outlin
 /// `KNOTES_PROBE_ACTION=folder-delete=Folder`: Delete from the folder's menu in the sidebar (ADR
 /// 0032), its items printed first.
 pub fn folder_delete_requested(sidebar: &crate::sidebar_view::SidebarSource, outline: &objc2_app_kit::NSOutlineView) {
-    let Some(folder) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("folder-delete=").map(str::to_owned)) else { return };
+    // `folder-ai=Folder`: its «Сховати від ШІ» (or «Показати ШІ»), ADR 0036.
+    let action = std::env::var("KNOTES_PROBE_ACTION").unwrap_or_default();
+    let (folder, chosen) = match (action.strip_prefix("folder-delete="), action.strip_prefix("folder-ai=")) {
+        (Some(folder), _) => (folder.to_owned(), objc2::sel!(deleteFolder:)),
+        (_, Some(folder)) => (folder.to_owned(), objc2::sel!(toggleFolderAi:)),
+        _ => return,
+    };
     let Some(menu) = outline.menu() else { return };
     sidebar.fill_menu(&menu, Some(&knotes_app::SidebarItem::Folder(folder)));
     let items = menu.itemArray();
     println!("sidebar-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
-    let Some(entry) = items.iter().find(|i| i.action() == Some(objc2::sel!(deleteFolder:))) else { return };
+    let Some(entry) = items.iter().find(|i| i.action() == Some(chosen)) else { return };
     let mtm = MainThreadMarker::new().expect("main thread");
     // SAFETY: the menu item's own target and action, sent as a click would.
     unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(entry.action().expect("menu action"), entry.target().as_deref(), Some(&entry)) };
@@ -900,6 +907,8 @@ pub fn schedule(with_sidebar: bool) {
                     println!("space-menu: {}", window.probe_space_menu());
                     println!("list-marks: {}", window.probe_list_marks());
                     println!("sidebar-marks: {}", window.sidebar.probe_marks());
+                    println!("list-ai-marks: {}", window.list.probe_ai_marks());
+                    println!("sidebar-ai-marks: {}", window.sidebar.probe_ai_marks());
                     report_sidebar(&window.outline);
                     report_sidebar_mode(&window.window);
                     report_panel(window);

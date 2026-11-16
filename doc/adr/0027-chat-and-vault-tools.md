@@ -278,7 +278,8 @@ plan usage for open-source and local apps) on 2026-11-14:
   notes answers that it is not shared with the AI; links to it and its tag counts are left out
   of others' results; the vault's overview does not count it; the marking tag is not listed; a
   document open in the window that is kept is not named to the model. Looked up again at most
-  every 10 s (the tags from the index, the folders' rules files read).
+  every 10 s (the tags from the index, the folders' rules files read). Files kept one by one
+  in their folder's rules, the marks and the menus: ADR 0036.
 - Test questions: launched with `KNOTES_CHAT_EVAL=questions.json` (and `KNOTES_CHAT_EVAL_OUT`),
   the app asks each question in a conversation of its own, never saved, on the chat's thread,
   and writes down each answer with the tools called, its size and time, for checking by hand

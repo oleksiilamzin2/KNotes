@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use knotes_app::{Clock, DateGroup, ListItem, TimeStyle, days_from_civil, space_mark, time_style, title_of};
-use knotes_spaces::Spaces;
+use knotes_spaces::{KeptFromAi, Spaces};
 use knotes_core::{NoteRow, TrashEntry};
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -76,6 +76,10 @@ pub struct Ivars {
     items: RefCell<Vec<ListItem>>,
     /// The vault's spaces and the window's, for the marks of other spaces' notes (ADR 0030).
     spaces: RefCell<(Arc<Spaces>, Option<String>)>,
+    /// What is kept from the AI, for its marks; and what a row's menu calls to keep the row's
+    /// document from it or show it (ADR 0036).
+    ai: RefCell<Arc<KeptFromAi>>,
+    on_ai: RefCell<Option<OnSelect>>,
     /// The recently deleted the list shows (ADR 0032), and what their rows' menu calls: a note
     /// deleted (its path), an entry restored or deleted for good (its id), all emptied.
     deleted: RefCell<Arc<Vec<TrashEntry>>>,
@@ -163,6 +167,15 @@ define_class!(
             }
         }
 
+        /// A note's menu: kept from the AI, or shown to it again (ADR 0036).
+        #[unsafe(method(toggleAi:))]
+        fn toggle_ai(&self, _sender: Option<&AnyObject>) {
+            let path = self.menu_row().and_then(|row| self.path_at(row));
+            if let (Some(path), Some(callback)) = (path, self.ivars().on_ai.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
         /// A note's menu: into the recently deleted (ADR 0032).
         #[unsafe(method(deleteNote:))]
         fn delete_note(&self, _sender: Option<&AnyObject>) {
@@ -245,6 +258,8 @@ impl NoteListSource {
             rows: RefCell::new(Arc::new(Vec::new())),
             items: RefCell::new(Vec::new()),
             spaces: RefCell::new((Arc::new(Spaces::default()), None)),
+            ai: RefCell::new(Arc::default()),
+            on_ai: RefCell::new(None),
             deleted: RefCell::new(Arc::new(Vec::new())),
             on_delete: RefCell::new(None),
             on_restore: RefCell::new(None),
@@ -309,11 +324,21 @@ impl NoteListSource {
     pub fn fill_menu(&self, menu: &NSMenu) {
         let mtm = self.mtm();
         menu.removeAllItems();
-        let deleted = self.menu_row().is_some_and(|row| self.deleted_at(row).is_some());
+        let row = self.menu_row();
+        let deleted = row.is_some_and(|row| self.deleted_at(row).is_some());
+        let kept = row.and_then(|row| self.path_at(row)).is_some_and(|path| self.ivars().ai.borrow().holds(&path));
+        let ai = if kept { strings::SHOW_TO_AI } else { strings::KEEP_FROM_AI };
         let entries: &[Option<(&str, Sel)>] = if deleted {
             &[Some((strings::RESTORE, sel!(restoreDeleted:))), Some((strings::DELETE_FOREVER, sel!(purgeDeleted:))), None, Some((strings::EMPTY_DELETED, sel!(emptyDeleted:)))]
         } else {
-            &[Some((strings::OPEN_IN_NEW_TAB, sel!(openInNewTab:))), Some((strings::RENAME_NOTE, sel!(renameNote:))), Some((strings::MOVE_NOTE, sel!(moveNote:))), None, Some((strings::DELETE, sel!(deleteNote:)))]
+            &[
+                Some((strings::OPEN_IN_NEW_TAB, sel!(openInNewTab:))),
+                Some((strings::RENAME_NOTE, sel!(renameNote:))),
+                Some((strings::MOVE_NOTE, sel!(moveNote:))),
+                Some((ai, sel!(toggleAi:))),
+                None,
+                Some((strings::DELETE, sel!(deleteNote:))),
+            ]
         };
         for entry in entries {
             match entry {
@@ -331,6 +356,27 @@ impl NoteListSource {
     /// The spaces whose marks the rows show, and the window's (whose own go unmarked).
     pub fn set_spaces(&self, spaces: Arc<Spaces>, current: Option<String>) {
         *self.ivars().spaces.borrow_mut() = (spaces, current);
+    }
+
+    /// What is kept from the AI, whose rows the list marks (ADR 0036).
+    pub fn set_ai(&self, ai: Arc<KeptFromAi>) {
+        *self.ivars().ai.borrow_mut() = ai;
+    }
+
+    /// Called with the path of a document its row's menu keeps from the AI or shows it.
+    pub fn on_ai(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_ai.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The rows drawn with the AI's mark, for the probe: "a | b" (their titles).
+    pub fn probe_ai_marks(&self) -> String {
+        let Some(table) = self.ivars().table.borrow().load() else { return String::new() };
+        let marked: Vec<String> = (0..table.numberOfRows())
+            .filter_map(|row| table.viewAtColumn_row_makeIfNecessary(0, row, true))
+            .filter(|cell| crate::ai_mark::shown(cell))
+            .filter_map(|cell| cell.downcast::<NSTableCellView>().ok().and_then(|cell| field(&cell, TITLE_ID)).map(|f| f.stringValue().to_string()))
+            .collect();
+        marked.join(" | ")
     }
 
     /// The marked notes of the list, for the probe: "b • Дім | c • Робота".
@@ -470,9 +516,10 @@ impl NoteListSource {
                 let from = entry.path.rsplit_once('/').map(|(folder, _)| folder);
                 let about = if entry.folder { strings::deleted_folder(entry.notes) } else { strings::deleted_from(from) };
                 set_field(&cell, SNIPPET_ID, &about);
-                if let Some(dot) = cell.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == DOT_ID)) {
+                if let Some(dot) = crate::ai_mark::dot(&cell, DOT_ID) {
                     dot.setHidden(true);
                 }
+                crate::ai_mark::show(&cell, false);
                 Some(Retained::into_super(cell))
             }
             ListItem::Note(i) | ListItem::Found(i, _) => {
@@ -488,7 +535,7 @@ impl NoteListSource {
                 };
                 set_field(&cell, SNIPPET_ID, snippet);
                 // The mark of the note's space, when the window is not in it (ADR 0030).
-                if let Some(dot) = cell.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == DOT_ID)).and_then(|v| v.downcast::<NSImageView>().ok()) {
+                if let Some(dot) = crate::ai_mark::dot(&cell, DOT_ID) {
                     let (spaces, current) = &*self.ivars().spaces.borrow();
                     let mark = space_mark(spaces, current.as_deref(), &row.path);
                     if let Some(space) = mark {
@@ -496,6 +543,8 @@ impl NoteListSource {
                     }
                     dot.setHidden(mark.is_none());
                 }
+                // The AI's mark, when it never sees the note (ADR 0036).
+                crate::ai_mark::show(&cell, self.ivars().ai.borrow().holds(&row.path));
                 Some(Retained::into_super(cell))
             }
         }
@@ -572,7 +621,7 @@ pub const NOTE_PATH_TYPE: &str = "app.knotes.note-path";
 pub const TITLE_ID: &str = "title";
 pub const TIME_ID: &str = "time";
 pub const SNIPPET_ID: &str = "snippet";
-/// The dot of another space beside a note's title (ADR 0030).
+/// The dot of another space beside a note's title (ADR 0030), among its marks.
 const DOT_ID: &str = "space-dot";
 
 fn header_cell(table: &NSTableView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
@@ -604,22 +653,19 @@ fn note_cell(table: &NSTableView, mtm: MainThreadMarker) -> Retained<NSTableCell
         title.setContentCompressionResistancePriority_forOrientation(200.0, NSLayoutConstraintOrientation::Horizontal);
         let dot = NSImageView::new(mtm);
         dot.setIdentifier(Some(&NSString::from_str(DOT_ID)));
-        dot.setTranslatesAutoresizingMaskIntoConstraints(false);
         dot.setHidden(true);
-        dot.setContentCompressionResistancePriority_forOrientation(900.0, NSLayoutConstraintOrientation::Horizontal);
+        let marks = crate::ai_mark::marks(mtm, &dot);
         for v in [&title, &time, &snippet] {
             cell.addSubview(v);
         }
-        cell.addSubview(&dot);
+        cell.addSubview(&marks);
         activate(&[
             title.topAnchor().constraintEqualToAnchor_constant(&cell.topAnchor(), 7.0),
             title.leadingAnchor().constraintEqualToAnchor_constant(&cell.leadingAnchor(), 8.0),
-            // The space's dot right after the title, which gives way to it.
-            dot.leadingAnchor().constraintEqualToAnchor_constant(&title.trailingAnchor(), 5.0),
-            dot.centerYAnchor().constraintEqualToAnchor(&title.centerYAnchor()),
-            dot.widthAnchor().constraintEqualToConstant(9.0),
-            dot.heightAnchor().constraintEqualToConstant(9.0),
-            dot.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&cell.trailingAnchor(), -8.0),
+            // The AI's mark and the space's dot right after the title, which gives way to them.
+            marks.leadingAnchor().constraintEqualToAnchor_constant(&title.trailingAnchor(), 5.0),
+            marks.centerYAnchor().constraintEqualToAnchor(&title.centerYAnchor()),
+            marks.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&cell.trailingAnchor(), -8.0),
             time.topAnchor().constraintEqualToAnchor_constant(&title.bottomAnchor(), 3.0),
             time.leadingAnchor().constraintEqualToAnchor(&title.leadingAnchor()),
             snippet.firstBaselineAnchor().constraintEqualToAnchor(&time.firstBaselineAnchor()),

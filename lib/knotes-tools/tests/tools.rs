@@ -596,3 +596,19 @@ fn a_folder_kept_from_the_ai_stays_kept_when_its_rules_cannot_be_read() {
     assert!(matches!(kept, Err(ToolError::Excluded(_))), "the others' rules stay: {kept:?}");
     assert!(broken.is_ok(), "no word of the AI in it: shared as before: {broken:?}");
 }
+
+#[test]
+fn a_pdf_its_folder_lists_as_kept_from_the_ai_no_tool_shows() {
+    // A PDF has no tags: it is kept in its folder's `.knotes.json` (ADR 0036).
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Docs/.knotes.json", r#"{"files": {"budget.pdf": {"ai": false}}}"#);
+    write(dir.path(), "Docs/budget.pdf", "%PDF-1.4");
+    write(dir.path(), "Docs/plan.pdf", "%PDF-1.4");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    assert!(matches!(tools.call("read_pdf", &json!({"path": "Docs/budget.pdf"})), Err(ToolError::Excluded(_))));
+    assert!(tools.call("read_pdf", &json!({"path": "Docs/plan.pdf"})).is_ok(), "its neighbour is shared");
+    let found = tools.call("search", &json!({"query": "radar budget"})).unwrap();
+    assert!(!found.to_string().contains("budget.pdf"), "{found}");
+}

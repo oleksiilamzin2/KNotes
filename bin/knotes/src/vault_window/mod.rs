@@ -13,6 +13,7 @@ mod embeds;
 mod trash;
 mod spaces;
 mod probe_actions;
+mod ai;
 
 use self::{completion::*, editing::*, find::*, list::*};
 
@@ -107,6 +108,8 @@ struct State {
     rest_tags: HashSet<String>,
     /// The recently deleted, the newest first (ADR 0032).
     trash: Arc<Vec<TrashEntry>>,
+    /// What is kept from the AI (ADR 0036).
+    ai: Arc<knotes_spaces::KeptFromAi>,
 }
 
 impl State {
@@ -360,6 +363,7 @@ impl VaultWindow {
             space_folders: None,
             rest_tags: HashSet::new(),
             trash: Arc::new(Vec::new()),
+            ai: Arc::default(),
         };
         let this = Rc::new(Self {
             window,
@@ -621,6 +625,19 @@ impl VaultWindow {
         this.sidebar.on_delete_folder(move |folder| {
             if let Some(window) = weak_delete_folder.upgrade() {
                 window.delete_folder(&folder);
+            }
+        });
+        // Kept from the AI, or shown to it again (ADR 0036).
+        let weak_ai: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_ai(move |path| {
+            if let Some(window) = weak_ai.upgrade() {
+                window.toggle_ai(&path);
+            }
+        });
+        let weak_folder_ai: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_folder_ai(move |folder| {
+            if let Some(window) = weak_folder_ai.upgrade() {
+                window.toggle_folder_ai(&folder);
             }
         });
         let weak_restore: Weak<Self> = Rc::downgrade(&this);
@@ -902,7 +919,10 @@ impl VaultWindow {
             state.catalog = Arc::clone(&snapshot.catalog);
             state.spaces = Arc::clone(&snapshot.spaces);
             state.trash = Arc::clone(&snapshot.trash);
+            state.ai = Arc::clone(&snapshot.ai);
         }
+        self.list.set_ai(Arc::clone(&snapshot.ai));
+        self.sidebar.set_ai(Arc::clone(&snapshot.ai));
         if !self.space_restored.replace(true) {
             self.state.borrow_mut().space = self.saved_space();
         }

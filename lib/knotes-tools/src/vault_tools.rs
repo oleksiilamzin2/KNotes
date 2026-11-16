@@ -1,12 +1,12 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use knotes_core::{BlockHit, ContentQuery, DocumentPages, FolderRulesStore, MeaningSearch, NoteParser, Span, TitleSearch, VaultReader, Within};
 use knotes_md::MarkdownParser;
 use knotes_search::TitleIndex;
-use knotes_spaces::{Space, Spaces};
+use knotes_spaces::{KeptFromAi, Space, Spaces};
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
@@ -17,39 +17,24 @@ const FRAGMENT: usize = 400;
 /// A read stops past this many characters, at a block's or page's end.
 const READ_BUDGET: usize = 24_000;
 /// The tag that keeps a note from the AI (ADR 0004).
-pub const NO_AI_TAG: &str = "no-ai";
+pub use knotes_spaces::NO_AI_TAG;
 
-/// What the user keeps from the AI: the notes tagged `#no-ai`, and the folders whose
-/// `.knotes.json` sets `ai` (paths composed).
+/// What the user keeps from the AI (`KeptFromAi`, the one rule the window marks by too), and
+/// the vault's spaces (ADR 0030), read from the same rules files.
 #[derive(Default)]
 struct Kept {
-    notes: HashSet<String>,
-    folders: HashMap<String, bool>,
-    /// The vault's spaces (ADR 0030), read from the same rules files.
+    ai: KeptFromAi,
     spaces: Spaces,
 }
 
 impl Kept {
-    /// Whether `path` is kept: tagged, or under a folder whose nearest setting is `"ai": false`.
+    /// Whether `path` is kept: tagged `#no-ai`, listed so in its folder, or in a folder kept.
     fn holds(&self, path: &str) -> bool {
-        let path = composed(path);
-        if self.notes.contains(&path) {
-            return true;
-        }
-        let mut folder = path.as_str();
-        loop {
-            folder = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
-            if let Some(&shared) = self.folders.get(folder) {
-                return !shared;
-            }
-            if folder.is_empty() {
-                return false;
-            }
-        }
+        self.ai.holds(path)
     }
 
     fn is_empty(&self) -> bool {
-        self.notes.is_empty() && self.folders.values().all(|&shared| shared)
+        self.ai.is_empty()
     }
 }
 
@@ -137,7 +122,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn look_up_kept(&self) -> Kept {
-        let notes = self.index.notes_with_tag(NO_AI_TAG).unwrap_or_default().iter().map(|p| composed(p)).collect();
+        let tagged = self.index.notes_with_tag(NO_AI_TAG).unwrap_or_default();
         let mut folders: BTreeSet<String> = BTreeSet::from([String::new()]);
         for entry in self.index.catalog().unwrap_or_default() {
             let mut path = entry.path.as_str();
@@ -158,19 +143,14 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             }
         }
         let spaces = Spaces::from_texts(&rules);
-        let folders = rules
-            .into_iter()
-            .filter_map(|(folder, text)| {
-                let ai = match serde_json::from_str::<Value>(&text) {
-                    Ok(value) => value.get("ai")?.as_bool()?,
-                    Err(_) if text.contains("\"ai\"") => false,
-                    Err(_) => return None,
-                };
-                Some((composed(&folder), ai))
-            })
-            .chain(unreadable.into_iter().map(|folder| (folder, false)))
-            .collect();
-        Kept { notes, folders, spaces }
+        let mut ai = KeptFromAi::new(tagged.iter().map(String::as_str), []);
+        for (folder, text) in &rules {
+            ai.add_rules_text(folder, text);
+        }
+        for folder in &unreadable {
+            ai.keep_folder(folder);
+        }
+        Kept { ai, spaces }
     }
 
     /// The space a tool's `space` argument names, by its name (any case) or id; none when not

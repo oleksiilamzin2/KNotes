@@ -44,8 +44,9 @@ lives outside the folder and can be thrown away at any time.
 
 - A chat with an OpenAI model on your own ChatGPT plan, with no API key. It reads your notes
   through search and links to the ones it used; it cannot change them.
-- Notes tagged `#no-ai`, and folders whose `.knotes.json` says `"ai": false`, are never
-  shown to it.
+- Anything you choose is never shown to it: «Сховати від ШІ» in a note's, file's or folder's
+  menu keeps it, and a small grey struck-through brain marks it. (Underneath, a note gets the
+  `#no-ai` tag; a folder or a PDF is named in its folder's `.knotes.json`.)
 - An MCP server, `knotes-mcp`, gives the same read-only tools to other agents, such as
   Claude Code.
 

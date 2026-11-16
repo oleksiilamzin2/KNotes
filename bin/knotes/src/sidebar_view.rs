@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use knotes_app::{Sidebar, SidebarItem, folder_space_mark, space_mark};
-use knotes_spaces::Spaces;
+use knotes_spaces::{KeptFromAi, Spaces};
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -62,6 +62,10 @@ pub struct Ivars {
     on_rename_end: RefCell<Option<OnRenameEnd>>,
     /// Called with a folder to move into the recently deleted (ADR 0032).
     on_delete_folder: RefCell<Option<OnDeleteFolder>>,
+    /// What is kept from the AI, for its marks; and what a folder's menu calls to keep the
+    /// folder from it or show it (ADR 0036).
+    ai: RefCell<Arc<KeptFromAi>>,
+    on_folder_ai: RefCell<Option<OnDeleteFolder>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -217,6 +221,15 @@ define_class!(
             }
         }
 
+        /// A folder's menu: kept from the AI, or shown to it again (ADR 0036).
+        #[unsafe(method(toggleFolderAi:))]
+        fn toggle_folder_ai(&self, item: &NSMenuItem) {
+            let folder = item.representedObject().and_then(|o| o.downcast::<NSString>().ok()).and_then(|k| SidebarItem::from_key(&k.to_string())).and_then(|i| drop_folder(&i).map(str::to_owned));
+            if let (Some(folder), Some(callback)) = (folder, self.ivars().on_folder_ai.borrow().as_ref()) {
+                callback(folder);
+            }
+        }
+
         #[unsafe(method(renameFolder:))]
         fn rename_folder(&self, _sender: Option<&AnyObject>) {
             if let Some((row, _)) = self.menu_folder() {
@@ -267,6 +280,8 @@ impl SidebarSource {
             on_new_folder: RefCell::new(None),
             on_rename_end: RefCell::new(None),
             on_delete_folder: RefCell::new(None),
+            ai: RefCell::new(Arc::default()),
+            on_folder_ai: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -299,13 +314,15 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             image.setImage(icon.and_then(|name| NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)).as_deref());
             image.setHidden(icon.is_none());
         }
-        if let Some(dot) = dot_view(&cell) {
+        if let Some(dot) = crate::ai_mark::dot(&cell, DOT_ID) {
             let mark = self.mark(&item);
             if let Some(space) = &mark {
                 dot.setImage(crate::space_ui::dot(space.color, 9.0, &space.name).as_deref());
             }
             dot.setHidden(mark.is_none());
         }
+        // The AI's mark: a folder it never looks into, a tab's document it never sees (ADR 0036).
+        crate::ai_mark::show(&cell, self.kept_from_ai(&item));
         if let Some(count) = count_field(&cell) {
             let text = model.count(&item).map(|n| n.to_string()).unwrap_or_default();
             count.setStringValue(&NSString::from_str(&text));
@@ -345,8 +362,9 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     /// for other rows. Each item knows its row's item.
     pub fn fill_menu(&self, menu: &NSMenu, item: Option<&SidebarItem>) {
         menu.removeAllItems();
+        let ai = if item.is_some_and(|i| self.kept_from_ai(i)) { strings::SHOW_TO_AI } else { strings::KEEP_FROM_AI };
         let entries: &[(&str, Sel)] = match item {
-            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (strings::DELETE, sel!(deleteFolder:))],
+            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (ai, sel!(toggleFolderAi:)), (strings::DELETE, sel!(deleteFolder:))],
             Some(SidebarItem::Tab(_)) => &[(strings::CLOSE_TAB, sel!(closeTabFromMenu:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))],
             // Below the rows: a new folder at the vault's top.
             None => &[(strings::NEW_FOLDER, sel!(newFolder:))],
@@ -402,6 +420,38 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
 
     pub fn set_spaces(&self, spaces: Arc<Spaces>, current: Option<String>) {
         *self.ivars().spaces.borrow_mut() = (spaces, current);
+    }
+
+    /// What is kept from the AI, whose folders and tabs the rows mark (ADR 0036).
+    pub fn set_ai(&self, ai: Arc<KeptFromAi>) {
+        *self.ivars().ai.borrow_mut() = ai;
+    }
+
+    /// Called with a folder its menu keeps from the AI or shows it.
+    pub fn on_folder_ai(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_folder_ai.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Whether the AI never sees `item`: a folder, or a tab's document.
+    fn kept_from_ai(&self, item: &SidebarItem) -> bool {
+        let ai = self.ivars().ai.borrow();
+        match item {
+            SidebarItem::Folder(folder) => ai.holds_folder(folder),
+            SidebarItem::Tab(path) => ai.holds(path),
+            _ => false,
+        }
+    }
+
+    /// The rows drawn with the AI's mark, for the probe: "Diary | b" (their names).
+    pub fn probe_ai_marks(&self) -> String {
+        let Some(outline) = self.ivars().outline.borrow().load() else { return String::new() };
+        let marked: Vec<String> = (0..outline.numberOfRows())
+            .filter_map(|row| outline.viewAtColumn_row_makeIfNecessary(0, row, true))
+            .filter(|cell| crate::ai_mark::shown(cell))
+            // SAFETY: the cells are built by `cell` with their text field set.
+            .filter_map(|cell| cell.downcast::<NSTableCellView>().ok().and_then(|cell| unsafe { cell.textField() }).map(|f| f.stringValue().to_string()))
+            .collect();
+        marked.join(" | ")
     }
 
     /// The space whose dot a row shows (ADR 0030): a folder's where it sets one, a tab's
@@ -585,7 +635,7 @@ const CELL_ID: &str = "SidebarCell";
 const GAP_HEIGHT: f64 = 10.0;
 const COUNT_ID: &str = "count";
 const CLOSE_ID: &str = "close";
-/// A row's space dot (ADR 0030).
+/// A row's space dot (ADR 0030), among its marks.
 const DOT_ID: &str = "space-dot";
 
 /// A reused cell (icon, name, count on the right), laid out with constraints.
@@ -612,11 +662,13 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     close.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
     close.setIdentifier(Some(&NSString::from_str(CLOSE_ID)));
     close.setHidden(true);
-    // The dot of a space (ADR 0030), right after the name; hidden on most rows.
+    // The AI's mark (ADR 0036) and the dot of a space (ADR 0030), right after the name; hidden
+    // on most rows.
     let dot = NSImageView::new(mtm);
     dot.setIdentifier(Some(&NSString::from_str(DOT_ID)));
     dot.setHidden(true);
-    for view in [&*image as &NSView, &name, &count, &close, &dot] {
+    let marks = crate::ai_mark::marks(mtm, &dot);
+    for view in [&*image as &NSView, &name, &count, &close, &marks] {
         view.setTranslatesAutoresizingMaskIntoConstraints(false);
         cell.addSubview(view);
     }
@@ -631,12 +683,10 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         close.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
         close.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         close.widthAnchor().constraintEqualToConstant(16.0),
-        dot.leadingAnchor().constraintEqualToAnchor_constant(&name.trailingAnchor(), 5.0),
-        dot.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
-        dot.widthAnchor().constraintEqualToConstant(9.0),
-        dot.heightAnchor().constraintEqualToConstant(9.0),
-        dot.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&count.leadingAnchor(), -6.0),
-        dot.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&close.leadingAnchor(), -4.0),
+        marks.leadingAnchor().constraintEqualToAnchor_constant(&name.trailingAnchor(), 5.0),
+        marks.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
+        marks.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&count.leadingAnchor(), -6.0),
+        marks.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&close.leadingAnchor(), -4.0),
     ];
     for c in &constraints {
         c.setActive(true);
@@ -725,10 +775,6 @@ impl SidebarCell {
 pub fn close_button(cell: &NSTableCellView) -> Option<Retained<NSButton>> {
     let id = NSString::from_str(CLOSE_ID);
     cell.subviews().iter().find(|v| v.identifier().is_some_and(|i| i.isEqualToString(&id))).and_then(|v| v.downcast::<NSButton>().ok())
-}
-
-fn dot_view(cell: &NSTableCellView) -> Option<Retained<NSImageView>> {
-    cell.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == DOT_ID)).and_then(|v| v.downcast::<NSImageView>().ok())
 }
 
 pub fn count_field(cell: &NSTableCellView) -> Option<Retained<NSTextField>> {

@@ -60,6 +60,10 @@ impl VaultWindow {
             if let Some((path, folder)) = action.strip_prefix("drop-path=").and_then(|s| s.split_once('=')) {
                 self.move_note_to(path, folder);
             }
+            // `ai-path=Docs/a.pdf`: what the row's «Сховати від ШІ» calls (ADR 0036).
+            if let Some(path) = action.strip_prefix("ai-path=") {
+                self.toggle_ai(path);
+            }
         }
         probe::list_menu_requested(&self.list, &self.table);
         probe::drag_requested(&self.list, &self.table, &self.sidebar);

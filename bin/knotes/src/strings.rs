@@ -79,6 +79,13 @@ pub const SPACES_NOTE: &str = "Простори бази зберігаютьс�
 pub const SPACES_NO_VAULT: &str = "Відкрийте базу, щоб налаштувати її простори.";
 pub const ADD_SPACE: &str = "Додати простір";
 pub const DELETE: &str = "Видалити";
+/// A note's, a file's or a folder's menu (ADR 0036).
+pub const KEEP_FROM_AI: &str = "Сховати від ШІ";
+pub const SHOW_TO_AI: &str = "Показати ШІ";
+/// The mark of what the AI never sees, as a tooltip and to VoiceOver.
+pub const KEPT_FROM_AI: &str = "Сховано від ШІ";
+/// Why a note read only cannot be kept from the AI or shown to it (its tag cannot be written).
+pub const READ_ONLY_TAG: &str = "Нотатку відкрито лише для читання, тож тег #no-ai у неї не записати.";
 pub const NEW_SPACE_NAME: &str = "Новий простір";
 pub const DELETE_SPACE_NOTE: &str = "Його теки й нотатки лишаться на місці, лише вийдуть із простору.";
 
@@ -337,6 +344,10 @@ pub fn mention_failed(name: &str) -> String {
 }
 pub fn folder_space_failed(name: &str) -> String {
     format!("Не вдалося змінити простір теки «{name}»")
+}
+/// "Не вдалося сховати «Щоденник» від ШІ", or show it.
+pub fn ai_failed(name: &str, keep: bool) -> String {
+    if keep { format!("Не вдалося сховати «{name}» від ШІ") } else { format!("Не вдалося показати «{name}» ШІ") }
 }
 pub const SPACES_FAILED: &str = "Не вдалося зберегти простори";
 pub const TRASH_DAYS_FAILED: &str = "Не вдалося зберегти, скільки днів зберігати видалене";

@@ -3193,7 +3193,7 @@ fn an_empty_folder_shows_in_the_sidebar() {
 fn a_new_folder_is_made_from_a_folder_s_menu_or_the_sidebar_s_and_named_in_place() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "new-folder=Work"), ("KNOTES_PROBE_FOLDER_NAME", "Звіти")]);
-    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Видалити | Простір"), "{out}");
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Сховати від ШІ | Видалити | Простір"), "{out}");
     assert!(vault.path().join("Work/Звіти").is_dir() && !vault.path().join("Work/Нова тека").exists(), "made and renamed: {out}");
     // At the top of a space: the new folder joins it.
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_ACTION", "new-folder=")]);
@@ -3265,7 +3265,7 @@ fn deleted_entries(vault: &std::path::Path) -> usize {
 fn a_note_deleted_from_its_menu_goes_to_recently_deleted_and_comes_back_from_there() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);
-    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | — | Видалити"), "{out}");
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | Сховати від ШІ | — | Видалити"), "{out}");
     assert!(!vault.path().join("Work/a.md").exists() && deleted_entries(vault.path()) == 1, "{out}");
     assert!(out.contains("Нещодавно видалені (1)"), "a row for them: {out}");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-restore")]);
@@ -3279,7 +3279,7 @@ fn a_note_deleted_from_its_menu_goes_to_recently_deleted_and_comes_back_from_the
 fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_emptied() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-delete=Home")]);
-    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Видалити | Простір"), "{out}");
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Сховати від ШІ | Видалити | Простір"), "{out}");
     assert!(!vault.path().join("Home").exists() && deleted_entries(vault.path()) == 1, "{out}");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted")]);
     let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
@@ -3666,4 +3666,90 @@ fn the_line_break_above_a_table_is_not_deleted_into_its_header() {
 fn empty_brackets_typed_in_a_code_block_stay_as_typed() {
     let (vault, out) = probe_notes(&[("a.md", "```md\n\n```\nend")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "- [] x"), ("KNOTES_PROBE_TYPE_CHARS", "1"), ("KNOTES_PROBE_RANGE", "6,0"), ("KNOTES_PROBE_ACTION", "save")]);
     assert_eq!(read(vault.path(), "a.md"), "```md\n- [] x\n```\nend", "{out}");
+}
+
+/// A vault for keeping things from the AI (ADR 0036): a diary folder, a note, a PDF.
+fn ai_vault() -> tempfile::TempDir {
+    let vault = tempfile::tempdir().unwrap();
+    for (path, text) in [("Щоденник/день.md", "Мій день."), ("Щоденник/Відкрите/план.md", "План."), ("нотатка.md", "Текст #no-ai тут."), ("Docs/a.pdf", "%PDF-1.4")] {
+        let path = vault.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    vault
+}
+
+/// The rows a probe's report line lists, sorted.
+fn listed<'a>(out: &'a str, line: &str) -> Vec<&'a str> {
+    let rows = out.lines().find_map(|l| l.strip_prefix(line)).unwrap_or_else(|| panic!("no {line}: {out}"));
+    let mut rows: Vec<&str> = rows.split(" | ").filter(|r| !r.is_empty()).collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn a_note_kept_from_the_ai_from_its_menu_is_tagged_marked_and_shown_again() {
+    let vault = ai_vault();
+    let day = vault.path().join("Щоденник/день.md");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Щоденник/день.md"), ("KNOTES_PROBE_ACTION", "list-ai")]);
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | Сховати від ШІ | — | Видалити"), "{out}");
+    assert_eq!(std::fs::read_to_string(&day).unwrap(), "---\ntags: [no-ai]\n---\nМій день.", "the open note tagged in the editor, and saved");
+    let out = probe_with(&[vault.path()], None);
+    assert_eq!(listed(&out, "list-ai-marks: "), ["день", "нотатка"], "a tag in the text counts too");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Щоденник/день.md"), ("KNOTES_PROBE_ACTION", "list-ai")]);
+    assert!(out.contains("| Показати ШІ |"), "{out}");
+    assert_eq!(std::fs::read_to_string(&day).unwrap(), "Мій день.", "the tag gone with the frontmatter it made");
+}
+
+#[test]
+fn a_note_not_open_is_kept_from_the_ai_on_the_disk_and_its_tag_in_the_text_goes_when_shown() {
+    let vault = ai_vault();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Щоденник/день.md"), ("KNOTES_PROBE_ACTION", "ai-path=нотатка.md")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("нотатка.md")).unwrap(), "Текст тут.", "shown: its #no-ai taken out of the text");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Щоденник/день.md"), ("KNOTES_PROBE_ACTION", "ai-path=нотатка.md")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("нотатка.md")).unwrap(), "---\ntags: [no-ai]\n---\nТекст тут.");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Щоденник/день.md")).unwrap(), "Мій день.", "the note open untouched");
+}
+
+#[test]
+fn a_folder_kept_from_the_ai_from_its_menu_marks_itself_and_the_notes_in_it_subfolders_too() {
+    let vault = ai_vault();
+    let rules = |folder: &str| std::fs::read_to_string(vault.path().join(folder).join(".knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-ai=Щоденник")]);
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Сховати від ШІ | Видалити | Простір"), "{out}");
+    assert_eq!(rules("Щоденник"), Some(serde_json::json!({"ai": false})));
+    let out = probe_with(&[vault.path()], None);
+    assert_eq!(listed(&out, "sidebar-ai-marks: "), ["Щоденник"], "{out}");
+    assert_eq!(listed(&out, "list-ai-marks: "), ["день", "нотатка", "план"], "the subfolder's note too: {out}");
+    // A subfolder shown again says so itself; a note in the folder shown again, in its rules.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-ai=Щоденник/Відкрите")]);
+    assert!(out.contains("| Показати ШІ |"), "{out}");
+    assert_eq!(rules("Щоденник/Відкрите"), Some(serde_json::json!({"ai": true})));
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "ai-path=Щоденник/день.md")]);
+    assert_eq!(rules("Щоденник"), Some(serde_json::json!({"ai": false, "files": {"день.md": {"ai": true}}})));
+    let out = probe_with(&[vault.path()], None);
+    assert_eq!(listed(&out, "list-ai-marks: "), ["нотатка"], "{out}");
+    // The folder shown again: its key goes, its notes' too would be said where they differ.
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-ai=Щоденник")]);
+    assert_eq!(rules("Щоденник"), Some(serde_json::json!({"files": {"день.md": {"ai": true}}})));
+}
+
+#[test]
+fn a_pdf_is_kept_from_the_ai_in_its_folder_s_rules_and_shown_again() {
+    let vault = ai_vault();
+    let rules = || std::fs::read_to_string(vault.path().join("Docs/.knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "ai-path=Docs/a.pdf")]);
+    assert_eq!(rules(), Some(serde_json::json!({"files": {"a.pdf": {"ai": false}}})));
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "ai-path=Docs/a.pdf")]);
+    assert_eq!(rules(), Some(serde_json::json!({})), "its entry gone, and the files with it");
+}
+
+#[test]
+fn a_folder_whose_rules_do_not_parse_is_not_written_over_when_kept_from_the_ai() {
+    let vault = ai_vault();
+    let broken = r#"{"space": "work",}"#;
+    std::fs::write(vault.path().join("Щоденник/.knotes.json"), broken).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-ai=Щоденник")]);
+    assert!(out.contains("failed: Не вдалося сховати «Щоденник» від ШІ"), "told: {out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Щоденник/.knotes.json")).unwrap(), broken);
 }

@@ -1,5 +1,6 @@
 //! Knotes: the AppKit app (ADR 0002, 0010).
 
+mod ai_mark;
 mod app_delegate;
 mod chat_bubble;
 mod chat_eval;
