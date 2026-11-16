@@ -581,6 +581,9 @@ impl VaultWindow {
             editing.document.named();
         }
         self.state.borrow_mut().history.rename(&old, &path);
+        // Its tab follows the file (the next snapshot drops tabs whose files are gone).
+        self.tabs.borrow_mut().rename(&old, &path);
+        self.save_tabs();
         self.live_preview.set_path(&path);
     }
 

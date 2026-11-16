@@ -3433,3 +3433,15 @@ fn a_sort_order_chosen_leaves_a_rules_file_that_does_not_parse_as_it_is() {
     assert!(out.contains("rules-not-written: Work/.knotes.json: .knotes.json: trailing comma"), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("Work/.knotes.json")).unwrap(), rules);
 }
+
+#[test]
+fn a_new_note_named_after_its_first_line_keeps_its_tab() {
+    let home = tempfile::tempdir().unwrap();
+    let (_vault, out) = probe_notes_at_home(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "new"), ("KNOTES_PROBE_TYPE", "Мій заголовок\nтекст")], home.path());
+    // The tabs as the app left them on quitting, beside the vault's index.
+    let vaults = home.path().join("Library/Application Support/Knotes/vaults");
+    let file = std::fs::read_dir(vaults).unwrap().map(|e| e.unwrap().path().join("tabs.json")).find(|p| p.exists()).expect("tabs.json");
+    let tabs = std::fs::read_to_string(file).unwrap();
+    assert!(tabs.contains("Вхідні/Мій заголовок.md"), "{tabs}\n{out}");
+    assert!(!tabs.contains("Без назви"), "{tabs}");
+}
