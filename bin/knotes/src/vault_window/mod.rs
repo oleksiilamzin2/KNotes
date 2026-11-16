@@ -804,18 +804,52 @@ impl VaultWindow {
                     SidebarItem::Folder(path) => path.clone(),
                     _ => String::new(),
                 };
-                let mut rules = state.rules.get(&folder).cloned().unwrap_or_else(|| FolderRules::parse("{}").expect("empty object"));
-                rules.set_option(option);
-                if let Some(vault) = &state.vault
-                    && let Err(e) = FsVault::new(vault).write_rules(&folder, &rules.to_json())
-                {
-                    eprintln!("knotes: cannot save {folder}/.knotes.json: {e}");
-                }
-                Arc::make_mut(&mut state.rules).insert(folder, rules);
+                let Some(vault) = state.vault.clone() else { return };
+                drop(state);
+                let Some(rules) = self.write_list_option(&FsVault::new(&vault), &folder, option) else { return };
+                Arc::make_mut(&mut self.state.borrow_mut().rules).insert(folder, rules);
             }
         }
-        drop(state);
         self.refresh_list();
+    }
+
+    /// Writes `option` into the rules file of `folder` as it is on disk now, not as the last
+    /// snapshot read it: what was written there since stays. A file that does not parse is not
+    /// replaced (it would keep only the list's field; its spaces, `"ai": false` and the rest
+    /// would go): the user is told, and nothing changes. The rules as written.
+    fn write_list_option(&self, files: &FsVault, folder: &str, option: ListOption) -> Option<FolderRules> {
+        let file = if folder.is_empty() { knotes_app::RULES_FILE.to_owned() } else { format!("{folder}/{}", knotes_app::RULES_FILE) };
+        let parsed = files.read_rules(&[folder]).map_err(|e| e.to_string()).and_then(|found| {
+            let text = found.into_iter().next().map(|(_, text)| text).filter(|text| !text.trim().is_empty());
+            FolderRules::parse(text.as_deref().unwrap_or("{}"))
+        });
+        let mut rules = match parsed {
+            Ok(rules) => rules,
+            Err(e) => {
+                self.tell_rules_not_written(&file, &e);
+                return None;
+            }
+        };
+        rules.set_option(option);
+        if let Err(e) = files.write_rules(folder, &rules.to_json()) {
+            self.tell_rules_not_written(&file, &e.to_string());
+            return None;
+        }
+        Some(rules)
+    }
+
+    /// Says a list option was not saved, the rules file `file` being the reason (`error`).
+    fn tell_rules_not_written(&self, file: &str, error: &str) {
+        eprintln!("knotes: not written {file}: {error}");
+        if probe::enabled() {
+            println!("rules-not-written: {file}: {error}");
+            return;
+        }
+        let alert = NSAlert::new(MainThreadMarker::from(&*self.window));
+        alert.setMessageText(&NSString::from_str(strings::LIST_OPTION_NOT_SAVED));
+        alert.setInformativeText(&NSString::from_str(&strings::rules_file_error(file, error)));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+        alert.beginSheetModalForWindow_completionHandler(&self.window, None);
     }
 
     pub fn apply(&self, event: Event) {

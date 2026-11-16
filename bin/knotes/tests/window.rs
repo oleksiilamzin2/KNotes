@@ -3415,3 +3415,21 @@ fn a_note_not_in_utf8_keeps_its_bytes_when_a_note_it_links_to_is_renamed() {
     assert!(vault.path().join("New.md").exists(), "{out}");
     assert_eq!(std::fs::read(vault.path().join("b.md")).unwrap(), linking);
 }
+
+#[test]
+fn a_sort_order_chosen_keeps_the_rest_of_the_folder_s_rules_file() {
+    let rules = r#"{"space": "work", "ai": false, "list": {"group": false}}"#;
+    let (vault, out) = probe_notes(&[("Work/a.md", "a"), ("Work/.knotes.json", rules)], &[("KNOTES_PROBE_SELECT", "f:Work"), ("KNOTES_PROBE_ACTION", "sort=title")]);
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(vault.path().join("Work/.knotes.json")).unwrap()).unwrap();
+    assert_eq!(saved, serde_json::json!({"space": "work", "ai": false, "list": {"group": false, "sort": "title"}}), "{out}");
+}
+
+#[test]
+fn a_sort_order_chosen_leaves_a_rules_file_that_does_not_parse_as_it_is() {
+    // A comma too many, as typed by hand: the snapshot ignores the file, and the choice wrote
+    // `{"list": …}` over it, taking its space and `"ai": false` away.
+    let rules = "{\n  \"space\": \"work\",\n  \"ai\": false,\n}\n";
+    let (vault, out) = probe_notes(&[("Work/a.md", "a"), ("Work/.knotes.json", rules)], &[("KNOTES_PROBE_SELECT", "f:Work"), ("KNOTES_PROBE_ACTION", "sort=title")]);
+    assert!(out.contains("rules-not-written: Work/.knotes.json: .knotes.json: trailing comma"), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Work/.knotes.json")).unwrap(), rules);
+}
