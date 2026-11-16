@@ -930,6 +930,14 @@ impl VaultWindow {
         if let Some(path) = changed {
             self.changed_on_disk(&path);
         }
+        // The note open is gone from the disk (deleted or moved outside Knotes): it closes, its
+        // unwritten edits beside where it was. Asked of the disk, not of the snapshot, which may
+        // predate a file just made or renamed.
+        if let (Some(path), Some(vault)) = (self.open_path(), self.vault())
+            && !vault.join(&path).exists()
+        {
+            self.note_vanished();
+        }
         self.update_navigation();
         if probe::enabled() && !snapshot.rows.is_empty() && probe::act_once() {
             self.act_as_probe_asks();

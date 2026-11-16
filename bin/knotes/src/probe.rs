@@ -429,10 +429,16 @@ pub fn connection_link_requested(window: &std::rc::Rc<VaultWindow>) {
     });
 }
 
-/// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file.
+/// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file;
+/// `KNOTES_PROBE_DELETE=1`: another program deletes it.
 pub fn write_requested(window: &VaultWindow) {
-    let (Ok(text), Some(path), Some(vault)) = (std::env::var("KNOTES_PROBE_WRITE"), window.open_path(), window.vault()) else { return };
-    std::fs::write(vault.join(path), text).expect("outside write");
+    let (Some(path), Some(vault)) = (window.open_path(), window.vault()) else { return };
+    if let Ok(text) = std::env::var("KNOTES_PROBE_WRITE") {
+        std::fs::write(vault.join(&path), text).expect("outside write");
+    }
+    if std::env::var_os("KNOTES_PROBE_DELETE").is_some() {
+        std::fs::remove_file(vault.join(&path)).expect("outside delete");
+    }
 }
 
 /// `KNOTES_PROBE_REWRITE_IMAGE=pic.png=/path/new.png`: another program writes a new picture

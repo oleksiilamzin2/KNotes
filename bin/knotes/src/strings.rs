@@ -285,6 +285,12 @@ pub fn not_utf8(note: &str) -> String {
 pub const NOT_UTF8_DETAILS: &str =
     "Knotes показує її лише для читання, щоб не зіпсувати файл. Щоб редагувати її тут, збережіть її в UTF-8 в іншому редакторі.";
 
+/// The note open went from the disk with edits not written yet.
+pub const GONE_TITLE: &str = "Нотатку видалили або перенесли поза Knotes";
+pub fn gone_details(copy: &str) -> String {
+    format!("Незбережені зміни збережено поруч як «{copy}».")
+}
+
 /// A list option not saved: the folder's rules file does not parse, or cannot be written.
 pub const LIST_OPTION_NOT_SAVED: &str = "Налаштування списку не збережено";
 pub fn rules_file_error(file: &str, error: &str) -> String {

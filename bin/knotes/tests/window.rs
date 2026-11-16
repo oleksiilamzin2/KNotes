@@ -3434,6 +3434,12 @@ fn a_sort_order_chosen_leaves_a_rules_file_that_does_not_parse_as_it_is() {
     assert_eq!(std::fs::read_to_string(vault.path().join("Work/.knotes.json")).unwrap(), rules);
 }
 
+/// The files in `dir` named as conflict copies of the note `stem` (`stem (конфлікт …).md`).
+fn conflict_copies(dir: &std::path::Path, stem: &str) -> Vec<String> {
+    let prefix = format!("{stem} (конфлікт ");
+    std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(&prefix) && n.ends_with(").md")).collect()
+}
+
 #[test]
 fn a_new_note_named_after_its_first_line_keeps_its_tab() {
     let home = tempfile::tempdir().unwrap();
@@ -3444,4 +3450,29 @@ fn a_new_note_named_after_its_first_line_keeps_its_tab() {
     let tabs = std::fs::read_to_string(file).unwrap();
     assert!(tabs.contains("Вхідні/Мій заголовок.md"), "{tabs}\n{out}");
     assert!(!tabs.contains("Без назви"), "{tabs}");
+}
+
+#[test]
+fn an_open_note_deleted_outside_closes_and_its_unsaved_edits_go_beside_it() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    std::fs::write(vault.path().join("other.md"), "o").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", "!"), ("KNOTES_PROBE_DELETE", "1"), ("KNOTES_PROBE_DELAY_MS", "1500")]);
+    assert!(!vault.path().join("n.md").exists(), "not made again where it was: {out}");
+    let copies = conflict_copies(vault.path(), "n");
+    assert_eq!(copies.len(), 1, "{copies:?} {out}");
+    assert_eq!(read(vault.path(), &copies[0]), "hello!");
+    assert!(out.contains(&format!("vanished-notice: {}", copies[0])), "{out}");
+    assert!(out.contains("note-column: empty"), "{out}");
+}
+
+#[test]
+fn an_open_note_deleted_outside_without_edits_closes_and_comes_back_nowhere() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("n.md"), "hello").unwrap();
+    std::fs::write(vault.path().join("other.md"), "o").unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_DELETE", "1"), ("KNOTES_PROBE_DELAY_MS", "1500")]);
+    assert!(!vault.path().join("n.md").exists(), "{out}");
+    assert!(conflict_copies(vault.path(), "n").is_empty(), "{out}");
+    assert!(out.contains("note-column: empty"), "{out}");
 }

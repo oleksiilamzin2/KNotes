@@ -588,7 +588,9 @@ impl VaultWindow {
     }
 
     /// Writes the editor's text if it has unsaved edits. A change on disk the window has not
-    /// seen yet is kept next to the note as a conflict copy instead of being overwritten.
+    /// seen yet is kept next to the note as a conflict copy instead of being overwritten. A note
+    /// gone from the disk (deleted or moved outside Knotes) is not made again where it was: the
+    /// edits go beside that place, as a copy, and the note turns read only until it closes.
     /// The error when the text could not be written (it stays unsaved in the editor).
     pub(super) fn write_edits(&self) -> Result<(), SaveFailure> {
         let Some(vault) = self.state.borrow().vault.clone() else { return Ok(()) };
@@ -598,32 +600,65 @@ impl VaultWindow {
             let vault = FsVault::new(&vault);
             let text = self.note_text.string().to_string();
             let mut copy = None;
-            if let Ok(disk) = vault.read_text(&editing.path) {
-                match editing.document.on_disk(&disk, &text) {
-                    DiskChange::Conflict => copy = keep_conflict_copy(&vault, &editing.path, &disk),
+            match vault.read_text(&editing.path) {
+                Ok(disk) => match editing.document.on_disk(&disk, &text) {
+                    DiskChange::Conflict => copy = keep_conflict_copy(&vault, &editing.path, &disk).map(|c| (c, false)),
                     DiskChange::Ignore if !editing.document.is_dirty() => return Ok(()),
                     _ => {}
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let Some(kept) = keep_conflict_copy(&vault, &editing.path, &text) else { return Err((editing.path.clone(), e)) };
+                    editing.document.discarded();
+                    editing.read_only = true;
+                    copy = Some((kept, true));
                 }
+                Err(_) => {}
             }
-            let written = write(&vault, editing, &text).map_err(|e| (editing.path.clone(), e));
-            (copy.map(|copy| (editing.path.clone(), copy)), written)
+            let written = match copy {
+                Some((_, true)) => Ok(()),
+                _ => write(&vault, editing, &text).map_err(|e| (editing.path.clone(), e)),
+            };
+            (copy.map(|(copy, gone)| (editing.path.clone(), copy, gone)), written)
         };
-        if let Some((path, copy)) = copy {
-            self.tell_conflict(&path, &copy);
+        match copy {
+            Some((_, copy, true)) => {
+                self.show_note_column();
+                self.tell_copy(strings::GONE_TITLE, &strings::gone_details(knotes_app::title_of(&copy)), &copy, "vanished-notice");
+            }
+            Some((path, copy, false)) => self.tell_conflict(&path, &copy),
+            None => {}
         }
         written
+    }
+
+    /// The note open is gone from the disk: deleted, or moved outside Knotes (its new name is
+    /// not known). Edits not written yet go beside where it was (`write_edits`), and it closes;
+    /// when even that copy cannot be written it stays, its edits in it.
+    pub(super) fn note_vanished(&self) {
+        match self.write_edits() {
+            Ok(()) => {
+                self.show_nothing();
+            }
+            Err((path, e)) => self.tell_save_failed(&path, &e),
+        }
     }
 
     /// Tells where the other version of a note went (ADR 0011), in a sheet on the window that
     /// can open it.
     pub(super) fn tell_conflict(&self, path: &str, copy: &str) {
+        self.tell_copy(strings::CONFLICT_TITLE, &strings::conflict_details(knotes_app::title_of(path), knotes_app::title_of(copy)), copy, "conflict-notice");
+    }
+
+    /// A sheet saying `title` and `details` about the copy at `copy`, with a button opening it;
+    /// in probe mode the line `probe: copy`.
+    pub(super) fn tell_copy(&self, title: &str, details: &str, copy: &str, probe: &str) {
         if probe::enabled() {
-            println!("conflict-notice: {copy}");
+            println!("{probe}: {copy}");
             return;
         }
         let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
-        alert.setMessageText(&NSString::from_str(strings::CONFLICT_TITLE));
-        alert.setInformativeText(&NSString::from_str(&strings::conflict_details(knotes_app::title_of(path), knotes_app::title_of(copy))));
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(details));
         alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
         alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OPEN_COPY));
         let weak = self.this.borrow().clone();
