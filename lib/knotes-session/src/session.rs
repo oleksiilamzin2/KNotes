@@ -4,7 +4,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use knotes_core::BoxError;
-use knotes_index::SqliteIndex;
+use knotes_index::{SqliteIndex, is_corrupt};
 use knotes_indexer::Indexer;
 use knotes_md::MarkdownParser;
 use knotes_vault::{FsVault, FsWatcher};
@@ -21,6 +21,8 @@ const PURGE_EVERY: Duration = Duration::from_secs(3600);
 /// Index maintenance runs this long after the last change; otherwise the thread sleeps until
 /// a message arrives (no polling: an idle app does not wake up).
 const MAINTENANCE_DELAY: Duration = Duration::from_secs(2);
+/// After a failed sync the next try comes with the next change, or this long after.
+const RETRY: Duration = Duration::from_secs(30);
 
 /// Messages to the indexing thread.
 enum Control {
@@ -30,8 +32,12 @@ enum Control {
 
 pub enum Event {
     Snapshot(Snapshot),
-    /// Indexing stopped; the window shows the last snapshot and the error.
+    /// A sync, a snapshot or index upkeep failed; the window shows the last snapshot and says
+    /// it. Indexing goes on: the next change, or a retry, tries again.
     Error(String),
+    /// The vault cannot be watched (why): it is indexed, but changes made outside Knotes are
+    /// seen only when it is opened again.
+    NotWatched(String),
 }
 
 /// An open vault. Dropping it stops the background thread, then releases the lock.
@@ -53,8 +59,23 @@ impl VaultSession {
         let worker = {
             let (vault, dir, changes) = (vault.to_path_buf(), dir.clone(), control.clone());
             thread::Builder::new().name("knotes-index".into()).spawn(move || {
-                if let Err(e) = run(&vault, &dir, &tx, changes, &control_rx) {
-                    let _ = tx.send(Event::Error(e.to_string()));
+                loop {
+                    match run(&vault, &dir, &tx, changes.clone(), &control_rx) {
+                        Ok(()) => return,
+                        // Found damaged while open (its connection now closed): it is a cache,
+                        // built again from the vault, and the session goes on.
+                        Err(e) if is_corrupt(&e) => {
+                            eprintln!("knotes: the index of {} is damaged, built again: {e}", vault.display());
+                            if let Err(e) = SqliteIndex::recreate(&dir) {
+                                let _ = tx.send(Event::Error(e.to_string()));
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Event::Error(e.to_string()));
+                            return;
+                        }
+                    }
                 }
             })?
         };
@@ -76,6 +97,9 @@ impl Drop for VaultSession {
     }
 }
 
+/// Indexes the vault until told to stop. A failure is told (`Event::Error`) and indexing goes
+/// on, tried again with the next change or after `RETRY`; only an index that cannot be opened,
+/// or one found damaged (built again by the caller), ends it.
 fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, control: &Receiver<Control>) -> Result<(), BoxError> {
     let mut index = SqliteIndex::open(dir)?;
     let files = FsVault::new(vault);
@@ -85,31 +109,63 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
         *last.borrow_mut() = Some(snapshot.clone());
         Ok(tx.send(Event::Snapshot(snapshot)).is_ok())
     };
+    // What a step gave: go on (`Ok(true)`), the window is gone (`Ok(false)`), or a damaged index
+    // (`Err`, for the caller to build it again). Any other failure is told; `failed` says so.
+    let mut failed = false;
+    let settle = |result: Result<bool, BoxError>, failed: &mut bool| -> Result<bool, BoxError> {
+        match result {
+            Ok(going) => {
+                *failed = false;
+                Ok(going)
+            }
+            Err(e) if is_corrupt(&e) => Err(e),
+            Err(e) => {
+                *failed = true;
+                Ok(tx.send(Event::Error(e.to_string())).is_ok())
+            }
+        }
+    };
     purge_expired(&files);
     let mut purged_at = std::time::Instant::now();
-    send(&index, Vec::new())?;
-    // Watch before syncing, so changes made during the sync are picked up afterwards.
-    let _watcher = FsWatcher::with_callback(vault, DEBOUNCE, move |batch| changes.send(Control::Changed(batch)).is_ok())?;
+    if !settle(send(&index, Vec::new()), &mut failed)? {
+        return Ok(());
+    }
+    // Watch before syncing, so changes made during the sync are picked up afterwards. Without
+    // the watcher (a volume FSEvents does not watch) the vault is still indexed; changes made
+    // outside Knotes are then seen when it is opened again.
+    let _watcher = match FsWatcher::with_callback(vault, DEBOUNCE, move |batch| changes.send(Control::Changed(batch)).is_ok()) {
+        Ok(watcher) => Some(watcher),
+        Err(e) => {
+            if tx.send(Event::NotWatched(e.to_string())).is_err() {
+                return Ok(());
+            }
+            None
+        }
+    };
     // PDFs' text is indexed too (ADR 0022).
     let indexer = Indexer::with_documents(FsVault::new(vault), MarkdownParser::new(), knotes_pdf::PdfTexts::new(vault));
-    let first = indexer.sync(&mut index)?;
-    let touched = first.added + first.modified + first.removed;
-    if touched >= LARGE_SYNC {
-        memory::give_back(&index);
-    }
-    if touched > 0 && !send(&index, Vec::new())? {
+    // A sync and, when it changed something or `always`, its snapshot.
+    let sync = |index: &mut SqliteIndex, changed: Vec<String>, always: bool| -> Result<bool, BoxError> {
+        let report = indexer.sync(index)?;
+        let touched = report.added + report.modified + report.removed;
+        if touched >= LARGE_SYNC {
+            memory::give_back(index);
+        }
+        if touched > 0 || always { send(index, changed) } else { Ok(true) }
+    };
+    if !settle(sync(&mut index, Vec::new(), false), &mut failed)? {
         return Ok(());
     }
     let mut maintenance_due = true;
     loop {
-        let message = if maintenance_due {
-            match control.recv_timeout(MAINTENANCE_DELAY) {
+        let wait = if failed { Some(RETRY) } else { maintenance_due.then_some(MAINTENANCE_DELAY) };
+        let message = match wait {
+            Some(wait) => match control.recv_timeout(wait) {
                 Ok(m) => Some(m),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
-            }
-        } else {
-            Some(control.recv().map_err(|_| "control channel closed")?)
+            },
+            None => Some(control.recv().map_err(|_| "control channel closed")?),
         };
         match message {
             Some(Control::Changed(changed)) => {
@@ -117,24 +173,33 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
                     purge_expired(&files);
                     purged_at = std::time::Instant::now();
                 }
-                let report = indexer.sync(&mut index)?;
-                if report.added + report.modified + report.removed >= LARGE_SYNC {
-                    memory::give_back(&index);
-                }
-                if !send(&index, changed)? {
+                if !settle(sync(&mut index, changed, true), &mut failed)? {
                     return Ok(());
                 }
                 maintenance_due = true;
             }
             Some(Control::Stop) => return Ok(()),
-            None => {
-                let merged = index.maintenance()?.merge_steps;
-                maintenance_due = merged > 0;
-                if merged == 0 {
-                    // Merging is done (or was not needed): whatever it allocated is free now.
-                    memory::give_back(&index);
+            // The retry after a failure: the whole vault looked at again.
+            None if failed => {
+                if !settle(sync(&mut index, Vec::new(), true), &mut failed)? {
+                    return Ok(());
                 }
             }
+            None => match index.maintenance() {
+                Ok(report) => {
+                    maintenance_due = report.merge_steps > 0;
+                    if report.merge_steps == 0 {
+                        // Merging is done (or was not needed): whatever it allocated is free now.
+                        memory::give_back(&index);
+                    }
+                }
+                Err(e) => {
+                    maintenance_due = false;
+                    if !settle(Err(e), &mut failed)? {
+                        return Ok(());
+                    }
+                }
+            },
         }
     }
 }

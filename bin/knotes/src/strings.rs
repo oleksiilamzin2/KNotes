@@ -353,6 +353,17 @@ pub fn failed_files(error: &str, names: &[&str]) -> String {
     format!("{error}. {}", names.join(", "))
 }
 
+/// Indexing failed: what is shown is what was indexed before.
+pub const INDEX_FAILED: &str = "Не вдалося оновити індекс бази";
+pub fn index_failed_details(error: &str) -> String {
+    format!("{error}. Список і пошук показують те, що було проіндексовано раніше; Knotes спробує ще раз із наступною зміною.")
+}
+/// The vault cannot be watched: changes made outside are not seen.
+pub const NOT_WATCHED: &str = "Knotes не бачить змін, зроблених поза ним";
+pub fn not_watched_details(error: &str) -> String {
+    format!("{error}. Базу проіндексовано, але зміни з інших програм з'являться, лише коли ви відкриєте її знову.")
+}
+
 /// A list option not saved: the folder's rules file does not parse, or cannot be written.
 pub const LIST_OPTION_NOT_SAVED: &str = "Налаштування списку не збережено";
 pub fn rules_file_error(file: &str, error: &str) -> String {

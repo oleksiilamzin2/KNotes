@@ -32,14 +32,23 @@ pub struct SqliteIndex {
 }
 
 impl SqliteIndex {
-    /// Opens or creates the index. An index with another schema version, or one that does
-    /// not match its content pack (e.g. after a crash), is deleted and created empty: it is
-    /// a cache and gets rebuilt from the vault.
+    /// Opens or creates the index. An index with another schema version, one that does not
+    /// match its content pack (e.g. after a crash), or one SQLite finds damaged, is deleted and
+    /// created empty: it is a cache and gets rebuilt from the vault.
     pub fn open(dir: &Path) -> Result<Self, BoxError> {
         fs::create_dir_all(dir)?;
-        if let Some(index) = Self::open_consistent(dir)? {
-            return Ok(index);
+        match Self::open_consistent(dir) {
+            Ok(Some(index)) => return Ok(index),
+            Ok(None) => {}
+            Err(e) if is_corrupt(&e) => eprintln!("knotes: the index in {} is damaged, built again: {e}", dir.display()),
+            Err(e) => return Err(e),
         }
+        Self::recreate(dir)
+    }
+
+    /// Deletes the index and creates it empty, for the vault's next sync to fill: what `open`
+    /// does with an index it cannot use, and what the indexer does with one found damaged later.
+    pub fn recreate(dir: &Path) -> Result<Self, BoxError> {
         for name in [DB_FILE, "index.sqlite-wal", "index.sqlite-shm", PACK_FILE, "content.pack.new"] {
             match fs::remove_file(dir.join(name)) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
@@ -84,6 +93,11 @@ impl SqliteIndex {
         conn.execute_batch("CREATE TEMP TABLE scope_blocks(id INTEGER PRIMARY KEY); CREATE TEMP TABLE note_blocks(id INTEGER PRIMARY KEY)")?;
         Ok(Some(Self { dir: dir.to_path_buf(), conn, pack: RefCell::new(pack), read_only: false, data_version: Cell::new(-1), block_count: Cell::new(None), corpus: RefCell::new(None), scope: RefCell::new(None) }))
     }
+}
+
+/// Whether `error` is SQLite finding the database damaged, or not a database at all.
+pub fn is_corrupt(error: &BoxError) -> bool {
+    matches!(error.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(e, _)) if matches!(e.code, rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase))
 }
 
 /// What one `SqliteIndex::maintenance` run did.

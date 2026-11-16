@@ -207,6 +207,8 @@ pub struct VaultWindow {
     embed_edits: Cell<u64>,
     /// A save failed and was told; told again only after one has worked.
     save_failed: Cell<bool>,
+    /// The last indexing failure told, so the same one is not told again.
+    index_error: RefCell<Option<String>>,
     this: RefCell<Weak<Self>>,
     completion: CompletionPanel,
     /// UTF-16 start of the text an accepted completion replaces, and what it completes.
@@ -401,6 +403,7 @@ impl VaultWindow {
             edits: Cell::new(0),
             embed_edits: Cell::new(0),
             save_failed: Cell::new(false),
+            index_error: RefCell::new(None),
             this: RefCell::new(Weak::new()),
             completion: CompletionPanel::new(mtm),
             completion_from: Cell::new(0),
@@ -852,13 +855,25 @@ impl VaultWindow {
         alert.beginSheetModalForWindow_completionHandler(&self.window, None);
     }
 
+    /// Says indexing failed, once for each reason (a sync tried again after each change would
+    /// say it each time).
+    fn tell_index_error(&self, title: &str, details: &str) {
+        if self.index_error.borrow().as_deref() == Some(details) {
+            eprintln!("knotes: {title}: {details}");
+            return;
+        }
+        *self.index_error.borrow_mut() = Some(details.to_owned());
+        self.tell_failed(title, &details);
+    }
+
     pub fn apply(&self, event: Event) {
         match event {
             Event::Snapshot(snapshot) => {
                 self.show(&snapshot);
                 self.chat.index_changed();
             }
-            Event::Error(e) => eprintln!("knotes: indexing stopped: {e}"),
+            Event::Error(e) => self.tell_index_error(strings::INDEX_FAILED, &strings::index_failed_details(&e)),
+            Event::NotWatched(e) => self.tell_index_error(strings::NOT_WATCHED, &strings::not_watched_details(&e)),
         }
     }
 

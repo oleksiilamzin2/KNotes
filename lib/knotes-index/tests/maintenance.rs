@@ -36,3 +36,22 @@ fn releasing_memory_empties_the_page_cache_a_large_write_filled() {
     let left = index.cache_used();
     assert!(left < filled / 4, "{filled} -> {left}");
 }
+
+#[test]
+fn a_damaged_index_is_built_again_not_refused() {
+    use knotes_core::FileStates;
+    // A crash or a disk fault: the file is no database any more. The index is a cache.
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut index = SqliteIndex::open(dir.path()).unwrap();
+        let file = VaultFile { path: "a.md".into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 };
+        let parsed = MarkdownParser::new().parse("a");
+        index.apply(&[IndexChange::Upsert { file: &file, note: Some(("a", &parsed)) }]).unwrap();
+    }
+    for name in ["index.sqlite-wal", "index.sqlite-shm"] {
+        let _ = std::fs::remove_file(dir.path().join(name));
+    }
+    std::fs::write(dir.path().join("index.sqlite"), vec![0x5a; 8192]).unwrap();
+    let index = SqliteIndex::open(dir.path()).unwrap();
+    assert!(index.file_states().unwrap().is_empty(), "empty, for the next sync to fill");
+}

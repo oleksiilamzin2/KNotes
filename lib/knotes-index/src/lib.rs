@@ -17,4 +17,4 @@ mod write;
 
 pub use corpus::TextSnapshot;
 pub use link_targets::LinkTargets;
-pub use sqlite_index::{MaintenanceReport, SqliteIndex};
+pub use sqlite_index::{MaintenanceReport, SqliteIndex, is_corrupt};
