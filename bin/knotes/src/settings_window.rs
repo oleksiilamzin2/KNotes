@@ -380,6 +380,7 @@ fn make(mtm: MainThreadMarker) -> Settings {
     // SAFETY: the window is kept here; closing it must not release it.
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
+    crate::probe::conceal(&window);
     Settings { window, popup, caches, status, progress, spaces, trash, tabs, _target: target }
 }
 

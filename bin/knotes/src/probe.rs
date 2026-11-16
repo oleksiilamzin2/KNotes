@@ -806,6 +806,15 @@ pub fn enabled() -> bool {
     std::env::var_os("KNOTES_PROBE").is_some()
 }
 
+/// In probe mode, `window` is made transparent: it is on screen as AppKit sees it (laid out,
+/// drawn, its PNG made), but the hundreds of runs of the window tests no longer flash over the
+/// user's work.
+pub fn conceal(window: &objc2_app_kit::NSWindow) {
+    if enabled() {
+        window.setAlphaValue(0.0);
+    }
+}
+
 /// Sidebar item to select before reporting (`KNOTES_PROBE_SELECT=f:Folder` or `t:tag`).
 pub fn requested_selection() -> Option<knotes_app::SidebarItem> {
     knotes_app::SidebarItem::from_key(&std::env::var("KNOTES_PROBE_SELECT").ok()?)

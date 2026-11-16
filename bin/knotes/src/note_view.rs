@@ -407,6 +407,7 @@ impl NoteTextView {
         self.ivars().quick_look.replace(Some(crate::quick_look::QuickLookSource::new(self.mtm(), &file)));
         // SAFETY: the shared panel of this app, on the main thread.
         let Some(panel) = (unsafe { QLPreviewPanel::sharedPreviewPanel(self.mtm()) }) else { return };
+        crate::probe::conceal(&panel);
         if panel.isVisible() {
             // SAFETY: as above.
             unsafe {

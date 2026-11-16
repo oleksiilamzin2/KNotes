@@ -32,6 +32,7 @@ pub fn build(
     // Rust owns the window; AppKit must not release it again on close.
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(ns_string!("Knotes"));
+    probe::conceal(&window);
 
     let split = split_controller(sidebar, list, note, chat, mtm);
     window.setContentViewController(Some(&split));

@@ -60,7 +60,8 @@ fn main() {
     std::thread::spawn(knotes_editor::load_code_grammars);
     let mtm = MainThreadMarker::new().expect("main thread");
     let app = NSApplication::sharedApplication(mtm);
-    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    // A probe run (the window tests) shows no Dock icon: hundreds of runs bounced one each.
+    app.setActivationPolicy(if probe::enabled() { NSApplicationActivationPolicy::Accessory } else { NSApplicationActivationPolicy::Regular });
     let delegate = app_delegate::AppDelegate::new(mtm);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     app.run();

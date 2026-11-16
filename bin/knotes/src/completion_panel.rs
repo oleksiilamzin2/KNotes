@@ -87,6 +87,7 @@ impl CompletionPanel {
         panel.setBackgroundColor(Some(&NSColor::clearColor()));
         // SAFETY: the panel is owned by this struct, not released on close.
         unsafe { panel.setReleasedWhenClosed(false) };
+        crate::probe::conceal(&panel);
         let background = NSVisualEffectView::new(mtm);
         background.setMaterial(NSVisualEffectMaterial::Menu);
         background.setState(NSVisualEffectState::Active);
