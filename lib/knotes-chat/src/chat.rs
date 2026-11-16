@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::authorized::{error_of, send_authorized};
-use crate::context::{Memory, Summary, context, estimate_tokens, recent_start, transcript, turn_starts};
+use crate::context::{Memory, Summary, context, estimate_tokens, recent_start, transcript, turn_starts, withhold};
 use crate::{API, AccessToken, ChatError, HttpRequest, Method, SseEvents, ToolBox, Transport};
 
 /// What the model is told about itself and the tools.
@@ -130,17 +130,18 @@ impl Chat<'_> {
         items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}));
         let size = match memory.tokens {
             Some(tokens) => tokens + estimate_tokens(&items[before..]) as u64,
-            None => estimate_tokens(&context(items, memory)) as u64,
+            None => estimate_tokens(&context(&withhold(items, &|p| tools.excluded(p)), memory)) as u64,
         };
         if size > self.compact_at {
-            self.compact(items, &mut memory.summary, cancel, on_event)?;
+            self.compact(&withhold(items, &|p| tools.excluded(p)), &mut memory.summary, cancel, on_event)?;
             // The cached start is gone with the summary anyway: the day and the vault anew.
             memory.preamble = Some(self.preamble(tools));
             memory.tokens = None;
         }
         let mut made = 0;
         for _ in 0..MAX_STEPS {
-            let (output, input_tokens, cached) = self.respond(&context(items, memory), tools, cancel, on_event)?;
+            // What the user has kept from the AI since earlier turns is not sent again.
+            let (output, input_tokens, cached) = self.respond(&context(&withhold(items, &|p| tools.excluded(p)), memory), tools, cancel, on_event)?;
             if cached.is_some() {
                 memory.cached = cached;
             }

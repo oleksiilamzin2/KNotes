@@ -4,7 +4,7 @@
 //! cache covers that start), else with old tool results cut and past reasoning left out, which
 //! sends fewer tokens.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// The input past which a request costs twice as much (OpenAI's pricing of GPT-5.6 and its
 /// kin, whose windows reach 1 050 000): no conversation is let grow past it.
@@ -80,6 +80,53 @@ pub fn context(items: &[Value], memory: &Memory) -> Vec<Value> {
         }
     }
     out
+}
+
+/// `items` as they may be sent now: without what the user has since kept from the AI
+/// (`excluded`: tagged `#no-ai`, a folder's `"ai": false`), which earlier turns' tool results may
+/// hold. A result about a document now kept (a read, an outline: its `path`) is withheld whole;
+/// an entry naming one (a search's find, a listed note, a link) is taken out of its result. The
+/// items stay as many and in their places (a summary covers them by count), those nothing
+/// changed in byte for byte (the cache), and the conversation kept keeps them all: shared again,
+/// a document's results go again. The answers given and a summary keep what they say.
+pub fn withhold(items: &[Value], excluded: &dyn Fn(&str) -> bool) -> Vec<Value> {
+    items
+        .iter()
+        .map(|item| {
+            let output = (item["type"] == "function_call_output").then(|| item["output"].as_str()).flatten();
+            let Some(result) = output.and_then(|o| serde_json::from_str::<Value>(o).ok()) else { return item.clone() };
+            let left = without_kept(&result, excluded);
+            if left.as_ref() == Some(&result) {
+                return item.clone();
+            }
+            let mut item = item.clone();
+            item["output"] = json!(match left {
+                Some(left) => left.to_string(),
+                None => json!({"withheld": "about a document the user has since kept from the AI: do not use or repeat what was given of it"}).to_string(),
+            });
+            item
+        })
+        .collect()
+}
+
+/// `value` without the objects whose `path` is a document kept: none when it is one.
+fn without_kept(value: &Value, excluded: &dyn Fn(&str) -> bool) -> Option<Value> {
+    match value {
+        Value::Object(fields) => {
+            if fields.get("path").and_then(Value::as_str).is_some_and(excluded) {
+                return None;
+            }
+            let mut left = Map::new();
+            for (key, field) in fields {
+                if let Some(field) = without_kept(field, excluded) {
+                    left.insert(key.clone(), field);
+                }
+            }
+            Some(Value::Object(left))
+        }
+        Value::Array(list) => Some(Value::Array(list.iter().filter_map(|v| without_kept(v, excluded)).collect())),
+        other => Some(other.clone()),
+    }
 }
 
 /// A rough count of the tokens `input` takes: its JSON's bytes over four (Cyrillic, two bytes

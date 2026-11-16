@@ -57,3 +57,22 @@ fn tokens_are_estimated_from_the_json_s_size() {
     let estimate = estimate_tokens(&input);
     assert!((2_700..2_900).contains(&estimate), "11 bytes a word, over four: {estimate}");
 }
+
+#[test]
+fn what_the_user_has_since_kept_from_the_ai_is_not_sent_again() {
+    use knotes_chat::withhold;
+    let output = |value: Value| json!({"type": "function_call_output", "call_id": "c", "output": value.to_string()});
+    let read = output(json!({"path": "Private/Secret.md", "blocks": [{"text": "The secret code is 1234."}]}));
+    let found = output(json!({"results": [{"path": "Private/Secret.md", "text": "code 1234"}, {"path": "Open.md", "text": "an open note"}], "next_offset": null}));
+    let other = output(json!({"results": [{"path": "Open.md", "text": "an open note"}]}));
+    let failed = json!({"type": "function_call_output", "call_id": "c", "output": "not JSON"});
+    let user = json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "what is the code?"}]});
+    let items = vec![user.clone(), read, found, other.clone(), failed.clone()];
+    let sent = withhold(&items, &|path: &str| path.starts_with("Private/"));
+    assert_eq!(sent.len(), items.len(), "the items keep their places: a summary covers them by count");
+    let all = serde_json::to_string(&sent).unwrap();
+    assert!(!all.contains("1234") && !all.contains("Private/Secret.md"), "{all}");
+    assert!(sent[1]["output"].as_str().unwrap().contains("withheld"), "{}", sent[1]);
+    assert!(sent[2]["output"].as_str().unwrap().contains("Open.md"), "the shared find stays: {}", sent[2]);
+    assert_eq!((&sent[0], &sent[3], &sent[4]), (&user, &other, &failed), "the rest byte for byte");
+}

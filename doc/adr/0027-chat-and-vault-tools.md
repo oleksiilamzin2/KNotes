@@ -322,6 +322,12 @@ plan usage for open-source and local apps) on 2026-11-14:
 - Found sound: the sign-in (loopback on `127.0.0.1` only, `state`, PKCE S256 with 32 random bytes
   from the Security framework, the ID token's issuer, audience, expiry and nonce checked), TLS
   through the system's verifier, the tokens in the Keychain, the MCP server on stdio only.
-- Left: a conversation keeps the fragments it was given, and sends them again in its next turns,
-  even after their note is marked `#no-ai` (a new conversation does not); a note just tagged
-  `#no-ai` is shared until it is indexed and for up to 10 s after (`TITLES_LAST`).
+- **What the user keeps from the AI after it was read is not sent again** (later the same day):
+  a conversation sent its earlier tool results with every turn, after their note was tagged
+  `#no-ai` too. Each request (and a summary's) now withholds a result about a document kept
+  (`withhold`) and takes the entries naming one out of lists; the conversation kept keeps them
+  all, so a document shared again is sent again, and the items stay byte for byte where nothing
+  changed (the cache).
+- Left: the model's own earlier answers, and a summary, keep what they said of such a note; a
+  note just tagged `#no-ai` is shared until it is indexed and for up to 10 s after
+  (`TITLES_LAST`).

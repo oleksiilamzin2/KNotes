@@ -453,3 +453,20 @@ fn the_effort_chosen_goes_with_each_request() {
     assert_eq!(send(&chat, &mut items, "hi", None, &tools).0, Ok(()));
     assert_eq!(fake.body(0)["reasoning"], json!({"effort": "low"}));
 }
+
+#[test]
+fn a_note_kept_from_the_ai_after_it_was_read_is_not_sent_again() {
+    // Read in an earlier turn, then tagged #no-ai (or its folder kept out): the conversation went
+    // on sending what was read of it.
+    let call = json!({"type": "function_call", "call_id": "call_1", "name": "read_note", "arguments": "{\"path\":\"Private/Secret.md\"}"});
+    let read = json!({"type": "function_call_output", "call_id": "call_1", "output": json!({"path": "Private/Secret.md", "blocks": [{"text": "The secret code is 1234."}]}).to_string()});
+    let mut items = vec![json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "the code?"}]}), call, read, message("It is 1234.")];
+    let fake = Fake::answering(vec![reply(vec![message("Noted.")])]);
+    let (token, tools) = (Token::default(), Tools::default());
+    let (result, _) = send(&chat(&fake, &token), &mut items, "thanks", None, &tools);
+    assert_eq!(result, Ok(()));
+    let input = fake.body(0)["input"].to_string();
+    assert!(!input.contains("The secret code"), "{input}");
+    assert!(input.contains("withheld"), "{input}");
+    assert!(items[2]["output"].as_str().unwrap().contains("The secret code"), "the conversation kept keeps it, for when it is shared again");
+}
