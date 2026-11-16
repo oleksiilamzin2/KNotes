@@ -478,8 +478,9 @@ impl VaultWindow {
     /// `move_notes`, the files moved one by one, or all at once by moving `folder` (from, to).
     pub(super) fn relocate(&self, moves: Moves, folder: Option<(&str, &str)>) -> bool {
         let Some(vault_dir) = self.vault() else { return false };
-        // Unwritten edits stay in the editor and follow the note to its new path.
-        let _ = self.write_edits();
+        // Written first, the embedded notes' edits too, so the links are planned on what the
+        // notes hold. Unwritten edits stay in the editor and follow the note to its new path.
+        let _ = self.write_all();
         let plan = self.relinks(&moves);
         let update = plan.links == 0
             || match rename_dialog::ask_link_update(objc2::MainThreadOnly::mtm(&*self.window), plan.links, plan.edits.len()) {

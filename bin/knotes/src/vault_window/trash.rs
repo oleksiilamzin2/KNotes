@@ -12,6 +12,8 @@ impl VaultWindow {
     /// it closes first (its edits written).
     pub fn delete(&self, path: &str) {
         let Some(vault) = self.vault() else { return };
+        // Edits typed in an embed of it go with it, not beside it after it went.
+        self.save_embeds();
         let inside = format!("{path}/");
         let open: Vec<String> = self.tabs.borrow().paths().filter(|p| *p == path || p.starts_with(&inside)).map(str::to_owned).collect();
         for tab in open {

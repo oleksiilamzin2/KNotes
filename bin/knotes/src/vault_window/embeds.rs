@@ -77,6 +77,11 @@ impl VaultWindow {
             let range = embedded_part(&full, link.subpath.as_deref())?;
             Some(Content { path, full, range, subpath: link.subpath.clone() })
         });
+        // An embed edited and gone from the note (its line deleted or changed): its edits are
+        // written now, not dropped with its view.
+        if self.embeds.has_leaving() {
+            self.save_embeds();
+        }
     }
 
     /// Opens the note the embed `key` shows, at its section or block (its edits written first,
@@ -90,6 +95,11 @@ impl VaultWindow {
         if let Some(subpath) = subpath {
             self.show_subpath(&subpath);
         }
+    }
+
+    /// The note the `n`th embed shows (probe mode).
+    pub fn embed_path(&self, n: usize) -> Option<String> {
+        self.embeds.key(n).and_then(|key| self.embeds.target_of(&key)).map(|(path, _)| path)
     }
 
     /// The `n`th embedded note's view (probe mode).
@@ -126,10 +136,17 @@ impl VaultWindow {
 
     /// Writes what was typed in embedded notes back into them; the first that failed.
     pub(super) fn write_embeds(&self) -> Result<(), SaveFailure> {
-        match self.vault() {
-            Some(vault) => self.embeds.save(&FsVault::new(&vault)),
-            None => Ok(()),
+        let Some(vault) = self.vault() else { return Ok(()) };
+        let files = FsVault::new(&vault);
+        let saved = self.embeds.save(&files, |path, text| keep_conflict_copy(&files, path, text));
+        for (path, copy, gone) in &saved.copies {
+            if *gone {
+                self.tell_copy(strings::GONE_TITLE, &strings::gone_details(knotes_app::title_of(copy)), copy, "vanished-notice");
+            } else {
+                self.tell_conflict(path, copy);
+            }
         }
+        saved.failed.map_or(Ok(()), Err)
     }
 
     /// An edit in an embedded note: written once the user pauses, as the note's own.

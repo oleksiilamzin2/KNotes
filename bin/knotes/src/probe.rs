@@ -1416,11 +1416,29 @@ fn report_list(table: &NSTableView) {
 /// Open note (from the text view itself), history buttons (from the toolbar) and list selection.
 fn report_note(window: &VaultWindow) {
     // `KNOTES_PROBE_EMBED_TYPE=text`: typed at the end of the first embedded note, then the keys
-    // of `KNOTES_PROBE_EMBED_KEYS` there, then written.
+    // of `KNOTES_PROBE_EMBED_KEYS` there, then written. Before it is written:
+    // `KNOTES_PROBE_EMBED_OUTSIDE=text`, another program rewrites the embedded note;
+    // `KNOTES_PROBE_EMBED_GONE=1`, another program deletes it; `KNOTES_PROBE_EMBED_CUT=at,length`,
+    // that range of the note itself (UTF-16) deleted, as typing does, the embed's line with it.
     if let Ok(text) = std::env::var("KNOTES_PROBE_EMBED_TYPE") {
         window.probe_type_in_embed(0, &text);
         if let Some(view) = window.embed_view(0) {
             keys_requested_from("KNOTES_PROBE_EMBED_KEYS", &view);
+        }
+        if let (Some(path), Some(vault)) = (window.embed_path(0), window.vault()) {
+            if let Ok(outside) = std::env::var("KNOTES_PROBE_EMBED_OUTSIDE") {
+                std::fs::write(vault.join(&path), outside).expect("outside write");
+            }
+            if std::env::var_os("KNOTES_PROBE_EMBED_GONE").is_some() {
+                std::fs::remove_file(vault.join(&path)).expect("outside delete");
+            }
+        }
+        if let Some((at, length)) = std::env::var("KNOTES_PROBE_EMBED_CUT").ok().and_then(|r| {
+            let (at, length) = r.split_once(',')?;
+            Some((at.parse().ok()?, length.parse().ok()?))
+        }) {
+            // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+            unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**window.note_text as &objc2_app_kit::NSTextView, &NSString::from_str(""), objc2_foundation::NSRange::new(at, length)) };
         }
         window.save_embeds();
     }

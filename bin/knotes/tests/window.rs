@@ -3492,3 +3492,45 @@ fn a_note_that_cannot_be_read_opens_read_only_and_is_never_written() {
     assert!(out.contains("note-column: note (read only)"), "{out}");
     assert_eq!(read(vault.path(), "n.md"), "secret");
 }
+
+#[test]
+fn an_embedded_note_changed_outside_while_edited_keeps_both_versions() {
+    let notes = [("a.md", "Top\n\n![[b]]\n\nend"), ("b.md", "Body.")];
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")];
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_EMBED_TYPE", " More."), ("KNOTES_PROBE_EMBED_OUTSIDE", "Changed outside.")]);
+    assert_eq!(read(vault.path(), "b.md"), "Body. More.", "the edits keep the note's name: {out}");
+    let copies = conflict_copies(vault.path(), "b");
+    assert_eq!(copies.len(), 1, "{copies:?} {out}");
+    assert_eq!(read(vault.path(), &copies[0]), "Changed outside.");
+    assert!(out.contains(&format!("conflict-notice: {}", copies[0])), "{out}");
+}
+
+#[test]
+fn an_embedded_section_written_back_keeps_a_change_made_outside_elsewhere_in_its_note() {
+    let notes = [("a.md", "![[b#Part]]"), ("b.md", "# B\n\n## Part\n\nPart text.\n\n## Next\n\nN.\n")];
+    let outside = "# B changed\n\n## Part\n\nPart text.\n\n## Next\n\nN.\n";
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_TYPE", " More."), ("KNOTES_PROBE_EMBED_OUTSIDE", outside)]);
+    assert_eq!(read(vault.path(), "b.md"), "# B changed\n\n## Part\n\nPart text. More.\n\n## Next\n\nN.\n", "{out}");
+    assert!(conflict_copies(vault.path(), "b").is_empty(), "no conflict outside the part: {out}");
+}
+
+#[test]
+fn an_embedded_note_deleted_outside_while_edited_comes_back_only_as_a_copy() {
+    let notes = [("a.md", "Top\n\n![[b]]\n\nend"), ("b.md", "Body.")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_TYPE", " More."), ("KNOTES_PROBE_EMBED_GONE", "1")]);
+    assert!(!vault.path().join("b.md").exists(), "not made again where it was: {out}");
+    let copies = conflict_copies(vault.path(), "b");
+    assert_eq!(copies.len(), 1, "{copies:?} {out}");
+    assert_eq!(read(vault.path(), &copies[0]), "Body. More.");
+    assert!(out.contains(&format!("vanished-notice: {}", copies[0])), "{out}");
+}
+
+#[test]
+fn edits_in_an_embed_whose_line_is_deleted_are_still_written() {
+    // "![[b]]\n\n" is 8 long after "Top\n\n": deleted before the embed's edits were written,
+    // its view went, and they with it.
+    let notes = [("a.md", "Top\n\n![[b]]\n\nend"), ("b.md", "Body.")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_TYPE", " More."), ("KNOTES_PROBE_EMBED_CUT", "5,8")]);
+    assert_eq!(read(vault.path(), "b.md"), "Body. More.", "{out}");
+    assert_eq!(read(vault.path(), "a.md"), "Top\n\nend");
+}

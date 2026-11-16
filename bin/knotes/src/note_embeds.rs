@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use knotes_core::{Link, LinkResolver, NoteWriter};
-use knotes_editor::splice_part;
+use knotes_editor::{embedded_part, splice_part};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -122,8 +122,22 @@ impl Shown {
 #[derive(Default)]
 pub struct NoteEmbeds {
     shown: RefCell<Vec<Shown>>,
+    /// Embeds edited and gone from the note (their line deleted or changed) before their edits
+    /// were written: kept, their views out of the note, until written.
+    leaving: RefCell<Vec<Shown>>,
     /// The link targets the views style their links with.
     links: RefCell<Option<Arc<dyn LinkResolver>>>,
+}
+
+/// What writing the embeds did besides writing.
+#[derive(Default)]
+pub struct EmbedsSaved {
+    /// Each note whose other version went beside it: its path, the copy's, and whether the note
+    /// was gone (deleted or moved outside Knotes; the copy holds the edits) rather than changed
+    /// outside in the part edited here (the copy holds that version).
+    pub copies: Vec<(String, String, bool)>,
+    /// The first edits that could not be written: their note and why.
+    pub failed: Option<(String, io::Error)>,
 }
 
 impl NoteEmbeds {
@@ -178,9 +192,18 @@ impl NoteEmbeds {
         }
         for gone in old {
             gone.remove();
+            // Its edits are still the user's: written when the window writes (`has_leaving`).
+            if gone.dirty {
+                self.leaving.borrow_mut().push(gone);
+            }
         }
         *self.shown.borrow_mut() = shown;
         self.keep_rooms(host, host_preview);
+    }
+
+    /// Whether embeds gone from the note hold edits not written yet.
+    pub fn has_leaving(&self) -> bool {
+        !self.leaving.borrow().is_empty()
     }
 
     /// The embed `key` edited: measured again (its box grows or shrinks with it) and marked to be
@@ -205,26 +228,54 @@ impl NoteEmbeds {
         }
     }
 
-    /// Writes the edited embeds back into their notes: where their parts were while a note is as
-    /// last read, else where they are now. One that cannot be written (its part gone, its note
-    /// now in another encoding, the disk refusing) stays edited; the first such is given.
-    pub fn save(&self, files: &FsVault) -> Result<(), (String, io::Error)> {
-        let mut failed = None;
-        for entry in self.shown.borrow_mut().iter_mut().filter(|s| s.dirty) {
+    /// Writes the edited embeds (those gone from the note too) back into their notes: where
+    /// their parts were while a note is as last read, else where they are now. As the editor
+    /// does (ADR 0011): a part changed outside meanwhile is kept beside its note (`keep_copy`
+    /// writes a conflict copy of a note's text and gives its path) before the edits go in; a
+    /// note gone from the disk is not made again where it was, its edits go beside that place.
+    /// One that cannot be written (its part gone, its note now in another encoding or not
+    /// readable, the disk refusing) stays edited.
+    pub fn save(&self, files: &FsVault, keep_copy: impl Fn(&str, &str) -> Option<String>) -> EmbedsSaved {
+        let mut saved = EmbedsSaved::default();
+        let (mut shown, mut leaving) = (self.shown.borrow_mut(), self.leaving.borrow_mut());
+        for entry in shown.iter_mut().chain(leaving.iter_mut()).filter(|s| s.dirty) {
             let text = entry.view.string().to_string();
             let file = match files.read_utf8(&entry.path) {
                 Ok(file) => file,
-                // Written back, a note in another encoding would lose its bytes.
-                Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                    failed.get_or_insert((entry.path.clone(), e));
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    // What the note would hold with the edits, beside where it was.
+                    let kept = splice_part(&entry.full, &entry.full, entry.range.clone(), entry.subpath.as_deref(), &text).and_then(|(written, _)| keep_copy(&entry.path, &written));
+                    match kept {
+                        Some(copy) => {
+                            saved.copies.push((entry.path.clone(), copy, true));
+                            entry.dirty = false;
+                        }
+                        None => {
+                            saved.failed.get_or_insert((entry.path.clone(), e));
+                        }
+                    }
                     continue;
                 }
-                Err(_) => entry.full.clone(),
+                // In another encoding (written back, it would lose its bytes), or not readable.
+                Err(e) => {
+                    saved.failed.get_or_insert((entry.path.clone(), e));
+                    continue;
+                }
             };
             let Some((written, range)) = splice_part(&file, &entry.full, entry.range.clone(), entry.subpath.as_deref(), &text) else {
-                failed.get_or_insert((entry.path.clone(), io::Error::new(io::ErrorKind::NotFound, "the embedded part is no longer in the note")));
+                saved.failed.get_or_insert((entry.path.clone(), io::Error::new(io::ErrorKind::NotFound, "the embedded part is no longer in the note")));
                 continue;
             };
+            let outside = file != entry.full && embedded_part(&file, entry.subpath.as_deref()).is_some_and(|part| file[part] != entry.text);
+            if outside {
+                match keep_copy(&entry.path, &file) {
+                    Some(copy) => saved.copies.push((entry.path.clone(), copy, false)),
+                    None => {
+                        saved.failed.get_or_insert((entry.path.clone(), io::Error::other("the version changed outside could not be kept")));
+                        continue;
+                    }
+                }
+            }
             match files.write_note(&entry.path, &written) {
                 Ok(()) => {
                     entry.full = written;
@@ -233,11 +284,12 @@ impl NoteEmbeds {
                     entry.dirty = false;
                 }
                 Err(e) => {
-                    failed.get_or_insert((entry.path.clone(), e));
+                    saved.failed.get_or_insert((entry.path.clone(), e));
                 }
             }
         }
-        failed.map_or(Ok(()), Err)
+        leaving.retain(|s| s.dirty);
+        saved
     }
 
     /// The user chose to leave without the edits that could not be written.
@@ -245,6 +297,7 @@ impl NoteEmbeds {
         for entry in self.shown.borrow_mut().iter_mut() {
             entry.dirty = false;
         }
+        self.leaving.borrow_mut().clear();
     }
 
     /// Puts each view over its box as the note is laid out now; one whose box is not laid out
@@ -283,6 +336,9 @@ impl NoteEmbeds {
     pub fn clear(&self) {
         for gone in self.shown.take() {
             gone.remove();
+            if gone.dirty {
+                self.leaving.borrow_mut().push(gone);
+            }
         }
     }
 
