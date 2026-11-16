@@ -48,3 +48,14 @@ The owner chose (2026-11-16): kept in the vault; the days set per vault; named Â
 - Links to a deleted note show as missing until it is restored.
 - What is in the trash takes room in the vault, and in git if the vault is a repository, until
   its days pass.
+
+## Later (2026-11-16, ADR 0035)
+
+- A deletion, restore or deletion for good that fails is said (one sheet for several), instead
+  of leaving the entry or the note where it was without a word. A note whose edits cannot be
+  written is not deleted when the user stays with them.
+- A deletion that fails leaves no entry behind (an entry without `entry.json` is never listed,
+  so it was never deleted for good either); a restore counts as done once the file is back,
+  whatever is left of its entry, whose `entry.json` at least goes, so it is not listed with
+  nothing in it.
+- Deleting writes the edits typed in an embed of the note first, so they go with it.

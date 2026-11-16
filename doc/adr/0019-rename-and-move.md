@@ -56,3 +56,12 @@ answered a question round (2026-11-13).
   zoomed the window. A PDF open is named there without its folder or `.pdf`, as a note is
   without `.md`, and renamed there too: `.pdf` is kept on the file, links to it are updated as
   a note's are, and the viewer shows it from its new place at the page it was at.
+- Later (2026-11-16, ADR 0035): a PDF renamed from the note list (a search's results list PDFs)
+  keeps `.pdf`, as from the toolbar; moved (Move to…, or dragged onto a folder) it keeps its file
+  name, numbered when taken (`unique_file_path`): both made a `.md` of it. The notes to edit are
+  also the note open and the notes it embeds, just written by the rename and not indexed yet
+  (`plan_relinks`'s `fresh`). A Markdown link changes only when its target or its note moves:
+  links to notes that stay, in notes that stay, keep their `./`, case and `%xx` (they were
+  rewritten and counted in the question). A rename whose links cannot be found (the index not
+  readable) is called off with a word; moves and link updates that fail are said, with the
+  files. Probe actions `list-rename-path=` and `drop-path=` reach a PDF's row by its path.

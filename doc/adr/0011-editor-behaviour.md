@@ -38,3 +38,18 @@ TextKit 2, its riskiest parts are checked in a spike. The owner decided how edit
 - No edit is ever lost silently; conflict files may need manual merging.
 - Link rewriting touches other files; until the git stage it has no undo beyond the
   editor's own.
+
+## Later (2026-11-16): what the promise needed (ADR 0035)
+
+- "No edit is ever lost silently" did not hold where a write failed: autosave now says so once,
+  the edits stay in the window, and leaving the note, closing the window or quitting asks to
+  stay with them or discard them.
+- Writes keep the replaced file's permissions, creation date, extended attributes and ACL, and
+  reach the disk before the rename.
+- A note deleted or moved outside Knotes while open closes instead of being written back where
+  it was; edits not written yet go beside that place as a conflict copy. A version from outside
+  whose conflict copy cannot be written is not overwritten.
+- A note not in UTF-8, or one that cannot be read, opens read only (it was read lossily, or
+  opened empty and editable, and a key typed replaced the file).
+- A new note named after its first line keeps its tab (ADR 0024); if the name cannot be given,
+  that is said once and the note keeps `Без назви.md`.

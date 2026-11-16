@@ -57,3 +57,16 @@ be edited in place.
   its text leaves it room) opens the note at the embedded heading or block, its edits written
   first. A heading or block (from the button or a `[[note#Heading]]` link) is scrolled to the
   top from the layout, not from where it is on screen (the window may not be on it yet).
+
+## Later (2026-11-16): embedded notes as safe as the note (ADR 0035)
+
+- A part changed outside while edited goes beside its note as a conflict copy before the edits
+  go in, as the note's own conflicts do (ADR 0011); a change elsewhere in that note is kept.
+- An embedded note gone from the disk is not written back where it was: what it would hold goes
+  beside that place as a copy.
+- Edits in an embed whose line is deleted or changed before they are written are still written
+  (kept with the view gone, `leaving`), not dropped with it.
+- An edit that cannot be written (its part gone, its note now in another encoding or not
+  readable, the disk refusing) stays edited, and leaving the note asks, as for the note itself;
+  a note not in UTF-8 is not embedded (it stays a link), since edited it would lose its bytes.
+- Renames, moves and deletions write the embeds' edits first.

@@ -32,3 +32,13 @@ named Knotes with bundle id `app.knotes.Knotes`.
 - `.knotes` files are hidden, so the scanner never indexes them, and they travel with the
   vault (git, iCloud). The watcher ignores hidden paths today and must learn to report
   `.knotes` changes.
+
+## Later
+
+- The test command channel became the probe mode: `KNOTES_PROBE=1` and `KNOTES_PROBE_*`
+  variables drive the window once its vault is shown, and it prints its state and quits
+  (`bin/knotes/tests/window.rs`); there is no socket.
+- 2026-11-16 (ADR 0035): a list option is written into the folder's rules file as it is on
+  disk, not from the snapshot's copy, and a file that does not parse is left as it is (it lost
+  its other keys to `{"list": …}`); the user is told. A vault that cannot be opened is said, in
+  Ukrainian when another window or Knotes holds it.
