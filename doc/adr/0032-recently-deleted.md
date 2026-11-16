@@ -27,8 +27,10 @@ The owner chose (2026-11-16): kept in the vault; the days set per vault; named �
 - **Restore**: back to where it was, the folders above made again with their rules; another
   name beside it (" 2", " 3") when the place is taken.
 - **The days**: `"trash": {"days": 30}` in the root's `.knotes.json`, set in the settings for
-  the front window's vault; entries older are deleted for good when a vault opens and after
-  each change to it (the entries are few; a new number of days so applies at once).
+  the front window's vault; entries older are deleted for good when a vault opens, when its
+  root's rules change (a new number of days so applies at once) and otherwise at most hourly
+  after a change (they expire with time, not with changes). Each snapshot reads only the
+  entries it does not know yet: an entry does not change once made.
 - **In the window**: «Видалити» in a note's menu in the list and in a folder's in the sidebar (a
   folder with notes asks first; no Cmd+Backspace: in the editor it deletes to the line's start,
   and a menu's key would take it there); «Нещодавно видалені (N)» at the sidebar's
