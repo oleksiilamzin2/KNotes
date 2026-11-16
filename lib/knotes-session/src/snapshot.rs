@@ -84,9 +84,16 @@ impl Snapshot {
         };
         let mut paths = Vec::new();
         collect_paths(&folders, &mut paths);
-        let rules = rules_store
-            .read_rules(&paths.iter().map(String::as_str).collect::<Vec<_>>())?
-            .into_iter()
+        // A folder's at a time: one that cannot be read is skipped as one that does not parse,
+        // not the whole snapshot (and the vault's indexing with it).
+        let rules = paths
+            .iter()
+            .flat_map(|folder| {
+                rules_store.read_rules(&[folder.as_str()]).unwrap_or_else(|e| {
+                    eprintln!("knotes: ignoring {folder}/.knotes.json: {e}");
+                    Vec::new()
+                })
+            })
             .filter_map(|(folder, text)| match FolderRules::parse(&text) {
                 Ok(rules) => Some((folder, rules)),
                 Err(e) => {

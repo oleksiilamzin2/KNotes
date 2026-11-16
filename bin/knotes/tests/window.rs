@@ -3590,3 +3590,37 @@ fn a_folder_whose_space_cannot_be_written_says_so() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(out.contains("failed: Не вдалося змінити простір теки «Locked»: Permission denied"), "{out}");
 }
+
+#[test]
+fn a_vault_with_a_folder_that_cannot_be_read_still_opens() {
+    use std::os::unix::fs::PermissionsExt;
+    // The walk failed on it, the indexing stopped before the first snapshot, and the window stayed
+    // empty without a word.
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    std::fs::write(vault.path().join("b.md"), "b").unwrap();
+    let private = vault.path().join("Private");
+    std::fs::create_dir(&private).unwrap();
+    std::fs::write(private.join("s.md"), "s").unwrap();
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_DELAY_MS", "1000")]);
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(out.contains("subtitle: 2 нотатки"), "{out}");
+    assert!(!out.contains("failed:"), "{out}");
+}
+
+#[test]
+fn a_vault_with_a_rules_file_that_cannot_be_read_still_opens() {
+    use std::os::unix::fs::PermissionsExt;
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    std::fs::create_dir(vault.path().join("Work")).unwrap();
+    std::fs::write(vault.path().join("Work/w.md"), "w").unwrap();
+    let rules = vault.path().join("Work/.knotes.json");
+    std::fs::write(&rules, "{}").unwrap();
+    std::fs::set_permissions(&rules, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_DELAY_MS", "1000")]);
+    std::fs::set_permissions(&rules, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(out.contains("subtitle: 2 нотатки"), "{out}");
+    assert!(!out.contains("failed:"), "{out}");
+}

@@ -54,14 +54,7 @@ fn folders_in(abs: &Path, rel: &str) -> io::Result<Vec<String>> {
             dirs.push((entry.path(), if rel.is_empty() { name.to_owned() } else { format!("{rel}/{name}") }));
         }
     }
-    let nested: Vec<Vec<String>> = dirs
-        .par_iter()
-        .map(|(abs, rel)| match folders_in(abs, rel) {
-            // Deleted while listed: not part of the vault any more.
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-            other => other,
-        })
-        .collect::<io::Result<_>>()?;
+    let nested: Vec<Vec<String>> = dirs.par_iter().map(|(abs, rel)| skip_unlistable(folders_in(abs, rel), rel)).collect::<io::Result<_>>()?;
     let mut folders: Vec<String> = dirs.into_iter().map(|(_, rel)| rel).collect();
     folders.extend(nested.into_iter().flatten());
     Ok(folders)
@@ -88,9 +81,24 @@ fn scan_dir(abs: &Path, rel: &str) -> io::Result<Vec<VaultFile>> {
             }
         }
     }
-    let nested: Vec<Vec<VaultFile>> = dirs.par_iter().map(|(abs, rel)| scan_dir(abs, rel)).collect::<io::Result<_>>()?;
+    let nested: Vec<Vec<VaultFile>> = dirs.par_iter().map(|(abs, rel)| skip_unlistable(scan_dir(abs, rel), rel)).collect::<io::Result<_>>()?;
     files.extend(nested.into_iter().flatten());
     Ok(files)
+}
+
+/// A folder below the root that cannot be listed counts as empty: one deleted while the vault
+/// is walked is not part of it any more, and one not allowed (its permissions, another user's)
+/// cannot be read, by the index or by anyone, without failing the whole vault. The root itself
+/// still fails, as the vault does then.
+fn skip_unlistable<T>(listed: io::Result<Vec<T>>, rel: &str) -> io::Result<Vec<T>> {
+    match listed {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!("knotes: {rel} cannot be listed, left out: {e}");
+            Ok(Vec::new())
+        }
+        other => other,
+    }
 }
 
 fn mtime_ns(meta: &Metadata) -> i64 {

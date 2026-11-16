@@ -92,3 +92,21 @@ fn takes_in_the_attachments_in_the_knotes_folder_only() {
         [(".knotes/attachments/Pasted image 20261113114500.png".to_owned(), FileKind::Image), ("note.md".to_owned(), FileKind::Markdown)]
     );
 }
+
+#[test]
+fn a_folder_that_cannot_be_listed_is_left_out_not_the_whole_vault() {
+    use knotes_core::FolderLister;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    touch(dir.path(), "a.md", "a");
+    touch(dir.path(), "Private/s.md", "s");
+    touch(dir.path(), "Work/w.md", "w");
+    let private = dir.path().join("Private");
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o000)).unwrap();
+    let vault = FsVault::new(dir.path());
+    let (files, folders) = (vault.scan(), vault.folders());
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o755)).unwrap();
+    let paths: Vec<String> = files.unwrap().into_iter().map(|f| f.path).collect();
+    assert_eq!(paths, ["Work/w.md", "a.md"]);
+    assert_eq!(folders.unwrap(), ["Private", "Work"], "it is there, only not readable");
+}
