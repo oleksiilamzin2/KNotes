@@ -28,8 +28,10 @@ pub struct Paint {
 pub const STRUCK: u16 = 1 << 15;
 /// The `look` bit for text on a background (inline code).
 pub const SHADED: u16 = 1 << 14;
+/// The `look` bit for highlighted text (`==text==`), on yellow.
+pub const MARKED: u16 = 1 << 13;
 /// The look itself, without the bits.
-const LOOK: u16 = !(STRUCK | SHADED);
+const LOOK: u16 = !(STRUCK | SHADED | MARKED);
 
 /// A paragraph style's settings; the default sets nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -166,20 +168,27 @@ impl<'a> Palette<'a> {
 /// Attribute sets and paragraph styles made once and shared by every composition.
 pub struct PaintCache {
     style_key: Retained<NSString>,
-    /// Background of inline code.
+    /// Background of inline code, and of highlighted text.
     shade: Retained<NSColor>,
+    mark: Retained<NSColor>,
     styles: RefCell<HashMap<ParaKey, Retained<NSParagraphStyle>>>,
     attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
 }
 
-/// Font, colour, test name, kerning, paragraph style, line-through and background of an
-/// attribute set.
-type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle, bool, bool);
+/// Font, colour, test name, kerning, paragraph style, line-through and background (none, code's,
+/// a highlight's) of an attribute set.
+type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle, bool, u8);
 
 impl PaintCache {
     /// `style_key` names the attribute carrying each range's test name.
     pub fn new(style_key: &str) -> Self {
-        Self { style_key: NSString::from_str(style_key), shade: NSColor::quaternarySystemFillColor(), styles: RefCell::new(HashMap::new()), attributes: RefCell::new(HashMap::new()) }
+        Self {
+            style_key: NSString::from_str(style_key),
+            shade: NSColor::quaternarySystemFillColor(),
+            mark: NSColor::systemYellowColor().colorWithAlphaComponent(0.4),
+            styles: RefCell::new(HashMap::new()),
+            attributes: RefCell::new(HashMap::new()),
+        }
     }
 
     fn attributes(&self, palette: &Palette, paint: Paint) -> Retained<NSDictionary<NSString, AnyObject>> {
@@ -191,12 +200,13 @@ impl PaintCache {
         let (font, color, name) = palette.looks[usize::from(paint.look & LOOK)];
         let kern = palette.kerns[paint.kern as usize];
         let struck = paint.look & STRUCK != 0;
-        let shaded = paint.look & SHADED != 0;
+        // A highlight over code keeps the highlight's yellow.
+        let background = if paint.look & MARKED != 0 { 2 } else { u8::from(paint.look & SHADED != 0) };
         let para = (paint.para != 0).then(|| {
             let para = palette.para_of(paint.para);
             self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style()).clone()
         });
-        let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, shaded);
+        let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, background);
         self.attributes
             .borrow_mut()
             .entry(key)
@@ -222,10 +232,10 @@ impl PaintCache {
                     keys.push(unsafe { NSStrikethroughStyleAttributeName });
                     values.push(line.as_ref());
                 }
-                if shaded {
+                if background != 0 {
                     // SAFETY: as above.
                     keys.push(unsafe { NSBackgroundColorAttributeName });
-                    values.push(self.shade.as_ref());
+                    values.push(if background == 2 { self.mark.as_ref() } else { self.shade.as_ref() });
                 }
                 NSDictionary::from_slices(&keys, &values)
             })

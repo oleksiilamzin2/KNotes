@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use knotes_core::{FileKind, Link, LinkKind, NoteParser};
-use knotes_md::{MarkdownParser, OPTIONS};
+use knotes_md::{MarkdownParser, OPTIONS, comment_ranges, mark_ranges};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,6 +29,10 @@ pub enum Style {
     QuoteMarker { depth: u8 },
     /// A fenced code block's opening (with its language) or closing fence line.
     Fence,
+    /// `==text==`, Obsidian's highlight, with its signs.
+    Mark,
+    /// `%%text%%`, an Obsidian comment, with its signs: shown dim, nothing styled inside.
+    Comment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,8 +248,13 @@ pub fn highlight(source: &str) -> Highlight {
     let mut item: Option<usize> = None;
     // Quotes open: only the outermost marks the prefixes of all its lines.
     let mut quotes = 0;
+    // Code, formulas and frontmatter: no comment or highlight sign counts there.
+    let mut verbatim: Vec<Range<usize>> = Vec::new();
     for (event, r) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         let text = &source[r.clone()];
+        if matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::MetadataBlock(_)) | Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_)) {
+            verbatim.push(r.clone());
+        }
         match event {
             Event::Start(Tag::Table(aligns)) => {
                 let aligns = aligns
@@ -384,9 +393,54 @@ pub fn highlight(source: &str) -> Highlight {
     }
     h.links.sort_by_key(|l| l.range.start);
     h.images = h.links.iter().filter_map(|l| image(source, l)).collect();
+    verbatim.sort_by_key(|r| r.start);
+    comments(&mut h, source, &verbatim);
+    marks(&mut h, source, &verbatim);
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
     h
+}
+
+/// `%%comments%%` (ADR 0018): one dim run each, the signs hidden away from the cursor, and
+/// nothing else styled inside (the parser leaves their tags and links out too).
+fn comments(h: &mut Highlight, source: &str, verbatim: &[Range<usize>]) {
+    let comments = comment_ranges(source, verbatim);
+    if comments.is_empty() {
+        return;
+    }
+    let inside = |at: usize| {
+        let after = comments.partition_point(|c| c.start <= at);
+        after > 0 && at < comments[after - 1].end
+    };
+    h.runs.retain(|r| !inside(r.range.start));
+    h.markup.retain(|m| !inside(m.start));
+    h.links.retain(|l| !inside(l.range.start));
+    h.formulas.retain(|f| !inside(f.range.start));
+    h.images.retain(|i| !inside(i.range.start));
+    h.code_blocks.retain(|c| !inside(c.start));
+    h.code_langs.retain(|c| !inside(c.block.start));
+    h.callouts.retain(|c| !inside(c.range.start));
+    h.tables.retain(|t| !inside(t.range.start));
+    for comment in comments {
+        h.markup.push(comment.start..comment.start + 2);
+        let text = &source[comment.clone()];
+        if text.len() >= 4 && text.ends_with("%%") {
+            h.markup.push(comment.end - 2..comment.end);
+        }
+        h.runs.push(Run { range: comment, style: Style::Comment });
+    }
+}
+
+/// `==highlights==` outside code, formulas and comments: one run each, the signs hidden away
+/// from the cursor.
+fn marks(h: &mut Highlight, source: &str, verbatim: &[Range<usize>]) {
+    let comments = h.runs.iter().filter(|r| r.style == Style::Comment).map(|r| r.range.clone());
+    let skip: Vec<Range<usize>> = verbatim.iter().cloned().chain(comments).collect();
+    for mark in mark_ranges(source, &skip) {
+        h.markup.push(mark.start..mark.start + 2);
+        h.markup.push(mark.end - 2..mark.end);
+        h.runs.push(Run { range: mark, style: Style::Mark });
+    }
 }
 
 /// The image or PDF `l` embeds, when it is one in the vault alone on its line.

@@ -17,7 +17,7 @@ use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, Formul
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PDF_CAPTION, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
 use crate::strings;
-use crate::text_paint::{Paint, PaintCache, Palette, Para, SHADED, STRUCK};
+use crate::text_paint::{MARKED, Paint, PaintCache, Palette, Para, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
@@ -531,7 +531,8 @@ impl LivePreview {
         let plain = palette.look(&look.body, &look.text, "plain");
         let mut canvas = Canvas::new(region.0..region.1, Paint { look: plain, para: 0, kern: 0 });
         let meets = |r: &Range<usize>| r.start < region.1 && r.end > region.0;
-        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. } | Style::QuoteMarker { .. } | Style::Fence)) {
+        // A highlight keeps the font and colour of what it covers: its yellow comes below.
+        for run in styled.runs.iter().filter(|r| meets(&r.range) && !matches!(r.style, Style::ListMarker { .. } | Style::QuoteMarker { .. } | Style::Fence | Style::Mark)) {
             let (font, color, name) = self.run_look(run, &styled);
             let id = palette.look(font, color, name);
             canvas.paint(run.range.clone(), |p| p.look = id);
@@ -543,6 +544,9 @@ impl LivePreview {
         for run in styled.runs.iter().filter(|r| r.style == Style::Code && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= SHADED);
         }
+        for run in styled.runs.iter().filter(|r| r.style == Style::Mark && meets(&r.range)) {
+            canvas.paint(run.range.clone(), |p| p.look |= MARKED);
+        }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
             let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
             canvas.paint(m.clone(), |p| p.look = id);
@@ -553,8 +557,9 @@ impl LivePreview {
         for end in external_link_ends(&styled, region, revealed) {
             canvas.paint(end.kern_at..end.kern_at + 1, |p| p.kern = arrow);
         }
-        // A done task's text is muted, bold or italic inside it too (links keep their colour).
-        for run in styled.runs.iter().filter(|r| r.style == Style::Done && meets(&r.range)) {
+        // A done task's text, and a comment, are muted, bold or italic inside too (links keep
+        // their colour).
+        for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Done | Style::Comment) && meets(&r.range)) {
             let mut looks: Vec<u16> = run.range.clone().filter_map(|i| canvas.get(i).map(|p| p.look)).collect();
             looks.sort_unstable();
             looks.dedup();
@@ -2794,6 +2799,8 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'static str) {
         Style::Done => (&look.body, &look.muted, "done"),
         Style::QuoteMarker { .. } => (&look.body, &look.muted, "quote-marker"),
         Style::Fence => (&look.mono, &look.muted, "code-fence"),
+        Style::Mark => (&look.body, &look.text, "mark"),
+        Style::Comment => (&look.body, &look.muted, "comment"),
     }
 }
 

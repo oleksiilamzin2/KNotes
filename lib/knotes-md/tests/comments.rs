@@ -19,3 +19,22 @@ fn tags_links_anchors_and_headings_in_comments_are_not_the_note_s() {
     assert_eq!(note.links.iter().map(|l| l.target.as_str()).collect::<Vec<_>>(), ["Kept"]);
     assert!(note.anchors.is_empty() && note.headings.is_empty(), "{:?} {:?}", note.anchors, note.headings);
 }
+
+#[test]
+fn highlights_are_double_equals_around_words_within_a_line() {
+    use knotes_md::mark_ranges;
+    let text = |src: &'static str| mark_ranges(src, &[]).into_iter().map(|r| &src[r]).collect::<Vec<_>>();
+    assert_eq!(text("a ==one== b ==two words=="), ["==one==", "==two words=="]);
+    assert!(text("a == b == c").is_empty(), "signs before and after a space");
+    assert!(text("Title\n====\n").is_empty(), "a heading's underline");
+    assert!(text("a ==open\nshut== b").is_empty(), "within a line");
+}
+
+#[test]
+fn a_highlight_sign_inside_a_comment_holding_code_is_skipped() {
+    use knotes_md::mark_ranges;
+    let src = "%% `x` ==no== %%";
+    let comment = 0..src.len();
+    let code = 3..6;
+    assert!(mark_ranges(src, &[comment, code]).is_empty());
+}

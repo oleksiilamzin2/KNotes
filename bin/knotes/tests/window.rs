@@ -1167,6 +1167,15 @@ fn a_note_opened_from_a_content_search_shows_its_matches_scrolled_into_view() {
 }
 
 #[test]
+fn highlights_are_on_yellow_and_comments_dim_their_signs_hidden_away_from_the_cursor() {
+    let (_vault, out) = probe_notes(&[("c.md", "T\n\na ==hot== b %%aside #t%% c\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("hot"), "the signs off the yellow: {out}");
+    let editor = out.lines().find_map(|l| l.strip_prefix("editor: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(editor.contains("[hidden]==|[plain]hot|[hidden]=="), "its font and colour kept: {editor}");
+    assert!(editor.contains("[hidden]%%|[comment]aside #t|[hidden]%%"), "dim, the tag not styled: {editor}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");

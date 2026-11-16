@@ -30,3 +30,8 @@ fn parser_fills_the_snippet() {
     let src = "# T\n\nbody text\n";
     assert_eq!(knotes_md::MarkdownParser::new().parse(src).snippet, "body text");
 }
+
+#[test]
+fn the_preview_leaves_out_comments_and_the_signs_of_highlights() {
+    assert_eq!(knotes_md::snippet("Це ==важлива== думка %%таємне #тег%% далі, a == b", 200), "Це важлива думка далі, a == b");
+}

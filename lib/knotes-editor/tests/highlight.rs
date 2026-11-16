@@ -329,3 +329,24 @@ fn a_fenced_block_with_a_language_gives_it_and_its_code() {
     assert_eq!(&source[run.code.clone()], "fn a() {}\nlet b;\n");
     assert_eq!(&source[run.block.clone()], "```rust ignore\nfn a() {}\nlet b;\n```");
 }
+
+#[test]
+fn obsidian_highlights_hide_their_equals_signs() {
+    assert!(styles("a ==mark== b").contains(&(Style::Mark, "==mark==")));
+    assert_eq!(markup("a ==mark== b"), ["==", "=="]);
+    assert!(styles("## Title ==hot==").contains(&(Style::Mark, "==hot==")), "in a heading too");
+    for plain in ["a == b", "`==x==`", "Title\n====\n", "a ==open", "$a==b$ and $c==d$", "x %% ==no== %%"] {
+        assert!(!styles(plain).iter().any(|(s, _)| *s == Style::Mark), "{plain}");
+    }
+}
+
+#[test]
+fn comments_are_one_run_their_percents_hidden_and_nothing_styled_inside() {
+    let src = "x %%note #t [[Link]] **b**%% y";
+    assert!(styles(src).contains(&(Style::Comment, "%%note #t [[Link]] **b**%%")));
+    assert!(styles(src).iter().all(|(s, _)| *s == Style::Comment), "{:?}", styles(src));
+    assert_eq!(markup(src), ["%%", "%%"]);
+    assert!(highlight(src).links.is_empty());
+    assert!(styles("a\n%%\nblock\n%%\nb").contains(&(Style::Comment, "%%\nblock\n%%")), "across lines");
+    assert_eq!(markup("`%%` and %%c%%"), ["`", "`", "%%", "%%"], "not in code");
+}
