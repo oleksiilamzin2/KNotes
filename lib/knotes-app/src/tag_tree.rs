@@ -104,3 +104,45 @@ pub fn space_tag_trees(inside: &[(String, usize)], all: &[(String, usize)]) -> (
     rest.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     (tag_tree(inside), rest)
 }
+
+/// The tags to offer for `query` while one is typed (ADR 0033), at most `limit`, with their
+/// notes: in a space its own first (`space`, counted there), then the rest of the vault's
+/// (`all`); in each, those starting with it, then those with a part (after `/`) starting with
+/// it, then those holding it; the most used first. Case is ignored (the index keeps tags
+/// lowercased).
+pub fn suggest_tags<'a>(query: &str, space: &'a [TagNode], all: &'a [TagNode], limit: usize) -> Vec<(&'a str, usize)> {
+    let query = query.to_lowercase();
+    let how = |tag: &str| {
+        if tag.starts_with(&query) {
+            Some(0)
+        } else if tag.split('/').skip(1).any(|part| part.starts_with(&query)) {
+            Some(1)
+        } else {
+            tag.contains(&query).then_some(2)
+        }
+    };
+    let mut own: HashSet<&str> = HashSet::new();
+    let mut found: Vec<(u8, u8, &TagNode)> = Vec::new();
+    for (group, nodes) in [(0, space), (1, all)] {
+        walk(nodes, &mut |node| {
+            if group == 0 {
+                own.insert(&node.tag);
+            } else if own.contains(node.tag.as_str()) {
+                return;
+            }
+            if let Some(class) = how(&node.tag) {
+                found.push((group, class, node));
+            }
+        });
+    }
+    found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then(b.2.notes.cmp(&a.2.notes)).then_with(|| a.2.tag.cmp(&b.2.tag)));
+    found.into_iter().take(limit).map(|(_, _, node)| (node.tag.as_str(), node.notes)).collect()
+}
+
+/// Every node below `nodes`, parents before their children.
+fn walk<'a>(nodes: &'a [TagNode], visit: &mut impl FnMut(&'a TagNode)) {
+    for node in nodes {
+        visit(node);
+        walk(&node.children, visit);
+    }
+}

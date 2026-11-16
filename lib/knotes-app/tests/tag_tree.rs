@@ -37,3 +37,15 @@ fn tags_count_from_each_note_s_tags_once_a_note_for_a_tag_and_every_parent() {
     let counts: Vec<(&str, usize)> = counts.iter().map(|(t, n)| (t.as_str(), *n)).collect();
     assert_eq!(counts, [("project", 3), ("project/radar", 2), ("project/radar/fmcw", 1), ("project/ui", 1), ("todo", 1)], "sorted by tag; a.md once under «project»");
 }
+
+#[test]
+fn tags_are_offered_the_space_s_first_then_by_how_they_match_then_the_most_used() {
+    use knotes_app::suggest_tags;
+    let counts = |pairs: &[(&str, usize)]| tag_tree(&pairs.iter().map(|(t, n)| (t.to_string(), *n)).collect::<Vec<_>>());
+    let all = counts(&[("area", 2), ("area/home", 1), ("area/job", 1), ("cooking", 4), ("project", 2), ("project/radar", 2), ("radar", 5), ("radio", 1)]);
+    let space = counts(&[("area", 1), ("area/job", 1), ("radar", 3)]);
+    assert_eq!(suggest_tags("ra", &[], &all, 10), [("radar", 5), ("radio", 1), ("project/radar", 2)], "the start first, then a part's start");
+    assert_eq!(suggest_tags("Ra", &space, &all, 10), [("radar", 3), ("radio", 1), ("project/radar", 2)], "the space's first, counted there; case ignored");
+    assert_eq!(suggest_tags("", &space, &all, 3), [("radar", 3), ("area", 1), ("area/job", 1)], "nothing typed: the most used, at most the limit");
+    assert_eq!(suggest_tags("adi", &[], &all, 10), [("radio", 1)], "held inside");
+}
