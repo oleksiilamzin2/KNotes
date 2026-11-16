@@ -190,8 +190,14 @@ fn scroll_note_to_end(view: &objc2_app_kit::NSTextView) {
 /// `KNOTES_PROBE_KEYS=down,return,…`: key commands as the keyboard sends them to the text
 /// view (`doCommandBySelector:`, which asks the delegate first).
 pub fn keys_requested(view: &objc2_app_kit::NSTextView) {
+    keys_requested_from("KNOTES_PROBE_KEYS", view);
+}
+
+/// The key commands listed in the variable `var`, sent to `view` (`KNOTES_PROBE_EMBED_KEYS`:
+/// to an embedded note's).
+pub fn keys_requested_from(var: &str, view: &objc2_app_kit::NSTextView) {
     use objc2::sel;
-    let Ok(keys) = std::env::var("KNOTES_PROBE_KEYS") else { return };
+    let Ok(keys) = std::env::var(var) else { return };
     for key in keys.split(',') {
         let command = match key {
             "down" => sel!(moveDown:),
@@ -1395,6 +1401,15 @@ fn report_list(table: &NSTableView) {
 
 /// Open note (from the text view itself), history buttons (from the toolbar) and list selection.
 fn report_note(window: &VaultWindow) {
+    // `KNOTES_PROBE_EMBED_TYPE=text`: typed at the end of the first embedded note, then the keys
+    // of `KNOTES_PROBE_EMBED_KEYS` there, then written.
+    if let Ok(text) = std::env::var("KNOTES_PROBE_EMBED_TYPE") {
+        window.probe_type_in_embed(0, &text);
+        if let Some(view) = window.embed_view(0) {
+            keys_requested_from("KNOTES_PROBE_EMBED_KEYS", &view);
+        }
+        window.save_embeds();
+    }
     // `KNOTES_PROBE_EMBED_CLICK=index`: a click on that character of the first embedded note.
     if let Some(index) = std::env::var("KNOTES_PROBE_EMBED_CLICK").ok().and_then(|n| n.parse().ok()) {
         window.probe_click_in_embed(0, index);
@@ -1473,10 +1488,6 @@ fn report_note(window: &VaultWindow) {
     println!("search-row: {}", if window.search_bar.is_shown() { "shown" } else { "hidden" });
     println!("cursor: {}", window.note_text.selectedRange().location);
     println!("text: {}", window.note_text.string().to_string().replace('\n', "⏎"));
-    if let Ok(text) = std::env::var("KNOTES_PROBE_EMBED_TYPE") {
-        window.probe_type_in_embed(0, &text);
-        window.save_embeds();
-    }
     for line in window.describe_embeds() {
         println!("{line}");
     }

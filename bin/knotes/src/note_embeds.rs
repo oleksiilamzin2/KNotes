@@ -78,6 +78,10 @@ pub struct Callbacks {
     pub on_focus: OnFocus,
     /// The open button pressed: the embed's key.
     pub on_open: Rc<dyn Fn(&str)>,
+    /// The cursor moved in an embed (its key): the completion list follows.
+    pub on_cursor: Rc<dyn Fn(&str)>,
+    /// A key command in an embed: true when the completion list took it.
+    pub on_command: Rc<dyn Fn(objc2::runtime::Sel) -> bool>,
 }
 
 /// Gets a link and the path of the embedded note it is written in.
@@ -283,6 +287,11 @@ impl NoteEmbeds {
         }
     }
 
+    /// The view of the embed `key` and its note's path.
+    pub fn view_of(&self, key: &str) -> Option<(Retained<NSTextView>, String)> {
+        self.shown.borrow().iter().find(|s| s.key == key).map(|s| (Retained::into_super(s.view.clone()), s.path.clone()))
+    }
+
     /// The key of the `n`th embed shown (probe mode).
     pub fn key(&self, n: usize) -> Option<String> {
         self.shown.borrow().get(n).map(|s| s.key.clone())
@@ -338,6 +347,10 @@ fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, callbacks: &Cal
     });
     let (edit, edited_key) = (callbacks.on_edit.clone(), key.clone());
     preview.on_change(move || edit(&edited_key));
+    let (cursor, cursor_key) = (callbacks.on_cursor.clone(), key.clone());
+    preview.on_cursor(move || cursor(&cursor_key));
+    let command = callbacks.on_command.clone();
+    preview.on_command(move |sel| command(sel));
     let (focus, focused_key) = (callbacks.on_focus.clone(), key.clone());
     view.on_focus(move |taken| focus(&focused_key, taken));
     let (open, open_key) = (callbacks.on_open.clone(), key.clone());

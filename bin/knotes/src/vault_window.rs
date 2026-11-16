@@ -27,7 +27,7 @@ use objc2::rc::Retained;
 use objc2::MainThreadMarker;
 use objc2::runtime::{ProtocolObject, Sel};
 use objc2::sel;
-use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextField, NSTextInputClient, NSView, NSViewController, NSWindow, NSWorkspace};
+use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF, NSModalResponse, NSOutlineView, NSSplitViewController, NSSplitViewItem, NSTableView, NSTextField, NSTextInputClient, NSTextView, NSView, NSViewController, NSWindow, NSWorkspace};
 use crate::pdf_viewer::PdfViewer;
 use objc2_foundation::{NSDate, NSDateFormatter, NSDictionary, NSIndexSet, NSNumber, NSNumberFormatter, NSNumberFormatterStyle, NSPoint, NSRange, NSString, NSURL};
 use objc2_app_kit::NSTextElementProvider;
@@ -227,6 +227,8 @@ pub struct VaultWindow {
     /// closed: it stays closed while typing on.
     completion_anchor: Cell<usize>,
     completion_dismissed: Cell<Option<usize>>,
+    /// The text view the list is for: an embedded note's (ADR 0034), else the note's own.
+    completion_view: RefCell<Option<Retained<NSTextView>>>,
     /// Set while a completion is inserted, so the edit does not reopen the list.
     accepting: Cell<bool>,
     /// List search: the background thread, the latest request and the results shown.
@@ -415,6 +417,7 @@ impl VaultWindow {
             completing: Cell::new(Completing::Link),
             completion_anchor: Cell::new(0),
             completion_dismissed: Cell::new(None),
+            completion_view: RefCell::new(None),
             accepting: Cell::new(false),
             search_worker: RefCell::new(None),
             search_generation: Cell::new(0),
@@ -2121,7 +2124,20 @@ impl VaultWindow {
                 if let Some(window) = edit_weak.upgrade() {
                     window.embeds.edited(key, &window.note_text, &window.live_preview);
                     window.save_embeds_later();
+                    window.complete_in_embed(key);
                 }
+            }),
+            on_cursor: Rc::new({
+                let weak = self.this.borrow().clone();
+                move |key| {
+                    if let Some(window) = weak.upgrade() {
+                        window.complete_in_embed(key);
+                    }
+                }
+            }),
+            on_command: Rc::new({
+                let weak = self.this.borrow().clone();
+                move |command| weak.upgrade().is_some_and(|window| window.completion_command(command))
             }),
             on_focus: Rc::new(move |key, taken| {
                 if let Some(window) = focus_weak.upgrade() {
@@ -2179,6 +2195,11 @@ impl VaultWindow {
         }
     }
 
+    /// The `n`th embedded note's view (probe mode).
+    pub fn embed_view(&self, n: usize) -> Option<Retained<NSTextView>> {
+        self.embeds.view(n).map(Retained::into_super)
+    }
+
     /// A click on character `index` of the `n`th embedded note (probe mode).
     pub fn probe_click_in_embed(&self, n: usize, index: usize) {
         self.embeds.probe_click(n, index);
@@ -2188,6 +2209,14 @@ impl VaultWindow {
     pub fn probe_open_embed(&self, n: usize) {
         if let Some(key) = self.embeds.key(n) {
             self.open_embed(&key);
+        }
+    }
+
+    /// The completion list for the cursor in the embed `key`'s view, links written as from its
+    /// note.
+    fn complete_in_embed(&self, key: &str) {
+        if let Some((view, path)) = self.embeds.view_of(key) {
+            self.complete_in(&view, Some(path));
         }
     }
 
@@ -2326,10 +2355,15 @@ impl VaultWindow {
 
     /// Shows, updates or hides the link completion list for the text before the cursor.
     fn update_completion(&self) {
+        self.complete_in(&self.note_text, self.open_path());
+    }
+
+    /// The completion list for the cursor in `view`, which shows the note at `source` (the
+    /// open note, or an embedded one: links are written as from it).
+    fn complete_in(&self, view: &NSTextView, source: Option<String>) {
         if self.accepting.get() {
             return;
         }
-        let view = &self.note_text;
         let selection = view.selectedRange();
         let ns = view.string();
         let found = (selection.length == 0).then(|| self.completion_at(&ns, selection.location)).flatten();
@@ -2342,7 +2376,7 @@ impl VaultWindow {
             return;
         }
         let (items, completing) = match &target {
-            CompletionTarget::Link(link) => (self.completion_items(link), Completing::Link),
+            CompletionTarget::Link(link) => (source.map(|source| self.completion_items(link, &source, view)).unwrap_or_default(), Completing::Link),
             CompletionTarget::Tag(tag) => (self.tag_items(tag), Completing::Tag { frontmatter: tag.frontmatter }),
         };
         // The tag typed in full and nothing else to offer: Return makes a new line again.
@@ -2354,6 +2388,7 @@ impl VaultWindow {
         self.completion_from.set(from);
         self.completion_anchor.set(anchor);
         self.completing.set(completing);
+        *self.completion_view.borrow_mut() = Some(objc2::Message::retain(view));
         // SAFETY: the range lies inside the text; a null actual range is allowed.
         let cursor = unsafe { view.firstRectForCharacterRange_actualRange(NSRange::new(selection.location, 0), std::ptr::null_mut()) };
         self.completion.show(&self.window, cursor, items);
@@ -2398,9 +2433,9 @@ impl VaultWindow {
             .collect()
     }
 
-    fn completion_items(&self, completion: &LinkCompletion) -> Vec<CompletionItem> {
+    fn completion_items(&self, completion: &LinkCompletion, source: &str, view: &NSTextView) -> Vec<CompletionItem> {
         let state = self.state.borrow();
-        let (Some(links), Some(titles), Some(source)) = (state.links.as_ref(), state.titles.as_ref(), self.open_path()) else {
+        let (Some(links), Some(titles)) = (state.links.as_ref(), state.titles.as_ref()) else {
             return Vec::new();
         };
         match completion {
@@ -2415,7 +2450,7 @@ impl VaultWindow {
                     .map(|(path, alias)| {
                         let (folder, name) = path.rsplit_once('/').unwrap_or(("", &path));
                         let name = name.strip_suffix(".md").unwrap_or(name);
-                        let link = links.link_text(&path, &source);
+                        let link = links.link_text(&path, source);
                         CompletionItem {
                             title: alias.clone().unwrap_or_else(|| name.to_owned()),
                             detail: folder.to_owned(),
@@ -2425,9 +2460,9 @@ impl VaultWindow {
                     .collect()
             }
             LinkCompletion::Heading { target, query, .. } | LinkCompletion::Block { target, query, .. } => {
-                let Some(path) = links.resolve(LinkKind::Wiki, target, &source) else { return Vec::new() };
+                let Some(path) = links.resolve(LinkKind::Wiki, target, source) else { return Vec::new() };
                 let text = if path == source {
-                    self.note_text.string().to_string()
+                    view.string().to_string()
                 } else {
                     state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(&path).ok()).unwrap_or_default()
                 };
@@ -2483,7 +2518,7 @@ impl VaultWindow {
     fn accept_completion(&self) {
         let Some(item) = self.completion.chosen() else { return };
         self.completion.hide();
-        let view = &self.note_text;
+        let view = self.completion_view.borrow().clone().unwrap_or_else(|| Retained::into_super(self.note_text.clone()));
         let cursor = view.selectedRange().location;
         let from = self.completion_from.get().min(cursor);
         let ns = view.string();
@@ -2499,7 +2534,7 @@ impl VaultWindow {
         view.setSelectedRange(NSRange::new(from, cursor - from));
         let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
         // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
-        unsafe { NSTextInputClient::insertText_replacementRange(&***view, &NSString::from_str(&text), not_found) };
+        unsafe { NSTextInputClient::insertText_replacementRange(&*view, &NSString::from_str(&text), not_found) };
         let after = from + text.encode_utf16().count() + if closed { 2 } else { 0 };
         view.setSelectedRange(NSRange::new(after, 0));
         self.accepting.set(false);

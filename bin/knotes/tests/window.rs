@@ -1273,6 +1273,18 @@ fn a_link_in_an_embedded_note_goes_where_it_goes_from_that_note() {
 }
 
 #[test]
+fn links_and_tags_complete_in_an_embedded_note_too() {
+    let notes = [("a.md", "Top\n\n![[sub/b]]\n\nend"), ("sub/b.md", "Body."), ("sub/target.md", "t"), ("c.md", "#cooking")];
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")];
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_EMBED_TYPE", " [[targ")]);
+    assert!(completion(&out).starts_with("▸target — sub"), "{out}");
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_EMBED_TYPE", " [[targ"), ("KNOTES_PROBE_EMBED_KEYS", "return")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("sub/b.md")).unwrap(), "Body. [[target]]", "the link as from sub/b.md: {out}");
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_EMBED_TYPE", " #coo")]);
+    assert_eq!(completion(&out), "▸#cooking — 1", "{out}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");
