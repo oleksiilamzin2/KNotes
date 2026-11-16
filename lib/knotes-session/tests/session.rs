@@ -100,6 +100,24 @@ fn snapshots_show_empty_folders_and_folders_made_meanwhile() {
 }
 
 #[test]
+fn snapshots_carry_the_recently_deleted_and_the_vault_s_days_purge_the_older() {
+    use knotes_core::TrashStore;
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for name in ["old.md", "new.md", "a.md"] {
+        fs::write(vault.path().join(name), name).unwrap();
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let day = 86_400_000;
+    let files = knotes_vault::FsVault::new(vault.path());
+    files.trash("old.md", now - 40 * day).unwrap();
+    files.trash("new.md", now - day).unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| s.rows.len() == 1 && s.trash.len() == 1);
+    assert_eq!(first.trash[0].path, "new.md", "the one older than 30 days gone for good");
+    assert_eq!(files.trashed().unwrap().len(), 1);
+}
+
+#[test]
 fn closing_a_session_is_immediate() {
     let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     fs::write(vault.path().join("a.md"), "a").unwrap();

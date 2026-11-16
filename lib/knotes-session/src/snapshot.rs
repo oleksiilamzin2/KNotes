@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use knotes_app::{FolderNode, FolderRules, TagNode, folder_tree_with, tag_tree};
-use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex};
+use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex, TrashEntry, TrashStore};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
 use knotes_spaces::Spaces;
@@ -23,6 +23,8 @@ pub struct Snapshot {
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// The vault's spaces and its folders' (ADR 0030), from the rules.
     pub spaces: Arc<Spaces>,
+    /// The recently deleted, the newest first (ADR 0032).
+    pub trash: Arc<Vec<TrashEntry>>,
     /// Link resolution for the editor (ADR 0013).
     pub links: Arc<LinkTargets>,
     /// Fuzzy title search, for link completion.
@@ -35,7 +37,7 @@ impl Snapshot {
     /// `previous`: its lookups are reused when the files (paths and aliases) are the same.
     pub fn read(
         index: &(impl NoteRows + NoteCatalog + TagIndex),
-        rules_store: &(impl FolderRulesStore + FolderLister),
+        rules_store: &(impl FolderRulesStore + FolderLister + TrashStore),
         changed: Vec<String>,
         previous: Option<&Snapshot>,
     ) -> Result<Self, BoxError> {
@@ -82,6 +84,7 @@ impl Snapshot {
             untagged,
             rules: Arc::new(rules),
             spaces: Arc::new(spaces),
+            trash: Arc::new(rules_store.trashed().unwrap_or_default()),
             changed,
         })
     }

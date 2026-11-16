@@ -62,6 +62,22 @@ impl FolderRules {
         list.insert(key.into(), value);
     }
 
+    /// The days the vault keeps deleted things, as this root's file says (ADR 0032).
+    pub fn trash_days(&self) -> u32 {
+        self.root.get("trash").and_then(|t| t.get("days")).and_then(Value::as_u64).filter(|d| *d > 0).map_or(DEFAULT_TRASH_DAYS, |d| d.min(u64::from(u32::MAX)) as u32)
+    }
+
+    /// Sets the days the vault keeps deleted things (the root's file).
+    pub fn set_trash_days(&mut self, days: u32) {
+        let trash = self.root.entry("trash").or_insert_with(|| json!({}));
+        if !trash.is_object() {
+            *trash = json!({});
+        }
+        if let Some(trash) = trash.as_object_mut() {
+            trash.insert("days".into(), json!(days.max(1)));
+        }
+    }
+
     /// The file's object, every key in it (spaces read theirs from it, ADR 0030).
     pub fn object(&self) -> &Map<String, Value> {
         &self.root
@@ -95,6 +111,15 @@ pub fn new_notes_folder(rules: &HashMap<String, FolderRules>, default: &str) -> 
     let set = rules.get("").and_then(|r| r.root.get("newNotes")).and_then(|n| n.get("folder")).and_then(Value::as_str);
     set.unwrap_or(default).trim_matches('/').to_owned()
 }
+
+/// How many days the vault keeps what is deleted (ADR 0032): its root's `"trash": {"days"}`,
+/// 30 when it says nothing, a day at least.
+pub fn trash_days(rules: &HashMap<String, FolderRules>) -> u32 {
+    rules.get("").map_or(DEFAULT_TRASH_DAYS, FolderRules::trash_days)
+}
+
+/// What the vault keeps deleted things for when it says nothing (as Apple Notes).
+pub const DEFAULT_TRASH_DAYS: u32 = 30;
 
 /// List settings of `folder` (`""` is the vault root), given the rules of the folders that
 /// have a `.knotes.json` file.

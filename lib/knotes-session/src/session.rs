@@ -81,6 +81,7 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
         *last.borrow_mut() = Some(snapshot.clone());
         Ok(tx.send(Event::Snapshot(snapshot)).is_ok())
     };
+    purge_expired(&files);
     send(&index, Vec::new())?;
     // Watch before syncing, so changes made during the sync are picked up afterwards.
     let _watcher = FsWatcher::with_callback(vault, DEBOUNCE, move |batch| changes.send(Control::Changed(batch)).is_ok())?;
@@ -107,6 +108,8 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
         };
         match message {
             Some(Control::Changed(changed)) => {
+                // The days may have changed with the root's rules; few entries to look at.
+                purge_expired(&files);
                 let report = indexer.sync(&mut index)?;
                 if report.added + report.modified + report.removed >= LARGE_SYNC {
                     memory::give_back(&index);
@@ -125,6 +128,20 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
                     memory::give_back(&index);
                 }
             }
+        }
+    }
+}
+
+/// Deletes for good what has been in the trash longer than the vault's days (ADR 0032).
+fn purge_expired(files: &FsVault) {
+    use knotes_core::{FolderRulesStore, TrashStore};
+    let root = files.read_rules(&[""]).ok().and_then(|r| r.into_iter().next()).and_then(|(_, text)| knotes_app::FolderRules::parse(&text).ok());
+    let days = root.as_ref().map_or(knotes_app::DEFAULT_TRASH_DAYS, knotes_app::FolderRules::trash_days);
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    let before = now_ms - i64::from(days) * 86_400_000;
+    for entry in files.trashed().unwrap_or_default().into_iter().filter(|e| e.deleted_ms < before) {
+        if let Err(e) = files.purge(&entry.id) {
+            eprintln!("knotes: cannot delete {} for good: {e}", entry.path);
         }
     }
 }

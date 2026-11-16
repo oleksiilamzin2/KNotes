@@ -25,7 +25,7 @@ mod tag_tree;
 
 pub use connections::{Mention, Outgoing, backlink_mentions, make_link, outgoing_links, unlinked_mentions};
 pub use find_in_text::find_all;
-pub use folder_rules::{FolderRules, RULES_FILE, new_notes_folder, resolve_list_settings};
+pub use folder_rules::{DEFAULT_TRASH_DAYS, FolderRules, RULES_FILE, new_notes_folder, resolve_list_settings, trash_days};
 pub use folder_tree::{FolderNode, folder_tree, folder_tree_with};
 pub use history::{HISTORY_DEPTH, History};
 pub use image_embed::{embed_images, pasted_image_name};

@@ -74,3 +74,13 @@ fn new_notes_go_to_the_root_rules_folder_or_the_default() {
     assert_eq!(new_notes_folder(&rules(&[("", r#"{"newNotes": {"folder": ""}}"#)]), "Вхідні"), "", "empty means the vault root");
     assert_eq!(new_notes_folder(&rules(&[("A", r#"{"newNotes": {"folder": "X"}}"#)]), "Вхідні"), "Вхідні", "only the root decides");
 }
+
+#[test]
+fn deleted_things_are_kept_thirty_days_unless_the_vault_says_otherwise() {
+    assert_eq!(knotes_app::trash_days(&rules(&[])), 30);
+    assert_eq!(knotes_app::trash_days(&rules(&[("", r#"{"trash": {"days": 7}}"#)])), 7);
+    assert_eq!(knotes_app::trash_days(&rules(&[("", r#"{"trash": {"days": 0}}"#)])), 30, "no fewer than a day");
+    let mut root = FolderRules::parse(r#"{"spaces": []}"#).unwrap();
+    root.set_trash_days(14);
+    assert!(root.to_json().contains("\"days\": 14") && root.to_json().contains("spaces"), "{}", root.to_json());
+}
