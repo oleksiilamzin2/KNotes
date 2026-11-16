@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use knotes_app::{FolderNode, FolderRules, TagNode, folder_tree_with, tag_tree};
+use knotes_app::{FolderNode, FolderRules, TagNode, count_tags, folder_tree_with, tag_tree};
 use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex, TrashEntry, TrashStore};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
@@ -17,8 +17,11 @@ pub struct Snapshot {
     /// known file's (a folder came or went).
     pub folder_paths: Arc<Vec<String>>,
     pub tags: Arc<Vec<TagNode>>,
-    /// Notes without any tag.
-    pub untagged: usize,
+    /// Every tag a note has with the note, a note's together: a space's tags count from them
+    /// (ADR 0030). Kept from the previous snapshot while the same, with `tags`.
+    pub tagged: Arc<Vec<(String, String)>>,
+    /// Notes without any tag; kept from the previous snapshot while the same.
+    pub untagged: Arc<HashSet<String>>,
     /// `.knotes.json` rules by folder (`""` is the vault root); unreadable files are skipped.
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// The vault's spaces and its folders' (ADR 0030), from the rules.
@@ -57,8 +60,20 @@ impl Snapshot {
             None => Arc::new(rules_store.folders()?),
         };
         let folders = folder_tree_with(catalog.iter().map(|e| e.path.as_str()), folder_paths.iter().map(String::as_str));
-        let tags = tag_tree(&index.tag_counts()?);
-        let untagged = index.untagged_notes()?.len();
+        // The tags count from every note's (no query of their own), only when they changed.
+        let tagged = index.tagged_notes()?;
+        let (tagged, tags) = match previous.filter(|p| *p.tagged == tagged) {
+            Some(p) => (Arc::clone(&p.tagged), Arc::clone(&p.tags)),
+            None => {
+                let tags = tag_tree(&count_tags(tagged.iter().map(|(tag, path)| (tag.as_str(), path.as_str()))));
+                (Arc::new(tagged), Arc::new(tags))
+            }
+        };
+        let untagged: HashSet<String> = index.untagged_notes()?.into_iter().collect();
+        let untagged = match previous.filter(|p| *p.untagged == untagged) {
+            Some(p) => Arc::clone(&p.untagged),
+            None => Arc::new(untagged),
+        };
         let mut paths = Vec::new();
         collect_paths(&folders, &mut paths);
         let rules = rules_store
@@ -80,7 +95,8 @@ impl Snapshot {
             titles,
             folders: Arc::new(folders),
             folder_paths,
-            tags: Arc::new(tags),
+            tags,
+            tagged,
             untagged,
             rules: Arc::new(rules),
             spaces: Arc::new(spaces),

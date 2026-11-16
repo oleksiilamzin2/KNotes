@@ -155,3 +155,24 @@ fn snapshots_resolve_links_and_search_titles_and_reuse_them_while_files_stay() {
     assert_eq!(added.titles.search_titles("new", 5)[0].path, "New.md");
     drop(session);
 }
+
+#[test]
+fn snapshots_carry_each_tag_with_its_note_and_the_untagged_and_reuse_them_while_the_tags_stay() {
+    use std::sync::Arc;
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::write(vault.path().join("a.md"), "#radar #area/job one").unwrap();
+    fs::write(vault.path().join("b.md"), "two").unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| s.rows.len() == 2);
+    let mut tagged = first.tagged.to_vec();
+    tagged.sort();
+    assert_eq!(tagged, [("area/job".to_owned(), "a.md".to_owned()), ("radar".to_owned(), "a.md".to_owned())]);
+    assert_eq!(first.untagged.iter().collect::<Vec<_>>(), ["b.md"]);
+    assert_eq!(first.tags.iter().map(|t| (t.tag.as_str(), t.notes)).collect::<Vec<_>>(), [("area", 1), ("radar", 1)]);
+    fs::write(vault.path().join("b.md"), "two, longer").unwrap();
+    let later = wait_for(&events, |s| s.changed.iter().any(|p| p == "b.md"));
+    assert!(Arc::ptr_eq(&first.tagged, &later.tagged) && Arc::ptr_eq(&first.tags, &later.tags) && Arc::ptr_eq(&first.untagged, &later.untagged), "the same tags: the same lookups");
+    fs::write(vault.path().join("b.md"), "#radar two").unwrap();
+    let tagged = wait_for(&events, |s| s.untagged.is_empty());
+    assert_eq!(tagged.tags.iter().map(|t| (t.tag.as_str(), t.notes)).collect::<Vec<_>>(), [("area", 1), ("radar", 2)]);
+}

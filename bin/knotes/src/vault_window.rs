@@ -59,8 +59,10 @@ struct State {
     /// Every folder of the vault, empty ones too (the snapshot's list).
     folder_paths: Arc<Vec<String>>,
     tags: Arc<Vec<TagNode>>,
-    /// Notes without any tag (the "Untagged" row).
-    untagged: usize,
+    /// Notes without any tag (the "Untagged" row), and every tag with its note, a note's
+    /// together (a space's tags count from them, ADR 0030): the last snapshot's.
+    untagged: Arc<HashSet<String>>,
+    tagged: Arc<Vec<(String, String)>>,
     index_dir: Option<PathBuf>,
     vault: Option<PathBuf>,
     /// List settings of tag views: tags have no folder and no `.knotes.json`; kept for the session.
@@ -86,6 +88,15 @@ struct State {
     rest_tags: HashSet<String>,
     /// The recently deleted, the newest first (ADR 0032).
     trash: Arc<Vec<TrashEntry>>,
+}
+
+/// A space's tags and those only outside it (ADR 0030), with the tags and the space's folders
+/// they were counted from.
+struct SpaceTags {
+    tagged: Arc<Vec<(String, String)>>,
+    folders: SpaceFolders,
+    tags: Vec<TagNode>,
+    rest: Vec<TagNode>,
 }
 
 impl State {
@@ -131,6 +142,8 @@ pub struct VaultWindow {
     /// each PDF and let go with it: PDFKit keeps every page it drew while the view lives.
     pdf_view: RefCell<Option<PdfViewer>>,
     pdf_path: RefCell<Option<String>>,
+    /// The space's tags and the rest's as last counted (ADR 0030).
+    space_tags: RefCell<Option<Rc<SpaceTags>>>,
     /// The recently deleted entry shown, read where it is kept (ADR 0032): nothing open then.
     previewing: RefCell<Option<TrashEntry>>,
     /// The occurrences found in the note (UTF-16) and the one selected.
@@ -309,7 +322,8 @@ impl VaultWindow {
             folders: Arc::new(FolderNode::default()),
             folder_paths: Arc::new(Vec::new()),
             tags: Arc::new(Vec::new()),
-            untagged: 0,
+            untagged: Arc::default(),
+            tagged: Arc::default(),
             index_dir: None,
             vault: None,
             tag_settings: HashMap::new(),
@@ -338,6 +352,7 @@ impl VaultWindow {
             find_bar,
             pdf_view: RefCell::new(None),
             pdf_path: RefCell::new(None),
+            space_tags: RefCell::new(None),
             previewing: RefCell::new(None),
             find_matches: RefCell::new(Vec::new()),
             pdf_find: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
@@ -1012,6 +1027,19 @@ impl VaultWindow {
         });
     }
 
+    /// The tags of the space and of the rest of the vault (ADR 0030), counted again only when
+    /// the tags or the space's folders changed (not on every save).
+    fn space_tags(&self, tagged: &Arc<Vec<(String, String)>>, space: &SpaceFolders) -> Rc<SpaceTags> {
+        let mut kept = self.space_tags.borrow_mut();
+        if let Some(counted) = kept.as_ref().filter(|k| Arc::ptr_eq(&k.tagged, tagged) && k.folders == *space) {
+            return Rc::clone(counted);
+        }
+        let (tags, rest) = split_tags(tagged, &|path| space.holds(path));
+        let counted = Rc::new(SpaceTags { tagged: Arc::clone(tagged), folders: space.clone(), tags, rest });
+        *kept = Some(Rc::clone(&counted));
+        counted
+    }
+
     fn rebuild_sidebar(&self) {
         // Rebuilding would end the editing of a folder's name; done when it ends.
         if self.sidebar.is_renaming() {
@@ -1031,27 +1059,25 @@ impl VaultWindow {
             drop(state);
             // In a space: its folders and tags (counted there), the inbox if it is one of them,
             // its untagged notes; then the rest of the vault under a row of its own (ADR 0030).
+            // From the snapshot, no query here: a snapshot comes after every save.
             let mut state = self.state.borrow_mut();
             let space = state.space_folders.clone();
             let untagged = match &space {
-                Some(space) => self.untagged_notes(&mut state).iter().filter(|p| space.holds(p)).count(),
-                None => state.untagged,
+                Some(space) => state.untagged.iter().filter(|p| space.holds(p)).count(),
+                None => state.untagged.len(),
             };
             let split = space.as_ref().map(|space| {
                 let (folders, rest_folders) = state.folders.split(space);
-                self.ensure_reader(&mut state);
-                let tagged = state.reader.as_ref().and_then(|r| r.tagged_notes().ok()).unwrap_or_default();
-                let (tags, rest_tags) = split_tags(&tagged, &|path| space.holds(path));
-                (folders, tags, rest_folders, rest_tags)
+                (folders, rest_folders, self.space_tags(&state.tagged, space))
             });
-            state.rest_tags = split.as_ref().map(|(_, _, _, rest)| tag_names(rest)).unwrap_or_default();
+            state.rest_tags = split.as_ref().map(|(_, _, tags)| tag_names(&tags.rest)).unwrap_or_default();
             drop(state);
             let state = self.state.borrow();
             let (folders, tags) = match &split {
-                Some((folders, tags, _, _)) => (folders, tags.as_slice()),
+                Some((folders, _, tags)) => (folders, tags.tags.as_slice()),
                 None => (&*state.folders, state.tags.as_slice()),
             };
-            let rest = split.as_ref().map(|(_, _, rest_folders, rest_tags)| RestPart { folders: rest_folders, tags: rest_tags, notes: rest_folders.notes });
+            let rest = split.as_ref().map(|(_, rest_folders, tags)| RestPart { folders: rest_folders, tags: &tags.rest, notes: rest_folders.notes });
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
             let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
             Sidebar::new(folders, tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| resolve_list_settings(path, &state.rules).include_subfolders, rest, state.trash.len())
@@ -1182,7 +1208,8 @@ impl VaultWindow {
             state.folders = Arc::clone(&snapshot.folders);
             state.folder_paths = Arc::clone(&snapshot.folder_paths);
             state.tags = Arc::clone(&snapshot.tags);
-            state.untagged = snapshot.untagged;
+            state.untagged = Arc::clone(&snapshot.untagged);
+            state.tagged = Arc::clone(&snapshot.tagged);
             state.catalog = Arc::clone(&snapshot.catalog);
             state.spaces = Arc::clone(&snapshot.spaces);
             state.trash = Arc::clone(&snapshot.trash);
@@ -2816,8 +2843,8 @@ impl VaultWindow {
         let selection = state.selection.clone();
         let (title, listed) = match &selection {
             SidebarItem::Folder(path) => (path.rsplit('/').next().unwrap_or(path).to_owned(), None),
-            SidebarItem::Tag(tag) => (format!("#{tag}"), Some(self.notes_with_tag(&mut state, tag))),
-            SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some(self.untagged_notes(&mut state))),
+            SidebarItem::Tag(tag) => (format!("#{tag}"), Some(Arc::new(self.notes_with_tag(&mut state, tag)))),
+            SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some(Arc::clone(&state.untagged))),
             SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), None),
             _ => (strings::ALL_NOTES.to_owned(), None),
         };
@@ -3165,11 +3192,6 @@ impl VaultWindow {
             *self.search_results.borrow_mut() = Some(response);
             self.refresh_list();
         }
-    }
-
-    fn untagged_notes(&self, state: &mut State) -> HashSet<String> {
-        self.ensure_reader(state);
-        state.reader.as_ref().and_then(|r| r.untagged_notes().ok()).unwrap_or_default().into_iter().collect()
     }
 
     fn notes_with_tag(&self, state: &mut State, tag: &str) -> HashSet<String> {
