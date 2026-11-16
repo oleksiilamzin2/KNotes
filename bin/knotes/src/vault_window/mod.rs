@@ -886,7 +886,9 @@ impl VaultWindow {
             // renamed).
             state.history.retain(|p| paths.contains(p) || open.as_deref() == Some(p));
         }
-        let changed = self.open_path().filter(|open| snapshot.changed.iter().any(|p| p == open));
+        // Events lost (`RESCAN`): the note open and the embedded notes are looked at anyway.
+        let rescan = snapshot.changed.iter().any(|p| p == knotes_vault::RESCAN);
+        let changed = self.open_path().filter(|open| rescan || snapshot.changed.iter().any(|p| p == open));
         {
             let mut state = self.state.borrow_mut();
             state.rows = Arc::clone(&snapshot.rows);
@@ -916,7 +918,7 @@ impl VaultWindow {
             })
         };
         // Embedded notes read again when links resolve anew or their notes changed (ADR 0034).
-        let embeds_changed = new_links.is_some() || snapshot.changed.iter().any(|p| self.embeds.shows(p));
+        let embeds_changed = new_links.is_some() || rescan || snapshot.changed.iter().any(|p| self.embeds.shows(p));
         if let Some(links) = new_links {
             self.live_preview.set_links(&self.note_text, links);
         } else {

@@ -10,11 +10,14 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// FSEvents watcher with debouncing: changes arriving within `debounce` of the first one
 /// form one batch. Hidden paths (`.obsidian`, `.git`, dotfiles) are dropped, except the
-/// per-folder rules files `.knotes.json`.
+/// per-folder rules files `.knotes.json`. When FSEvents says events were lost and the tree must
+/// be scanned again (`RESCAN`), the batch holds `RESCAN`: anything may have changed.
 /// Dropping the watcher stops the background thread, and returns at once: FSEvents is stopped
 /// on a thread of its own. Stopping spins until the stream's run loop idles and asks fseventsd,
 /// which answers its clients in turn and took seconds when they were many and slow (tests run
 /// from a folder of half a million build files); a vault closing need not wait for it.
+pub const RESCAN: &str = "";
+
 pub struct FsWatcher {
     watcher: Option<RecommendedWatcher>,
     batches: Option<Receiver<Vec<String>>>,
@@ -44,8 +47,13 @@ impl FsWatcher {
         // FSEvents reports real paths (/private/var/...), so compare against the canonical root.
         let root = root.canonicalize()?;
         let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
+        let watched = root.clone();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
             if let Ok(event) = event {
+                // Events were dropped (a burst, a full queue): the root stands for them all.
+                if event.need_rescan() {
+                    let _ = raw_tx.send(watched.clone());
+                }
                 for path in event.paths {
                     let _ = raw_tx.send(path);
                 }
@@ -90,13 +98,40 @@ fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, on_batch: &impl Fn(Vec<St
 }
 
 /// Keeps visible paths, the attachments folder's files and per-folder rules files
-/// (`.knotes.json` and the old `.knotes`, ADR 0010, 0020); drops anything else hidden.
+/// (`.knotes.json` and the old `.knotes`, ADR 0010, 0020); drops anything else hidden. The
+/// root itself is `RESCAN`.
 fn add_visible(root: &Path, path: &Path, paths: &mut BTreeSet<String>) {
     let Some(rel) = path.strip_prefix(root).ok().and_then(Path::to_str) else { return };
+    if rel.is_empty() {
+        paths.insert(RESCAN.to_owned());
+        return;
+    }
     let (folders, name) = rel.rsplit_once('/').unwrap_or(("", rel));
     let folders = folders.strip_prefix(ATTACHMENTS_FOLDER).filter(|rest| rest.is_empty() || rest.starts_with('/')).unwrap_or(folders);
     let hidden_folder = folders.split('/').any(|part| part.starts_with('.'));
     if !rel.is_empty() && !hidden_folder && (!name.starts_with('.') || name == ".knotes.json" || name == ".knotes") {
         paths.insert(rel.to_owned());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kept(rel: &str) -> Vec<String> {
+        let root = Path::new("/vault");
+        let mut paths = BTreeSet::new();
+        add_visible(root, &if rel.is_empty() { root.to_path_buf() } else { root.join(rel) }, &mut paths);
+        paths.into_iter().collect()
+    }
+
+    #[test]
+    fn the_root_stands_for_a_rescan_and_hidden_paths_go() {
+        assert_eq!(kept(""), [RESCAN]);
+        assert_eq!(kept("a.md"), ["a.md"]);
+        assert_eq!(kept("Work/.knotes.json"), ["Work/.knotes.json"]);
+        assert_eq!(kept(".knotes/attachments/p.png"), [".knotes/attachments/p.png"]);
+        assert!(kept(".git/HEAD").is_empty());
+        assert!(kept(".DS_Store").is_empty());
     }
 }
