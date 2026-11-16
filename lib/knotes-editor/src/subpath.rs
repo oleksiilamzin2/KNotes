@@ -56,3 +56,13 @@ pub fn embedded_part(source: &str, subpath: Option<&str>) -> Option<Range<usize>
     let end = start + source[start..end].trim_end().len();
     Some(start..end)
 }
+
+/// The note `file` with an embedded part replaced by `text` (ADR 0034), and the part's range
+/// in it now: at `range` while `file` is still `was` (the note as last read or written: the
+/// part's own heading may have changed in the edit), else where part `subpath` is in `file`
+/// now. `None` when it is no longer there.
+pub fn splice_part(file: &str, was: &str, range: Range<usize>, subpath: Option<&str>, text: &str) -> Option<(String, Range<usize>)> {
+    let range = if file == was && range.end <= file.len() { range } else { embedded_part(file, subpath)? };
+    let written = format!("{}{text}{}", &file[..range.start], &file[range.end..]);
+    Some((written, range.start..range.start + text.len()))
+}
