@@ -7,7 +7,7 @@ use knotes_core::{ATTACHMENTS_FOLDER, AttachmentStore, FileKind, FolderLister, F
 use rayon::prelude::*;
 
 pub struct FsVault {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
 }
 
 impl FsVault {
@@ -154,7 +154,7 @@ impl FolderRulesStore for FsVault {
 
 impl FsVault {
     /// The absolute path of a vault-relative path that stays inside the vault.
-    fn inside(&self, path: &str) -> io::Result<PathBuf> {
+    pub(crate) fn inside(&self, path: &str) -> io::Result<PathBuf> {
         let rel = Path::new(path);
         let inside = !path.is_empty() && rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
         if !inside {
@@ -239,7 +239,7 @@ impl AttachmentStore for FsVault {
 impl FsVault {
     /// Makes room for `.knotes/` at the vault root: an old root rules file there (ADR 0010)
     /// becomes `.knotes.json`, or goes when a newer one exists.
-    fn make_knotes_folder(&self) -> io::Result<()> {
+    pub(crate) fn make_knotes_folder(&self) -> io::Result<()> {
         let old = self.root.join(OLD_RULES_FILE);
         if !old.is_file() {
             return Ok(());

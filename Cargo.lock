@@ -824,6 +824,7 @@ dependencies = [
  "knotes-core",
  "notify",
  "rayon",
+ "serde_json",
  "tempfile",
 ]
 

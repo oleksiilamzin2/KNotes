@@ -1,5 +1,6 @@
 //! File system access to a vault.
 
+mod fs_trash;
 mod fs_vault;
 mod fs_watcher;
 
