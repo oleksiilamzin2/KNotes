@@ -2835,6 +2835,10 @@ impl LivePreview {
     /// no task in Markdown, nor in Obsidian, but it is what one types for one. An edit of its
     /// own, so undo takes it back first.
     fn complete_task_box(&self, view: &NSTextView, space: usize) {
+        // In a code block it is an example, kept as typed.
+        if self.ivars().styled.borrow().code_blocks.iter().any(|block| block.start <= space && space < block.end) {
+            return;
+        }
         let text = view.string();
         let line = text.paragraphRangeForRange(NSRange::new(space, 0)).location;
         let typed = text.substringWithRange(NSRange::new(line, space + 1 - line)).to_string();

@@ -3661,3 +3661,9 @@ fn the_line_break_above_a_table_is_not_deleted_into_its_header() {
     let (text, out) = deleted(&format!("Intro\n\n{table}"), "6,1");
     assert_eq!(text, format!("Intro\n{table}"), "an empty line above goes: {out}");
 }
+
+#[test]
+fn empty_brackets_typed_in_a_code_block_stay_as_typed() {
+    let (vault, out) = probe_notes(&[("a.md", "```md\n\n```\nend")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "- [] x"), ("KNOTES_PROBE_TYPE_CHARS", "1"), ("KNOTES_PROBE_RANGE", "6,0"), ("KNOTES_PROBE_ACTION", "save")]);
+    assert_eq!(read(vault.path(), "a.md"), "```md\n- [] x\n```\nend", "{out}");
+}
