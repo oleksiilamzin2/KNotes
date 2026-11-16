@@ -94,7 +94,8 @@ impl TagIndex for SqliteIndex {
     }
 
     fn tagged_notes(&self) -> Result<Vec<(String, String)>, BoxError> {
-        let mut st = self.conn.prepare_cached("SELECT DISTINCT t.tag, f.path FROM tags t JOIN files f ON f.id = t.file_id")?;
+        // The tags' key (note, tag) keeps a note's tags together, each once.
+        let mut st = self.conn.prepare_cached("SELECT t.tag, f.path FROM tags t JOIN files f ON f.id = t.file_id ORDER BY t.file_id")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }

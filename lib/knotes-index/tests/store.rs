@@ -111,3 +111,15 @@ fn a_failed_batch_changes_nothing() {
     assert!(result.is_err());
     assert!(index.file_states().unwrap().is_empty());
 }
+
+#[test]
+fn every_tag_comes_with_its_note_grouped_by_note_so_notes_count_in_one_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    upsert(&mut index, "a.md", "#x #z\n");
+    upsert(&mut index, "b.md", "#y\n");
+    let notes: Vec<String> = index.tagged_notes().unwrap().into_iter().map(|(_, path)| path).collect();
+    let mut groups = notes.clone();
+    groups.dedup();
+    assert_eq!(groups.len(), 2, "a note's tags one after another: {notes:?}");
+}

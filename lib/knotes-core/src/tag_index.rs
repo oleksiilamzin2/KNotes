@@ -11,7 +11,7 @@ pub trait TagIndex {
     fn tag_counts(&self) -> Result<Vec<(String, usize)>, BoxError>;
     /// Paths of notes without any tag, sorted.
     fn untagged_notes(&self) -> Result<Vec<String>, BoxError>;
-    /// Every tag a note has (as written, without its parents) with the note's path: what counts
-    /// tags within a space (ADR 0030).
+    /// Every tag a note has (as written, without its parents) with the note's path, a note's
+    /// tags one after another: what counts tags, in the vault and within a space (ADR 0030).
     fn tagged_notes(&self) -> Result<Vec<(String, String)>, BoxError>;
 }
