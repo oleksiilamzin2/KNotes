@@ -1176,6 +1176,19 @@ fn highlights_are_on_yellow_and_comments_dim_their_signs_hidden_away_from_the_cu
 }
 
 #[test]
+fn a_footnote_shows_its_label_raised_and_a_click_goes_to_its_definition_and_back() {
+    let note = [("f.md", "Text[^1] here.\n\nmiddle\n\n[^1]: The note.\n\nend")];
+    let (_vault, out) = probe_notes(&note, &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let editor = out.lines().find_map(|l| l.strip_prefix("editor: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(editor.contains("[hidden][^|[footnote]1|[hidden]]"), "{editor}");
+    assert!(editor.contains("[footnote-label][^1]:"), "{editor}");
+    let (_vault, out) = probe_notes(&note, &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "6")]);
+    assert!(out.contains("cursor: 29\n"), "after the definition's [^1]: {out}");
+    let (_vault, out) = probe_notes(&note, &[("KNOTES_PROBE_OPEN", "f.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "25")]);
+    assert!(out.contains("cursor: 8\n"), "back after the reference: {out}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");

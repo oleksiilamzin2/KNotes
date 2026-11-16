@@ -33,6 +33,10 @@ pub enum Style {
     Mark,
     /// `%%text%%`, an Obsidian comment, with its signs: shown dim, nothing styled inside.
     Comment,
+    /// A footnote reference `[^label]`: its label shown raised, the brackets hidden.
+    FootnoteRef,
+    /// A footnote definition's `[^label]:`, shown muted.
+    FootnoteLabel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,6 +70,14 @@ pub struct CodeRun {
     pub language: String,
 }
 
+/// A footnote's reference `[^label]`, or its definition's `[^label]:`: what a click follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FootnoteRun {
+    pub range: Range<usize>,
+    pub label: String,
+    pub definition: bool,
+}
+
 /// A link and the source range it covers, brackets and destination included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkRun {
@@ -94,6 +106,8 @@ pub struct Highlight {
     pub images: Vec<ImageRun>,
     /// Markdown tables (ADR 0021), sorted by start.
     pub tables: Vec<TableRun>,
+    /// Footnote references and definitions (ADR 0034), sorted by start.
+    pub footnotes: Vec<FootnoteRun>,
 }
 
 /// A column's alignment, from the delimiter row (`:--`, `:-:`, `--:`).
@@ -186,6 +200,7 @@ impl Highlight {
             .chain(self.code_langs.iter().flat_map(|c| [c.block.start, c.block.end, c.code.start, c.code.end]))
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
+            .chain(self.footnotes.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.tables.iter().flat_map(|t| {
                 [t.range.start, t.range.end, t.delimiter.start, t.delimiter.end]
                     .into_iter()
@@ -222,6 +237,7 @@ impl Highlight {
                 })
                 .collect(),
             images: self.images.iter().map(|i| ImageRun { range: map(i.range.start)..map(i.range.end), ..i.clone() }).collect(),
+            footnotes: self.footnotes.iter().map(|f| FootnoteRun { range: map(f.range.start)..map(f.range.end), ..f.clone() }).collect(),
             tables: self
                 .tables
                 .iter()
@@ -359,6 +375,19 @@ pub fn highlight(source: &str) -> Highlight {
                 }
                 h.code_blocks.push(block);
             }
+            Event::FootnoteReference(label) => {
+                h.runs.push(Run { range: r.clone(), style: Style::FootnoteRef });
+                h.markup.push(r.start..r.start + 2);
+                h.markup.push(r.end - 1..r.end);
+                h.footnotes.push(FootnoteRun { range: r, label: label.to_string(), definition: false });
+            }
+            Event::Start(Tag::FootnoteDefinition(label)) => {
+                if let Some(close) = text.find("]:") {
+                    let label_range = r.start..r.start + close + 2;
+                    h.runs.push(Run { range: label_range.clone(), style: Style::FootnoteLabel });
+                    h.footnotes.push(FootnoteRun { range: label_range, label: label.to_string(), definition: true });
+                }
+            }
             Event::InlineMath(tex) => formula(&mut h, r, &tex, false),
             Event::DisplayMath(tex) => formula(&mut h, r, &tex, true),
             Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole }, .. }) => {
@@ -398,6 +427,7 @@ pub fn highlight(source: &str) -> Highlight {
     marks(&mut h, source, &verbatim);
     h.runs.sort_by_key(|run| run.range.start);
     h.markup.sort_by_key(|m| m.start);
+    h.footnotes.sort_by_key(|f| f.range.start);
     h
 }
 
@@ -421,6 +451,7 @@ fn comments(h: &mut Highlight, source: &str, verbatim: &[Range<usize>]) {
     h.code_langs.retain(|c| !inside(c.block.start));
     h.callouts.retain(|c| !inside(c.range.start));
     h.tables.retain(|t| !inside(t.range.start));
+    h.footnotes.retain(|f| !inside(f.range.start));
     for comment in comments {
         h.markup.push(comment.start..comment.start + 2);
         let text = &source[comment.clone()];

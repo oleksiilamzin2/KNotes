@@ -23,3 +23,8 @@ be edited in place.
   out, and a highlight's signs.
 - One scan for each in knotes-md (`comment_ranges`, `mark_ranges`), shared by the index, the
   preview and the editor.
+- **Footnotes** (pulldown-cmark's, GFM's: a reference with no definition stays text): a
+  reference `[^label]` shows its label raised, smaller, in the link colour, its brackets hidden
+  away from the cursor; a definition keeps `[^label]:` in view, muted. A click on a reference
+  away from the cursor's paragraph (anywhere with Cmd) puts the cursor after its definition's
+  `]:`; a click on a definition's label, after its first reference. Labels match ignoring case.

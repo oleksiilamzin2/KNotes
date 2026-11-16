@@ -350,3 +350,16 @@ fn comments_are_one_run_their_percents_hidden_and_nothing_styled_inside() {
     assert!(styles("a\n%%\nblock\n%%\nb").contains(&(Style::Comment, "%%\nblock\n%%")), "across lines");
     assert_eq!(markup("`%%` and %%c%%"), ["`", "`", "%%", "%%"], "not in code");
 }
+
+#[test]
+fn footnote_references_show_their_label_raised_and_definitions_their_label_muted() {
+    let src = "Text[^1] and[^long] more.\n\n[^1]: The first.\n[^long]: The second.\n";
+    let styled = styles(src);
+    assert!(styled.contains(&(Style::FootnoteRef, "[^1]")) && styled.contains(&(Style::FootnoteRef, "[^long]")), "{styled:?}");
+    assert!(styled.contains(&(Style::FootnoteLabel, "[^1]:")) && styled.contains(&(Style::FootnoteLabel, "[^long]:")), "{styled:?}");
+    assert_eq!(markup("Text[^1] x\n\n[^1]: y\n"), ["[^", "]"], "a reference shows its label alone; a definition all of it");
+    let found = highlight(src);
+    let notes: Vec<(&str, &str, bool)> = found.footnotes.iter().map(|f| (&src[f.range.clone()], f.label.as_str(), f.definition)).collect();
+    assert_eq!(notes, [("[^1]", "1", false), ("[^long]", "long", false), ("[^1]:", "1", true), ("[^long]:", "long", true)]);
+    assert!(!styles("No such[^9] note.").iter().any(|(s, _)| *s == Style::FootnoteRef), "a reference with no definition stays text");
+}

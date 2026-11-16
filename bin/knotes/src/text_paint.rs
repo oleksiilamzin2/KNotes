@@ -11,7 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSKernAttributeName, NSMutableParagraphStyle, NSParagraphStyle,
-    NSBackgroundColorAttributeName, NSParagraphStyleAttributeName, NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextStorage, NSUnderlineStyle,
+    NSBackgroundColorAttributeName, NSBaselineOffsetAttributeName, NSParagraphStyleAttributeName, NSStrikethroughStyleAttributeName, NSTextAlignment, NSTextStorage, NSUnderlineStyle,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSRange, NSString};
 
@@ -30,8 +30,10 @@ pub const STRUCK: u16 = 1 << 15;
 pub const SHADED: u16 = 1 << 14;
 /// The `look` bit for highlighted text (`==text==`), on yellow.
 pub const MARKED: u16 = 1 << 13;
+/// The `look` bit for raised text (a footnote reference's label).
+pub const RAISED: u16 = 1 << 12;
 /// The look itself, without the bits.
-const LOOK: u16 = !(STRUCK | SHADED | MARKED);
+const LOOK: u16 = !(STRUCK | SHADED | MARKED | RAISED);
 
 /// A paragraph style's settings; the default sets nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -171,21 +173,25 @@ pub struct PaintCache {
     /// Background of inline code, and of highlighted text.
     shade: Retained<NSColor>,
     mark: Retained<NSColor>,
+    /// How far raised text sits above the line's baseline, in points.
+    raise: f64,
     styles: RefCell<HashMap<ParaKey, Retained<NSParagraphStyle>>>,
     attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
 }
 
-/// Font, colour, test name, kerning, paragraph style, line-through and background (none, code's,
-/// a highlight's) of an attribute set.
-type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle, bool, u8);
+/// Font, colour, test name, kerning, paragraph style, line-through, background (none, code's,
+/// a highlight's) and raised of an attribute set.
+type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const NSParagraphStyle, bool, u8, bool);
 
 impl PaintCache {
-    /// `style_key` names the attribute carrying each range's test name.
-    pub fn new(style_key: &str) -> Self {
+    /// `style_key` names the attribute carrying each range's test name; raised text sits
+    /// `raise` points above the baseline.
+    pub fn new(style_key: &str, raise: f64) -> Self {
         Self {
             style_key: NSString::from_str(style_key),
             shade: NSColor::quaternarySystemFillColor(),
             mark: NSColor::systemYellowColor().colorWithAlphaComponent(0.4),
+            raise,
             styles: RefCell::new(HashMap::new()),
             attributes: RefCell::new(HashMap::new()),
         }
@@ -202,11 +208,12 @@ impl PaintCache {
         let struck = paint.look & STRUCK != 0;
         // A highlight over code keeps the highlight's yellow.
         let background = if paint.look & MARKED != 0 { 2 } else { u8::from(paint.look & SHADED != 0) };
+        let raised = paint.look & RAISED != 0;
         let para = (paint.para != 0).then(|| {
             let para = palette.para_of(paint.para);
             self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style()).clone()
         });
-        let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, background);
+        let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, background, raised);
         self.attributes
             .borrow_mut()
             .entry(key)
@@ -214,6 +221,7 @@ impl PaintCache {
                 let style = NSString::from_str(name);
                 let kern = NSNumber::numberWithDouble(kern);
                 let line = NSNumber::numberWithInteger(NSUnderlineStyle::Single.0);
+                let raise = NSNumber::numberWithDouble(self.raise);
                 // SAFETY: AppKit's attribute name constants live for the whole process.
                 let mut keys = unsafe { vec![NSFontAttributeName, NSForegroundColorAttributeName, &*self.style_key] };
                 let mut values: Vec<&AnyObject> = vec![font.as_ref(), color.as_ref(), style.as_ref()];
@@ -231,6 +239,11 @@ impl PaintCache {
                     // SAFETY: as above.
                     keys.push(unsafe { NSStrikethroughStyleAttributeName });
                     values.push(line.as_ref());
+                }
+                if raised {
+                    // SAFETY: as above.
+                    keys.push(unsafe { NSBaselineOffsetAttributeName });
+                    values.push(raise.as_ref());
                 }
                 if background != 0 {
                     // SAFETY: as above.

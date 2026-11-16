@@ -17,7 +17,7 @@ use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, Formul
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PDF_CAPTION, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};
 use crate::strings;
-use crate::text_paint::{MARKED, Paint, PaintCache, Palette, Para, SHADED, STRUCK};
+use crate::text_paint::{MARKED, Paint, PaintCache, Palette, Para, RAISED, SHADED, STRUCK};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
@@ -39,6 +39,9 @@ pub const READABLE_WIDTH: f64 = 700.0;
 const MIN_MARGIN: f64 = 32.0;
 const TOP_MARGIN: f64 = 24.0;
 const BODY_SIZE: f64 = 15.0;
+/// A footnote reference's label: its size and how far above the baseline, of the body's.
+const FOOTNOTE_SCALE: f64 = 0.7;
+const FOOTNOTE_RAISE: f64 = 0.4;
 const HEADING_SIZES: [f64; 6] = [23.0, 20.0, 18.0, 16.0, 15.0, 15.0];
 const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"];
 /// Indentation of each list level (the source's own indentation is hidden).
@@ -78,6 +81,8 @@ struct Look {
     /// List numbers: digits of one width, so items' text lines up.
     digits: Retained<NSFont>,
     headings: Vec<Retained<NSFont>>,
+    /// A footnote reference's raised label.
+    footnote: Retained<NSFont>,
     /// Hidden markup: a near-zero font size collapses its width; clear colour hides the rest.
     hidden: Retained<NSFont>,
     text: Retained<NSColor>,
@@ -400,7 +405,8 @@ impl LivePreview {
                 NSColor::systemGrayColor(),
             ],
             clear: NSColor::clearColor(),
-            paint: PaintCache::new(STYLE_KEY),
+            paint: PaintCache::new(STYLE_KEY, BODY_SIZE * FOOTNOTE_RAISE),
+            footnote: NSFont::systemFontOfSize(BODY_SIZE * FOOTNOTE_SCALE),
             number_widths: Cell::new(None),
             body_widths: RefCell::new(std::collections::HashMap::new()),
             piece_widths: RefCell::new(std::collections::HashMap::new()),
@@ -546,6 +552,9 @@ impl LivePreview {
         }
         for run in styled.runs.iter().filter(|r| r.style == Style::Mark && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= MARKED);
+        }
+        for run in styled.runs.iter().filter(|r| r.style == Style::FootnoteRef && meets(&r.range)) {
+            canvas.paint(run.range.clone(), |p| p.look |= RAISED);
         }
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
             let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
@@ -2539,6 +2548,12 @@ impl LivePreview {
         if !cmd && self.toggle_task_at(view, index) {
             return true;
         }
+        if let Some(at) = self.footnote_target(index, cmd) {
+            let at = at.min(view.string().length());
+            view.setSelectedRange(NSRange::new(at, 0));
+            view.scrollRangeToVisible(NSRange::new(at, 0));
+            return true;
+        }
         let Some(link) = self.followed_link(index, cmd) else { return false };
         if let Some(callback) = self.ivars().on_link.borrow().as_ref() {
             callback(&link);
@@ -2549,7 +2564,21 @@ impl LivePreview {
     /// Whether a plain click on character `index` acts (follows a link, ticks a task): the
     /// pointer shows a hand there.
     pub fn clickable(&self, index: usize) -> bool {
-        self.followed_link(index, false).is_some() || self.task_at(index).is_some()
+        self.followed_link(index, false).is_some() || self.task_at(index).is_some() || self.footnote_target(index, false).is_some()
+    }
+
+    /// Where a click on character `index` goes, on a footnote's reference or definition label
+    /// away from the cursor's paragraph (anywhere with Cmd): from a reference to just after its
+    /// definition's `]:`, from a definition to just after its first reference (ADR 0034).
+    fn footnote_target(&self, index: usize, cmd: bool) -> Option<usize> {
+        let styled = self.ivars().styled.borrow();
+        let revealed = self.ivars().revealed.get();
+        if !cmd && index >= revealed.0 && index < revealed.1 {
+            return None;
+        }
+        let clicked = styled.footnotes.iter().find(|f| f.range.contains(&index))?;
+        let other = styled.footnotes.iter().find(|f| f.definition != clicked.definition && f.label.eq_ignore_ascii_case(&clicked.label))?;
+        Some(other.range.end)
     }
 
     /// The link a click on character `index` follows: where its markup is hidden, or anywhere
@@ -2801,6 +2830,8 @@ fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'static str) {
         Style::Fence => (&look.mono, &look.muted, "code-fence"),
         Style::Mark => (&look.body, &look.text, "mark"),
         Style::Comment => (&look.body, &look.muted, "comment"),
+        Style::FootnoteRef => (&look.footnote, &look.accent, "footnote"),
+        Style::FootnoteLabel => (&look.body, &look.muted, "footnote-label"),
     }
 }
 
