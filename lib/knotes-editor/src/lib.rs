@@ -10,6 +10,7 @@ mod image_width;
 mod restyle;
 mod subpath;
 mod table_edit;
+mod tag_completion;
 mod task_box;
 mod utf16;
 
@@ -23,5 +24,6 @@ pub use image_width::set_image_width;
 pub use restyle::{Edit, changed_region};
 pub use subpath::{note_headings, subpath_offset};
 pub use table_edit::TableText;
+pub use tag_completion::{TagCompletion, tag_completion, tag_typed};
 pub use task_box::task_box_typed;
 pub use utf16::{byte_offset, utf16_offsets};
