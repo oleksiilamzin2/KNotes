@@ -20,6 +20,7 @@ mod sidebar;
 mod space_folders;
 mod space_list;
 mod space_marks;
+mod space_tags;
 mod tabs;
 mod tag_tree;
 
@@ -43,5 +44,6 @@ pub use sidebar::{RestPart, Sidebar, SidebarItem, SidebarMode};
 pub use space_folders::SpaceFolders;
 pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
+pub use space_tags::SpaceTags;
 pub use tabs::{AfterClose, TabPlace, Tabs};
 pub use tag_tree::{TagNode, count_tags, split_tags, tag_tree};

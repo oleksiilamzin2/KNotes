@@ -199,3 +199,30 @@ fn fewer_days_set_while_the_vault_is_open_purge_at_once_and_snapshots_keep_the_r
     let purged = wait_for(&events, |s| s.trash.len() == 1);
     assert_eq!(purged.trash[0].path, "new.md");
 }
+
+#[test]
+fn snapshots_count_each_space_s_tags_and_untagged_notes_and_count_again_only_when_they_change() {
+    use std::sync::Arc;
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fs::create_dir_all(vault.path().join("Work")).unwrap();
+    fs::write(vault.path().join("Work/a.md"), "#radar #area/job a").unwrap();
+    fs::write(vault.path().join("Work/b.md"), "plain").unwrap();
+    fs::write(vault.path().join("top.md"), "#cooking #radar top").unwrap();
+    fs::write(vault.path().join(".knotes.json"), r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}]}"#).unwrap();
+    fs::write(vault.path().join("Work/.knotes.json"), r#"{"space": "work"}"#).unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| s.rows.len() == 3);
+    let counted = |nodes: &[knotes_app::TagNode]| nodes.iter().map(|t| (t.tag.clone(), t.notes)).collect::<Vec<_>>();
+    let work = &first.space_tags[0];
+    assert_eq!(work.id, "work");
+    assert_eq!(counted(&work.tags), [("area".to_owned(), 1), ("radar".to_owned(), 1)], "counted within the space");
+    assert_eq!(counted(&work.rest), [("cooking".to_owned(), 1)], "only outside it");
+    assert_eq!(work.untagged, 1);
+    fs::write(vault.path().join("Work/b.md"), "plain, longer").unwrap();
+    let later = wait_for(&events, |s| s.changed.iter().any(|p| p == "Work/b.md"));
+    assert!(Arc::ptr_eq(&first.space_tags, &later.space_tags), "the same tags: not counted again");
+    fs::write(vault.path().join("Work/b.md"), "#cooking now").unwrap();
+    let tagged = wait_for(&events, |s| s.space_tags[0].untagged == 0);
+    assert_eq!(counted(&tagged.space_tags[0].tags), [("area".to_owned(), 1), ("cooking".to_owned(), 1), ("radar".to_owned(), 1)]);
+    assert!(tagged.space_tags[0].rest.is_empty());
+}

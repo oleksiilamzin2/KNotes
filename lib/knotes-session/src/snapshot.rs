@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use knotes_app::{FolderNode, FolderRules, TagNode, count_tags, folder_tree_with, tag_tree};
+use knotes_app::{FolderNode, FolderRules, SpaceFolders, SpaceTags, TagNode, count_tags, folder_tree_with, tag_tree};
 use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex, TrashEntry, TrashStore};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
@@ -26,6 +26,9 @@ pub struct Snapshot {
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// The vault's spaces and its folders' (ADR 0030), from the rules.
     pub spaces: Arc<Spaces>,
+    /// Each space's tags, those only outside it and its untagged notes, in the order of
+    /// `spaces`: counted here, off the main thread, and only when they may have changed.
+    pub space_tags: Arc<Vec<SpaceTags>>,
     /// The recently deleted, the newest first (ADR 0032); only new entries read, the list kept
     /// from the previous snapshot while the same.
     pub trash: Arc<Vec<TrashEntry>>,
@@ -89,6 +92,17 @@ impl Snapshot {
             })
             .collect::<HashMap<String, FolderRules>>();
         let spaces = Spaces::from_rules(rules.iter().map(|(folder, rules)| (folder.as_str(), rules.object())));
+        let space_folders: Vec<SpaceFolders> = spaces.list().iter().map(|space| SpaceFolders::new(&folders, &spaces, &space.id)).collect();
+        let same = |p: &&Snapshot| {
+            Arc::ptr_eq(&p.tagged, &tagged)
+                && Arc::ptr_eq(&p.untagged, &untagged)
+                && p.space_tags.len() == space_folders.len()
+                && p.space_tags.iter().zip(spaces.list()).zip(&space_folders).all(|((kept, space), folders)| kept.id == space.id && kept.folders == *folders)
+        };
+        let space_tags = match previous.filter(same) {
+            Some(p) => Arc::clone(&p.space_tags),
+            None => Arc::new(spaces.list().iter().zip(space_folders).map(|(space, folders)| SpaceTags::count(&space.id, folders, &tagged, &untagged)).collect()),
+        };
         let trash = rules_store.trashed_with(previous.map_or(&[], |p| p.trash.as_slice())).unwrap_or_default();
         let trash = match previous.filter(|p| *p.trash == trash) {
             Some(p) => Arc::clone(&p.trash),
@@ -106,6 +120,7 @@ impl Snapshot {
             untagged,
             rules: Arc::new(rules),
             spaces: Arc::new(spaces),
+            space_tags,
             trash,
             changed,
         })

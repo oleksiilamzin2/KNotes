@@ -44,7 +44,9 @@ and in the lists alike.
   it), then a «Решта бази» row with the rest of the vault's below it, each folder in one part
   only (one of a part inside the other's hangs from its nearest ancestor in its own part, or at
   the top named by its path), the tags with no note in the space there; that row, and its
-  folders and tags, list the notes outside the space. Every other list (all notes, a folder, a
+  folders and tags, list the notes outside the space. Each space's tags and untagged notes are
+  counted with the snapshot, off the main thread (a snapshot follows every save), and only
+  when the tags, the untagged notes or the spaces' folders changed. Every other list (all notes, a folder, a
   tag, untagged) gives the space's notes, then the rest of the list's under a «Решта бази»
   header (no date headers there), and list search its finds the same way; a new note goes to
   the space's first folder unless a folder is selected. The chat is told the current space each turn (a developer
