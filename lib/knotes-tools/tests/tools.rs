@@ -541,3 +541,30 @@ fn a_folder_in_every_space_is_searched_and_listed_in_each_and_named_as_such() {
     assert_eq!(call(&v, "list_spaces", json!({}))["shared"], json!(["Contacts"]));
     assert!(v.tools.spaces_line().contains("in every space: Contacts"), "{}", v.tools.spaces_line());
 }
+
+#[test]
+fn only_the_vaults_documents_are_read() {
+    // The model chooses the paths, and a note or a PDF can tell it which: an absolute path or one
+    // with `..` read any file the user can, a hidden one the recently deleted.
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), "secret.txt", "TOP SECRET");
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Notes/a.md", "a note");
+    write(dir.path(), "Notes/Мии\u{306}.md", "a name macOS wrote decomposed");
+    write(dir.path(), ".knotes/trash/1-0/Secret.md", "deleted, and kept from the AI #no-ai");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("Notes/away")).unwrap();
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    let absolute = outside.path().join("secret.txt").to_string_lossy().into_owned();
+    let behind = format!("../{}/secret.txt", outside.path().file_name().unwrap().to_string_lossy());
+    for path in [absolute.as_str(), behind.as_str(), "Notes/../../secret.txt", ".knotes/trash/1-0/Secret.md", "Notes/away/secret.txt"] {
+        for tool in ["read_note", "read_pdf", "outline", "links", "related"] {
+            let refused = tools.call(tool, &json!({"path": path}));
+            assert!(matches!(refused, Err(ToolError::NotFound(_))), "{tool} {path}: {refused:?}");
+        }
+    }
+    assert_eq!(tools.call("read_note", &json!({"path": "Notes/a.md"})).unwrap()["blocks"][0]["text"], "a note");
+    let composed = tools.call("read_note", &json!({"path": "Notes/Мий.md"})).unwrap();
+    assert_eq!(composed["blocks"][0]["text"], "a name macOS wrote decomposed");
+}

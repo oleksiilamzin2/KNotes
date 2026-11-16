@@ -204,6 +204,21 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             .collect()
     }
 
+    /// The vault path the `path` argument names, as the index lists it. Only the vault's
+    /// documents are read: the model (whose words a note or a PDF may have put there) or an MCP
+    /// client chooses the path, and an absolute one or one with `..` reached any file the user
+    /// can read, a hidden one the recently deleted (`.knotes/trash`, kept ones too) and `.git`.
+    /// The index holds only what the vault's walk takes: visible files inside it, no symlink. A
+    /// path given composed finds a file whose name macOS wrote decomposed.
+    fn document(&self, args: &Value) -> Result<String, ToolError> {
+        let path = text_arg(args, "path")?;
+        if self.index.modified(&path).ok().flatten().is_some() {
+            return Ok(path);
+        }
+        let wanted = composed(&path);
+        self.index.catalog().ok().and_then(|catalog| catalog.into_iter().find(|e| composed(&e.path) == wanted)).map(|e| e.path).ok_or(ToolError::NotFound(path))
+    }
+
     /// `Err(Excluded)` for a document the user keeps from the AI.
     fn shared(&self, path: &str) -> Result<(), ToolError> {
         if self.excluded(path) { Err(ToolError::Excluded(path.to_string())) } else { Ok(()) }
@@ -381,7 +396,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn read_note(&self, args: &Value) -> Result<Value, ToolError> {
-        let path = text_arg(args, "path")?;
+        let path = self.document(args)?;
         self.shared(&path)?;
         if kind_of(&path) == "pdf" {
             return Err(ToolError::BadArguments(format!("{path} is a PDF: read it with read_pdf")));
@@ -407,7 +422,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn read_pdf(&self, args: &Value) -> Result<Value, ToolError> {
-        let path = text_arg(args, "path")?;
+        let path = self.document(args)?;
         self.shared(&path)?;
         let count = self.documents.page_count(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
         let from = count_arg(args, "from_page", 1, usize::MAX).max(1);
@@ -428,7 +443,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn outline(&self, args: &Value) -> Result<Value, ToolError> {
-        let path = text_arg(args, "path")?;
+        let path = self.document(args)?;
         self.shared(&path)?;
         let headings: Vec<Value> = if kind_of(&path) == "pdf" {
             self.documents.page_count(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
@@ -441,7 +456,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn links(&self, args: &Value) -> Result<Value, ToolError> {
-        let path = text_arg(args, "path")?;
+        let path = self.document(args)?;
         self.shared(&path)?;
         let kept = self.kept();
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -463,7 +478,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn related(&self, args: &Value) -> Result<Value, ToolError> {
-        let path = text_arg(args, "path")?;
+        let path = self.document(args)?;
         self.shared(&path)?;
         let text = self.text_of(&path).ok_or_else(|| ToolError::NotFound(path.clone()))?;
         let kept = self.kept();

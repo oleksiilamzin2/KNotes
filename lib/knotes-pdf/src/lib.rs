@@ -168,31 +168,33 @@ impl PdfTexts {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
+
+    /// The PDF at the vault path `path`, if it is one inside the vault: an absolute path, or one
+    /// with `..`, reaches no PDF (the AI's tools take paths the model chose).
+    fn pdf(&self, path: &str) -> Option<PathBuf> {
+        let inside = !path.is_empty() && Path::new(path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+        (inside && FileKind::from_path(path) == FileKind::Pdf).then(|| self.root.join(path))
+    }
 }
 
 impl knotes_core::DocumentPages for PdfTexts {
     fn page_count(&self, path: &str) -> Option<usize> {
-        if FileKind::from_path(path) != FileKind::Pdf {
-            return None;
-        }
         // SAFETY: a document of its own.
-        open(&self.root.join(path)).map(|d| unsafe { d.pageCount() })
+        open(&self.pdf(path)?).map(|d| unsafe { d.pageCount() })
     }
 
     fn page_text(&self, path: &str, page: usize) -> Option<String> {
-        (FileKind::from_path(path) == FileKind::Pdf).then(|| page_text(&self.root.join(path), page).map(|p| p.text(0..p.len()))).flatten()
+        page_text(&self.pdf(path)?, page).map(|p| p.text(0..p.len()))
     }
 
     fn outline(&self, path: &str) -> Vec<(u8, String, usize)> {
-        if FileKind::from_path(path) != FileKind::Pdf {
-            return Vec::new();
-        }
-        pdf_outline(&self.root.join(path)).unwrap_or_default().into_iter().map(|b| (b.level, b.title, b.page)).collect()
+        let Some(file) = self.pdf(path) else { return Vec::new() };
+        pdf_outline(&file).unwrap_or_default().into_iter().map(|b| (b.level, b.title, b.page)).collect()
     }
 }
 
 impl DocumentText for PdfTexts {
     fn document_text(&self, path: &str) -> Option<String> {
-        (FileKind::from_path(path) == FileKind::Pdf).then(|| pdf_text(&self.root.join(path))).flatten()
+        pdf_text(&self.pdf(path)?)
     }
 }
