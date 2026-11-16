@@ -98,9 +98,19 @@ fn mtime_ns(meta: &Metadata) -> i64 {
 }
 
 impl VaultReader for FsVault {
+    /// A file not in UTF-8 reads lossily, its other bytes as U+FFFD: good for the index and
+    /// for showing it, never for writing it back (`read_utf8`).
     fn read_text(&self, path: &str) -> io::Result<String> {
         let bytes = fs::read(self.root.join(path))?;
         Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+    }
+}
+
+impl FsVault {
+    /// The text of the file at `path` exactly as it is, or `InvalidData` when it is not UTF-8:
+    /// what is read to be written back, so a file in another encoding never loses its bytes.
+    pub fn read_utf8(&self, path: &str) -> io::Result<String> {
+        String::from_utf8(fs::read(self.root.join(path))?).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("{path} is not UTF-8")))
     }
 }
 

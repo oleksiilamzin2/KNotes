@@ -72,7 +72,8 @@ impl VaultWindow {
             if FileKind::from_path(&path) != FileKind::Markdown || path == source {
                 return None;
             }
-            let full = files.read_text(&path).ok()?;
+            // A note not in UTF-8 stays a link: edited here, it would lose its bytes.
+            let full = files.read_utf8(&path).ok()?;
             let range = embedded_part(&full, link.subpath.as_deref())?;
             Some(Content { path, full, range, subpath: link.subpath.clone() })
         });

@@ -137,7 +137,8 @@ impl VaultWindow {
         let document = self.pdf_path.borrow().clone().or_else(|| self.open_path());
         let (Some(document), Some(vault), Some(links)) = (document, self.vault(), self.state.borrow().links.clone()) else { return };
         let files = FsVault::new(&vault);
-        let Ok(text) = files.read_text(source) else { return };
+        // A note not in UTF-8 is left as it is: written back, it would lose its bytes.
+        let Ok(text) = files.read_utf8(source) else { return };
         // The note changed since: nothing is made.
         let name = document_name(&document);
         if !text.get(range.clone()).is_some_and(|words| words.eq_ignore_ascii_case(name) || words.to_lowercase() == name.to_lowercase()) {

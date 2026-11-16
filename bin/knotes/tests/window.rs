@@ -3396,3 +3396,22 @@ fn a_note_whose_edits_cannot_be_written_stays_open_when_another_is_chosen() {
     assert!(out.contains("quit called off"), "{out}");
 }
 
+#[test]
+fn a_note_not_in_utf8_opens_read_only_and_is_never_written() {
+    // "Привіт, світ" in Windows-1251: read as UTF-8, a key typed wrote it back as U+FFFD.
+    let cp1251: &[u8] = &[0xcf, 0xf0, 0xe8, 0xe2, 0xb3, 0xf2, 0x2c, 0x20, 0xf1, 0xe2, 0xb3, 0xf2];
+    let (vault, out) = probe_images(&[("a.md", "a")], &[("old.md", cp1251)], &[("KNOTES_PROBE_OPEN", "old.md"), ("KNOTES_PROBE_TYPE", "!"), ("KNOTES_PROBE_ACTION", "save")]);
+    assert!(out.contains("read-only: old.md: not UTF-8"), "{out}");
+    assert!(out.contains("note-column: note (read only)"), "{out}");
+    assert_eq!(std::fs::read(vault.path().join("old.md")).unwrap(), cp1251);
+}
+
+#[test]
+fn a_note_not_in_utf8_keeps_its_bytes_when_a_note_it_links_to_is_renamed() {
+    // Its link is not rewritten: written back, the note would lose its other bytes.
+    let mut linking = b"[[Old]] ".to_vec();
+    linking.extend([0xcf, 0xf0, 0xe8, 0xe2, 0xb3, 0xf2]);
+    let (vault, out) = probe_images(&[("Old.md", "old")], &[("b.md", &linking)], &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "rename=New")]);
+    assert!(vault.path().join("New.md").exists(), "{out}");
+    assert_eq!(std::fs::read(vault.path().join("b.md")).unwrap(), linking);
+}

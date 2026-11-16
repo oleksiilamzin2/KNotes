@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use knotes_core::{Link, LinkResolver, NoteWriter, VaultReader};
+use knotes_core::{Link, LinkResolver, NoteWriter};
 use knotes_editor::splice_part;
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
@@ -206,13 +206,21 @@ impl NoteEmbeds {
     }
 
     /// Writes the edited embeds back into their notes: where their parts were while a note is as
-    /// last read, else where they are now. One that cannot be written (its part gone, the disk
-    /// refusing) stays edited; the first such is given.
+    /// last read, else where they are now. One that cannot be written (its part gone, its note
+    /// now in another encoding, the disk refusing) stays edited; the first such is given.
     pub fn save(&self, files: &FsVault) -> Result<(), (String, io::Error)> {
         let mut failed = None;
         for entry in self.shown.borrow_mut().iter_mut().filter(|s| s.dirty) {
             let text = entry.view.string().to_string();
-            let file = files.read_text(&entry.path).unwrap_or_else(|_| entry.full.clone());
+            let file = match files.read_utf8(&entry.path) {
+                Ok(file) => file,
+                // Written back, a note in another encoding would lose its bytes.
+                Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                    failed.get_or_insert((entry.path.clone(), e));
+                    continue;
+                }
+                Err(_) => entry.full.clone(),
+            };
             let Some((written, range)) = splice_part(&file, &entry.full, entry.range.clone(), entry.subpath.as_deref(), &text) else {
                 failed.get_or_insert((entry.path.clone(), io::Error::new(io::ErrorKind::NotFound, "the embedded part is no longer in the note")));
                 continue;

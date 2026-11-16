@@ -277,6 +277,13 @@ pub fn unsaved_details(error: &str) -> String {
 }
 pub const STAY: &str = "Залишитися";
 pub const DISCARD_CHANGES: &str = "Відкинути зміни";
+
+/// A note not in UTF-8, shown read only.
+pub fn not_utf8(note: &str) -> String {
+    format!("«{note}» збережено не в UTF-8")
+}
+pub const NOT_UTF8_DETAILS: &str =
+    "Knotes показує її лише для читання, щоб не зіпсувати файл. Щоб редагувати її тут, збережіть її в UTF-8 в іншому редакторі.";
 /// Edit menu: the find bar over the note, and the search over the note list.
 pub const FIND: &str = "Знайти…";
 pub const FIND_NEXT: &str = "Знайти далі";

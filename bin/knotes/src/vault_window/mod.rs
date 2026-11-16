@@ -130,6 +130,9 @@ const OUTLINE_DELAY: Duration = Duration::from_millis(150);
 struct Editing {
     path: String,
     document: Document,
+    /// A file not in UTF-8: shown as well as it reads and never written, which would replace
+    /// its bytes.
+    read_only: bool,
 }
 
 pub struct VaultWindow {

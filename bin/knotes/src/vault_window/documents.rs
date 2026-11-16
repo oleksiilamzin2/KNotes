@@ -43,7 +43,8 @@ impl VaultWindow {
         };
         self.no_document.setStringValue(&NSString::from_str(&label));
         self.no_document.setHidden(note || pdf);
-        self.note_text.setEditable(previewing.is_none() && (note || pdf));
+        let read_only = self.editing.borrow().as_ref().is_some_and(|e| e.read_only);
+        self.note_text.setEditable(previewing.is_none() && (note || pdf) && !read_only);
         if let Some(scroll) = self.note_text.enclosingScrollView() {
             scroll.setHidden(!note);
         }
@@ -101,17 +102,20 @@ impl VaultWindow {
         self.previewing.take();
         self.show_pdf(None);
         self.completion.hide();
-        let text = {
+        let (text, read_only) = {
             let mut state = self.state.borrow_mut();
             if record {
                 state.history.visit(path);
             }
             // The file, not the index: the index may not have caught up with the last save yet.
-            state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(path).ok()).unwrap_or_default()
+            state.vault.as_ref().and_then(|v| read_for_editor(&FsVault::new(v), path).ok()).unwrap_or_default()
         };
-        *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text) });
+        *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text), read_only });
         self.show_note_column();
         self.live_preview.show(&self.note_text, path, &text);
+        if read_only {
+            self.tell_not_utf8(path);
+        }
         self.sync_embeds(true);
         // Where it was when its tab was left; words found by a search, below, win.
         if let Some(place) = self.show_tab(path) {

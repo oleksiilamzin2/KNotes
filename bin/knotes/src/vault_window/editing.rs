@@ -26,6 +26,16 @@ pub(super) fn write(vault: &FsVault, editing: &mut Editing, text: &str) -> std::
 /// What could not be written: the note's path and why.
 pub(super) type SaveFailure = (String, std::io::Error);
 
+/// The note's text as the editor takes it, and whether it is read only: a file not in UTF-8
+/// shows as well as it reads and is never written, which would replace its bytes.
+pub(super) fn read_for_editor(vault: &FsVault, path: &str) -> std::io::Result<(String, bool)> {
+    match vault.read_utf8(path) {
+        Ok(text) => Ok((text, false)),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok((vault.read_text(path)?, true)),
+        Err(e) => Err(e),
+    }
+}
+
 /// An image found on a pasteboard: a file already in the vault (its vault path), or one to
 /// add to the attachments folder.
 pub(super) enum PastedImage {
@@ -339,6 +349,19 @@ impl VaultWindow {
         alert.runModal() == NSAlertSecondButtonReturn
     }
 
+    /// Says the note at `path` is shown read only: it is not in UTF-8.
+    pub(super) fn tell_not_utf8(&self, path: &str) {
+        if probe::enabled() {
+            println!("read-only: {path}: not UTF-8");
+            return;
+        }
+        let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
+        alert.setMessageText(&NSString::from_str(&strings::not_utf8(knotes_app::title_of(path))));
+        alert.setInformativeText(&NSString::from_str(strings::NOT_UTF8_DETAILS));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+        alert.beginSheetModalForWindow_completionHandler(&self.window, None);
+    }
+
     /// Renames the note at `old` to `name` in its folder (a number added when the name is
     /// taken), with the links to it (ADR 0019); a PDF keeps `.pdf`. False when nothing moved.
     pub fn rename_note(&self, old: &str, name: &str) -> bool {
@@ -529,7 +552,8 @@ impl VaultWindow {
         };
         let after = LinkTargets::new(state.catalog.iter().map(|e| moves.get(&e.path).map_or(e.path.as_str(), String::as_str)));
         let files = FsVault::new(&vault);
-        plan_relinks(moves, reader, &|p| files.read_text(p).ok(), &MarkdownParser::new(), &*before, &after).unwrap_or_else(|e| {
+        // A note not in UTF-8 is left as it is: written back, it would lose its bytes.
+        plan_relinks(moves, reader, &|p| files.read_utf8(p).ok(), &MarkdownParser::new(), &*before, &after).unwrap_or_else(|e| {
             eprintln!("knotes: cannot plan link updates: {e}");
             Relinks::default()
         })
@@ -567,7 +591,7 @@ impl VaultWindow {
         let Some(vault) = self.state.borrow().vault.clone() else { return Ok(()) };
         let (copy, written) = {
             let mut editing = self.editing.borrow_mut();
-            let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return Ok(()) };
+            let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty() && !e.read_only) else { return Ok(()) };
             let vault = FsVault::new(&vault);
             let text = self.note_text.string().to_string();
             let mut copy = None;
@@ -615,7 +639,7 @@ impl VaultWindow {
     /// edits on both sides keep both versions.
     pub(super) fn changed_on_disk(&self, path: &str) {
         let Some(vault) = self.state.borrow().vault.clone() else { return };
-        let Ok(disk) = FsVault::new(&vault).read_text(path) else { return };
+        let Ok((disk, read_only)) = read_for_editor(&FsVault::new(&vault), path) else { return };
         let text = self.note_text.string().to_string();
         let change = match self.editing.borrow_mut().as_mut() {
             Some(editing) => editing.document.on_disk(&disk, &text),
@@ -628,6 +652,14 @@ impl VaultWindow {
                 self.live_preview.show(&self.note_text, path, &disk);
                 let end = self.note_text.string().length();
                 self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
+                // Written outside in another encoding (or back in UTF-8): editable as it is now.
+                let was = self.editing.borrow_mut().as_mut().map(|e| std::mem::replace(&mut e.read_only, read_only));
+                if was == Some(!read_only) {
+                    self.show_note_column();
+                    if read_only {
+                        self.tell_not_utf8(path);
+                    }
+                }
             }
             DiskChange::Conflict => {
                 // The editor's text keeps the note's name; the copy holds the other side.
