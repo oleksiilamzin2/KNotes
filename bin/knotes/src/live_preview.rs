@@ -780,11 +780,8 @@ impl LivePreview {
                 let fragment = layout.textLayoutFragmentForLocation(&location)?;
                 let frame = fragment.layoutFragmentFrame();
                 let top = if overlaps(&(range.0..range.1), revealed) {
-                    let line = fragment.textLineFragments().firstObject().map_or(0.0, |l| {
-                        let bounds = l.typographicBounds();
-                        bounds.origin.y + bounds.size.height
-                    });
-                    line + PREVIEW_GAP
+                    // Not laid out yet (mid-edit): placed after the layout to come.
+                    first_line_bottom(&fragment)? + PREVIEW_GAP
                 } else {
                     PREVIEW_GAP
                 };
@@ -3181,6 +3178,15 @@ fn touches(marker: &Range<usize>, selection: (usize, usize)) -> bool {
 
 fn span(selection: NSRange) -> (usize, usize) {
     (selection.location, selection.location + selection.length)
+}
+
+/// Where the first line of `fragment` ends, from its top; none before it is laid out (AppKit
+/// gives no line fragments then, though declared to).
+pub fn first_line_bottom(fragment: &NSTextLayoutFragment) -> Option<f64> {
+    // SAFETY: `textLineFragments` takes no argument and gives an array, or nil before layout.
+    let lines: Option<Retained<NSArray<objc2_app_kit::NSTextLineFragment>>> = unsafe { msg_send![fragment, textLineFragments] };
+    let bounds = lines?.firstObject()?.typographicBounds();
+    Some(bounds.origin.y + bounds.size.height)
 }
 
 /// A paragraph no range meets: nothing revealed.

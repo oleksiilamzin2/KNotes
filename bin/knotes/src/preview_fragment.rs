@@ -324,15 +324,7 @@ impl PreviewFragment {
         if let Mark::EmbedBox { below, height } = mark {
             let frame = self.layoutFragmentFrame();
             let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
-            let top = if *below {
-                let line = self.textLineFragments().firstObject().map_or(0.0, |l| {
-                    let bounds = l.typographicBounds();
-                    bounds.origin.y + bounds.size.height
-                });
-                line + PREVIEW_GAP
-            } else {
-                PREVIEW_GAP
-            };
+            let top = if *below { crate::live_preview::first_line_bottom(self)? + PREVIEW_GAP } else { PREVIEW_GAP };
             return Some(NSRect::new(NSPoint::new(-frame.origin.x, top), NSSize::new(column, *height)));
         }
         if let Mark::CodeBackground { .. } | Mark::CalloutBox { .. } = mark {

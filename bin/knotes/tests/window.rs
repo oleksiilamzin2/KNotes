@@ -1236,6 +1236,14 @@ fn an_embedded_note_is_edited_in_place_and_the_edit_goes_back_into_its_note() {
 }
 
 #[test]
+fn typing_an_embed_key_by_key_shows_it_without_a_crash() {
+    let notes = [("a.md", "Top\n\nend"), ("b.md", "# B\n\ntext\n")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "\n![[b]]"), ("KNOTES_PROBE_TYPE_CHARS", "1")]);
+    assert!(out.contains("decoration: embed-below"), "the box below the line being typed: {out}");
+    assert_eq!(embeds(&out).0.len(), 1, "{out}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");
