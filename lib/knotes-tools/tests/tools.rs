@@ -568,3 +568,31 @@ fn only_the_vaults_documents_are_read() {
     let composed = tools.call("read_note", &json!({"path": "Notes/Мий.md"})).unwrap();
     assert_eq!(composed["blocks"][0]["text"], "a name macOS wrote decomposed");
 }
+
+#[test]
+fn a_folder_kept_from_the_ai_stays_kept_when_its_rules_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    // A comma too many, and the folder's `"ai": false` was dropped; one rules file that could not
+    // be read, and every folder's was.
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Typo/.knotes.json", "{\n  \"ai\": false,\n}\n");
+    write(dir.path(), "Typo/plan.md", "the typo folder's plan");
+    write(dir.path(), "Locked/.knotes.json", r#"{"ai": false}"#);
+    write(dir.path(), "Locked/plan.md", "the locked folder's plan");
+    write(dir.path(), "Kept/.knotes.json", r#"{"ai": false}"#);
+    write(dir.path(), "Kept/plan.md", "the kept folder's plan");
+    write(dir.path(), "Broken/.knotes.json", "{ list: }");
+    write(dir.path(), "Broken/plan.md", "a folder with broken list settings only");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let locked = dir.path().join("Locked/.knotes.json");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    let read = |path: &str| tools.call("read_note", &json!({"path": path}));
+    let (typo, locked_read, kept, broken) = (read("Typo/plan.md"), read("Locked/plan.md"), read("Kept/plan.md"), read("Broken/plan.md"));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(matches!(typo, Err(ToolError::Excluded(_))), "{typo:?}");
+    assert!(matches!(locked_read, Err(ToolError::Excluded(_))), "{locked_read:?}");
+    assert!(matches!(kept, Err(ToolError::Excluded(_))), "the others' rules stay: {kept:?}");
+    assert!(broken.is_ok(), "no word of the AI in it: shared as before: {broken:?}");
+}

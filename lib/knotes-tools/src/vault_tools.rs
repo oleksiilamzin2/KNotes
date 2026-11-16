@@ -146,12 +146,29 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 path = folder;
             }
         }
-        let list: Vec<&str> = folders.iter().map(String::as_str).collect();
-        let rules = self.files.read_rules(&list).unwrap_or_default();
+        // A folder's rules at a time. One whose rules cannot be read, or whose file names `"ai"`
+        // but does not parse (a comma too many), is kept: kept by mistake is better than shared
+        // by mistake. Read all at once, one unreadable file dropped every folder's rule.
+        let mut rules = Vec::new();
+        let mut unreadable = Vec::new();
+        for folder in &folders {
+            match self.files.read_rules(&[folder.as_str()]) {
+                Ok(found) => rules.extend(found),
+                Err(_) => unreadable.push(composed(folder)),
+            }
+        }
         let spaces = Spaces::from_texts(&rules);
         let folders = rules
             .into_iter()
-            .filter_map(|(folder, text)| Some((composed(&folder), serde_json::from_str::<Value>(&text).ok()?.get("ai")?.as_bool()?)))
+            .filter_map(|(folder, text)| {
+                let ai = match serde_json::from_str::<Value>(&text) {
+                    Ok(value) => value.get("ai")?.as_bool()?,
+                    Err(_) if text.contains("\"ai\"") => false,
+                    Err(_) => return None,
+                };
+                Some((composed(&folder), ai))
+            })
+            .chain(unreadable.into_iter().map(|folder| (folder, false)))
             .collect();
         Kept { notes, folders, spaces }
     }
