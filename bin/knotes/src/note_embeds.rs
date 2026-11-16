@@ -6,6 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -205,13 +206,15 @@ impl NoteEmbeds {
     }
 
     /// Writes the edited embeds back into their notes: where their parts were while a note is as
-    /// last read, else where they are now; one whose part is gone is left (and said).
-    pub fn save(&self, files: &FsVault) {
+    /// last read, else where they are now. One that cannot be written (its part gone, the disk
+    /// refusing) stays edited; the first such is given.
+    pub fn save(&self, files: &FsVault) -> Result<(), (String, io::Error)> {
+        let mut failed = None;
         for entry in self.shown.borrow_mut().iter_mut().filter(|s| s.dirty) {
             let text = entry.view.string().to_string();
             let file = files.read_text(&entry.path).unwrap_or_else(|_| entry.full.clone());
             let Some((written, range)) = splice_part(&file, &entry.full, entry.range.clone(), entry.subpath.as_deref(), &text) else {
-                eprintln!("knotes: {} no longer holds the embedded part; not written", entry.path);
+                failed.get_or_insert((entry.path.clone(), io::Error::new(io::ErrorKind::NotFound, "the embedded part is no longer in the note")));
                 continue;
             };
             match files.write_note(&entry.path, &written) {
@@ -221,8 +224,18 @@ impl NoteEmbeds {
                     entry.text = text;
                     entry.dirty = false;
                 }
-                Err(e) => eprintln!("knotes: cannot save {}: {e}", entry.path),
+                Err(e) => {
+                    failed.get_or_insert((entry.path.clone(), e));
+                }
             }
+        }
+        failed.map_or(Ok(()), Err)
+    }
+
+    /// The user chose to leave without the edits that could not be written.
+    pub fn discard(&self) {
+        for entry in self.shown.borrow_mut().iter_mut() {
+            entry.dirty = false;
         }
     }
 

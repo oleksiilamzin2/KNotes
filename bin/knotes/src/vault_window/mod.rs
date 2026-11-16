@@ -202,6 +202,8 @@ pub struct VaultWindow {
     edits: Cell<u64>,
     /// The same for edits in embedded notes (ADR 0034).
     embed_edits: Cell<u64>,
+    /// A save failed and was told; told again only after one has worked.
+    save_failed: Cell<bool>,
     this: RefCell<Weak<Self>>,
     completion: CompletionPanel,
     /// UTF-16 start of the text an accepted completion replaces, and what it completes.
@@ -395,6 +397,7 @@ impl VaultWindow {
             editing: RefCell::new(None),
             edits: Cell::new(0),
             embed_edits: Cell::new(0),
+            save_failed: Cell::new(false),
             this: RefCell::new(Weak::new()),
             completion: CompletionPanel::new(mtm),
             completion_from: Cell::new(0),

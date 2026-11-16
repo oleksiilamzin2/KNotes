@@ -15,7 +15,10 @@ impl VaultWindow {
         let inside = format!("{path}/");
         let open: Vec<String> = self.tabs.borrow().paths().filter(|p| *p == path || p.starts_with(&inside)).map(str::to_owned).collect();
         for tab in open {
-            self.close_tab(&tab);
+            // Its edits could not be written and the user stayed with them: nothing is deleted.
+            if !self.close_tab(&tab) {
+                return;
+            }
         }
         if let Err(e) = FsVault::new(&vault).trash(path, now_ms()) {
             eprintln!("knotes: cannot delete {path}: {e}");
@@ -97,7 +100,10 @@ impl VaultWindow {
     pub fn show_deleted(&self, id: &str) {
         let Some(entry) = self.state.borrow().trash.iter().find(|e| e.id == id).cloned() else { return };
         let Some(kept) = self.vault().and_then(|v| FsVault::new(&v).kept_at(id).ok()) else { return };
-        self.leave();
+        if !self.leave() {
+            self.stay();
+            return;
+        }
         self.completion.hide();
         if self.find_bar.is_shown() {
             self.close_find();

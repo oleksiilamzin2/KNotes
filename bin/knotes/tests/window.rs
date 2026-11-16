@@ -3343,3 +3343,56 @@ fn a_pdf_moved_from_the_list_keeps_its_name() {
     assert!(!vault.path().join("Archive/doc.pdf.md").exists(), "{out}");
     assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "see [[Archive/doc.pdf]]");
 }
+
+/// A vault whose `Locked` folder cannot be written, the probe run on it with the note
+/// `Locked/n.md` open and typed in; the folder writable again before the vault goes.
+fn probe_locked(env: &[(&str, &str)]) -> (tempfile::TempDir, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir(vault.path().join("Locked")).unwrap();
+    std::fs::write(vault.path().join("Locked/n.md"), "old text").unwrap();
+    std::fs::write(vault.path().join("other.md"), "other").unwrap();
+    let locked = vault.path().join("Locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let mut env = env.to_vec();
+    env.push(("KNOTES_PROBE_TYPE", " NEW"));
+    if !env.iter().any(|(k, _)| *k == "KNOTES_PROBE_OPEN") {
+        env.push(("KNOTES_PROBE_OPEN", "Locked/n.md"));
+    }
+    let out = probe_env(&[vault.path()], None, &env);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (vault, out)
+}
+
+#[test]
+fn a_save_that_fails_is_told() {
+    let (vault, out) = probe_locked(&[("KNOTES_PROBE_ACTION", "save")]);
+    assert!(out.contains("save-failed: Locked/n.md: Permission denied"), "{out}");
+    assert!(out.contains("note: Locked/n.md | old text NEW"), "the edits stay in the window: {out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Locked/n.md")).unwrap(), "old text");
+}
+
+#[test]
+fn a_window_whose_edits_cannot_be_written_stays_open() {
+    let (_vault, out) = probe_locked(&[("KNOTES_PROBE_ACTION", "close")]);
+    assert!(out.contains("unsaved-question: Locked/n.md: Permission denied"), "{out}");
+    assert!(out.contains("window stays open"), "{out}");
+}
+
+#[test]
+fn a_window_closes_without_edits_that_cannot_be_written_when_the_user_says_so() {
+    let (vault, out) = probe_locked(&[("KNOTES_PROBE_ACTION", "close"), ("KNOTES_PROBE_ANSWER", "discard")]);
+    assert!(out.contains("unsaved-question: Locked/n.md"), "{out}");
+    assert!(!out.contains("window stays open"), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Locked/n.md")).unwrap(), "old text");
+}
+
+#[test]
+fn a_note_whose_edits_cannot_be_written_stays_open_when_another_is_chosen() {
+    let (_vault, out) = probe_locked(&[("KNOTES_PROBE_OPEN", "Locked/n.md,other.md")]);
+    assert!(out.contains("unsaved-question: Locked/n.md"), "{out}");
+    assert!(out.contains("note: Locked/n.md | old text NEW"), "{out}");
+    // Quitting asks again and, kept, is called off.
+    assert!(out.contains("quit called off"), "{out}");
+}
+

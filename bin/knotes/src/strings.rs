@@ -260,6 +260,23 @@ pub const CONFLICT_OPEN_COPY: &str = "Відкрити копію";
 pub fn conflict_details(note: &str, copy: &str) -> String {
     format!("Ваші зміни лишилися в «{note}», а версію з диска збережено поруч як «{copy}».")
 }
+
+/// A note's edits could not be written.
+pub fn save_failed(note: &str) -> String {
+    format!("Не вдалося зберегти «{note}»")
+}
+
+/// Said by autosave, once: the edits are not lost yet.
+pub fn save_failed_details(error: &str) -> String {
+    format!("{error}. Зміни лишаються у вікні, Knotes спробує зберегти їх ще раз.")
+}
+
+/// Asked before leaving a note whose edits could not be written.
+pub fn unsaved_details(error: &str) -> String {
+    format!("{error}. Якщо піти з нотатки зараз, незбережені зміни буде втрачено.")
+}
+pub const STAY: &str = "Залишитися";
+pub const DISCARD_CHANGES: &str = "Відкинути зміни";
 /// Edit menu: the find bar over the note, and the search over the note list.
 pub const FIND: &str = "Знайти…";
 pub const FIND_NEXT: &str = "Знайти далі";

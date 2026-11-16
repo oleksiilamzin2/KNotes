@@ -82,7 +82,9 @@ impl VaultWindow {
     /// as the note is left).
     pub(super) fn open_embed(&self, key: &str) {
         let Some((path, subpath)) = self.embeds.target_of(key) else { return };
-        self.open_note(&path, true);
+        if !self.open_note(&path, true) {
+            return;
+        }
         self.highlight_open_note();
         if let Some(subpath) = subpath {
             self.show_subpath(&subpath);
@@ -114,10 +116,18 @@ impl VaultWindow {
         }
     }
 
-    /// Writes what was typed in embedded notes back into them (ADR 0034).
+    /// Writes what was typed in embedded notes back into them (ADR 0034); a failure is told.
     pub fn save_embeds(&self) {
-        if let Some(vault) = self.vault() {
-            self.embeds.save(&FsVault::new(&vault));
+        if let Err((path, e)) = self.write_embeds() {
+            self.tell_save_failed(&path, &e);
+        }
+    }
+
+    /// Writes what was typed in embedded notes back into them; the first that failed.
+    pub(super) fn write_embeds(&self) -> Result<(), SaveFailure> {
+        match self.vault() {
+            Some(vault) => self.embeds.save(&FsVault::new(&vault)),
+            None => Ok(()),
         }
     }
 

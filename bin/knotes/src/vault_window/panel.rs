@@ -98,7 +98,9 @@ impl VaultWindow {
     /// A line in the connections clicked: its note opened in the tab shown, the link at
     /// `range` (bytes) selected, in view and pointed at.
     pub(super) fn open_connection(&self, path: &str, range: Option<std::ops::Range<usize>>) {
-        self.open_note(path, true);
+        if !self.open_note(path, true) {
+            return;
+        }
         let Some(range) = range else { return };
         let text = self.note_text.string().to_string();
         if range.end > text.len() || !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
@@ -115,7 +117,9 @@ impl VaultWindow {
     /// there yet, as a click on the link does.
     pub(super) fn follow_connection(&self, label: &str, resolved: Option<String>) {
         match resolved {
-            Some(path) => self.open_note(&path, true),
+            Some(path) => {
+                self.open_note(&path, true);
+            }
             None => self.follow_link(&Link {
                 kind: LinkKind::Wiki,
                 embed: false,

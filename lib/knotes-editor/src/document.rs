@@ -54,6 +54,11 @@ impl Document {
         self.dirty = false;
     }
 
+    /// The user chose to leave without the edits that could not be written.
+    pub fn discarded(&mut self) {
+        self.dirty = false;
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }

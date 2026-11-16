@@ -60,10 +60,13 @@ impl VaultWindow {
         format!("note ({})", if self.note_text.isEditable() { "editable" } else { "read only" })
     }
 
-    /// The note column empty: no document open.
-    pub(super) fn show_nothing(&self) {
+    /// The note column empty: no document open. False when the note open stays: its edits
+    /// could not be written and the user chose to stay.
+    pub(super) fn show_nothing(&self) -> bool {
+        if !self.leave() {
+            return false;
+        }
         self.previewing.take();
-        self.leave();
         self.completion.hide();
         if self.find_bar.is_shown() {
             self.close_find();
@@ -75,18 +78,28 @@ impl VaultWindow {
         self.show_note_column();
         self.refresh_panel();
         self.update_navigation();
+        true
     }
 
-    /// Shows a note in the note column; `record` adds it to the back/forward history.
-    pub fn open_note(&self, path: &str, record: bool) {
+    /// The note open stays (its edits could not be written and the user chose to stay): the
+    /// list shows it selected again. Gives false, for `open_note` and `open_pdf` to return.
+    pub(super) fn stay(&self) -> bool {
+        self.highlight_open_note();
+        false
+    }
+
+    /// Shows a note in the note column; `record` adds it to the back/forward history. False
+    /// when the note open stays (its edits could not be written and the user chose to stay).
+    pub fn open_note(&self, path: &str, record: bool) -> bool {
         if FileKind::from_path(path) == FileKind::Pdf {
-            self.open_pdf(path, None, record);
-            return;
+            return self.open_pdf(path, None, record);
+        }
+        self.remember_place();
+        if !self.leave() {
+            return self.stay();
         }
         self.previewing.take();
-        self.remember_place();
         self.show_pdf(None);
-        self.leave();
         self.completion.hide();
         let text = {
             let mut state = self.state.borrow_mut();
@@ -114,13 +127,17 @@ impl VaultWindow {
         self.find_search_word();
         self.refresh_panel();
         self.update_navigation();
+        true
     }
 
-    /// Opens the PDF at `path` in place of the note (ADR 0022), at page `page` (from 1).
-    pub fn open_pdf(&self, path: &str, page: Option<u32>, record: bool) {
-        self.previewing.take();
+    /// Opens the PDF at `path` in place of the note (ADR 0022), at page `page` (from 1). False
+    /// when the note open stays (its edits could not be written and the user chose to stay).
+    pub fn open_pdf(&self, path: &str, page: Option<u32>, record: bool) -> bool {
         self.remember_place();
-        self.leave();
+        if !self.leave() {
+            return self.stay();
+        }
+        self.previewing.take();
         self.completion.hide();
         if self.find_bar.is_shown() {
             self.close_find();
@@ -155,6 +172,7 @@ impl VaultWindow {
         }
         self.refresh_panel();
         self.update_navigation();
+        true
     }
 
     /// Shows the PDF at `path` in the note column, or the note again (`None`). The last PDF's
@@ -317,7 +335,14 @@ impl VaultWindow {
             next.map(str::to_owned)
         };
         if let Some(path) = target {
-            self.open_note(&path, false);
+            if !self.open_note(&path, false) {
+                // The note open stayed: the history goes back to it.
+                let mut state = self.state.borrow_mut();
+                if forward { state.history.back() } else { state.history.forward() };
+                drop(state);
+                self.update_navigation();
+                return;
+            }
             self.highlight_open_note();
         }
     }

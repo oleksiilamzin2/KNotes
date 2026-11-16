@@ -913,10 +913,18 @@ pub fn schedule(with_sidebar: bool) {
             WINDOW.with(|w| {
                 if let Some(window) = w.borrow_mut().take() {
                     window.window.performClose(None);
+                    // Kept open (its note's edits could not be written): said, and the probe ends.
+                    if window.window.isVisible() {
+                        println!("window stays open");
+                        std::process::exit(0);
+                    }
                 }
             });
         } else {
             NSApplication::sharedApplication(mtm).terminate(None);
+            // Back only when the quit was called off (unwritten edits kept): the probe ends.
+            println!("quit called off");
+            std::process::exit(0);
         }
     });
 }

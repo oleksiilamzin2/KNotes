@@ -7,12 +7,24 @@ pub(super) const TABS_FILE: &str = "tabs.json";
 
 impl VaultWindow {
     /// Closes `path`'s tab: the document shown stays, or its neighbour's shows, or nothing.
-    pub fn close_tab(&self, path: &str) {
-        let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return };
+    /// False when it stays open: its note's edits could not be written and the user chose to
+    /// stay.
+    pub fn close_tab(&self, path: &str) -> bool {
+        let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return true };
+        // The tab shown goes: its note is left first (the tab stays when the user stays). Not
+        // borrowed while leaving, which keeps the tab's place.
+        let shown = self.tabs.borrow().current_path() == Some(path);
+        if shown && !self.leave() {
+            return false;
+        }
         let after = self.tabs.borrow_mut().close(i);
         match after {
-            AfterClose::Show(next) => self.open_note(&next, true),
-            AfterClose::Nothing => self.show_nothing(),
+            AfterClose::Show(next) => {
+                self.open_note(&next, true);
+            }
+            AfterClose::Nothing => {
+                self.show_nothing();
+            }
             AfterClose::Same => {}
         }
         self.save_tabs();
@@ -20,6 +32,7 @@ impl VaultWindow {
             self.rebuild_sidebar();
             self.highlight(&SidebarItem::Gap);
         }
+        true
     }
 
     /// Closes the tab shown (Cmd+W); false when there is none.
@@ -32,6 +45,11 @@ impl VaultWindow {
     /// Closes every tab but `path`'s, which shows.
     pub fn close_other_tabs(&self, path: &str) {
         let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return };
+        // The tab shown goes unless it is `path`'s: its note is left first.
+        let shown_goes = self.tabs.borrow().current_path() != Some(path);
+        if shown_goes && !self.leave() {
+            return;
+        }
         let after = self.tabs.borrow_mut().close_others(i);
         if let AfterClose::Show(next) = after {
             self.open_note(&next, true);

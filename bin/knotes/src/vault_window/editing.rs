@@ -17,12 +17,14 @@ pub(super) fn normalize(path: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-pub(super) fn write(vault: &FsVault, editing: &mut Editing, text: &str) {
-    match vault.write_note(&editing.path, text) {
-        Ok(()) => editing.document.saved(text),
-        Err(e) => eprintln!("knotes: cannot save {}: {e}", editing.path),
-    }
+pub(super) fn write(vault: &FsVault, editing: &mut Editing, text: &str) -> std::io::Result<()> {
+    vault.write_note(&editing.path, text)?;
+    editing.document.saved(text);
+    Ok(())
 }
+
+/// What could not be written: the note's path and why.
+pub(super) type SaveFailure = (String, std::io::Error);
 
 /// An image found on a pasteboard: a file already in the vault (its vault path), or one to
 /// add to the attachments folder.
@@ -243,12 +245,19 @@ impl VaultWindow {
             };
             (vault, folder)
         };
+        // The note open is left first: when it stays (its edits unwritten), nothing is made.
+        if !self.leave() {
+            self.stay();
+            return;
+        }
         let path = unique_note_path(&folder, strings::UNTITLED, |p| vault.join(p).exists());
         if let Err(e) = FsVault::new(&vault).write_note(&path, "") {
             eprintln!("knotes: cannot create {path}: {e}");
             return;
         }
-        self.open_note(&path, true);
+        if !self.open_note(&path, true) {
+            return;
+        }
         if let Some(editing) = self.editing.borrow_mut().as_mut() {
             editing.document = Document::untitled();
         }
@@ -257,20 +266,77 @@ impl VaultWindow {
     }
 
     /// Saves and names a new note after its first line: the user leaves the note (another
-    /// note opens, the window closes, the app quits).
-    pub fn leave(&self) {
-        self.write_edits();
-        self.save_embeds();
-        self.name_new_note(true);
+    /// note opens, the window closes, the app quits). False when its edits could not be
+    /// written and the user chose to stay with them: the note must stay where it is.
+    pub fn leave(&self) -> bool {
+        match self.write_all() {
+            Ok(()) => self.name_new_note(true),
+            Err((path, e)) => {
+                if !self.ask_discard(&path, &e) {
+                    return false;
+                }
+                if let Some(editing) = self.editing.borrow_mut().as_mut() {
+                    editing.document.discarded();
+                }
+                self.embeds.discard();
+            }
+        }
         self.remember_place();
         self.save_tabs();
+        true
     }
 
-    /// Autosave and File → Save; names a new note whose first line is finished.
+    /// Autosave and File → Save; names a new note whose first line is finished. A failure is
+    /// told; the edits stay in the window, and leaving the note asks first.
     pub fn save(&self) {
-        self.write_edits();
-        self.save_embeds();
-        self.name_new_note(false);
+        match self.write_all() {
+            Ok(()) => self.name_new_note(false),
+            Err((path, e)) => self.tell_save_failed(&path, &e),
+        }
+    }
+
+    /// Writes the note's edits and those typed in the notes it embeds; the first failure.
+    pub(super) fn write_all(&self) -> Result<(), SaveFailure> {
+        let note = self.write_edits();
+        let embeds = self.write_embeds();
+        let written = note.and(embeds);
+        if written.is_ok() {
+            self.save_failed.set(false);
+        }
+        written
+    }
+
+    /// Says a save failed, once until one works again (autosave would say it every pause).
+    pub(super) fn tell_save_failed(&self, path: &str, error: &std::io::Error) {
+        eprintln!("knotes: cannot save {path}: {error}");
+        if self.save_failed.replace(true) {
+            return;
+        }
+        if probe::enabled() {
+            println!("save-failed: {path}: {error}");
+            return;
+        }
+        let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
+        alert.setMessageText(&NSString::from_str(&strings::save_failed(knotes_app::title_of(path))));
+        alert.setInformativeText(&NSString::from_str(&strings::save_failed_details(&error.to_string())));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+        alert.beginSheetModalForWindow_completionHandler(&self.window, None);
+    }
+
+    /// The edits of `path` could not be written: whether to leave them (the note, the window,
+    /// the app) or to stay, the default. `KNOTES_PROBE_ANSWER=discard` leaves in probe mode.
+    fn ask_discard(&self, path: &str, error: &std::io::Error) -> bool {
+        eprintln!("knotes: cannot save {path}: {error}");
+        if probe::enabled() {
+            println!("unsaved-question: {path}: {error}");
+            return std::env::var("KNOTES_PROBE_ANSWER").as_deref() == Ok("discard");
+        }
+        let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
+        alert.setMessageText(&NSString::from_str(&strings::save_failed(knotes_app::title_of(path))));
+        alert.setInformativeText(&NSString::from_str(&strings::unsaved_details(&error.to_string())));
+        alert.addButtonWithTitle(&NSString::from_str(strings::STAY));
+        alert.addButtonWithTitle(&NSString::from_str(strings::DISCARD_CHANGES)).setHasDestructiveAction(true);
+        alert.runModal() == NSAlertSecondButtonReturn
     }
 
     /// Renames the note at `old` to `name` in its folder (a number added when the name is
@@ -363,7 +429,8 @@ impl VaultWindow {
     /// `move_notes`, the files moved one by one, or all at once by moving `folder` (from, to).
     pub(super) fn relocate(&self, moves: Moves, folder: Option<(&str, &str)>) -> bool {
         let Some(vault_dir) = self.vault() else { return false };
-        self.write_edits();
+        // Unwritten edits stay in the editor and follow the note to its new path.
+        let _ = self.write_edits();
         let plan = self.relinks(&moves);
         let update = plan.links == 0
             || match rename_dialog::ask_link_update(objc2::MainThreadOnly::mtm(&*self.window), plan.links, plan.edits.len()) {
@@ -495,27 +562,29 @@ impl VaultWindow {
 
     /// Writes the editor's text if it has unsaved edits. A change on disk the window has not
     /// seen yet is kept next to the note as a conflict copy instead of being overwritten.
-    pub(super) fn write_edits(&self) {
-        let Some(vault) = self.state.borrow().vault.clone() else { return };
-        let copy = {
+    /// The error when the text could not be written (it stays unsaved in the editor).
+    pub(super) fn write_edits(&self) -> Result<(), SaveFailure> {
+        let Some(vault) = self.state.borrow().vault.clone() else { return Ok(()) };
+        let (copy, written) = {
             let mut editing = self.editing.borrow_mut();
-            let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return };
+            let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return Ok(()) };
             let vault = FsVault::new(&vault);
             let text = self.note_text.string().to_string();
             let mut copy = None;
             if let Ok(disk) = vault.read_text(&editing.path) {
                 match editing.document.on_disk(&disk, &text) {
                     DiskChange::Conflict => copy = keep_conflict_copy(&vault, &editing.path, &disk),
-                    DiskChange::Ignore if !editing.document.is_dirty() => return,
+                    DiskChange::Ignore if !editing.document.is_dirty() => return Ok(()),
                     _ => {}
                 }
             }
-            write(&vault, editing, &text);
-            copy.map(|copy| (editing.path.clone(), copy))
+            let written = write(&vault, editing, &text).map_err(|e| (editing.path.clone(), e));
+            (copy.map(|copy| (editing.path.clone(), copy)), written)
         };
         if let Some((path, copy)) = copy {
             self.tell_conflict(&path, &copy);
         }
+        written
     }
 
     /// Tells where the other version of a note went (ADR 0011), in a sheet on the window that
@@ -564,8 +633,9 @@ impl VaultWindow {
                 // The editor's text keeps the note's name; the copy holds the other side.
                 let vault = FsVault::new(&vault);
                 let copy = keep_conflict_copy(&vault, path, &disk);
-                if let Some(editing) = self.editing.borrow_mut().as_mut() {
-                    write(&vault, editing, &text);
+                let written = self.editing.borrow_mut().as_mut().map(|editing| write(&vault, editing, &text));
+                if let Some(Err(e)) = written {
+                    self.tell_save_failed(path, &e);
                 }
                 if let Some(copy) = copy {
                     self.tell_conflict(path, &copy);

@@ -55,7 +55,9 @@ impl VaultWindow {
             return;
         }
         if path != open {
-            self.open_note(&path, true);
+            if !self.open_note(&path, true) {
+                return;
+            }
             self.highlight_open_note();
         }
         if let Some(subpath) = &link.subpath {
@@ -79,7 +81,9 @@ impl VaultWindow {
             self.open_pdf(&resolved, page, true);
             return;
         }
-        self.open_note(&resolved, true);
+        if !self.open_note(&resolved, true) {
+            return;
+        }
         self.highlight_open_note();
         if let Some(subpath) = &subpath {
             let text = self.note_text.string().to_string();

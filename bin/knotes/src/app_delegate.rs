@@ -9,7 +9,7 @@ use knotes_session::{AppSettings, Event, VaultSession};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSModalResponseOK, NSOpenPanel, NSScreen, NSWindow, NSWindowDelegate};
+use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSApplicationTerminateReply, NSModalResponseOK, NSOpenPanel, NSScreen, NSWindow, NSWindowDelegate};
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use crate::vault_window::VaultWindow;
@@ -80,11 +80,25 @@ define_class!(
             true
         }
 
-        /// Quitting writes every unsaved note first.
+        /// Quitting writes every unsaved note first. One that cannot be written asks, and
+        /// staying with it calls the quit off.
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn should_terminate(&self, _sender: &NSApplication) -> NSApplicationTerminateReply {
+            // Not borrowed while a window asks: the question runs a modal loop.
+            let windows: Vec<Rc<VaultWindow>> = self.ivars().vaults.borrow().iter().map(|v| Rc::clone(&v.window)).collect();
+            for window in windows {
+                if !window.leave() {
+                    return NSApplicationTerminateReply::TerminateCancel;
+                }
+            }
+            NSApplicationTerminateReply::TerminateNow
+        }
+
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _notification: &NSNotification) {
-            for vault in self.ivars().vaults.borrow().iter() {
-                vault.window.leave();
+            let windows: Vec<Rc<VaultWindow>> = self.ivars().vaults.borrow().iter().map(|v| Rc::clone(&v.window)).collect();
+            for window in windows {
+                window.leave();
             }
             if let Some(vault) = self.ivars().vaults.borrow().last() {
                 remember_frame(&vault.window.window);
@@ -98,6 +112,13 @@ define_class!(
     }
 
     unsafe impl NSWindowDelegate for AppDelegate {
+        /// A vault window closes once its note's edits are written, or the user leaves them.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, sender: &NSWindow) -> bool {
+            let window = self.ivars().vaults.borrow().iter().find(|v| std::ptr::eq(&*v.window.window, sender)).map(|v| Rc::clone(&v.window));
+            window.is_none_or(|window| window.leave())
+        }
+
         /// Closing a vault window stops its session and releases the vault lock.
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, notification: &NSNotification) {
@@ -109,8 +130,9 @@ define_class!(
                 window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
             }
             let is_closing = |v: &OpenVault| std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject);
-            if let Some(vault) = self.ivars().vaults.borrow().iter().find(|v| is_closing(v)) {
-                vault.window.leave();
+            let window = self.ivars().vaults.borrow().iter().find(|v| is_closing(v)).map(|v| Rc::clone(&v.window));
+            if let Some(window) = window {
+                window.leave();
             }
             self.ivars().vaults.borrow_mut().retain(|v| !std::ptr::eq(&*v.window.window as *const NSWindow as *const AnyObject, &*closing as *const AnyObject));
         }
