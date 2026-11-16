@@ -42,3 +42,16 @@ fn a_reply_cut_mid_stream_still_renders() {
     assert_eq!(text(&reply_runs("Half a **bold")), "Half a **bold");
     assert_eq!(text(&reply_runs("")), "");
 }
+
+#[test]
+fn a_link_of_another_scheme_than_the_web_stays_text() {
+    // A note can lead the model to put any link in its reply: one click opened it in its app.
+    let runs = reply_runs("[report](file:///etc/hosts), [chat](slack://open), [mail](mailto:a@b.c), [site](HTTPS://example.org), [[Radar]]");
+    // Text without a link joins the words next to it.
+    for word in ["report", "chat"] {
+        assert!(runs.iter().filter(|r| r.text.contains(word)).all(|r| r.link.is_none()), "{word}: {runs:?}");
+    }
+    assert_eq!(run(&runs, "mail").link, Some(RunLink::Web("mailto:a@b.c".into())));
+    assert_eq!(run(&runs, "site").link, Some(RunLink::Web("HTTPS://example.org".into())));
+    assert_eq!(run(&runs, "Radar").link, Some(RunLink::Note("Radar".into())));
+}

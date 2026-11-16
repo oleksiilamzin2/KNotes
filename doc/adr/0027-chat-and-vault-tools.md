@@ -300,3 +300,28 @@ plan usage for open-source and local apps) on 2026-11-14:
   instead of 119); lists unhurt (the to-dos 16, with all their dates). It can still pass ten
   when the model calls several tools at once just before the reminder (11 twice in 16 runs of
   those questions); a hard limit would cut lists, which need 13–19.
+
+## Later (2026-11-16): a security review of the chat and the MCP server
+
+- **The tools read only the vault's documents.** `read_note`, `read_pdf`, `outline`, `links` and
+  `related` passed the path the model (or an MCP client) gave to `root.join`: an absolute path or
+  one with `..` read any file the user can read, a hidden one the recently deleted (notes kept
+  from the AI among them) and `.git`; a note or a PDF could tell the model which, and its text
+  went to OpenAI. A path is now one the index lists (the walk's visible files inside the vault,
+  no symlink; a composed path finds a decomposed name), and `FsVault::read_text` and `PdfTexts`
+  refuse a path outside the vault on their own.
+- **What the user keeps from the AI fails closed.** The folders' rules were read in one call: one
+  `.knotes.json` that could not be read dropped every folder's `"ai": false`, and one that did
+  not parse (a comma too many) its own. A folder whose rules cannot be read, or whose file names
+  `"ai"` but does not parse, is now kept.
+- **A reply's links open only the web.** A link of another scheme (`file:`, an app's own) opened
+  in its app with one click; a note could lead the model to write one under harmless words. Only
+  `http`, `https` and `mailto` are links now, the rest text. Images in replies are not loaded.
+- **The model is told that what the tools return is data**, not instructions to follow; the MCP
+  server's instructions say the same.
+- Found sound: the sign-in (loopback on `127.0.0.1` only, `state`, PKCE S256 with 32 random bytes
+  from the Security framework, the ID token's issuer, audience, expiry and nonce checked), TLS
+  through the system's verifier, the tokens in the Keychain, the MCP server on stdio only.
+- Left: a conversation keeps the fragments it was given, and sends them again in its next turns,
+  even after their note is marked `#no-ai` (a new conversation does not); a note just tagged
+  `#no-ai` is shared until it is indexed and for up to 10 s after (`TITLES_LAST`).

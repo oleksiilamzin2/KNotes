@@ -82,7 +82,17 @@ pub fn reply_runs(markdown: &str) -> Vec<Run> {
             Event::End(TagEnd::Strong) => bold -= 1,
             Event::Start(Tag::Link { link_type, dest_url, .. }) => {
                 let url = dest_url.to_string();
-                out.link = Some(if matches!(link_type, LinkType::WikiLink { .. }) || !url.contains("://") && !url.starts_with("mailto:") { RunLink::Note(url) } else { RunLink::Web(url) });
+                // A link to the web opens in the browser; one of another scheme (`file:`, an app's
+                // own) stays text: the reply's words may come from a note written to lead there.
+                let lower = url.to_ascii_lowercase();
+                let web = ["https://", "http://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme));
+                out.link = if matches!(link_type, LinkType::WikiLink { .. }) || !url.contains("://") && !lower.starts_with("mailto:") && !lower.contains(':') {
+                    Some(RunLink::Note(url))
+                } else if web {
+                    Some(RunLink::Web(url))
+                } else {
+                    None
+                };
             }
             Event::End(TagEnd::Link) => out.link = None,
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => {
