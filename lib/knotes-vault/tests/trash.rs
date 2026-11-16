@@ -94,3 +94,15 @@ fn entries_list_newest_first_and_go_for_good_when_purged() {
     assert!(vault.restore(&a.id).is_err(), "gone for good");
     assert!(vault.trash("../outside.md", NOW).is_err() && vault.trash("missing.md", NOW).is_err());
 }
+
+#[test]
+fn an_entry_says_where_it_is_kept_so_it_can_be_read_there() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "Work/Plan.md", "The plan.");
+    let vault = FsVault::new(dir.path());
+    let entry = vault.trash("Work/Plan.md", NOW).unwrap();
+    let kept = vault.kept_at(&entry.id).unwrap();
+    assert_eq!(fs::read_to_string(&kept).unwrap(), "The plan.");
+    assert!(kept.starts_with(dir.path().join(".knotes/trash")), "{}", kept.display());
+    assert!(vault.kept_at("../../etc").is_err());
+}

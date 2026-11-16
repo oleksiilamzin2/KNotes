@@ -78,6 +78,12 @@ impl TrashStore for FsVault {
     fn purge(&self, id: &str) -> io::Result<()> {
         fs::remove_dir_all(self.entry_dir(id)?)
     }
+
+    fn kept_at(&self, id: &str) -> io::Result<PathBuf> {
+        let dir = self.entry_dir(id)?;
+        let (entry, _) = read_entry(&dir).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no deleted entry {id}")))?;
+        Ok(dir.join(name_of(&entry.path)))
+    }
 }
 
 impl FsVault {

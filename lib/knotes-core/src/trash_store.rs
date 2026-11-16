@@ -23,4 +23,6 @@ pub trait TrashStore {
     fn restore(&self, id: &str) -> std::io::Result<String>;
     /// Deletes the entry for good.
     fn purge(&self, id: &str) -> std::io::Result<()>;
+    /// Where the entry's file or folder is kept now, to be read there (shown, not restored).
+    fn kept_at(&self, id: &str) -> std::io::Result<std::path::PathBuf>;
 }
