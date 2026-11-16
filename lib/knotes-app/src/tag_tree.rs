@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::natural_order::natural_cmp;
 
 /// A tag in the sidebar; nested tags (`area/sub`) hang below their parent.
@@ -41,24 +43,51 @@ fn sort(nodes: &mut [TagNode]) {
     }
 }
 
-/// The tags in a space and the rest (ADR 0030), from every (tag, note) pair: the tags with
-/// notes in the space (`within`), counted there; then those with none there, counted outside,
-/// one whose parent is in the space at the top under its whole tag.
-pub fn split_tags(tagged: &[(String, String)], within: &dyn Fn(&str) -> bool) -> (Vec<TagNode>, Vec<TagNode>) {
-    use std::collections::{BTreeMap, HashSet};
-    let counts = |inside: bool| {
-        let mut notes: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
-        for (tag, path) in tagged.iter().filter(|(_, path)| within(path) == inside) {
-            for (i, _) in tag.match_indices('/') {
-                notes.entry(&tag[..i]).or_default().insert(path);
-            }
-            notes.entry(tag).or_default().insert(path);
+/// Every tag and every parent with how many notes have it or one below it, sorted by tag, from
+/// (tag, note) pairs that keep a note's tags together (as `TagIndex::tagged_notes` gives them).
+pub fn count_tags<'a>(tagged: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<(String, usize)> {
+    // A tag's count and the last note counted for it: a note's tags come together, so a note
+    // with two tags below one parent counts there once, with no set of notes a tag.
+    let mut counts: HashMap<&str, (usize, &str)> = HashMap::new();
+    let mut count = |tag: &'a str, path: &'a str| {
+        let (notes, last) = counts.entry(tag).or_insert((0, ""));
+        if *last != path {
+            *notes += 1;
+            *last = path;
         }
-        notes.into_iter().map(|(tag, paths)| (tag.to_owned(), paths.len())).collect::<Vec<_>>()
     };
-    let inside = counts(true);
+    for (tag, path) in tagged {
+        for (i, _) in tag.match_indices('/') {
+            count(&tag[..i], path);
+        }
+        count(tag, path);
+    }
+    let mut counts: Vec<(String, usize)> = counts.into_iter().map(|(tag, (notes, _))| (tag.to_owned(), notes)).collect();
+    counts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    counts
+}
+
+/// The tags in a space and the rest (ADR 0030), from every (tag, note) pair, a note's together:
+/// the tags with notes in the space (`within`), counted there; then those with none there,
+/// counted outside, one whose parent is in the space at the top under its whole tag.
+pub fn split_tags(tagged: &[(String, String)], within: &dyn Fn(&str) -> bool) -> (Vec<TagNode>, Vec<TagNode>) {
+    // Asked once a note: its tags come together.
+    let mut last: Option<(&str, bool)> = None;
+    let (mut inside, mut outside) = (Vec::new(), Vec::new());
+    for (tag, path) in tagged {
+        let held = match last {
+            Some((at, held)) if at == path => held,
+            _ => {
+                let held = within(path);
+                last = Some((path, held));
+                held
+            }
+        };
+        if held { &mut inside } else { &mut outside }.push((tag.as_str(), path.as_str()));
+    }
+    let inside = count_tags(inside);
     let in_space: HashSet<&str> = inside.iter().map(|(tag, _)| tag.as_str()).collect();
-    let outside: Vec<(String, usize)> = counts(false).into_iter().filter(|(tag, _)| !in_space.contains(tag.as_str())).collect();
+    let outside: Vec<(String, usize)> = count_tags(outside).into_iter().filter(|(tag, _)| !in_space.contains(tag.as_str())).collect();
     let mut rest = tag_tree(&outside);
     for node in &mut rest {
         node.name = node.tag.clone();

@@ -44,4 +44,4 @@ pub use space_folders::SpaceFolders;
 pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
 pub use tabs::{AfterClose, TabPlace, Tabs};
-pub use tag_tree::{TagNode, split_tags, tag_tree};
+pub use tag_tree::{TagNode, count_tags, split_tags, tag_tree};
