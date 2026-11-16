@@ -30,7 +30,10 @@ and in the lists alike.
   - A folder's space, in its own `.knotes.json`: `"space": "work"`. Subfolders take it, the
     nearest folder that says wins (as list settings and the `ai` rule do), so a folder moved or
     renamed keeps it; `"space": null` takes a subfolder out. The vault's root is in no space; an
-    id no space has counts as none.
+    id no space has counts as none. `"space": "*"` puts a folder in every space (at the owner's
+    word, 2026-11-15, for folders such as contacts or an inbox needed in each, in place of a note
+    in several spaces): each shows it among its own folders, none marks it, the tools count it in
+    each and name it apart (`list_spaces`'s `shared`).
 - **One reader**, crate `knotes-spaces` (serde_json, NFC paths): from the rules files it gives
   the spaces and each document's space. The app builds it from each snapshot's rules, the AI
   tools from the files as they read the `ai` rule; both compare paths composed (macOS writes some

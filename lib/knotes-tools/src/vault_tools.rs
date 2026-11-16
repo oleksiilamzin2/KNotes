@@ -187,7 +187,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         let catalog: Vec<_> = self.index.catalog().unwrap_or_default().into_iter().filter(|e| !kept.holds(&e.path)).collect();
         let spaces: Vec<Value> = space_folders(&kept, &catalog).into_iter().map(|(space, folders, notes)| json!({"name": space.name, "folders": folders, "notes": notes})).collect();
         let current = self.space.borrow().as_deref().and_then(|id| kept.spaces.get(id)).map(|s| s.name.clone());
-        json!({"spaces": spaces, "current": current})
+        json!({"spaces": spaces, "shared": shared_folders(&kept, &catalog), "current": current})
     }
 
     /// The tags with how many shared notes have each (the marking tag left out).
@@ -238,7 +238,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         let space = self.space_arg(args, &kept)?;
         let in_space: Option<Vec<String>> = space.as_ref().map(|space| {
             let catalog = self.index.catalog().unwrap_or_default();
-            catalog.into_iter().map(|e| e.path).filter(|p| kept.spaces.of(p).is_some_and(|s| s.id == space.id)).collect()
+            catalog.into_iter().map(|e| e.path).filter(|p| kept.spaces.holds(p, &space.id)).collect()
         });
         let find = |text: &str, within: Within, scope: Option<&[String]>| {
             let both: Option<Vec<String>> = match (scope, in_space.as_deref()) {
@@ -315,7 +315,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         if space.is_none()
             && let Some(id) = self.space.borrow().as_deref()
         {
-            hits.0.sort_by_key(|(_, hit, _)| kept.spaces.of(&hit.path).is_none_or(|s| s.id != id));
+            hits.0.sort_by_key(|(_, hit, _)| !kept.spaces.holds(&hit.path, id));
         }
         let (hits, next) = page(hits.0, offset, limit);
         let results: Vec<Value> = hits
@@ -577,7 +577,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         let kept = self.kept();
         let space = self.space_arg(args, &kept)?;
         let mut rows = self.index.note_rows().map_err(failed)?;
-        rows.retain(|r| !kept.holds(&r.path) && space.as_ref().is_none_or(|space| kept.spaces.of(&r.path).is_some_and(|s| s.id == space.id)));
+        rows.retain(|r| !kept.holds(&r.path) && space.as_ref().is_none_or(|space| kept.spaces.holds(&r.path, &space.id)));
         let seconds = |ns: i64| ns.div_euclid(1_000_000_000);
         if let Some(after) = after {
             rows.retain(|r| seconds(r.mtime_ns) >= after);
@@ -689,20 +689,36 @@ fn space_folders(kept: &Kept, catalog: &[knotes_core::CatalogEntry]) -> Vec<(Spa
         .iter()
         .map(|space| {
             let folders = all.iter().filter(|f| kept.spaces.own(f).flatten().is_some_and(|s| s.id == space.id)).map(|f| f.to_string()).collect();
-            let notes = catalog.iter().filter(|e| kind_of(&e.path) == "note" && kept.spaces.of(&e.path).is_some_and(|s| s.id == space.id)).count();
+            let notes = catalog.iter().filter(|e| kind_of(&e.path) == "note" && kept.spaces.holds(&e.path, &space.id)).count();
             (space.clone(), folders, notes)
         })
         .collect()
 }
 
-/// The spaces in a sentence for the model: each with its folders; empty with none.
+/// The folders whose own rules put them in every space.
+fn shared_folders(kept: &Kept, catalog: &[knotes_core::CatalogEntry]) -> Vec<String> {
+    let mut all: BTreeSet<&str> = BTreeSet::new();
+    for entry in catalog {
+        let mut path = entry.path.as_str();
+        while let Some((folder, _)) = path.rsplit_once('/') {
+            all.insert(folder);
+            path = folder;
+        }
+    }
+    all.into_iter().filter(|f| kept.spaces.own_shared(f)).map(str::to_owned).collect()
+}
+
+/// The spaces in a sentence for the model: each with its folders, and those in every space;
+/// empty with none.
 fn spaces_line(kept: &Kept, catalog: &[knotes_core::CatalogEntry]) -> String {
     let spaces = space_folders(kept, catalog);
     if spaces.is_empty() {
         return String::new();
     }
     let listed: Vec<String> = spaces.iter().map(|(space, folders, _)| format!("{} ({})", space.name, folders.join(", "))).collect();
-    format!("Spaces of the vault (named sets of its folders the user works in; list_spaces lists them, search and list_notes take one as `space`): {}.", listed.join(", "))
+    let shared = shared_folders(kept, catalog);
+    let shared = if shared.is_empty() { String::new() } else { format!("; in every space: {}", shared.join(", ")) };
+    format!("Spaces of the vault (named sets of its folders the user works in; list_spaces lists them, search and list_notes take one as `space`): {}{shared}.", listed.join(", "))
 }
 
 /// Search hits as they are gathered: how each was found, the hit, and the document it was

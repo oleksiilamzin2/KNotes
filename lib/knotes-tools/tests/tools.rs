@@ -522,9 +522,22 @@ fn the_spaces_are_listed_with_their_folders_notes_and_the_window_s() {
     let v = spaced();
     v.tools.set_space(Some("home".into()));
     let listed = call(&v, "list_spaces", json!({}));
-    assert_eq!(listed, json!({"spaces": [{"name": "Робота", "folders": ["Work"], "notes": 1}, {"name": "Дім", "folders": ["Home"], "notes": 1}], "current": "Дім"}));
+    assert_eq!(listed, json!({"spaces": [{"name": "Робота", "folders": ["Work"], "notes": 1}, {"name": "Дім", "folders": ["Home"], "notes": 1}], "shared": [], "current": "Дім"}));
     let line = v.tools.spaces_line();
     assert!(line.contains("Робота (Work)") && line.contains("Дім (Home)"), "{line}");
     assert_eq!(vault().tools.spaces_line(), "", "a vault with no spaces: nothing to say");
-    assert_eq!(call(&vault(), "list_spaces", json!({})), json!({"spaces": [], "current": null}));
+    assert_eq!(call(&vault(), "list_spaces", json!({})), json!({"spaces": [], "shared": [], "current": null}));
+}
+
+#[test]
+fn a_folder_in_every_space_is_searched_and_listed_in_each_and_named_as_such() {
+    let v = spaced();
+    write(v._dirs.0.path(), "Contacts/.knotes.json", r#"{"space": "*"}"#);
+    write(v._dirs.0.path(), "Contacts/Apples.md", "Apples from the neighbour.");
+    let mut index = SqliteIndex::open(v._dirs.1.path()).unwrap();
+    Indexer::with_documents(FsVault::new(v._dirs.0.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let found = paths(&call(&v, "search", json!({"query": "apples", "space": "Дім"})), "results");
+    assert!(found.contains(&"Contacts/Apples.md".to_string()) && found.contains(&"Home/Apples.md".to_string()) && !found.contains(&"Work/Apples.md".to_string()), "{found:?}");
+    assert_eq!(call(&v, "list_spaces", json!({}))["shared"], json!(["Contacts"]));
+    assert!(v.tools.spaces_line().contains("in every space: Contacts"), "{}", v.tools.spaces_line());
 }
