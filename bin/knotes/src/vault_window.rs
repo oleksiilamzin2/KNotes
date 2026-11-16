@@ -2105,6 +2105,7 @@ impl VaultWindow {
         };
         let links = self.state.borrow().links.clone();
         let (link_weak, edit_weak, focus_weak) = (self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone());
+        let open_weak = self.this.borrow().clone();
         let callbacks = Callbacks {
             on_link: Rc::new(move |link| {
                 if let Some(window) = link_weak.upgrade() {
@@ -2125,6 +2126,17 @@ impl VaultWindow {
                     }
                 }
             }),
+            // After the button's action: opening the note takes the button away.
+            on_open: Rc::new(move |key| {
+                let (Some(mtm), key) = (MainThreadMarker::new(), key.to_owned()) else { return };
+                let target = MainThreadBound::new(open_weak.clone(), mtm);
+                DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(window) = target.get(mtm).upgrade() {
+                        window.open_embed(&key);
+                    }
+                });
+            }),
         };
         let resolver = links.clone().map(|l| l as Arc<dyn LinkResolver>);
         let files = FsVault::new(&vault);
@@ -2138,6 +2150,35 @@ impl VaultWindow {
             let range = embedded_part(&full, link.subpath.as_deref())?;
             Some(Content { path, full, range, subpath: link.subpath.clone() })
         });
+    }
+
+    /// Opens the note the embed `key` shows, at its section or block (its edits written first,
+    /// as the note is left).
+    fn open_embed(&self, key: &str) {
+        let Some((path, subpath)) = self.embeds.target_of(key) else { return };
+        self.open_note(&path, true);
+        self.highlight_open_note();
+        if let Some(subpath) = subpath {
+            self.show_subpath(&subpath);
+        }
+    }
+
+    /// Puts the cursor at the open note's heading or block `subpath`, scrolled to the top.
+    fn show_subpath(&self, subpath: &str) {
+        let text = self.note_text.string().to_string();
+        if let Some(at) = subpath_offset(&text, subpath) {
+            let at = utf16_offsets(&text, &[at])[0];
+            self.note_text.setSelectedRange(NSRange::new(at, 0));
+            // From the layout, not the screen: the window may not be on it yet.
+            self.scroll_note_to(at);
+        }
+    }
+
+    /// Opens the note of the `n`th embed, as its button does (probe mode).
+    pub fn probe_open_embed(&self, n: usize) {
+        if let Some(key) = self.embeds.key(n) {
+            self.open_embed(&key);
+        }
     }
 
     /// Writes what was typed in embedded notes back into them (ADR 0034).
@@ -2206,10 +2247,7 @@ impl VaultWindow {
             self.highlight_open_note();
         }
         if let Some(subpath) = &link.subpath {
-            let text = self.note_text.string().to_string();
-            if let Some(at) = subpath_offset(&text, subpath) {
-                self.note_text.move_to_top(utf16_offsets(&text, &[at])[0]);
-            }
+            self.show_subpath(subpath);
         }
     }
 

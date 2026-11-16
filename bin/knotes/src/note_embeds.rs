@@ -13,17 +13,53 @@ use std::sync::Arc;
 use knotes_core::{Link, LinkResolver, NoteWriter, VaultReader};
 use knotes_editor::splice_part;
 use knotes_vault::FsVault;
-use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSTextElementProvider, NSTextView};
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::{NSButton, NSColor, NSImage, NSTextElementProvider, NSTextView};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use crate::live_preview::LivePreview;
 use crate::note_view::{self, NoteTextView};
+use crate::strings;
 
 /// Room between a box's edge and its note's text.
 pub const PAD: f64 = 12.0;
+/// The button that opens an embed's note, at its box's top right, and the room the text leaves
+/// it.
+const OPEN_SIZE: f64 = 20.0;
+const OPEN_INSET: f64 = 6.0;
+const OPEN_ROOM: f64 = OPEN_SIZE + OPEN_INSET;
+
+pub struct TargetIvars {
+    on_open: Box<dyn Fn()>,
+}
+
+define_class!(
+    /// The target of an embed's open button.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesEmbedOpenTarget"]
+    #[ivars = TargetIvars]
+    pub struct OpenTarget;
+
+    unsafe impl NSObjectProtocol for OpenTarget {}
+
+    impl OpenTarget {
+        #[unsafe(method(open:))]
+        fn open(&self, _sender: Option<&AnyObject>) {
+            (self.ivars().on_open)();
+        }
+    }
+);
+
+impl OpenTarget {
+    fn new(mtm: MainThreadMarker, on_open: impl Fn() + 'static) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(TargetIvars { on_open: Box::new(on_open) });
+        // SAFETY: NSObject's init.
+        unsafe { msg_send![super(this), init] }
+    }
+}
 
 /// What an embed shows: its note's vault path, the note as read and the part's range in it.
 pub struct Content {
@@ -39,6 +75,8 @@ pub struct Callbacks {
     pub on_link: Rc<dyn Fn(&Link)>,
     pub on_edit: Rc<dyn Fn(&str)>,
     pub on_focus: OnFocus,
+    /// The open button pressed: the embed's key.
+    pub on_open: Rc<dyn Fn(&str)>,
 }
 
 /// Gets an embed's key and whether its view took the keys (true) or gave them up.
@@ -56,9 +94,20 @@ struct Shown {
     dirty: bool,
     view: Retained<NoteTextView>,
     preview: Retained<LivePreview>,
+    /// The button opening its note, and its target (the button keeps it weakly).
+    button: Retained<NSButton>,
+    _target: Retained<OpenTarget>,
     /// The text's width and height it was measured at.
     width: f64,
     height: f64,
+}
+
+impl Shown {
+    /// Its views leave the note.
+    fn remove(&self) {
+        self.view.removeFromSuperview();
+        self.button.removeFromSuperview();
+    }
 }
 
 #[derive(Default)]
@@ -91,7 +140,7 @@ impl NoteEmbeds {
                 kept => {
                     let Some(content) = content(&link) else {
                         if let Some(gone) = kept {
-                            gone.view.removeFromSuperview();
+                            gone.remove();
                         }
                         continue;
                     };
@@ -119,7 +168,7 @@ impl NoteEmbeds {
             shown.push(entry);
         }
         for gone in old {
-            gone.view.removeFromSuperview();
+            gone.remove();
         }
         *self.shown.borrow_mut() = shown;
         self.keep_rooms(host, host_preview);
@@ -182,8 +231,14 @@ impl NoteEmbeds {
                 Some(rect) => {
                     s.view.setHidden(false);
                     s.view.setFrame(NSRect::new(NSPoint::new(rect.origin.x + PAD, rect.origin.y + PAD), NSSize::new(s.width, s.height)));
+                    s.button.setHidden(false);
+                    let corner = NSPoint::new(rect.origin.x + rect.size.width - OPEN_INSET - OPEN_SIZE, rect.origin.y + OPEN_INSET);
+                    s.button.setFrame(NSRect::new(corner, NSSize::new(OPEN_SIZE, OPEN_SIZE)));
                 }
-                None => s.view.setHidden(true),
+                None => {
+                    s.view.setHidden(true);
+                    s.button.setHidden(true);
+                }
             }
         }
         let width = text_width(host);
@@ -198,8 +253,18 @@ impl NoteEmbeds {
     /// No embeds shown: their views go.
     pub fn clear(&self) {
         for gone in self.shown.take() {
-            gone.view.removeFromSuperview();
+            gone.remove();
         }
+    }
+
+    /// The note and part the embed `key` shows.
+    pub fn target_of(&self, key: &str) -> Option<(String, Option<String>)> {
+        self.shown.borrow().iter().find(|s| s.key == key).map(|s| (s.path.clone(), s.subpath.clone()))
+    }
+
+    /// The key of the `n`th embed shown (probe mode).
+    pub fn key(&self, n: usize) -> Option<String> {
+        self.shown.borrow().get(n).map(|s| s.key.clone())
     }
 
     /// The view of the `n`th embed shown (probe mode).
@@ -216,9 +281,11 @@ impl NoteEmbeds {
                 let f = s.view.frame();
                 let hidden = if s.view.isHidden() { " hidden" } else { "" };
                 let text = s.view.string().to_string().replace('\n', "⏎");
+                let b = s.button.frame();
                 [
                     format!("embed: {} {:.1} {:.1} {:.1} {:.1}{hidden} | {text}", s.path, f.origin.x, f.origin.y, f.size.width, f.size.height),
                     format!("embed-editor: {}", LivePreview::describe(&s.view)),
+                    format!("embed-open: {:.1} {:.1} {:.1} {:.1}", b.origin.x, b.origin.y, b.size.width, b.size.height),
                 ]
             })
             .collect()
@@ -248,6 +315,18 @@ fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, callbacks: &Cal
     preview.on_change(move || edit(&edited_key));
     let (focus, focused_key) = (callbacks.on_focus.clone(), key.clone());
     view.on_focus(move |taken| focus(&focused_key, taken));
+    let (open, open_key) = (callbacks.on_open.clone(), key.clone());
+    let target = OpenTarget::new(mtm, move || open(&open_key));
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("arrow.up.right.square"), Some(&NSString::from_str(strings::OPEN_EMBED)));
+    let button = match image {
+        // SAFETY: the target outlives the button's use of it (both kept in the entry).
+        Some(image) => unsafe { NSButton::buttonWithImage_target_action(&image, Some(&target), Some(sel!(open:)), mtm) },
+        None => unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str("↗"), Some(&target), Some(sel!(open:)), mtm) },
+    };
+    button.setBordered(false);
+    button.setContentTintColor(Some(&NSColor::tertiaryLabelColor()));
+    button.setToolTip(Some(&NSString::from_str(strings::OPEN_EMBED)));
+    host.addSubview(&button);
     let (look, text) = (preview.clone(), objc2::rc::Weak::new(&*view));
     view.on_appearance(move || {
         if let Some(text) = text.load() {
@@ -255,7 +334,7 @@ fn made(mtm: MainThreadMarker, host: &NoteTextView, key: String, callbacks: &Cal
         }
     });
     host.addSubview(&view);
-    Shown { key, path: String::new(), text: String::new(), full: String::new(), range: 0..0, subpath: None, dirty: false, view, preview, width: 0.0, height: 0.0 }
+    Shown { key, path: String::new(), text: String::new(), full: String::new(), range: 0..0, subpath: None, dirty: false, view, preview, button, _target: target, width: 0.0, height: 0.0 }
 }
 
 /// Whether `view` has the keys.
@@ -263,10 +342,11 @@ fn focused(view: &NSTextView) -> bool {
     view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, view as *const _ as *const u8))
 }
 
-/// The width an embedded note's text takes in `host`: its column less the box's padding.
+/// The width an embedded note's text takes in `host`: its column less the box's padding and the
+/// open button's room.
 fn text_width(host: &NSTextView) -> f64 {
     let column = unsafe { host.textContainer() }.map_or(0.0, |c| c.size().width);
-    (column - 2.0 * PAD).max(40.0).floor()
+    (column - 2.0 * PAD - OPEN_ROOM).max(40.0).floor()
 }
 
 /// The height `view`'s text takes laid out `width` wide.

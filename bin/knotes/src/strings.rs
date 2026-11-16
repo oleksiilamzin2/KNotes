@@ -144,6 +144,8 @@ pub fn more_notes(n: usize) -> String {
 }
 pub const NO_HEADINGS: &str = "Немає заголовків";
 pub const NO_DOCUMENT: &str = "Немає відкритого документа";
+/// An embedded note's button (ADR 0034).
+pub const OPEN_EMBED: &str = "Відкрити нотатку";
 pub const FIND_SEARCHING: &str = "Пошук…";
 pub const NO_PDF_OUTLINE: &str = "У цьому PDF немає змісту";
 pub const LIST_OPTIONS: &str = "Параметри списку";

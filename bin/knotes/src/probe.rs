@@ -1395,6 +1395,10 @@ fn report_list(table: &NSTableView) {
 
 /// Open note (from the text view itself), history buttons (from the toolbar) and list selection.
 fn report_note(window: &VaultWindow) {
+    // `KNOTES_PROBE_EMBED_OPEN=n`: the `n`th embed's open button.
+    if let Some(n) = std::env::var("KNOTES_PROBE_EMBED_OPEN").ok().and_then(|n| n.parse().ok()) {
+        window.probe_open_embed(n);
+    }
     println!("textkit: {}", if window.note_text.textLayoutManager().is_some() { 2 } else { 1 });
     println!("editor: {}", crate::live_preview::LivePreview::describe(&window.note_text));
     println!("editor-struck: {}", crate::live_preview::LivePreview::describe_struck(&window.note_text));

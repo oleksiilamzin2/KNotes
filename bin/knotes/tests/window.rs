@@ -1244,6 +1244,24 @@ fn typing_an_embed_key_by_key_shows_it_without_a_crash() {
 }
 
 #[test]
+fn an_embed_s_button_at_its_top_right_opens_its_note_at_its_part() {
+    // Long enough that its section can come to the top.
+    let long = "A paragraph.\n\n".repeat(80);
+    let notes = [("a.md", "Top\n\n![[b#Part]]\n\nend".to_owned()), ("b.md", format!("# B\n\n{long}## Part\n\nPart text.\n"))];
+    let notes: Vec<(&str, &str)> = notes.iter().map(|(p, t)| (*p, t.as_str())).collect();
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let (shown, boxes) = embeds(&out);
+    let button: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("embed-open: ")).unwrap_or_else(|| panic!("{out}")).split_whitespace().filter_map(|n| n.parse().ok()).collect();
+    let text: Vec<f64> = shown[0].split(" | ").next().unwrap().split_whitespace().skip(1).filter_map(|n| n.parse().ok()).collect();
+    let b = &boxes[0];
+    assert!(button[0] + button[2] <= b[0] + b[2] && button[0] > b[0] + b[2] - 40.0 && button[1] >= b[1] && button[1] < b[1] + 20.0, "top right: {button:?} in {b:?}");
+    assert!(text[0] + text[2] <= button[0], "the text keeps clear of it: {text:?} {button:?}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_OPEN", "0")]);
+    assert!(out.contains("note: b.md |"), "{out}");
+    assert!(out.lines().any(|l| l.starts_with("note-top: ## Part")), "at its section: {out}");
+}
+
+#[test]
 fn inline_code_has_a_background_and_its_backticks_do_not() {
     let (_vault, out) = probe_notes(&[("c.md", "T\n\nrun `cargo test` now\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert_eq!(out.lines().find_map(|l| l.strip_prefix("editor-shaded: ")), Some("cargo test"), "{out}");
