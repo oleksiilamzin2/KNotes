@@ -1,0 +1,123 @@
+//! Spaces (ADR 0030): the window's space, a folder's, the switcher, the space remembered beside the index.
+
+use super::*;
+
+/// The window's space, beside the index (ADR 0030).
+pub(super) const SPACE_FILE: &str = "space.json";
+
+impl VaultWindow {
+    /// The window's space (ADR 0030), none for the whole vault: kept beside the index; the
+    /// sidebar and the list are shown again for it (a selection outside it goes to all notes).
+    pub fn set_space(&self, id: Option<String>) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.space = id.filter(|id| state.spaces.get(id).is_some());
+            state.fit_space();
+        }
+        self.save_space();
+        self.show_spaces();
+        self.rebuild_sidebar();
+        let mut selection = self.state.borrow().selection.clone();
+        if !self.exists(&selection) {
+            selection = SidebarItem::AllNotes;
+            self.state.borrow_mut().selection = selection.clone();
+        }
+        self.highlight(&selection);
+        self.refresh_list();
+    }
+
+    /// A folder's menu put it in a space, in none, or in a new space named in a dialog (ADR
+    /// 0030): its rules file says so only where that differs from its parent's space (else the
+    /// key goes). The snapshot that follows the writes shows it.
+    pub(super) fn set_folder_space(&self, folder: &str, choice: FolderChoice) {
+        let Some(vault) = self.vault() else { return };
+        let files = FsVault::new(&vault);
+        let rules_of = |folder: &str| files.read_rules(&[folder]).ok().and_then(|r| r.into_iter().next()).map(|(_, text)| text).unwrap_or_default();
+        let write = |folder: &str, text: Result<String, String>| match text.map_err(std::io::Error::other).and_then(|text| files.write_rules(folder, &text)) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("knotes: cannot write {folder}/.knotes.json: {e}");
+                false
+            }
+        };
+        let spaces = Arc::clone(&self.state.borrow().spaces);
+        let parent = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
+        // Every space: said here unless the parent says it already.
+        if choice == FolderChoice::EverySpace {
+            let wanted = if spaces.shared(parent) { FolderSpace::Inherit } else { FolderSpace::Shared };
+            write(folder, set_folder_space(&rules_of(folder), wanted));
+            return;
+        }
+        let id = match choice {
+            FolderChoice::Space(id) => Some(id),
+            FolderChoice::NoSpace | FolderChoice::EverySpace => None,
+            FolderChoice::NewSpace => {
+                let Some(name) = rename_dialog::ask_space_name(MainThreadMarker::from(&*self.window)) else { return };
+                let mut list = spaces.list().to_vec();
+                let id = new_space_id(&list, &name);
+                // The first colour no space has, else round the palette.
+                let color = SpaceColor::ALL.into_iter().find(|c| list.iter().all(|s| s.color != *c)).unwrap_or(SpaceColor::ALL[list.len() % SpaceColor::ALL.len()]);
+                list.push(Space { id: id.clone(), name, color });
+                if !write("", set_spaces(&rules_of(""), &list)) {
+                    return;
+                }
+                Some(id)
+            }
+        };
+        // The parent's space, unless it is in every space (then this folder must say its own).
+        let inherited = (!spaces.shared(parent)).then(|| spaces.of_folder(parent).map(|s| s.id.clone()));
+        let wanted = match &id {
+            _ if inherited.as_ref() == Some(&id) => FolderSpace::Inherit,
+            Some(id) => FolderSpace::In(id),
+            None => FolderSpace::None,
+        };
+        write(folder, set_folder_space(&rules_of(folder), wanted));
+    }
+
+    /// The switcher offers the vault's spaces, the window's selected; the list and the sidebar
+    /// mark the others'.
+    pub(super) fn show_spaces(&self) {
+        let state = self.state.borrow();
+        self.space_switcher.set_spaces(state.spaces.list(), state.space.as_deref());
+        self.list.set_spaces(Arc::clone(&state.spaces), state.space.clone());
+        self.sidebar.set_spaces(Arc::clone(&state.spaces), state.space.clone());
+        self.chat.set_space(state.space.as_ref().and_then(|id| state.spaces.get(id)).map(|s| (s.id.clone(), s.name.clone())));
+    }
+
+    /// The list's marked notes, for the probe.
+    pub fn probe_list_marks(&self) -> String {
+        self.list.probe_marks()
+    }
+
+    /// The switcher's menu, for the probe.
+    pub fn probe_space_menu(&self) -> String {
+        self.space_switcher.probe_menu()
+    }
+
+    /// The space and the spaces, for the probe: "Робота | spaces: Робота, Дім" (— for none).
+    pub fn describe_space(&self) -> String {
+        let state = self.state.borrow();
+        let name = state.space.as_ref().and_then(|id| state.spaces.get(id)).map_or("—", |s| s.name.as_str());
+        let names: Vec<&str> = state.spaces.list().iter().map(|s| s.name.as_str()).collect();
+        format!("{name} | spaces: {}", names.join(", "))
+    }
+
+    pub(super) fn space_file(&self) -> Option<PathBuf> {
+        self.state.borrow().index_dir.as_ref().map(|dir| dir.join(SPACE_FILE))
+    }
+
+    pub(super) fn save_space(&self) {
+        let Some(file) = self.space_file() else { return };
+        let text = serde_json::json!({"space": self.state.borrow().space}).to_string();
+        let tmp = file.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &file)) {
+            eprintln!("knotes: cannot save the space: {e}");
+        }
+    }
+
+    /// The space of the last launch.
+    pub(super) fn saved_space(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.space_file()?).ok()?;
+        serde_json::from_str::<serde_json::Value>(&text).ok()?.get("space")?.as_str().map(str::to_owned)
+    }
+}

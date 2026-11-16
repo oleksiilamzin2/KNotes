@@ -1,0 +1,122 @@
+//! Tabs (ADR 0024): each document a tab, the place in it kept, the tabs saved beside the index.
+
+use super::*;
+
+/// The vault's tabs, beside its index (ADR 0024).
+pub(super) const TABS_FILE: &str = "tabs.json";
+
+impl VaultWindow {
+    /// Closes `path`'s tab: the document shown stays, or its neighbour's shows, or nothing.
+    pub fn close_tab(&self, path: &str) {
+        let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return };
+        let after = self.tabs.borrow_mut().close(i);
+        match after {
+            AfterClose::Show(next) => self.open_note(&next, true),
+            AfterClose::Nothing => self.show_nothing(),
+            AfterClose::Same => {}
+        }
+        self.save_tabs();
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+    }
+
+    /// Closes the tab shown (Cmd+W); false when there is none.
+    pub fn close_current_tab(&self) -> bool {
+        let Some(path) = self.tabs.borrow().current_path().map(str::to_owned) else { return false };
+        self.close_tab(&path);
+        true
+    }
+
+    /// Closes every tab but `path`'s, which shows.
+    pub fn close_other_tabs(&self, path: &str) {
+        let Some(i) = self.tabs.borrow().paths().position(|p| p == path) else { return };
+        let after = self.tabs.borrow_mut().close_others(i);
+        if let AfterClose::Show(next) = after {
+            self.open_note(&next, true);
+        }
+        self.save_tabs();
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+    }
+
+    /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow. Gives
+    /// where the document was when its tab was last left.
+    pub(super) fn show_tab(&self, path: &str) -> Option<TabPlace> {
+        // A note opens in the tab shown; a PDF, or a note asked to, in a new tab beside it
+        // (owner's choice).
+        let beside = self.new_tab_next.replace(false) || FileKind::from_path(path) == FileKind::Pdf;
+        let place = if beside { self.tabs.borrow_mut().open_beside(path) } else { self.tabs.borrow_mut().navigate(path) };
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+        place
+    }
+
+    /// The tab shown remembers where its document is, as it is left.
+    pub(super) fn remember_place(&self) {
+        // Only the current tab's document: a tab just closed gives its place to none.
+        let shown = self.pdf_path.borrow().clone().or_else(|| self.open_path());
+        if shown.is_none() || shown.as_deref() != self.tabs.borrow().current_path() {
+            return;
+        }
+        let place = if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            Some(TabPlace { top: viewer.place(), cursor: None })
+        } else if self.editing.borrow().is_some() {
+            let selection = self.note_text.selectedRange();
+            self.note_top().map(|top| TabPlace { top: (top, 0.0), cursor: Some((selection.location, selection.length)) })
+        } else {
+            None
+        };
+        if let Some(place) = place {
+            self.tabs.borrow_mut().remember(place);
+        }
+    }
+
+    /// The vault's tabs file, beside its index (ADR 0024).
+    pub(super) fn tabs_file(&self) -> Option<PathBuf> {
+        self.state.borrow().index_dir.as_ref().map(|dir| dir.join(TABS_FILE))
+    }
+
+    /// Writes the tabs and their places for the next launch.
+    pub(super) fn save_tabs(&self) {
+        let Some(file) = self.tabs_file() else { return };
+        let text = self.tabs.borrow().to_json().to_string();
+        let tmp = file.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &file)) {
+            eprintln!("knotes: cannot save tabs: {e}");
+        }
+    }
+
+    /// The tabs of the last launch, those whose documents are still there; the one shown
+    /// then is shown again, where it was. Once, on the vault's first snapshot.
+    pub(super) fn restore_tabs(&self) {
+        let (Some(file), Some(vault)) = (self.tabs_file(), self.vault()) else { return };
+        let Ok(text) = std::fs::read_to_string(file) else { return };
+        let mut tabs = Tabs::from_text(&text);
+        tabs.retain(|p| vault.join(p).is_file());
+        let current = tabs.current_path().map(str::to_owned);
+        *self.tabs.borrow_mut() = tabs;
+        if let Some(path) = current {
+            self.open_note(&path, true);
+        }
+    }
+
+    /// Opens `path` in a new tab beside the tab shown (the list's menu).
+    pub fn open_in_new_tab(&self, path: &str) {
+        self.new_tab_next.set(true);
+        self.open_note(path, true);
+        self.new_tab_next.set(false);
+    }
+
+    /// `other`'s tab clicked, then the tab shown before (probe mode).
+    pub fn tab_trip(&self, other: &str) {
+        let Some(back) = self.tabs.borrow().current_path().map(str::to_owned) else { return };
+        self.select(SidebarItem::Tab(other.to_owned()));
+        self.select(SidebarItem::Tab(back));
+    }
+}

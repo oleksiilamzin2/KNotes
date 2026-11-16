@@ -1,0 +1,571 @@
+//! Writing notes: autosave, new notes, renames and moves with their links, conflicts with the disk, pasted images.
+
+use super::*;
+
+/// `path` with `.` and `..` segments applied; `None` if it leaves the vault.
+pub(super) fn normalize(path: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+pub(super) fn write(vault: &FsVault, editing: &mut Editing, text: &str) {
+    match vault.write_note(&editing.path, text) {
+        Ok(()) => editing.document.saved(text),
+        Err(e) => eprintln!("knotes: cannot save {}: {e}", editing.path),
+    }
+}
+
+/// An image found on a pasteboard: a file already in the vault (its vault path), or one to
+/// add to the attachments folder.
+pub(super) enum PastedImage {
+    InVault(String),
+    New { name: String, bytes: Vec<u8> },
+}
+
+/// The images a paste or a drop brings: image and PDF files (others are left), or else an image's
+/// data alone; none when text comes with it (a cell copied from a table carries its picture
+/// too, and the text is what is meant).
+pub(super) fn pasteboard_images(pasteboard: &NSPasteboard, vault: &Path) -> Vec<PastedImage> {
+    // SAFETY: AppKit's pasteboard type constants live for the whole process.
+    let (file_url, string, png, tiff) = unsafe { (NSPasteboardTypeFileURL, NSPasteboardTypeString, NSPasteboardTypePNG, NSPasteboardTypeTIFF) };
+    let files: Vec<PathBuf> = pasteboard
+        .pasteboardItems()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let url = item.stringForType(file_url)?;
+                    NSURL::URLWithString(&url)?.path().map(|p| PathBuf::from(p.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !files.is_empty() {
+        let vaults = [vault.to_path_buf(), vault.canonicalize().unwrap_or_default()];
+        return files
+            .into_iter()
+            .filter(|f| f.to_str().is_some_and(|f| matches!(FileKind::from_path(f), FileKind::Image | FileKind::Pdf)))
+            .filter_map(|file| {
+                let inside = vaults.iter().find_map(|v| file.strip_prefix(v).ok().and_then(Path::to_str).map(str::to_owned));
+                match inside {
+                    Some(path) => Some(PastedImage::InVault(path)),
+                    None => Some(PastedImage::New { name: file.file_name()?.to_str()?.to_owned(), bytes: std::fs::read(&file).ok()? }),
+                }
+            })
+            .collect();
+    }
+    if pasteboard.stringForType(string).is_some() {
+        return Vec::new();
+    }
+    let bytes = pasteboard.dataForType(png).map(|d| d.to_vec()).or_else(|| {
+        let data = pasteboard.dataForType(tiff)?;
+        let rep = NSBitmapImageRep::imageRepWithData(&data)?;
+        // SAFETY: an empty properties dictionary is valid for PNG.
+        unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }.map(|d| d.to_vec())
+    });
+    let Some(bytes) = bytes else { return Vec::new() };
+    let formatter = NSDateFormatter::new();
+    formatter.setDateFormat(Some(&NSString::from_str("yyyyMMddHHmmss")));
+    let stamp = formatter.stringFromDate(&NSDate::now()).to_string();
+    vec![PastedImage::New { name: pasted_image_name(&stamp), bytes }]
+}
+
+/// Writes the disk version of `path` as "Name (конфлікт date time).md" next to it.
+pub(super) fn keep_conflict_copy(vault: &FsVault, path: &str, disk: &str) -> Option<String> {
+    let formatter = NSDateFormatter::new();
+    formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm")));
+    let stamp = formatter.stringFromDate(&NSDate::now()).to_string();
+    let mut copy = conflict_path(path, &stamp);
+    if vault.read_text(&copy).is_ok() {
+        formatter.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd HH.mm.ss")));
+        copy = conflict_path(path, &formatter.stringFromDate(&NSDate::now()).to_string());
+    }
+    match vault.write_note(&copy, disk) {
+        Ok(()) => Some(copy),
+        Err(e) => {
+            eprintln!("knotes: cannot keep conflict copy {copy}: {e}");
+            None
+        }
+    }
+}
+
+impl VaultWindow {
+    /// Images pasted (Cmd+V) or dropped (at character `at`) into the open note: copied into
+    /// the attachments folder (one already in the vault stays where it is) and embedded where
+    /// the cursor is or the drop falls, each on a line of its own (ADR 0020). False when the
+    /// pasteboard brings no image: the text view pastes as usual.
+    pub fn paste_images(&self, pasteboard: &NSPasteboard, at: Option<usize>) -> bool {
+        let Some(vault) = self.state.borrow().vault.clone() else { return false };
+        let found = pasteboard_images(pasteboard, &vault);
+        if found.is_empty() {
+            return false;
+        }
+        let store = FsVault::new(&vault);
+        let paths: Vec<String> = found
+            .into_iter()
+            .filter_map(|image| match image {
+                PastedImage::InVault(path) => Some(path),
+                PastedImage::New { name, bytes } => store.add_attachment(&name, &bytes).inspect_err(|e| eprintln!("knotes: cannot add {name}: {e}")).ok(),
+            })
+            .collect();
+        if paths.is_empty() {
+            return true;
+        }
+        let view: &objc2_app_kit::NSTextView = &self.note_text;
+        let text = view.string();
+        if let Some(at) = at {
+            view.setSelectedRange(NSRange::new(at.min(text.length()), 0));
+        }
+        let selection = view.selectedRange();
+        let end = selection.location + selection.length;
+        let line_start = text.lineRangeForRange(NSRange::new(selection.location, 0)).location;
+        let after_line = text.lineRangeForRange(NSRange::new(end, 0));
+        let line_end = (after_line.location + after_line.length).max(end);
+        let before = text.substringWithRange(NSRange::new(line_start, selection.location - line_start)).to_string();
+        let after = text.substringWithRange(NSRange::new(end, line_end - end)).to_string();
+        let catalog = Arc::clone(&self.state.borrow().catalog);
+        let bare = |path: &str| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            !catalog.iter().any(|e| e.path != path && e.path.rsplit('/').next().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        };
+        let embeds = embed_images(&paths, &before, after.trim_end_matches(['\n', '\r']), bare);
+        let not_found = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+        // SAFETY: an NSString is a valid argument for insertText:replacementRange:.
+        unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(view, &NSString::from_str(&embeds), not_found) };
+        true
+    }
+
+    /// A new folder in `parent` (none: the folder selected in the sidebar, else the vault's
+    /// top), "Нова тека" numbered if taken, its name then edited in its row. Made at the top of
+    /// a space, it joins the space (ADR 0030).
+    pub fn new_folder(&self, parent: Option<String>) {
+        let Some(vault) = self.vault() else { return };
+        let parent = parent.unwrap_or_else(|| match &self.state.borrow().selection {
+            SidebarItem::Folder(path) => path.clone(),
+            _ => String::new(),
+        });
+        let path = unique_folder_path(&parent, strings::NEW_FOLDER, |p| vault.join(p).exists());
+        if let Err(e) = std::fs::create_dir_all(vault.join(&path)) {
+            eprintln!("knotes: cannot make the folder {path}: {e}");
+            return;
+        }
+        let space = self.state.borrow().space.clone().filter(|_| parent.is_empty());
+        if let Some(id) = &space {
+            let text = set_folder_space("", FolderSpace::In(id)).unwrap_or_default();
+            if let Err(e) = FsVault::new(&vault).write_rules(&path, &text) {
+                eprintln!("knotes: cannot write {path}/.knotes.json: {e}");
+            }
+        }
+        // Shown now, not when the watcher's snapshot comes: with its rules, in its space.
+        {
+            let mut state = self.state.borrow_mut();
+            let mut folders = (*state.folder_paths).clone();
+            folders.push(path.clone());
+            state.folders = Arc::new(folder_tree_with(state.catalog.iter().map(|e| e.path.as_str()), folders.iter().map(String::as_str)));
+            state.folder_paths = Arc::new(folders);
+            if let Some(id) = &space {
+                let rules = Arc::make_mut(&mut state.rules);
+                if let Ok(parsed) = FolderRules::parse(&serde_json::json!({"space": id}).to_string()) {
+                    rules.insert(path.clone(), parsed);
+                }
+                state.spaces = Arc::new(Spaces::from_rules(state.rules.iter().map(|(folder, rules)| (folder.as_str(), rules.object()))));
+            }
+            state.fit_space();
+        }
+        self.rebuild_sidebar();
+        let item = SidebarItem::Folder(path.clone());
+        // Its parents opened, so its row shows.
+        let mut at = parent.as_str();
+        let mut opened = Vec::new();
+        while !at.is_empty() {
+            opened.push(at.to_owned());
+            at = at.rsplit_once('/').map_or("", |(up, _)| up);
+        }
+        if self.state.borrow().space.is_some() && !self.state.borrow().space_folders.as_ref().is_some_and(|s| s.holds_folder(&path)) {
+            // SAFETY: an item object of this outline view.
+            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&SidebarItem::Rest))) };
+        }
+        for folder in opened.iter().rev() {
+            // SAFETY: as above.
+            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&SidebarItem::Folder(folder.clone())))) };
+        }
+        self.highlight(&item);
+        self.select(item.clone());
+        // SAFETY: an item object of this outline view.
+        let row = unsafe { self.outline.rowForItem(Some(&self.sidebar.object_for(&item))) };
+        if row >= 0 {
+            self.sidebar.begin_rename(row);
+        }
+    }
+
+    /// A user edit: autosave once the user pauses.
+    pub(super) fn edited(&self) {
+        match self.editing.borrow_mut().as_mut() {
+            Some(editing) => editing.document.edited(),
+            None => return,
+        }
+        let edit = self.edits.get() + 1;
+        self.edits.set(edit);
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        let when = DispatchTime::try_from(AUTOSAVE_DELAY).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            if let Some(window) = target.get(mtm).upgrade()
+                && window.edits.get() == edit
+            {
+                window.save();
+            }
+        });
+    }
+
+    /// File → New Note: an empty `Без назви.md` in the selected folder (the new notes folder
+    /// for "All notes" and tags), opened with the cursor in it (ADR 0011, 0013).
+    pub fn new_note(&self) {
+        let (vault, folder) = {
+            let state = self.state.borrow();
+            let Some(vault) = state.vault.clone() else { return };
+            // The folder selected, else the inbox; in a space one of its folders (ADR 0030).
+            let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
+            let folder = match (&state.selection, &state.space_folders) {
+                (SidebarItem::Folder(path), _) => path.clone(),
+                (SidebarItem::Rest, _) | (_, None) => inbox,
+                (_, Some(space)) => space_notes_folder(&inbox, space, &state.folders),
+            };
+            (vault, folder)
+        };
+        let path = unique_note_path(&folder, strings::UNTITLED, |p| vault.join(p).exists());
+        if let Err(e) = FsVault::new(&vault).write_note(&path, "") {
+            eprintln!("knotes: cannot create {path}: {e}");
+            return;
+        }
+        self.open_note(&path, true);
+        if let Some(editing) = self.editing.borrow_mut().as_mut() {
+            editing.document = Document::untitled();
+        }
+        self.highlight_open_note();
+        self.window.makeFirstResponder(Some(&self.note_text));
+    }
+
+    /// Saves and names a new note after its first line: the user leaves the note (another
+    /// note opens, the window closes, the app quits).
+    pub fn leave(&self) {
+        self.write_edits();
+        self.save_embeds();
+        self.name_new_note(true);
+        self.remember_place();
+        self.save_tabs();
+    }
+
+    /// Autosave and File → Save; names a new note whose first line is finished.
+    pub fn save(&self) {
+        self.write_edits();
+        self.save_embeds();
+        self.name_new_note(false);
+    }
+
+    /// Renames the note at `old` to `name` in its folder (a number added when the name is
+    /// taken), with the links to it (ADR 0019). False when nothing moved.
+    pub fn rename_note(&self, old: &str, name: &str) -> bool {
+        let (Some(stem), Some(vault)) = (note_file_stem(name), self.vault()) else { return false };
+        let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
+        // A change of case only is a rename of the same file.
+        let same = |p: &str| p.to_lowercase() == old.to_lowercase();
+        let new = unique_note_path(folder, &stem, |p| !same(p) && vault.join(p).exists());
+        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
+    }
+
+    /// Asks for a folder and moves the note at `path` there, with the links to it (ADR 0019).
+    pub fn move_note_to_chosen_folder(&self, path: &str) {
+        let folders = {
+            let state = self.state.borrow();
+            let mut list = Vec::new();
+            let mut stack = vec![&*state.folders];
+            while let Some(node) = stack.pop() {
+                list.push(node.path.clone());
+                stack.extend(node.children.iter().rev());
+            }
+            list
+        };
+        let name = knotes_app::title_of(path).to_owned();
+        let Some(folder) = rename_dialog::ask_folder(objc2::MainThreadOnly::mtm(&*self.window), &name, &folders) else { return };
+        self.move_note_to(path, &folder);
+    }
+
+    /// Moves the note at `path` into `folder` (`""`: the vault's root), with the links to it.
+    pub fn move_note_to(&self, path: &str, folder: &str) {
+        let Some(vault) = self.vault() else { return };
+        let file = path.rsplit('/').next().unwrap_or(path);
+        let wanted = if folder.is_empty() { file.to_owned() } else { format!("{folder}/{file}") };
+        if wanted == path {
+            return;
+        }
+        let new = unique_note_path(folder, knotes_app::title_of(file), |p| vault.join(p).exists());
+        self.move_notes(Moves::from([(path.to_owned(), new)]));
+    }
+
+    /// Renames the folder at `folder` to `name` (a `/` in it becomes `-`), with the links into
+    /// it (ADR 0019): the folder itself moves, attachments and all. False when nothing moved.
+    pub fn rename_folder(&self, folder: &str, name: &str) -> bool {
+        let name = name.trim().replace('/', "-");
+        let Some(vault) = self.vault().filter(|_| !name.is_empty()) else { return false };
+        let new = match folder.rsplit_once('/') {
+            Some((parent, _)) => format!("{parent}/{name}"),
+            None => name,
+        };
+        if new == folder || (new.to_lowercase() != folder.to_lowercase() && vault.join(&new).exists()) {
+            return false;
+        }
+        let prefix = format!("{folder}/");
+        let moves: Moves = self
+            .state
+            .borrow()
+            .catalog
+            .iter()
+            .filter_map(|e| e.path.strip_prefix(&prefix).map(|rest| (e.path.clone(), format!("{new}/{rest}"))))
+            .collect();
+        if !self.relocate(moves, Some((folder, &new))) {
+            return false;
+        }
+        // The sidebar keeps showing the folder (or the folder inside it) under its new name.
+        let selected = match &self.state.borrow().selection {
+            SidebarItem::Folder(path) if path == folder => Some(new.clone()),
+            SidebarItem::Folder(path) => path.strip_prefix(&prefix).map(|rest| format!("{new}/{rest}")),
+            _ => None,
+        };
+        if let Some(path) = selected {
+            self.state.borrow_mut().selection = SidebarItem::Folder(path);
+        }
+        true
+    }
+
+    /// Moves notes (new path by old), asking first when links would change and rewriting them
+    /// on yes (ADR 0019). The open note is saved first and follows its file. False when
+    /// nothing moved.
+    pub fn move_notes(&self, moves: Moves) -> bool {
+        self.relocate(moves, None)
+    }
+
+    /// `move_notes`, the files moved one by one, or all at once by moving `folder` (from, to).
+    pub(super) fn relocate(&self, moves: Moves, folder: Option<(&str, &str)>) -> bool {
+        let Some(vault_dir) = self.vault() else { return false };
+        self.write_edits();
+        let plan = self.relinks(&moves);
+        let update = plan.links == 0
+            || match rename_dialog::ask_link_update(objc2::MainThreadOnly::mtm(&*self.window), plan.links, plan.edits.len()) {
+                LinkUpdate::Update => true,
+                LinkUpdate::Keep => false,
+                LinkUpdate::Cancel => return false,
+            };
+        let vault = FsVault::new(&vault_dir);
+        let mut moved = Moves::new();
+        if let Some((from, to)) = folder {
+            match vault.move_note(from, to) {
+                Ok(()) => moved = moves.clone(),
+                Err(e) => {
+                    eprintln!("knotes: cannot move {from} to {to}: {e}");
+                    return false;
+                }
+            }
+        }
+        for (from, to) in moves.iter().filter(|_| folder.is_none()) {
+            match vault.move_note(from, to) {
+                Ok(()) => {
+                    moved.insert(from.clone(), to.clone());
+                }
+                Err(e) => eprintln!("knotes: cannot move {from} to {to}: {e}"),
+            }
+        }
+        if moved.is_empty() && folder.is_none() {
+            return false;
+        }
+        let failed = |path: &str| moves.iter().any(|(from, to)| to == path && !moved.contains_key(from));
+        let edits: Vec<&(String, String)> = if update { plan.edits.iter().filter(|(path, _)| !failed(path)).collect() } else { Vec::new() };
+        for (path, text) in &edits {
+            if let Err(e) = vault.write_note(path, text) {
+                eprintln!("knotes: cannot update links in {path}: {e}");
+            }
+        }
+        for (from, to) in &moved {
+            self.state.borrow_mut().history.rename(from, to);
+            self.tabs.borrow_mut().rename(from, to);
+        }
+        self.save_tabs();
+        if let Some(open) = self.open_path() {
+            let path = moved.get(&open).cloned().unwrap_or(open);
+            let edited = edits.iter().find(|(p, _)| *p == path).map(|(_, text)| text.clone());
+            if let Some(editing) = self.editing.borrow_mut().as_mut() {
+                editing.path = path.clone();
+                if let Some(text) = &edited {
+                    editing.document.saved(text);
+                }
+            }
+            self.live_preview.set_path(&path);
+            if let Some(text) = edited {
+                let cursor = self.note_text.selectedRange();
+                self.live_preview.show(&self.note_text, &path, &text);
+                let end = self.note_text.string().length();
+                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
+            }
+        }
+        // The PDF open moved: shown from its new place, at the page it was at.
+        let pdf = self.pdf_path.borrow().clone();
+        if let Some(new) = pdf.and_then(|p| moved.get(&p).cloned()) {
+            let page = self.pdf_view.borrow().as_ref().map_or(1, |v| v.page().0);
+            self.show_pdf(Some(&new));
+            if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+                self.window.layoutIfNeeded();
+                viewer.go_to(page.saturating_sub(1));
+            }
+            self.refresh_panel();
+        }
+        self.update_navigation();
+        true
+    }
+
+    /// Renames the PDF at `old` to `name` (`.pdf` added when left out) in its folder, links to
+    /// it updated as a note's are; false when declined or impossible.
+    pub fn rename_pdf(&self, old: &str, name: &str) -> bool {
+        let name = name.trim();
+        let stem = if name.to_lowercase().ends_with(".pdf") { &name[..name.len() - 4] } else { name };
+        let (Some(stem), Some(vault)) = (note_file_stem(stem), self.vault()) else { return false };
+        let folder = old.rsplit_once('/').map_or(String::new(), |(dir, _)| format!("{dir}/"));
+        // A change of case only is a rename of the same file.
+        let free = |p: &str| p.to_lowercase() == old.to_lowercase() || !vault.join(p).exists();
+        let new = (0..)
+            .map(|n| if n == 0 { format!("{folder}{stem}.pdf") } else { format!("{folder}{stem} {n}.pdf") })
+            .find(|p| free(p))
+            .unwrap_or_default();
+        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
+    }
+
+    /// The link edits `moves` call for, worked out from the index and the files.
+    pub(super) fn relinks(&self, moves: &Moves) -> Relinks {
+        let mut state = self.state.borrow_mut();
+        self.ensure_reader(&mut state);
+        let (Some(reader), Some(before), Some(vault)) = (state.reader.as_ref(), state.links.clone(), state.vault.clone()) else {
+            return Relinks::default();
+        };
+        let after = LinkTargets::new(state.catalog.iter().map(|e| moves.get(&e.path).map_or(e.path.as_str(), String::as_str)));
+        let files = FsVault::new(&vault);
+        plan_relinks(moves, reader, &|p| files.read_text(p).ok(), &MarkdownParser::new(), &*before, &after).unwrap_or_else(|e| {
+            eprintln!("knotes: cannot plan link updates: {e}");
+            Relinks::default()
+        })
+    }
+
+    /// Renames a new note's file after its first line, once (ADR 0011).
+    pub(super) fn name_new_note(&self, leaving: bool) {
+        let text = self.note_text.string().to_string();
+        let old = match self.editing.borrow().as_ref() {
+            Some(editing) if editing.document.wants_name(&text, leaving) => editing.path.clone(),
+            _ => return,
+        };
+        let Some(stem) = note_file_stem(text.lines().next().unwrap_or("")) else { return };
+        let Some(vault) = self.vault() else { return };
+        let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let path = unique_note_path(folder, &stem, |p| p != old && vault.join(p).exists());
+        if path != old
+            && let Err(e) = FsVault::new(&vault).move_note(&old, &path)
+        {
+            eprintln!("knotes: cannot rename {old} to {path}: {e}");
+            return;
+        }
+        if let Some(editing) = self.editing.borrow_mut().as_mut() {
+            editing.path = path.clone();
+            editing.document.named();
+        }
+        self.state.borrow_mut().history.rename(&old, &path);
+        self.live_preview.set_path(&path);
+    }
+
+    /// Writes the editor's text if it has unsaved edits. A change on disk the window has not
+    /// seen yet is kept next to the note as a conflict copy instead of being overwritten.
+    pub(super) fn write_edits(&self) {
+        let Some(vault) = self.state.borrow().vault.clone() else { return };
+        let copy = {
+            let mut editing = self.editing.borrow_mut();
+            let Some(editing) = editing.as_mut().filter(|e| e.document.is_dirty()) else { return };
+            let vault = FsVault::new(&vault);
+            let text = self.note_text.string().to_string();
+            let mut copy = None;
+            if let Ok(disk) = vault.read_text(&editing.path) {
+                match editing.document.on_disk(&disk, &text) {
+                    DiskChange::Conflict => copy = keep_conflict_copy(&vault, &editing.path, &disk),
+                    DiskChange::Ignore if !editing.document.is_dirty() => return,
+                    _ => {}
+                }
+            }
+            write(&vault, editing, &text);
+            copy.map(|copy| (editing.path.clone(), copy))
+        };
+        if let Some((path, copy)) = copy {
+            self.tell_conflict(&path, &copy);
+        }
+    }
+
+    /// Tells where the other version of a note went (ADR 0011), in a sheet on the window that
+    /// can open it.
+    pub(super) fn tell_conflict(&self, path: &str, copy: &str) {
+        if probe::enabled() {
+            println!("conflict-notice: {copy}");
+            return;
+        }
+        let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
+        alert.setMessageText(&NSString::from_str(strings::CONFLICT_TITLE));
+        alert.setInformativeText(&NSString::from_str(&strings::conflict_details(knotes_app::title_of(path), knotes_app::title_of(copy))));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OPEN_COPY));
+        let weak = self.this.borrow().clone();
+        let copy = copy.to_owned();
+        let handler = block2::RcBlock::new(move |response: NSModalResponse| {
+            if response == NSAlertSecondButtonReturn
+                && let Some(window) = weak.upgrade()
+            {
+                window.open_note(&copy, true);
+            }
+        });
+        alert.beginSheetModalForWindow_completionHandler(&self.window, Some(&handler));
+    }
+
+    /// The open note changed on disk: our own save is ignored, a clean editor reloads, and
+    /// edits on both sides keep both versions.
+    pub(super) fn changed_on_disk(&self, path: &str) {
+        let Some(vault) = self.state.borrow().vault.clone() else { return };
+        let Ok(disk) = FsVault::new(&vault).read_text(path) else { return };
+        let text = self.note_text.string().to_string();
+        let change = match self.editing.borrow_mut().as_mut() {
+            Some(editing) => editing.document.on_disk(&disk, &text),
+            None => return,
+        };
+        match change {
+            DiskChange::Ignore => {}
+            DiskChange::Reload => {
+                let cursor = self.note_text.selectedRange();
+                self.live_preview.show(&self.note_text, path, &disk);
+                let end = self.note_text.string().length();
+                self.note_text.setSelectedRange(objc2_foundation::NSRange::new(cursor.location.min(end), 0));
+            }
+            DiskChange::Conflict => {
+                // The editor's text keeps the note's name; the copy holds the other side.
+                let vault = FsVault::new(&vault);
+                let copy = keep_conflict_copy(&vault, path, &disk);
+                if let Some(editing) = self.editing.borrow_mut().as_mut() {
+                    write(&vault, editing, &text);
+                }
+                if let Some(copy) = copy {
+                    self.tell_conflict(path, &copy);
+                }
+            }
+        }
+    }
+}
