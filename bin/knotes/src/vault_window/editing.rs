@@ -26,13 +26,25 @@ pub(super) fn write(vault: &FsVault, editing: &mut Editing, text: &str) -> std::
 /// What could not be written: the note's path and why.
 pub(super) type SaveFailure = (String, std::io::Error);
 
-/// The note's text as the editor takes it, and whether it is read only: a file not in UTF-8
-/// shows as well as it reads and is never written, which would replace its bytes.
-pub(super) fn read_for_editor(vault: &FsVault, path: &str) -> std::io::Result<(String, bool)> {
+/// A note as the editor takes it (`read_for_editor`).
+pub(super) enum NoteRead {
+    /// Its text, to edit.
+    Text(String),
+    /// Not UTF-8: its text as well as it reads, read only (written, it would lose its bytes).
+    NotUtf8(String),
+    /// Not readable (offline in iCloud, not allowed, gone): nothing to show, and read only, or
+    /// what is typed would replace the file.
+    Failed(std::io::Error),
+}
+
+pub(super) fn read_for_editor(vault: &FsVault, path: &str) -> NoteRead {
     match vault.read_utf8(path) {
-        Ok(text) => Ok((text, false)),
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok((vault.read_text(path)?, true)),
-        Err(e) => Err(e),
+        Ok(text) => NoteRead::Text(text),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => match vault.read_text(path) {
+            Ok(text) => NoteRead::NotUtf8(text),
+            Err(e) => NoteRead::Failed(e),
+        },
+        Err(e) => NoteRead::Failed(e),
     }
 }
 
@@ -347,6 +359,20 @@ impl VaultWindow {
         alert.addButtonWithTitle(&NSString::from_str(strings::STAY));
         alert.addButtonWithTitle(&NSString::from_str(strings::DISCARD_CHANGES)).setHasDestructiveAction(true);
         alert.runModal() == NSAlertSecondButtonReturn
+    }
+
+    /// Says the note at `path` is shown read only and empty: it could not be read (`error`).
+    pub(super) fn tell_unreadable(&self, path: &str, error: &std::io::Error) {
+        eprintln!("knotes: cannot read {path}: {error}");
+        if probe::enabled() {
+            println!("unreadable: {path}: {error}");
+            return;
+        }
+        let alert = NSAlert::new(objc2::MainThreadOnly::mtm(&*self.window));
+        alert.setMessageText(&NSString::from_str(&strings::unreadable(knotes_app::title_of(path))));
+        alert.setInformativeText(&NSString::from_str(&strings::unreadable_details(&error.to_string())));
+        alert.addButtonWithTitle(&NSString::from_str(strings::CONFLICT_OK));
+        alert.beginSheetModalForWindow_completionHandler(&self.window, None);
     }
 
     /// Says the note at `path` is shown read only: it is not in UTF-8.
@@ -677,7 +703,12 @@ impl VaultWindow {
     /// edits on both sides keep both versions.
     pub(super) fn changed_on_disk(&self, path: &str) {
         let Some(vault) = self.state.borrow().vault.clone() else { return };
-        let Ok((disk, read_only)) = read_for_editor(&FsVault::new(&vault), path) else { return };
+        let (disk, read_only) = match read_for_editor(&FsVault::new(&vault), path) {
+            NoteRead::Text(text) => (text, false),
+            NoteRead::NotUtf8(text) => (text, true),
+            // Not readable now: what is shown stays.
+            NoteRead::Failed(_) => return,
+        };
         let text = self.note_text.string().to_string();
         let change = match self.editing.borrow_mut().as_mut() {
             Some(editing) => editing.document.on_disk(&disk, &text),

@@ -102,19 +102,26 @@ impl VaultWindow {
         self.previewing.take();
         self.show_pdf(None);
         self.completion.hide();
-        let (text, read_only) = {
+        let read = {
             let mut state = self.state.borrow_mut();
             if record {
                 state.history.visit(path);
             }
             // The file, not the index: the index may not have caught up with the last save yet.
-            state.vault.as_ref().and_then(|v| read_for_editor(&FsVault::new(v), path).ok()).unwrap_or_default()
+            state.vault.as_ref().map_or(NoteRead::Text(String::new()), |v| read_for_editor(&FsVault::new(v), path))
+        };
+        let (text, read_only, failed) = match read {
+            NoteRead::Text(text) => (text, false, None),
+            NoteRead::NotUtf8(text) => (text, true, None),
+            NoteRead::Failed(e) => (String::new(), true, Some(e)),
         };
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text), read_only });
         self.show_note_column();
         self.live_preview.show(&self.note_text, path, &text);
-        if read_only {
-            self.tell_not_utf8(path);
+        match failed {
+            Some(e) => self.tell_unreadable(path, &e),
+            None if read_only => self.tell_not_utf8(path),
+            None => {}
         }
         self.sync_embeds(true);
         // Where it was when its tab was left; words found by a search, below, win.

@@ -3476,3 +3476,19 @@ fn an_open_note_deleted_outside_without_edits_closes_and_comes_back_nowhere() {
     assert!(conflict_copies(vault.path(), "n").is_empty(), "{out}");
     assert!(out.contains("note-column: empty"), "{out}");
 }
+
+#[test]
+fn a_note_that_cannot_be_read_opens_read_only_and_is_never_written() {
+    use std::os::unix::fs::PermissionsExt;
+    // Unreadable (or offline in iCloud), it opened empty and editable: a key typed replaced it.
+    let vault = tempfile::tempdir().unwrap();
+    let file = vault.path().join("n.md");
+    std::fs::write(&file, "secret").unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_TYPE", "typed"), ("KNOTES_PROBE_ACTION", "save")]);
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(out.contains("unreadable: n.md: Permission denied"), "{out}");
+    assert!(out.contains("note-column: note (read only)"), "{out}");
+    assert_eq!(read(vault.path(), "n.md"), "secret");
+}

@@ -285,6 +285,14 @@ pub fn not_utf8(note: &str) -> String {
 pub const NOT_UTF8_DETAILS: &str =
     "Knotes показує її лише для читання, щоб не зіпсувати файл. Щоб редагувати її тут, збережіть її в UTF-8 в іншому редакторі.";
 
+/// A note that could not be read, shown read only and empty.
+pub fn unreadable(note: &str) -> String {
+    format!("Не вдалося прочитати «{note}»")
+}
+pub fn unreadable_details(error: &str) -> String {
+    format!("{error}. Нотатку відкрито лише для читання, щоб набране не замінило файл.")
+}
+
 /// The note open went from the disk with edits not written yet.
 pub const GONE_TITLE: &str = "Нотатку видалили або перенесли поза Knotes";
 pub fn gone_details(copy: &str) -> String {
