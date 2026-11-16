@@ -222,6 +222,9 @@ pub struct Ivars {
     /// A table edit of the live preview's own is under way: not checked against the table's
     /// structure.
     table_editing: Cell<bool>,
+    /// Text typed at the start of a table (a note starting with one): where its line ends, for
+    /// `textDidChange` to break it there, so the table keeps its line.
+    line_above_table: Cell<Option<usize>>,
     /// The note's text view, to draw an image once it is decoded.
     view: RefCell<objc2::rc::Weak<NSTextView>>,
     /// Where the view's top was when far images were last let go (text container
@@ -265,6 +268,7 @@ define_class!(
                 let edit = self.ivars().pending.get();
                 let typed_space = *self.ivars().inserted.borrow() == " ";
                 self.restyle_after_edit(&view);
+                self.break_line_above_table(&view);
                 if let Some(edit) = edit.filter(|e| typed_space && e.removed == 0) {
                     self.complete_task_box(&view, edit.location);
                 }
@@ -451,6 +455,7 @@ impl LivePreview {
             embed_heights: RefCell::new(HashMap::new()),
             undo: RefCell::new(None),
             table_editing: Cell::new(false),
+            line_above_table: Cell::new(None),
             menu_actions: RefCell::new(Vec::new()),
             table_scroll: RefCell::new(HashMap::new()),
             table_widths: RefCell::new(HashMap::new()),
@@ -1448,6 +1453,21 @@ impl LivePreview {
     fn allow_table_edit(&self, view: &NSTextView, range: NSRange, text: &str) -> bool {
         let styled = self.ivars().styled.borrow();
         let (start, end) = (range.location, range.location + range.length);
+        // Above a table: what is removed up to its start must leave it starting a line, or the
+        // line above joins its header (`Intro| a | b |`) and it is a table no more.
+        if range.length > 0 && styled.tables.iter().any(|t| t.range.start == end) {
+            let at_line_start = start == 0 || view.string().characterAtIndex(start - 1) == u16::from(b'\n');
+            return at_line_start || text.ends_with('\n');
+        }
+        // Typed at a table's start (the cursor may stand there, before its first cell): on a line
+        // of its own above it, so that a note starting with a table can get a line before it
+        // (it went into the first cell).
+        if range.length == 0 && !self.ivars().table_editing.get() && styled.tables.iter().any(|t| t.range.start == start) {
+            if !text.ends_with('\n') {
+                self.ivars().line_above_table.set(Some(start + text.encode_utf16().count()));
+            }
+            return true;
+        }
         let Some(table) = styled.tables.iter().find(|t| start < t.range.end && (end > t.range.start || (start == end && start >= t.range.start))) else {
             return true;
         };
@@ -1485,6 +1505,21 @@ impl LivePreview {
             unsafe { objc2_app_kit::NSTextInputClient::insertText_replacementRange(&**view, &NSString::from_str(&text), range) };
             this.ivars().table_editing.set(false);
         });
+    }
+
+    /// Text was typed at the start of a table: a line break after it gives the table its line
+    /// back, the cursor left before the break, so what is typed next goes on the new line. An
+    /// edit of its own, at once (later, the next key would come first).
+    fn break_line_above_table(&self, view: &NSTextView) {
+        let Some(at) = self.ivars().line_above_table.take() else { return };
+        let (range, line_break) = (NSRange::new(at, 0), NSString::from_str("\n"));
+        if view.shouldChangeTextInRange_replacementString(range, Some(&line_break)) {
+            if let Some(storage) = unsafe { view.textStorage() } {
+                storage.replaceCharactersInRange_withString(range, &line_break);
+            }
+            view.didChangeText();
+            view.setSelectedRange(NSRange::new(at, 0));
+        }
     }
 
     /// Tab, Shift+Tab, Return and arrows with the cursor in a table cell (ADR 0021): to the next
@@ -1553,13 +1588,17 @@ impl LivePreview {
     /// arrow from the line above) moves into the nearest cell.
     fn keep_cursor_in_cells(&self, view: &NSTextView) {
         let selection = view.selectedRange();
-        if selection.length != 0 {
+        // Mid-edit the tables still have their old offsets: a key typed at the end of the line
+        // above one put the cursor at its old start, and the next keys went into its first cell.
+        if selection.length != 0 || self.ivars().pending.get().is_some() {
             return;
         }
         let at = selection.location;
         let edge = {
             let styled = self.ivars().styled.borrow();
-            if cell_at(&styled, at).is_some() { None } else { nearest_cell_edge(&styled, at) }
+            // A note starting with a table keeps its cursor at its very start, before the first
+            // cell: the only place to type a line above it.
+            if cell_at(&styled, at).is_some() || (at == 0 && styled.tables.first().is_some_and(|t| t.range.start == 0)) { None } else { nearest_cell_edge(&styled, at) }
         };
         if let Some(edge) = edge.filter(|&e| e != at) {
             view.setSelectedRange(NSRange::new(edge, 0));

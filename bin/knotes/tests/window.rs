@@ -3624,3 +3624,40 @@ fn a_vault_with_a_rules_file_that_cannot_be_read_still_opens() {
     assert!(out.contains("subtitle: 2 нотатки"), "{out}");
     assert!(!out.contains("failed:"), "{out}");
 }
+
+#[test]
+fn typing_at_the_end_of_the_line_above_a_table_stays_on_that_line() {
+    // Mid-edit the table still had its old start: the cursor moved into its first cell after the
+    // first key, and the next keys went there (`IntroX` and `| ZYa |`).
+    let notes = [("a.md", "Intro\n| a | b |\n| --- | --- |\n| 1 | 2 |\n")];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "XYZ"), ("KNOTES_PROBE_TYPE_CHARS", "1"), ("KNOTES_PROBE_RANGE", "5,0"), ("KNOTES_PROBE_ACTION", "save")]);
+    assert_eq!(read(vault.path(), "a.md"), "IntroXYZ\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", "{out}");
+}
+
+#[test]
+fn a_note_starting_with_a_table_gets_a_line_typed_before_it() {
+    // What was typed there went into the first cell (`| Title a |`), Return as a space.
+    let table = "| a | b |\n| --- | --- |\n| 1 | 2 |\n";
+    let typed = |text: &str| {
+        let (vault, out) = probe_notes(&[("a.md", table)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", text), ("KNOTES_PROBE_TYPE_CHARS", "1"), ("KNOTES_PROBE_RANGE", "0,0"), ("KNOTES_PROBE_ACTION", "save")]);
+        (read(vault.path(), "a.md"), out)
+    };
+    let (text, out) = typed("Назва");
+    assert_eq!(text, format!("Назва\n{table}"), "{out}");
+    let (text, out) = typed("\n");
+    assert_eq!(text, format!("\n{table}"), "{out}");
+}
+
+#[test]
+fn the_line_break_above_a_table_is_not_deleted_into_its_header() {
+    // Deleted, the line above joined the header (`Intro| a | b |`): a table no more.
+    let table = "| a | b |\n| --- | --- |\n| 1 | 2 |\n";
+    let deleted = |note: &str, range: &str| {
+        let (vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", ""), ("KNOTES_PROBE_RANGE", range), ("KNOTES_PROBE_ACTION", "save")]);
+        (read(vault.path(), "a.md"), out)
+    };
+    let (text, out) = deleted(&format!("Intro\n{table}"), "5,1");
+    assert_eq!(text, format!("Intro\n{table}"), "{out}");
+    let (text, out) = deleted(&format!("Intro\n\n{table}"), "6,1");
+    assert_eq!(text, format!("Intro\n{table}"), "an empty line above goes: {out}");
+}
