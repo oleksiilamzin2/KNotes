@@ -57,10 +57,12 @@ impl<V: VaultScanner + VaultReader + Sync, P: NoteParser + Sync, D: DocumentText
             index.apply(&chunk.iter().map(|path| IndexChange::Remove { path }).collect::<Vec<_>>())?;
         }
 
-        // Pass 1: register new files without content and with mtime 0 ("not indexed yet").
-        // Every link target is then known before any note's links resolve, and a note that
-        // fails to read below keeps mtime 0 and is retried by the next sync.
-        let placeholders: Vec<VaultFile> = plan.added.iter().map(|f| VaultFile { mtime_ns: 0, ..(*f).clone() }).collect();
+        // Pass 1: register new files without content, their mtime one below the file's ("not
+        // indexed yet"). Every link target is then known before any note's links resolve, and a
+        // note that fails to read below keeps that mtime: the next sync sees it changed and
+        // tries again, the list shows its date (mtime 0 showed 01.01.1970), and the vectors see
+        // it change once read.
+        let placeholders: Vec<VaultFile> = plan.added.iter().map(|f| VaultFile { mtime_ns: f.mtime_ns - 1, ..(*f).clone() }).collect();
         for chunk in placeholders.chunks(REGISTER_BATCH) {
             index.apply(&chunk.iter().map(|file| IndexChange::Upsert { file, note: None }).collect::<Vec<_>>())?;
         }

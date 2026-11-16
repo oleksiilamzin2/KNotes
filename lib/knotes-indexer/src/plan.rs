@@ -11,8 +11,8 @@ pub struct Plan<'a> {
     pub removed: Vec<&'a str>,
 }
 
-/// Merge of two path-sorted lists. An indexed mtime of 0 marks a file registered but not yet
-/// indexed, so it always counts as modified.
+/// Merge of two path-sorted lists. A file registered but not yet indexed has an indexed mtime
+/// other than the file's (one below it; 0 in older indexes), so it counts as modified.
 pub fn plan<'a>(scanned: &'a [VaultFile], indexed: &'a [FileState]) -> Plan<'a> {
     let mut plan = Plan::default();
     let (mut s, mut i) = (scanned.iter().peekable(), indexed.iter().peekable());

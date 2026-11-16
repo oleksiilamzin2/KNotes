@@ -101,3 +101,23 @@ fn a_pdf_s_text_is_indexed_and_found_as_plain_text() {
     assert!(index.tag_counts().unwrap().is_empty(), "no tags from a PDF's text");
     assert!(index.links_from("docs/paper.pdf").unwrap().is_empty(), "no links either");
 }
+
+#[test]
+fn a_note_that_cannot_be_read_yet_keeps_its_date() {
+    use knotes_core::NoteRows;
+    use std::os::unix::fs::MetadataExt;
+    // Registered with mtime 0, it was listed on 01.01.1970 until it could be read.
+    let (vault, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(vault.path(), "locked.md", "secret");
+    let locked = vault.path().join("locked.md");
+    let meta = fs::metadata(&locked).unwrap();
+    let mtime_ns = meta.mtime() * 1_000_000_000 + meta.mtime_nsec();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    let report = sync(vault.path(), &mut index);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(report.failed.len(), 1);
+    let row = index.note_rows().unwrap().into_iter().find(|r| r.path == "locked.md").unwrap();
+    assert!((mtime_ns - row.mtime_ns).abs() <= 1, "{} vs {mtime_ns}", row.mtime_ns);
+    assert_eq!(sync(vault.path(), &mut index).modified, 1, "and is read at the next sync");
+}
