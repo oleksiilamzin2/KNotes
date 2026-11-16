@@ -3130,6 +3130,28 @@ fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_empt
 }
 
 #[test]
+fn a_deleted_note_pdf_or_folder_chosen_in_recently_deleted_shows_as_it_was_and_is_not_edited() {
+    let vault = spaced_vault();
+    let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("no {name}: {out}")).to_string();
+    let show = || probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-show")]);
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);
+    let out = show();
+    assert_eq!(line(&out, "note-column: "), "note (read only)", "the note, not «no document»: {out}");
+    assert_eq!(line(&out, "text: "), "a");
+    assert!(!vault.path().join("Work/a.md").exists(), "shown, not restored, nor written back: {out}");
+    std::fs::create_dir_all(vault.path().join("Docs")).unwrap();
+    std::fs::write(vault.path().join("Docs/x.pdf"), pdf_of(2)).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    knotes_core::TrashStore::trash(&knotes_vault::FsVault::new(vault.path()), "Docs/x.pdf", now).unwrap();
+    let out = show();
+    assert_eq!(line(&out, "note-column: "), "pdf", "the newest first: the PDF, in its viewer: {out}");
+    assert_eq!(line(&out, "pdf-view: "), "Docs/x.pdf 1/2");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-delete=Home")]);
+    let out = show();
+    assert_eq!(line(&out, "note-column: "), "empty: Тека «Home» · 1 нотатка. Відновіть її, щоб відкрити.", "{out}");
+}
+
+#[test]
 fn the_settings_deleted_tab_sets_the_days_the_vault_keeps_them() {
     let vault = spaced_vault();
     let name = vault.path().file_name().unwrap().to_string_lossy().to_string();

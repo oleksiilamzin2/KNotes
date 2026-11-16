@@ -131,6 +131,8 @@ pub struct VaultWindow {
     /// each PDF and let go with it: PDFKit keeps every page it drew while the view lives.
     pdf_view: RefCell<Option<PdfViewer>>,
     pdf_path: RefCell<Option<String>>,
+    /// The recently deleted entry shown, read where it is kept (ADR 0032): nothing open then.
+    previewing: RefCell<Option<TrashEntry>>,
     /// The occurrences found in the note (UTF-16) and the one selected.
     find_matches: RefCell<Vec<(usize, usize)>>,
     /// Set to call off the search under way in the PDF shown.
@@ -336,6 +338,7 @@ impl VaultWindow {
             find_bar,
             pdf_view: RefCell::new(None),
             pdf_path: RefCell::new(None),
+            previewing: RefCell::new(None),
             find_matches: RefCell::new(Vec::new()),
             pdf_find: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
             find_current: Cell::new(None),
@@ -645,6 +648,15 @@ impl VaultWindow {
                 && window.open_path().as_deref() != Some(path.as_str())
             {
                 window.open_note(&path, true);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_select_deleted(move |id| {
+            if let Some(window) = weak.upgrade()
+                && !window.highlighting.get()
+                && !window.shows_deleted(&id)
+            {
+                window.show_deleted(&id);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -1432,12 +1444,20 @@ impl VaultWindow {
 
     /// The note column as it should be: the note, the PDF (its viewer covers it), or, with no
     /// document open, a word saying so and no text view to type into (typed text went nowhere).
+    /// A recently deleted entry shown: its note read only, its PDF, or words for its folder.
     fn show_note_column(&self) {
-        let empty = self.editing.borrow().is_none() && self.pdf_path.borrow().is_none();
-        self.no_document.setHidden(!empty);
-        self.note_text.setEditable(!empty);
+        let previewing = self.previewing.borrow();
+        let pdf = self.pdf_view.borrow().is_some();
+        let note = !pdf && previewing.as_ref().map_or(self.editing.borrow().is_some(), |entry| !entry.folder);
+        let label = match previewing.as_ref() {
+            Some(entry) if entry.folder => strings::deleted_folder_shown(entry.path.rsplit('/').next().unwrap_or(&entry.path), entry.notes),
+            _ => strings::NO_DOCUMENT.to_owned(),
+        };
+        self.no_document.setStringValue(&NSString::from_str(&label));
+        self.no_document.setHidden(note || pdf);
+        self.note_text.setEditable(previewing.is_none() && (note || pdf));
         if let Some(scroll) = self.note_text.enclosingScrollView() {
-            scroll.setHidden(empty || self.pdf_path.borrow().is_some());
+            scroll.setHidden(!note);
         }
     }
 
@@ -1454,7 +1474,7 @@ impl VaultWindow {
         if !self.no_document.isHidden() {
             return format!("empty: {}", self.no_document.stringValue());
         }
-        if self.pdf_path.borrow().is_some() {
+        if self.pdf_view.borrow().is_some() {
             return "pdf".to_owned();
         }
         format!("note ({})", if self.note_text.isEditable() { "editable" } else { "read only" })
@@ -1462,6 +1482,7 @@ impl VaultWindow {
 
     /// The note column empty: no document open.
     fn show_nothing(&self) {
+        self.previewing.take();
         self.leave();
         self.completion.hide();
         if self.find_bar.is_shown() {
@@ -1699,6 +1720,37 @@ impl VaultWindow {
         self.refresh_trash();
     }
 
+    /// Whether the recently deleted entry `id` is the one shown.
+    fn shows_deleted(&self, id: &str) -> bool {
+        self.previewing.borrow().as_ref().is_some_and(|e| e.id == id)
+    }
+
+    /// A recently deleted entry shown where it is kept, to be read: a note's text read only, a
+    /// PDF in its viewer, a folder in words. No tab, no history, nothing written (an edit
+    /// would bring a note back where it was).
+    pub fn show_deleted(&self, id: &str) {
+        let Some(entry) = self.state.borrow().trash.iter().find(|e| e.id == id).cloned() else { return };
+        let Some(kept) = self.vault().and_then(|v| FsVault::new(&v).kept_at(id).ok()) else { return };
+        self.leave();
+        self.completion.hide();
+        if self.find_bar.is_shown() {
+            self.close_find();
+        }
+        *self.editing.borrow_mut() = None;
+        self.show_pdf(None);
+        let pdf = !entry.folder && FileKind::from_path(&entry.path) == FileKind::Pdf;
+        let text = if entry.folder || pdf { String::new() } else { std::fs::read_to_string(&kept).unwrap_or_default() };
+        if pdf {
+            self.show_pdf_file(Some(&kept));
+        }
+        self.live_preview.show(&self.note_text, &entry.path, &text);
+        *self.previewing.borrow_mut() = Some(entry);
+        self.show_note_column();
+        self.scroll_note_to(0);
+        self.refresh_panel();
+        self.update_navigation();
+    }
+
     /// The recently deleted read again (the watcher does not see them), the sidebar's row and
     /// their list shown again.
     fn refresh_trash(&self) {
@@ -1830,6 +1882,7 @@ impl VaultWindow {
             self.open_pdf(path, None, record);
             return;
         }
+        self.previewing.take();
         self.remember_place();
         self.show_pdf(None);
         self.leave();
@@ -1863,6 +1916,7 @@ impl VaultWindow {
 
     /// Opens the PDF at `path` in place of the note (ADR 0022), at page `page` (from 1).
     pub fn open_pdf(&self, path: &str, page: Option<u32>, record: bool) {
+        self.previewing.take();
         self.remember_place();
         self.leave();
         self.completion.hide();
@@ -1903,9 +1957,16 @@ impl VaultWindow {
     /// Shows the PDF at `path` in the note column, or the note again (`None`). The last PDF's
     /// viewer goes, with every page it drew.
     fn show_pdf(&self, path: Option<&str>) {
+        let file = path.zip(self.vault()).map(|(p, vault)| vault.join(p));
+        let shown = self.show_pdf_file(file.as_deref());
+        *self.pdf_path.borrow_mut() = path.filter(|_| shown).map(str::to_owned);
+    }
+
+    /// Shows the PDF `file` in its viewer in the note column, or none; whether it shows.
+    fn show_pdf_file(&self, file: Option<&Path>) -> bool {
         self.pdf_view.borrow_mut().take();
         let mtm = objc2::MainThreadOnly::mtm(&*self.window);
-        let viewer = path.and_then(|p| PdfViewer::new(mtm, &self.vault()?.join(p), self.find_bar.column.bounds()));
+        let viewer = file.and_then(|f| PdfViewer::new(mtm, f, self.find_bar.column.bounds()));
         let shown = viewer.is_some();
         if let Some(viewer) = viewer {
             let weak = self.this.borrow().clone();
@@ -1921,12 +1982,13 @@ impl VaultWindow {
         if let Some(scroll) = self.note_text.enclosingScrollView() {
             scroll.setHidden(shown);
         }
-        *self.pdf_path.borrow_mut() = path.filter(|_| shown).map(str::to_owned);
+        shown
     }
 
     /// `doc.pdf 2/3` for the PDF shown and its page, or `hidden` (probe mode).
     pub fn describe_pdf(&self) -> String {
-        let (Some(path), Some(viewer)) = (self.pdf_path.borrow().clone(), self.pdf_view.borrow().as_ref().map(|v| v.page())) else { return "hidden".to_owned() };
+        let path = self.pdf_path.borrow().clone().or_else(|| self.previewing.borrow().as_ref().map(|e| e.path.clone()));
+        let (Some(path), Some(viewer)) = (path, self.pdf_view.borrow().as_ref().map(|v| v.page())) else { return "hidden".to_owned() };
         format!("{path} {}/{}", viewer.0, viewer.1)
     }
 
@@ -2686,7 +2748,14 @@ impl VaultWindow {
                 let stem = if name.to_lowercase().ends_with(".pdf") { &name[..name.len() - 4] } else { name };
                 self.toolbar_delegate.set_note_title(stem, true);
             }
-            (None, None) => self.toolbar_delegate.set_note_title("", false),
+            // A recently deleted entry shown: its name, not to be renamed.
+            (None, None) => {
+                let name = self.previewing.borrow().as_ref().map(|e| {
+                    let name = e.path.rsplit('/').next().unwrap_or(&e.path);
+                    if e.folder { name.to_owned() } else { knotes_app::title_of(name).to_owned() }
+                });
+                self.toolbar_delegate.set_note_title(name.as_deref().unwrap_or(""), false);
+            }
         }
     }
 
@@ -2721,6 +2790,14 @@ impl VaultWindow {
     }
 
     fn refresh_list(&self) {
+        // A recently deleted entry shown goes with their list, or when restored or purged.
+        let gone = self.previewing.borrow().as_ref().is_some_and(|shown| {
+            let state = self.state.borrow();
+            state.selection != SidebarItem::Deleted || !state.trash.iter().any(|e| e.id == shown.id)
+        });
+        if gone {
+            self.show_nothing();
+        }
         // The recently deleted: their entries, the newest first (ADR 0032).
         if self.state.borrow().selection == SidebarItem::Deleted {
             let (rows, trash) = {
@@ -2732,6 +2809,7 @@ impl VaultWindow {
             self.table.reloadData();
             self.window.setTitle(&NSString::from_str(strings::RECENTLY_DELETED));
             self.window.setSubtitle(&NSString::from_str(&strings::entries_count(trash.len())));
+            self.highlight_open_note();
             return;
         }
         let mut state = self.state.borrow_mut();
@@ -2797,7 +2875,12 @@ impl VaultWindow {
     /// Selects the open note's row (it moves when the note is saved), or none if it is not listed.
     fn highlight_open_note(&self) {
         self.highlighting.set(true);
-        match self.open_path().and_then(|p| self.list.row_of(&p)) {
+        let shown = self.previewing.borrow().as_ref().map(|e| e.id.clone());
+        let row = match shown {
+            Some(id) => self.list.row_of_deleted(&id),
+            None => self.open_path().and_then(|p| self.list.row_of(&p)),
+        };
+        match row {
             Some(row) => self.table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false),
             // SAFETY: a nil sender is allowed.
             None => unsafe { self.table.deselectAll(None) },

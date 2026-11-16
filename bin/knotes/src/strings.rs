@@ -45,6 +45,11 @@ pub fn deleted_folder(notes: usize) -> String {
     format!("тека · {notes} {}", knotes_app::plural_uk(notes as u64, "нотатка", "нотатки", "нотаток"))
 }
 
+/// A deleted folder chosen in their list: "Тека «Work» · 3 нотатки. Відновіть її, щоб відкрити."
+pub fn deleted_folder_shown(name: &str, notes: usize) -> String {
+    format!("Тека «{name}» · {notes} {}. Відновіть її, щоб відкрити.", knotes_app::plural_uk(notes as u64, "нотатка", "нотатки", "нотаток"))
+}
+
 /// "Видалити теку «Work» і 3 нотатки?"
 pub fn delete_folder_question(name: &str, notes: usize) -> String {
     format!("Видалити теку «{name}» і {notes} {}?", knotes_app::plural_uk(notes as u64, "нотатка", "нотатки", "нотаток"))

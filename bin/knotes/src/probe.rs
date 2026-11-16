@@ -608,7 +608,11 @@ pub fn rename_requested() -> Option<String> {
 pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: &objc2_app_kit::NSTableView) {
     let Ok(action) = std::env::var("KNOTES_PROBE_ACTION") else { return };
     // `list-delete`: Delete on the selected note; `list-restore`, `list-purge`, `list-empty`: the
-    // recently deleted's items on their first row (ADR 0032).
+    // recently deleted's items on their first row (ADR 0032); `list-show`: the first row chosen.
+    if action == "list-show" {
+        table.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(0), false);
+        return;
+    }
     let (chosen, name) = match (action.strip_prefix("list-rename="), action.as_str()) {
         (Some(name), _) => (objc2::sel!(renameNote:), Some(name.to_owned())),
         (None, a) if a.starts_with("list-move=") => (objc2::sel!(moveNote:), None),

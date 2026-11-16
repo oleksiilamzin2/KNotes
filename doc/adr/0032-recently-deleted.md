@@ -35,6 +35,10 @@ The owner chose (2026-11-16): kept in the vault; the days set per vault; named �
   foot while there is any, listing the entries newest first (each with where it was and when
   it went), with «Відновити» and «Видалити назавжди», and «Очистити» for them all. A note open
   when deleted closes; its tab goes.
+- **An entry chosen there is shown** where it is kept, to be read: a note's text read only, a
+  PDF in its viewer, a folder in words (its name, its notes, restore it to open them). No tab,
+  no history, nothing written: an edit would bring a note back where it was, so a note is
+  restored to be edited (as Apple Notes asks).
 - One trait, `TrashStore` (knotes-core), `FsVault` keeping it.
 
 ## Consequences

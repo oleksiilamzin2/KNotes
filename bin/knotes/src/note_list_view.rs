@@ -81,6 +81,8 @@ pub struct Ivars {
     deleted: RefCell<Arc<Vec<TrashEntry>>>,
     on_delete: RefCell<Option<OnSelect>>,
     on_restore: RefCell<Option<OnSelect>>,
+    /// A recently deleted entry's row chosen: its id.
+    on_select_deleted: RefCell<Option<OnSelect>>,
     on_purge: RefCell<Option<OnSelect>>,
     on_empty: RefCell<Option<OnEmpty>>,
     clock: Cell<Clock>,
@@ -214,8 +216,12 @@ define_class!(
         #[unsafe(method(tableViewSelectionDidChange:))]
         fn selection_did_change(&self, notification: &NSNotification) {
             let Some(table) = notification.object().and_then(|o| o.downcast::<NSTableView>().ok()) else { return };
-            let path = (table.selectedRow() >= 0).then(|| self.path_at(table.selectedRow() as usize)).flatten();
-            if let (Some(path), Some(callback)) = (path, self.ivars().on_select.borrow().as_ref()) {
+            let Ok(row) = usize::try_from(table.selectedRow()) else { return };
+            if let Some(entry) = self.deleted_at(row) {
+                if let Some(callback) = self.ivars().on_select_deleted.borrow().as_ref() {
+                    callback(entry.id);
+                }
+            } else if let (Some(path), Some(callback)) = (self.path_at(row), self.ivars().on_select.borrow().as_ref()) {
                 callback(path);
             }
         }
@@ -242,6 +248,7 @@ impl NoteListSource {
             deleted: RefCell::new(Arc::new(Vec::new())),
             on_delete: RefCell::new(None),
             on_restore: RefCell::new(None),
+            on_select_deleted: RefCell::new(None),
             on_purge: RefCell::new(None),
             on_empty: RefCell::new(None),
             clock: Cell::new(now()),
@@ -268,6 +275,17 @@ impl NoteListSource {
 
     pub fn on_restore(&self, callback: impl Fn(String) + 'static) {
         *self.ivars().on_restore.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// A recently deleted entry's row chosen, with its id.
+    pub fn on_select_deleted(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_select_deleted.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The row of the recently deleted entry `id`, if listed.
+    pub fn row_of_deleted(&self, id: &str) -> Option<usize> {
+        let deleted = self.ivars().deleted.borrow();
+        self.ivars().items.borrow().iter().position(|item| matches!(item, ListItem::Deleted(i) if deleted.get(*i as usize).is_some_and(|e| e.id == id)))
     }
 
     pub fn on_purge(&self, callback: impl Fn(String) + 'static) {
