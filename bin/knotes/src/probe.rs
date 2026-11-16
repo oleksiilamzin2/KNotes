@@ -1561,6 +1561,7 @@ fn report_note(window: &VaultWindow) {
     println!("pdf-selection: {}", window.pdf_selection().replace('\n', "⏎"));
     println!("pdf-texts-kept: {}", window.pdf_texts_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));
     println!("pdf-pages-kept: {}", window.pdf_pages_kept().iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" "));
+    println!("pdf-drawings: {}", window.pdf_drawings());
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");
     }

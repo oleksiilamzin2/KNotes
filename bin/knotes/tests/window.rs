@@ -2143,6 +2143,10 @@ fn the_pdf_viewer_keeps_only_the_page_shown_and_two_either_side() {
     assert!(out.contains("pdf-view: long.pdf 15/30"), "{out}");
     let kept = pages_kept(&out);
     assert!(kept.contains(&15) && kept.iter().all(|p| (13..=17).contains(p)), "{kept:?}");
+    // Only those near the top and near the page linked to were ever drawn: before the viewer was
+    // in its window, every page counted as visible, and all 30 were set to be drawn.
+    let drawings: usize = out.lines().find_map(|l| l.strip_prefix("pdf-drawings: ")).unwrap_or_else(|| panic!("{out}")).parse().unwrap();
+    assert!(drawings <= 10, "{drawings} pages drawn: {out}");
     let (_vault, out) = probe_images(&notes, &[("long.pdf", &long)], &[env[0], env[1], env[2], ("KNOTES_PROBE_PDF_GO", "25")]);
     let kept = pages_kept(&out);
     assert!(out.contains("pdf-view: long.pdf 25/30") && kept.contains(&25) && kept.iter().all(|p| (23..=27).contains(p)), "{kept:?} {out}");

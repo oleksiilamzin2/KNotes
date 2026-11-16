@@ -239,6 +239,11 @@ impl VaultWindow {
         self.pdf_view.borrow().as_ref().map(PdfViewer::kept).unwrap_or_default()
     }
 
+    /// How many of the PDF's pages have been set to be drawn since it opened (probe mode).
+    pub fn pdf_drawings(&self) -> usize {
+        self.pdf_view.borrow().as_ref().map_or(0, PdfViewer::drawings)
+    }
+
     /// Shows page `page` (from 1) of the PDF shown (probe mode).
     pub fn pdf_go_to(&self, page: usize) {
         if let Some(viewer) = self.pdf_view.borrow().as_ref() {

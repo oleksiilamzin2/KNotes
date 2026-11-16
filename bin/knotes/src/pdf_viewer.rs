@@ -93,6 +93,8 @@ pub struct PagesIvars {
     /// puts it off).
     page_label: RefCell<Option<Retained<NSView>>>,
     label_shows: Cell<u64>,
+    /// How many pages have been set to be drawn since the viewer was made (probe mode).
+    drawings: Cell<usize>,
 }
 
 define_class!(
@@ -292,7 +294,7 @@ impl PdfPages {
     /// (a fraction), or how many points above it, in the space before it.
     fn anchor_at_top(&self) -> Option<(usize, f64, bool)> {
         let frames = self.ivars().frames.borrow();
-        let y = self.visibleRect().origin.y + self.enclosingScrollView().map_or(0.0, |s| s.contentInsets().top);
+        let y = self.shown()?.origin.y + self.enclosingScrollView().map_or(0.0, |s| s.contentInsets().top);
         let page = frames.iter().position(|f| f.origin.y + f.size.height > y).or(frames.len().checked_sub(1))?;
         let f = frames[page];
         Some(if y < f.origin.y { (page, y - f.origin.y, false) } else { (page, (y - f.origin.y) / f.size.height, true) })
@@ -371,9 +373,16 @@ impl PdfPages {
         }
     }
 
+    /// The part of the pages on screen; none before they are in a window. Out of one AppKit
+    /// gives a visible rect not clipped at all (±2⁴⁴ points): the canvas sized to it went past
+    /// Auto Layout's limits, and every page, being in it, was drawn as the viewer was made.
+    fn shown(&self) -> Option<NSRect> {
+        self.window().map(|_| self.visibleRect())
+    }
+
     /// The canvas onto the visible part, then the page shown and the pages kept.
     fn follow(&self) {
-        let visible = self.visibleRect();
+        let Some(visible) = self.shown() else { return };
         if let Some(canvas) = self.ivars().canvas.borrow().as_ref() {
             canvas.setFrame(visible);
             canvas.setNeedsDisplay(true);
@@ -431,7 +440,7 @@ impl PdfPages {
         if frames.is_empty() {
             return;
         }
-        let visible = self.visibleRect();
+        let Some(visible) = self.shown() else { return };
         let top = visible.origin.y + self.enclosingScrollView().map_or(0.0, |s| s.contentInsets().top) + 1.0;
         if !self.ivars().jumped.get() {
             let at_top = frames.iter().position(|f| f.origin.y + f.size.height + GAP > top).unwrap_or(frames.len() - 1);
@@ -453,6 +462,7 @@ impl PdfPages {
         let mut stand_ins = self.ivars().stand_ins.borrow_mut();
         for (i, frame) in frames.iter().enumerate().take(last + 1).skip(first) {
             images.entry(i).or_insert_with(|| {
+                self.ivars().drawings.set(self.ivars().drawings.get() + 1);
                 let size = NSSize::new(frame.size.width * zoom, frame.size.height * zoom);
                 let this = objc2::rc::Weak::new(self);
                 let image = DeferredImage::new(self.ivars().file.clone(), size, Some(i as u32 + 1), move || {
@@ -581,7 +591,7 @@ impl PdfPages {
 
     /// Keeps the text of the pages in view and of the pages selected; lets the others go.
     fn keep_texts(&self) {
-        let visible = self.visibleRect();
+        let visible = self.shown().unwrap_or_default();
         let selected = self.ordered().map(|((first, _), (last, _))| first..=last);
         let frames = self.ivars().frames.borrow();
         self.ivars().texts.borrow_mut().retain(|&i, _| frames.get(i).is_some_and(|f| intersects(*f, visible)) || selected.as_ref().is_some_and(|s| s.contains(&i)));
@@ -685,6 +695,7 @@ impl PdfViewer {
             found_current: Cell::new(None),
             page_label: RefCell::new(None),
             label_shows: Cell::new(0),
+            drawings: Cell::new(0),
         };
         let width = scroll.contentSize().width;
         let start = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 0.0));
@@ -885,6 +896,11 @@ impl PdfViewer {
         let mut kept: Vec<usize> = self.pages.ivars().images.borrow().keys().map(|i| i + 1).collect();
         kept.sort_unstable();
         kept
+    }
+
+    /// How many pages have been set to be drawn since it was made (probe mode).
+    pub fn drawings(&self) -> usize {
+        self.pages.ivars().drawings.get()
     }
 }
 
