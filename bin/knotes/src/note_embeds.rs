@@ -262,6 +262,15 @@ impl NoteEmbeds {
         self.shown.borrow().iter().find(|s| s.key == key).map(|s| (s.path.clone(), s.subpath.clone()))
     }
 
+    /// The centre of the `n`th embed's open button and a point on its note's text, in the note
+    /// view's coordinates (probe mode).
+    pub fn probe_points(&self, n: usize) -> Option<(NSPoint, NSPoint)> {
+        let shown = self.shown.borrow();
+        let s = shown.get(n)?;
+        let (b, v) = (s.button.frame(), s.view.frame());
+        Some((NSPoint::new(b.origin.x + b.size.width / 2.0, b.origin.y + b.size.height / 2.0), NSPoint::new(v.origin.x + 4.0, v.origin.y + v.size.height / 2.0)))
+    }
+
     /// The key of the `n`th embed shown (probe mode).
     pub fn key(&self, n: usize) -> Option<String> {
         self.shown.borrow().get(n).map(|s| s.key.clone())

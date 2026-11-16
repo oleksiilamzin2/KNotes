@@ -1256,6 +1256,8 @@ fn an_embed_s_button_at_its_top_right_opens_its_note_at_its_part() {
     let b = &boxes[0];
     assert!(button[0] + button[2] <= b[0] + b[2] && button[0] > b[0] + b[2] - 40.0 && button[1] >= b[1] && button[1] < b[1] + 20.0, "top right: {button:?} in {b:?}");
     assert!(text[0] + text[2] <= button[0], "the text keeps clear of it: {text:?} {button:?}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_HOVER_EMBED", "0")]);
+    assert!(out.contains("hover-embed-open: hand\n") && out.contains("hover-embed-text: text\n"), "a hand over the button, not over the note's text: {out}");
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_EMBED_OPEN", "0")]);
     assert!(out.contains("note: b.md |"), "{out}");
     assert!(out.lines().any(|l| l.starts_with("note-top: ## Part")), "at its section: {out}");

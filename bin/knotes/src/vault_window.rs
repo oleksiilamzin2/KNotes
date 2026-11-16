@@ -1457,6 +1457,11 @@ impl VaultWindow {
                 // SAFETY: AppKit's appearance name constant lives for the whole process.
                 objc2_app_kit::NSAppearanceCustomization::setAppearance(&*self.window, objc2_app_kit::NSAppearance::appearanceNamed(unsafe { objc2_app_kit::NSAppearanceNameDarkAqua }).as_deref());
             }
+            if let Some((button, text)) = std::env::var("KNOTES_PROBE_HOVER_EMBED").ok().and_then(|n| n.parse().ok()).and_then(|n| self.embeds.probe_points(n)) {
+                let in_window = |p| self.note_text.convertPoint_toView(p, None);
+                println!("hover-embed-open: {}", self.note_text.pointer(in_window(button)));
+                println!("hover-embed-text: {}", self.note_text.pointer(in_window(text)));
+            }
             if let Some(at) = std::env::var("KNOTES_PROBE_HOVER").ok().and_then(|a| a.parse().ok()) {
                 println!("hover: {}", if self.live_preview.clickable(at) { "hand" } else { "text" });
             }

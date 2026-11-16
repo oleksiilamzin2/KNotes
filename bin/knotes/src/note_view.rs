@@ -150,6 +150,14 @@ define_class!(
 
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
+            // Over a view lying on the text (an embedded note's, its open button), the text's own
+            // pointer would win over it: a button shows a hand, an embedded note its own.
+            if let Some(view) = self.subview_at(event.locationInWindow()) {
+                if is_button(&view) {
+                    NSCursor::pointingHandCursor().set();
+                }
+                return;
+            }
             // SAFETY: forwarding the same event to the superclass implementation.
             let _: () = unsafe { msg_send![super(self), mouseMoved: event] };
             self.pointer_at(Some(self.convertPoint_fromView(event.locationInWindow(), None)));
@@ -195,7 +203,10 @@ define_class!(
         /// The text view would set the I-beam over a link too.
         #[unsafe(method(cursorUpdate:))]
         fn cursor_update(&self, event: &NSEvent) {
-            if self.image_edge(event.locationInWindow()).is_some() {
+            let over_button = self.subview_at(event.locationInWindow()).is_some_and(|view| is_button(&view));
+            if over_button {
+                NSCursor::pointingHandCursor().set();
+            } else if self.image_edge(event.locationInWindow()).is_some() {
                 resize_cursor().set();
             } else if self.over_clickable(event.locationInWindow()) {
                 NSCursor::pointingHandCursor().set();
@@ -453,6 +464,29 @@ impl NoteTextView {
     }
 
     /// Whether the point (window coordinates) is over something a plain click acts on.
+    /// What the pointer shows at a point in window coordinates: `hand` over a button lying on
+    /// the text (an embedded note's open button) or what a click acts on, `resize` over an
+    /// image's edge, else `text`; over an embedded note's view, what that view shows.
+    pub fn pointer(&self, in_window: NSPoint) -> &'static str {
+        match self.subview_at(in_window) {
+            Some(view) if is_button(&view) => "hand",
+            Some(view) => view.downcast::<NoteTextView>().map_or("text", |inner| inner.pointer(in_window)),
+            None if self.image_edge(in_window).is_some() => "resize",
+            None if self.over_clickable(in_window) => "hand",
+            None => "text",
+        }
+    }
+
+    /// The view lying on the text at a point in window coordinates (an embedded note's view or
+    /// open button), if any.
+    fn subview_at(&self, in_window: NSPoint) -> Option<Retained<NSView>> {
+        // SAFETY: the view's superview, if it has one (the scroll view's clip view).
+        let superview = unsafe { self.superview() }?;
+        let hit = self.hitTest(superview.convertPoint_fromView(in_window, None))?;
+        let itself = std::ptr::eq(&*hit as *const NSView as *const u8, self as *const Self as *const u8);
+        (!itself).then_some(hit)
+    }
+
     fn over_clickable(&self, in_window: NSPoint) -> bool {
         let hover = self.ivars().on_hover.borrow();
         hover.as_ref().zip(self.character_under(in_window)).is_some_and(|(hover, index)| hover(index))
@@ -492,6 +526,11 @@ impl NoteTextView {
         let rect = self.convertRect_fromView(window.convertRectFromScreen(on_screen), None);
         self.scrollPoint(NSPoint::new(0.0, (rect.origin.y - self.textContainerInset().height).max(0.0)));
     }
+}
+
+/// Whether `view` is a button (it shows a hand).
+fn is_button(view: &NSView) -> bool {
+    view.isKindOfClass(<objc2_app_kit::NSButton as objc2::ClassType>::class())
 }
 
 /// The pointer over an image's right edge: a frame's right side being resized.
