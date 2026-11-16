@@ -145,15 +145,10 @@ impl FolderRulesStore for FsVault {
         Ok(found)
     }
 
-    /// Writes a temporary file next to the target and renames it over, so readers (and other
-    /// devices syncing the vault) never see half a file.
+    /// Writes a temporary file next to the target and renames it over (`replace_file`).
     fn write_rules(&self, folder: &str, text: &str) -> io::Result<()> {
         let dir = self.root.join(folder);
-        let tmp = dir.join(format!("{RULES_FILE}.tmp"));
-        fs::write(&tmp, text)?;
-        fs::rename(&tmp, dir.join(RULES_FILE)).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })?;
+        replace_file(&dir.join(RULES_FILE), &dir.join(format!("{RULES_FILE}.tmp")), text)?;
         let old = dir.join(OLD_RULES_FILE);
         if old.is_file() {
             fs::remove_file(old)?;
@@ -261,16 +256,77 @@ impl FsVault {
 
 impl NoteWriter for FsVault {
     /// Writes a hidden temporary file next to the note (the scanner and the watcher skip it)
-    /// and renames it over the note.
+    /// and renames it over the note (`replace_file`).
     fn write_note(&self, path: &str, text: &str) -> io::Result<()> {
         let target = self.inside(path)?;
         let dir = target.parent().unwrap_or(&self.root);
         fs::create_dir_all(dir)?;
         let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("note");
-        let tmp = dir.join(format!(".{name}.knotes-tmp"));
-        fs::write(&tmp, text)?;
-        fs::rename(&tmp, &target).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
+        replace_file(&target, &dir.join(format!(".{name}.knotes-tmp")), text)
     }
+}
+
+/// Writes `text` into `tmp` and renames it over `target`, so readers (and other devices syncing
+/// the vault) never see half a file. What the file it replaces holds besides its text stays: its
+/// permissions, creation date, extended attributes (Finder's tags among them) and ACL. The text
+/// reaches the disk before the rename, so a crash leaves the old file or the new one, never an
+/// empty one.
+fn replace_file(target: &Path, tmp: &Path, text: &str) -> io::Result<()> {
+    let written = (|| {
+        let mut file = fs::File::create(tmp)?;
+        io::Write::write_all(&mut file, text.as_bytes())?;
+        keep_metadata(target, &file);
+        sync(&file)
+    })();
+    written.and_then(|()| fs::rename(tmp, target)).inspect_err(|_| {
+        let _ = fs::remove_file(tmp);
+    })
+}
+
+/// Gives `file` the permissions, creation date, extended attributes and ACL of the file at
+/// `target`, if there is one; what cannot be kept is left as the new file has it.
+#[cfg(target_os = "macos")]
+fn keep_metadata(target: &Path, file: &fs::File) {
+    use std::os::fd::AsRawFd;
+    use std::os::macos::fs::FileTimesExt;
+    const COPYFILE_ACL: u32 = 1 << 0;
+    const COPYFILE_XATTR: u32 = 1 << 2;
+    unsafe extern "C" {
+        fn fcopyfile(from: i32, to: i32, state: *mut std::ffi::c_void, flags: u32) -> i32;
+    }
+    let Ok(meta) = fs::metadata(target) else { return };
+    let _ = file.set_permissions(meta.permissions());
+    if let Ok(created) = meta.created() {
+        let _ = file.set_times(fs::FileTimes::new().set_created(created));
+    }
+    // Not COPYFILE_STAT: it would give the new text the old modification time.
+    if let Ok(old) = fs::File::open(target) {
+        // SAFETY: two open descriptors that outlive the call; a null state is allowed.
+        unsafe { fcopyfile(old.as_raw_fd(), file.as_raw_fd(), std::ptr::null_mut(), COPYFILE_ACL | COPYFILE_XATTR) };
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keep_metadata(target: &Path, file: &fs::File) {
+    if let Ok(meta) = fs::metadata(target) {
+        let _ = file.set_permissions(meta.permissions());
+    }
+}
+
+/// The file's data on the disk. `fsync`, not the drive-cache flush `File::sync_all` makes on
+/// macOS (F_FULLFSYNC): that costs milliseconds a file, and a rename rewrites the links of many
+/// notes on the main thread (SQLite makes the same choice by default).
+#[cfg(target_os = "macos")]
+fn sync(file: &fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn fsync(fd: i32) -> i32;
+    }
+    // SAFETY: an open descriptor.
+    if unsafe { fsync(file.as_raw_fd()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync(file: &fs::File) -> io::Result<()> {
+    file.sync_data()
 }
