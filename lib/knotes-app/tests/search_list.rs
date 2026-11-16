@@ -69,7 +69,7 @@ fn a_search_in_a_space_gives_its_finds_then_the_rest_of_the_vault_s_under_a_head
         ContentMatch { path: "Home/b.md".into(), snippet: "b".into() },
     ];
     let items = search_list(&rows, &ListFilter::All, &ListSettings::default(), &[], &content, Some(SpaceList::Space(&work)));
-    let shown: Vec<String> = items.iter().map(|i| match i { ListItem::Found(n, _) | ListItem::Note(n) => rows[*n as usize].path.clone(), ListItem::Rest => "[rest]".into(), ListItem::Header(_) => "?".into() }).collect();
+    let shown: Vec<String> = items.iter().map(|i| match i { ListItem::Found(n, _) | ListItem::Note(n) => rows[*n as usize].path.clone(), ListItem::Rest => "[rest]".into(), ListItem::Header(_) | ListItem::Deleted(_) => "?".into() }).collect();
     assert_eq!(shown, ["Work/a.md", "[rest]", "top.md", "Home/b.md"], "the space's first, each part in the search's order");
     let rest = search_list(&rows, &ListFilter::All, &ListSettings::default(), &[], &content, Some(SpaceList::Rest(&work)));
     assert_eq!(rest.len(), 2, "outside only: {rest:?}");

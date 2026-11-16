@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use knotes_app::{Clock, DateGroup, ListItem, TimeStyle, days_from_civil, space_mark, time_style, title_of};
 use knotes_spaces::Spaces;
-use knotes_core::NoteRow;
+use knotes_core::{NoteRow, TrashEntry};
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuItem,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutConstraintOrientation, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem,
     NSScrollView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
     NSPasteboardItem, NSPasteboardWriting, NSTextFieldDelegate, NSTextView, NSUserInterfaceItemIdentification, NSView,
 };
@@ -57,6 +57,7 @@ impl Formatters {
 }
 
 type OnSelect = Box<dyn Fn(String)>;
+type OnEmpty = Box<dyn Fn()>;
 type OnRename = Box<dyn Fn(String, String)>;
 
 pub struct Ivars {
@@ -75,6 +76,13 @@ pub struct Ivars {
     items: RefCell<Vec<ListItem>>,
     /// The vault's spaces and the window's, for the marks of other spaces' notes (ADR 0030).
     spaces: RefCell<(Arc<Spaces>, Option<String>)>,
+    /// The recently deleted the list shows (ADR 0032), and what their rows' menu calls: a note
+    /// deleted (its path), an entry restored or deleted for good (its id), all emptied.
+    deleted: RefCell<Arc<Vec<TrashEntry>>>,
+    on_delete: RefCell<Option<OnSelect>>,
+    on_restore: RefCell<Option<OnSelect>>,
+    on_purge: RefCell<Option<OnSelect>>,
+    on_empty: RefCell<Option<OnEmpty>>,
     clock: Cell<Clock>,
     formatters: Formatters,
 }
@@ -121,6 +129,14 @@ define_class!(
 
     unsafe impl NSTextFieldDelegate for NoteListSource {}
 
+    unsafe impl NSMenuDelegate for NoteListSource {
+        /// The row's menu: a note's, or a recently deleted entry's.
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            self.fill_menu(menu);
+        }
+    }
+
     impl NoteListSource {
         #[unsafe(method(renameNote:))]
         fn rename_note(&self, _sender: Option<&AnyObject>) {
@@ -142,6 +158,38 @@ define_class!(
             let path = self.menu_row().and_then(|row| self.path_at(row));
             if let (Some(path), Some(callback)) = (path, self.ivars().on_move.borrow().as_ref()) {
                 callback(path);
+            }
+        }
+
+        /// A note's menu: into the recently deleted (ADR 0032).
+        #[unsafe(method(deleteNote:))]
+        fn delete_note(&self, _sender: Option<&AnyObject>) {
+            let path = self.menu_row().and_then(|row| self.path_at(row));
+            if let (Some(path), Some(callback)) = (path, self.ivars().on_delete.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
+        #[unsafe(method(restoreDeleted:))]
+        fn restore_deleted(&self, _sender: Option<&AnyObject>) {
+            let id = self.menu_row().and_then(|row| self.deleted_at(row)).map(|e| e.id);
+            if let (Some(id), Some(callback)) = (id, self.ivars().on_restore.borrow().as_ref()) {
+                callback(id);
+            }
+        }
+
+        #[unsafe(method(purgeDeleted:))]
+        fn purge_deleted(&self, _sender: Option<&AnyObject>) {
+            let id = self.menu_row().and_then(|row| self.deleted_at(row)).map(|e| e.id);
+            if let (Some(id), Some(callback)) = (id, self.ivars().on_purge.borrow().as_ref()) {
+                callback(id);
+            }
+        }
+
+        #[unsafe(method(emptyDeleted:))]
+        fn empty_deleted(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_empty.borrow().as_ref() {
+                callback();
             }
         }
 
@@ -191,6 +239,11 @@ impl NoteListSource {
             rows: RefCell::new(Arc::new(Vec::new())),
             items: RefCell::new(Vec::new()),
             spaces: RefCell::new((Arc::new(Spaces::default()), None)),
+            deleted: RefCell::new(Arc::new(Vec::new())),
+            on_delete: RefCell::new(None),
+            on_restore: RefCell::new(None),
+            on_purge: RefCell::new(None),
+            on_empty: RefCell::new(None),
             clock: Cell::new(now()),
             formatters: Formatters::new(),
         };
@@ -202,6 +255,59 @@ impl NoteListSource {
         *self.ivars().rows.borrow_mut() = rows;
         *self.ivars().items.borrow_mut() = items;
         self.ivars().clock.set(now());
+    }
+
+    /// The recently deleted entries the list's `Deleted` items stand for.
+    pub fn set_deleted(&self, entries: Arc<Vec<TrashEntry>>) {
+        *self.ivars().deleted.borrow_mut() = entries;
+    }
+
+    pub fn on_delete(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_delete.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_restore(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_restore.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_purge(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_purge.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_empty(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_empty.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The recently deleted entry in `row`, if it shows one.
+    fn deleted_at(&self, row: usize) -> Option<TrashEntry> {
+        match self.ivars().items.borrow().get(row)? {
+            ListItem::Deleted(i) => self.ivars().deleted.borrow().get(*i as usize).cloned(),
+            _ => None,
+        }
+    }
+
+    /// The row's menu: a recently deleted entry's (restore, delete for good, empty them all),
+    /// else a note's.
+    pub fn fill_menu(&self, menu: &NSMenu) {
+        let mtm = self.mtm();
+        menu.removeAllItems();
+        let deleted = self.menu_row().is_some_and(|row| self.deleted_at(row).is_some());
+        let entries: &[Option<(&str, Sel)>] = if deleted {
+            &[Some((strings::RESTORE, sel!(restoreDeleted:))), Some((strings::DELETE_FOREVER, sel!(purgeDeleted:))), None, Some((strings::EMPTY_DELETED, sel!(emptyDeleted:)))]
+        } else {
+            &[Some((strings::OPEN_IN_NEW_TAB, sel!(openInNewTab:))), Some((strings::RENAME_NOTE, sel!(renameNote:))), Some((strings::MOVE_NOTE, sel!(moveNote:))), None, Some((strings::DELETE, sel!(deleteNote:)))]
+        };
+        for entry in entries {
+            match entry {
+                Some((title, action)) => {
+                    // SAFETY: the source outlives the table (it is its data source), and implements the action.
+                    let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(*action), ns_string!("")) };
+                    unsafe { item.setTarget(Some(self)) };
+                    menu.addItem(&item);
+                }
+                None => menu.addItem(&NSMenuItem::separatorItem(mtm)),
+            }
+        }
     }
 
     /// The spaces whose marks the rows show, and the window's (whose own go unmarked).
@@ -337,6 +443,20 @@ impl NoteListSource {
                 }
                 Some(Retained::into_super(cell))
             }
+            ListItem::Deleted(i) => {
+                let entry = self.ivars().deleted.borrow().get(i as usize)?.clone();
+                let cell = note_cell(table, mtm);
+                let name = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+                set_field(&cell, TITLE_ID, if entry.folder { name } else { title_of(name) });
+                set_field(&cell, TIME_ID, &self.time_label(entry.deleted_ms * 1_000_000));
+                let from = entry.path.rsplit_once('/').map(|(folder, _)| folder);
+                let about = if entry.folder { strings::deleted_folder(entry.notes) } else { strings::deleted_from(from) };
+                set_field(&cell, SNIPPET_ID, &about);
+                if let Some(dot) = cell.subviews().iter().find(|v| v.identifier().is_some_and(|id| id.to_string() == DOT_ID)) {
+                    dot.setHidden(true);
+                }
+                Some(Retained::into_super(cell))
+            }
             ListItem::Note(i) | ListItem::Found(i, _) => {
                 let rows = self.ivars().rows.borrow();
                 let row = rows.get(i as usize)?;
@@ -415,13 +535,10 @@ pub fn table(mtm: MainThreadMarker, source: &NoteListSource) -> (Retained<NSScro
     }
     *source.ivars().table.borrow_mut() = Weak::new(&table);
     table.setDraggingSourceOperationMask_forLocal(objc2_app_kit::NSDragOperation::Move, true);
+    // Filled as it opens, for the row it opens on (ADR 0032).
     let menu = NSMenu::new(mtm);
-    for (title, action) in [(strings::OPEN_IN_NEW_TAB, sel!(openInNewTab:)), (strings::RENAME_NOTE, sel!(renameNote:)), (strings::MOVE_NOTE, sel!(moveNote:))] {
-        // SAFETY: the source outlives the table (it is its data source), and implements the action.
-        let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), ns_string!("")) };
-        unsafe { item.setTarget(Some(source)) };
-        menu.addItem(&item);
-    }
+    menu.setDelegate(Some(ProtocolObject::from_ref(source)));
+    source.fill_menu(&menu);
     // SAFETY: a menu built here, kept by the table.
     unsafe { table.setMenu(Some(&menu)) };
     // Keeps the toolbar's glass without its separator line (ADR 0016).

@@ -11,10 +11,10 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
     FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
+    search_list, with_search_mode, build_note_list, new_notes_folder, ListItem, trash_days, SpaceFolders, SpaceList, RestPart, split_tags, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
     note_file_stem, resolve_list_settings, unique_note_path,
 };
-use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, VaultReader};
+use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, conflict_path, link_completion, note_headings, subpath_offset, utf16_offsets};
@@ -84,6 +84,8 @@ struct State {
     space_folders: Option<SpaceFolders>,
     /// The tags the sidebar lists under «Решта бази» (none there in the space).
     rest_tags: HashSet<String>,
+    /// The recently deleted, the newest first (ADR 0032).
+    trash: Arc<Vec<TrashEntry>>,
 }
 
 impl State {
@@ -214,7 +216,7 @@ impl Drop for VaultWindow {
 
 impl VaultWindow {
     pub fn new(mtm: MainThreadMarker) -> Rc<Self> {
-        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0, &|_| false, None);
+        let empty = Sidebar::new(&Default::default(), &[], SidebarMode::Folders, None, 0, &|_| false, None, 0);
         let sidebar = SidebarSource::new(mtm, empty);
         let (scroll, outline) = sidebar_view::outline(mtm, &sidebar);
         // The folder tree above the space switcher (ADR 0030).
@@ -320,6 +322,7 @@ impl VaultWindow {
             space: None,
             space_folders: None,
             rest_tags: HashSet::new(),
+            trash: Arc::new(Vec::new()),
         };
         let this = Rc::new(Self {
             window,
@@ -543,6 +546,37 @@ impl VaultWindow {
         this.sidebar.on_new_folder(move |parent| {
             if let Some(window) = weak_new_folder.upgrade() {
                 window.new_folder(Some(parent));
+            }
+        });
+        // The recently deleted (ADR 0032): into them, back out, or gone for good.
+        let weak_delete: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_delete(move |path| {
+            if let Some(window) = weak_delete.upgrade() {
+                window.delete(&path);
+            }
+        });
+        let weak_delete_folder: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_delete_folder(move |folder| {
+            if let Some(window) = weak_delete_folder.upgrade() {
+                window.delete_folder(&folder);
+            }
+        });
+        let weak_restore: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_restore(move |id| {
+            if let Some(window) = weak_restore.upgrade() {
+                window.restore(&id);
+            }
+        });
+        let weak_purge: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_purge(move |id| {
+            if let Some(window) = weak_purge.upgrade() {
+                window.purge(Some(&id));
+            }
+        });
+        let weak_empty: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_empty(move || {
+            if let Some(window) = weak_empty.upgrade() {
+                window.purge(None);
             }
         });
         let weak_rename_end: Weak<Self> = Rc::downgrade(&this);
@@ -1008,7 +1042,7 @@ impl VaultWindow {
             let rest = split.as_ref().map(|(_, _, rest_folders, rest_tags)| RestPart { folders: rest_folders, tags: rest_tags, notes: rest_folders.notes });
             let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
             let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
-            Sidebar::new(folders, tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| resolve_list_settings(path, &state.rules).include_subfolders, rest)
+            Sidebar::new(folders, tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| resolve_list_settings(path, &state.rules).include_subfolders, rest, state.trash.len())
         };
         self.sidebar.set_model(model);
         self.outline.reloadData();
@@ -1139,6 +1173,7 @@ impl VaultWindow {
             state.untagged = snapshot.untagged;
             state.catalog = Arc::clone(&snapshot.catalog);
             state.spaces = Arc::clone(&snapshot.spaces);
+            state.trash = Arc::clone(&snapshot.trash);
         }
         if !self.space_restored.replace(true) {
             self.state.borrow_mut().space = self.saved_space();
@@ -1230,6 +1265,7 @@ impl VaultWindow {
             probe::folder_rename_requested(&self.sidebar, &self.outline);
             probe::folder_space_requested(&self.sidebar);
             probe::new_folder_requested(&self.sidebar, &self.outline);
+            probe::folder_delete_requested(&self.sidebar, &self.outline);
             if let Some(forward) = probe::requested_navigation() {
                 self.navigate(forward);
             }
@@ -1583,6 +1619,100 @@ impl VaultWindow {
         if row >= 0 {
             self.sidebar.begin_rename(row);
         }
+    }
+
+    /// Moves a note, a PDF or a folder into the recently deleted (ADR 0032); what is open of
+    /// it closes first (its edits written).
+    pub fn delete(&self, path: &str) {
+        let Some(vault) = self.vault() else { return };
+        let inside = format!("{path}/");
+        let open: Vec<String> = self.tabs.borrow().paths().filter(|p| *p == path || p.starts_with(&inside)).map(str::to_owned).collect();
+        for tab in open {
+            self.close_tab(&tab);
+        }
+        if let Err(e) = FsVault::new(&vault).trash(path, now_ms()) {
+            eprintln!("knotes: cannot delete {path}: {e}");
+            return;
+        }
+        self.refresh_trash();
+    }
+
+    /// A folder's menu: into the recently deleted, once confirmed when it holds notes.
+    pub fn delete_folder(&self, folder: &str) {
+        let notes = {
+            let state = self.state.borrow();
+            find_folder_node(&state.folders, folder).map_or(0, |n| n.notes)
+        };
+        if notes > 0 && !probe::enabled() {
+            let days = trash_days(&self.state.borrow().rules);
+            let alert = NSAlert::new(MainThreadMarker::from(&*self.window));
+            alert.setMessageText(&NSString::from_str(&strings::delete_folder_question(folder.rsplit('/').next().unwrap_or(folder), notes)));
+            alert.setInformativeText(&NSString::from_str(&strings::delete_kept_note(days)));
+            for title in [strings::DELETE, strings::CANCEL] {
+                alert.addButtonWithTitle(&NSString::from_str(title));
+            }
+            if alert.runModal() != objc2_app_kit::NSAlertFirstButtonReturn {
+                return;
+            }
+        }
+        self.delete(folder);
+    }
+
+    /// Brings a deleted entry back where it was (ADR 0032).
+    pub fn restore(&self, id: &str) {
+        let Some(vault) = self.vault() else { return };
+        if let Err(e) = FsVault::new(&vault).restore(id) {
+            eprintln!("knotes: cannot restore {id}: {e}");
+        }
+        self.refresh_trash();
+    }
+
+    /// Deletes an entry for good, or all of them (once confirmed).
+    pub fn purge(&self, id: Option<&str>) {
+        let Some(vault) = self.vault() else { return };
+        let files = FsVault::new(&vault);
+        let ids: Vec<String> = match id {
+            Some(id) => vec![id.to_owned()],
+            None => {
+                let all: Vec<String> = self.state.borrow().trash.iter().map(|e| e.id.clone()).collect();
+                if all.is_empty() {
+                    return;
+                }
+                if !probe::enabled() {
+                    let alert = NSAlert::new(MainThreadMarker::from(&*self.window));
+                    alert.setMessageText(&NSString::from_str(&strings::empty_deleted_question(all.len())));
+                    for title in [strings::DELETE_FOREVER, strings::CANCEL] {
+                        alert.addButtonWithTitle(&NSString::from_str(title));
+                    }
+                    if alert.runModal() != objc2_app_kit::NSAlertFirstButtonReturn {
+                        return;
+                    }
+                }
+                all
+            }
+        };
+        for id in ids {
+            if let Err(e) = files.purge(&id) {
+                eprintln!("knotes: cannot delete {id} for good: {e}");
+            }
+        }
+        self.refresh_trash();
+    }
+
+    /// The recently deleted read again (the watcher does not see them), the sidebar's row and
+    /// their list shown again.
+    fn refresh_trash(&self) {
+        let Some(vault) = self.vault() else { return };
+        let trash = FsVault::new(&vault).trashed().unwrap_or_default();
+        self.state.borrow_mut().trash = Arc::new(trash);
+        self.rebuild_sidebar();
+        let mut selection = self.state.borrow().selection.clone();
+        if !self.exists(&selection) {
+            selection = SidebarItem::AllNotes;
+            self.state.borrow_mut().selection = selection.clone();
+        }
+        self.highlight(&selection);
+        self.refresh_list();
     }
 
     /// A folder's menu put it in a space, in none, or in a new space named in a dialog (ADR
@@ -2591,6 +2721,19 @@ impl VaultWindow {
     }
 
     fn refresh_list(&self) {
+        // The recently deleted: their entries, the newest first (ADR 0032).
+        if self.state.borrow().selection == SidebarItem::Deleted {
+            let (rows, trash) = {
+                let state = self.state.borrow();
+                (Arc::clone(&state.rows), Arc::clone(&state.trash))
+            };
+            self.list.set_deleted(Arc::clone(&trash));
+            self.list.set_items(rows, (0..trash.len() as u32).map(ListItem::Deleted).collect());
+            self.table.reloadData();
+            self.window.setTitle(&NSString::from_str(strings::RECENTLY_DELETED));
+            self.window.setSubtitle(&NSString::from_str(&strings::entries_count(trash.len())));
+            return;
+        }
         let mut state = self.state.borrow_mut();
         let selection = state.selection.clone();
         let (title, listed) = match &selection {
@@ -2962,6 +3105,7 @@ impl VaultWindow {
                 folder_exists(&state.folders, path) || (*path == inbox && state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)))
             }
             SidebarItem::Rest => state.space.is_some(),
+            SidebarItem::Deleted => !state.trash.is_empty(),
             SidebarItem::Tag(tag) => tag_exists(&state.tags, tag),
             _ => true,
         }
@@ -3124,6 +3268,19 @@ fn session_settings_key(item: &SidebarItem) -> Option<String> {
 
 fn folder_exists(node: &FolderNode, path: &str) -> bool {
     node.path == path || node.children.iter().any(|c| folder_exists(c, path))
+}
+
+/// The folder at `path` in the tree.
+fn find_folder_node<'a>(node: &'a FolderNode, path: &str) -> Option<&'a FolderNode> {
+    if node.path == path {
+        return Some(node);
+    }
+    node.children.iter().find_map(|c| find_folder_node(c, path))
+}
+
+/// Now, in Unix milliseconds.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Every tag of `nodes` and below them.

@@ -86,13 +86,15 @@ pub enum ListItem {
     Found(u32, String),
     /// The header over the notes outside the window's space (ADR 0030).
     Rest,
+    /// A recently deleted entry (ADR 0032), by its place among them.
+    Deleted(u32),
 }
 
 impl ListItem {
     /// Index of the note row, for every item but headers.
     pub fn row(&self) -> Option<u32> {
         match self {
-            Self::Header(_) | Self::Rest => None,
+            Self::Header(_) | Self::Rest | Self::Deleted(_) => None,
             Self::Note(i) | Self::Found(i, _) => Some(*i),
         }
     }

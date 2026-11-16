@@ -64,6 +64,7 @@ fn date_groups_like_apple_notes() {
         .map(|i| match i {
             ListItem::Header(g) => format!("{g:?}"),
             ListItem::Rest => "[rest]".into(),
+            ListItem::Deleted(_) => "[deleted]".into(),
             ListItem::Note(n) | ListItem::Found(n, _) => rows[*n as usize].path.clone(),
         })
         .collect();
@@ -110,6 +111,7 @@ fn parts(rows: &[NoteRow], items: &[ListItem]) -> Vec<String> {
         .filter_map(|i| match i {
             ListItem::Note(n) | ListItem::Found(n, _) => Some(rows[*n as usize].path.clone()),
             ListItem::Rest => Some("[rest]".into()),
+            ListItem::Deleted(_) => None,
             ListItem::Header(_) => None,
         })
         .collect()

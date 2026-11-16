@@ -3034,7 +3034,7 @@ fn an_empty_folder_shows_in_the_sidebar() {
 fn a_new_folder_is_made_from_a_folder_s_menu_or_the_sidebar_s_and_named_in_place() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "new-folder=Work"), ("KNOTES_PROBE_FOLDER_NAME", "Звіти")]);
-    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Простір"), "{out}");
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Видалити | Простір"), "{out}");
     assert!(vault.path().join("Work/Звіти").is_dir() && !vault.path().join("Work/Нова тека").exists(), "made and renamed: {out}");
     // At the top of a space: the new folder joins it.
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_ACTION", "new-folder=")]);
@@ -3095,4 +3095,36 @@ fn a_folder_put_in_every_space_from_its_menu_shows_in_each() {
         let rest = sidebar.find("Решта бази").unwrap();
         assert!(sidebar[..rest].contains("Контакти (1)"), "{space}: among its own folders: {sidebar}");
     }
+}
+
+/// The entries in a vault's recently deleted.
+fn deleted_entries(vault: &std::path::Path) -> usize {
+    std::fs::read_dir(vault.join(".knotes/trash")).map_or(0, |d| d.count())
+}
+
+#[test]
+fn a_note_deleted_from_its_menu_goes_to_recently_deleted_and_comes_back_from_there() {
+    let vault = spaced_vault();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | — | Видалити"), "{out}");
+    assert!(!vault.path().join("Work/a.md").exists() && deleted_entries(vault.path()) == 1, "{out}");
+    assert!(out.contains("Нещодавно видалені (1)"), "a row for them: {out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-restore")]);
+    assert!(out.contains("list-menu-items: Відновити | Видалити назавжди | — | Очистити нещодавно видалені…"), "{out}");
+    assert!(out.contains("title: Усі нотатки"), "none left: their row goes, and the list with it: {out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Work/a.md")).unwrap(), "a", "back where it was");
+    assert_eq!(deleted_entries(vault.path()), 0);
+}
+
+#[test]
+fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_emptied() {
+    let vault = spaced_vault();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-delete=Home")]);
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Видалити | Простір"), "{out}");
+    assert!(!vault.path().join("Home").exists() && deleted_entries(vault.path()) == 1, "{out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted")]);
+    let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(list.starts_with("Home ~ ") && list.contains("тека · 1 нотатка"), "{list}");
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-empty")]);
+    assert_eq!(deleted_entries(vault.path()), 0, "gone for good");
 }

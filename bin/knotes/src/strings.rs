@@ -15,6 +15,45 @@ pub const EVERY_SPACE: &str = "У всіх просторах";
 pub const NEW_SPACE: &str = "Новий простір…";
 pub const NEW_SPACE_QUESTION: &str = "Назва нового простору";
 pub const CREATE: &str = "Створити";
+/// The recently deleted (ADR 0032).
+pub const RECENTLY_DELETED: &str = "Нещодавно видалені";
+pub const RESTORE: &str = "Відновити";
+pub const DELETE_FOREVER: &str = "Видалити назавжди";
+pub const EMPTY_DELETED: &str = "Очистити нещодавно видалені…";
+
+/// Where a deleted note was: "з теки «Work»", or the vault's root.
+pub fn deleted_from(folder: Option<&str>) -> String {
+    match folder {
+        Some(folder) => format!("з теки «{folder}»"),
+        None => "з кореня бази".to_owned(),
+    }
+}
+
+/// A deleted folder: "тека · 3 нотатки".
+pub fn deleted_folder(notes: usize) -> String {
+    format!("тека · {notes} {}", knotes_app::plural_uk(notes as u64, "нотатка", "нотатки", "нотаток"))
+}
+
+/// "Видалити теку «Work» і 3 нотатки?"
+pub fn delete_folder_question(name: &str, notes: usize) -> String {
+    format!("Видалити теку «{name}» і {notes} {}?", knotes_app::plural_uk(notes as u64, "нотатка", "нотатки", "нотаток"))
+}
+
+/// "Їх можна буде відновити з «Нещодавно видалених» протягом 30 днів."
+pub fn delete_kept_note(days: u32) -> String {
+    format!("Їх можна буде відновити з «Нещодавно видалених» протягом {days} {}.", knotes_app::plural_uk(u64::from(days), "день", "дні", "днів"))
+}
+
+/// "Видалити назавжди 3 записи? Цього не можна скасувати."
+pub fn empty_deleted_question(entries: usize) -> String {
+    format!("Видалити назавжди {entries} {}? Цього не можна скасувати.", knotes_app::plural_uk(entries as u64, "запис", "записи", "записів"))
+}
+
+/// "2 записи": the recently deleted list's count.
+pub fn entries_count(n: usize) -> String {
+    format!("{n} {}", knotes_app::plural_uk(n as u64, "запис", "записи", "записів"))
+}
+
 /// A new folder's name, and the commands that make one.
 pub const NEW_FOLDER: &str = "Нова тека";
 pub const NEW_SUBFOLDER: &str = "Нова підтека";

@@ -7,7 +7,7 @@ fn sidebar() -> Sidebar {
 fn sidebar_in(mode: SidebarMode) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md"]);
     let tags = tag_tree(&[("project".to_owned(), 2), ("project/radar".to_owned(), 1), ("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags, mode, None, 0, &|_| true, None)
+    Sidebar::new(&folders, &tags, mode, None, 0, &|_| true, None, 0)
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn items_round_trip_through_their_keys() {
 fn with_inbox(mode: SidebarMode, inbox: &str) -> Sidebar {
     let folders = folder_tree(["a.md", "Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md", "Inbox/Old/w.md"]);
     let tags = tag_tree(&[("todo".to_owned(), 1)]);
-    Sidebar::new(&folders, &tags, mode, Some(inbox), 3, &|_| true, None)
+    Sidebar::new(&folders, &tags, mode, Some(inbox), 3, &|_| true, None, 0)
 }
 
 #[test]
@@ -76,11 +76,11 @@ fn the_inbox_shows_before_its_folder_exists_and_may_be_nested() {
 #[test]
 fn a_folder_counts_the_notes_its_list_shows() {
     let folders = folder_tree(["Projects/Radar/x.md", "Projects/y.md", "Inbox/z.md", "Inbox/Old/w.md"]);
-    let own = Sidebar::new(&folders, &[], SidebarMode::Folders, Some("Inbox"), 0, &|_| false, None);
+    let own = Sidebar::new(&folders, &[], SidebarMode::Folders, Some("Inbox"), 0, &|_| false, None, 0);
     assert_eq!(own.count(&SidebarItem::Folder("Projects".into())), Some(1), "its own notes, not its subfolders'");
     assert_eq!(own.count(&SidebarItem::Folder("Inbox".into())), Some(1));
     assert_eq!(own.count(&SidebarItem::AllNotes), Some(4));
-    let mixed = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|path| path == "Projects", None);
+    let mixed = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|path| path == "Projects", None, 0);
     assert_eq!(mixed.count(&SidebarItem::Folder("Projects".into())), Some(2), "a folder that shows its subfolders counts them");
 }
 
@@ -103,14 +103,25 @@ fn in_a_space_the_rest_of_the_vault_hangs_below_a_row_of_its_own() {
     let tags = tag_tree(&[("radar".to_owned(), 1)]);
     let rest_tags = tag_tree(&[("cooking".to_owned(), 2)]);
     let rest = RestPart { folders: &rest_folders, tags: &rest_tags, notes: 3 };
-    let s = Sidebar::new(&folders, &tags, SidebarMode::Folders, None, 0, &|_| true, Some(rest));
+    let s = Sidebar::new(&folders, &tags, SidebarMode::Folders, None, 0, &|_| true, Some(rest), 0);
     assert_eq!(s.children(None)[3..], [SidebarItem::Folder("Work".into()), SidebarItem::RestGap, SidebarItem::Rest], "after the space's tree, a little apart");
     assert_eq!(s.count(&SidebarItem::Rest), Some(3));
     assert_eq!(s.children(Some(&SidebarItem::Rest)), [SidebarItem::Folder("Home".into())], "its folders below it");
     assert_eq!(s.children(Some(&SidebarItem::Folder("Home".into()))), [SidebarItem::Folder("Home/Kitchen".into())]);
     let rest = RestPart { folders: &rest_folders, tags: &rest_tags, notes: 3 };
-    let t = Sidebar::new(&folders, &tags, SidebarMode::Tags, None, 0, &|_| true, Some(rest));
+    let t = Sidebar::new(&folders, &tags, SidebarMode::Tags, None, 0, &|_| true, Some(rest), 0);
     assert_eq!(t.children(None)[3..], [SidebarItem::Tag("radar".into()), SidebarItem::RestGap, SidebarItem::Rest]);
     assert_eq!(t.children(Some(&SidebarItem::Rest)), [SidebarItem::Tag("cooking".into())]);
     assert_eq!(SidebarItem::from_key(&SidebarItem::Rest.key()), Some(SidebarItem::Rest));
+}
+
+#[test]
+fn the_recently_deleted_row_comes_last_while_there_is_any() {
+    let folders = folder_tree(["Work/a.md"]);
+    let s = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|_| true, None, 3);
+    assert_eq!(s.children(None)[3..], [SidebarItem::Folder("Work".into()), SidebarItem::DeletedGap, SidebarItem::Deleted]);
+    assert_eq!(s.count(&SidebarItem::Deleted), Some(3));
+    let none = Sidebar::new(&folders, &[], SidebarMode::Folders, None, 0, &|_| true, None, 0);
+    assert!(!none.children(None).contains(&SidebarItem::Deleted), "nothing deleted: no row");
+    assert_eq!(SidebarItem::from_key(&SidebarItem::Deleted.key()), Some(SidebarItem::Deleted));
 }

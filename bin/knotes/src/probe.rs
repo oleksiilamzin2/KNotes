@@ -607,14 +607,25 @@ pub fn rename_requested() -> Option<String> {
 /// to… from that menu (the folder picker answers with the folder).
 pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: &objc2_app_kit::NSTableView) {
     let Ok(action) = std::env::var("KNOTES_PROBE_ACTION") else { return };
-    let (chosen, name) = match (action.strip_prefix("list-rename="), action.starts_with("list-move=")) {
+    // `list-delete`: Delete on the selected note; `list-restore`, `list-purge`, `list-empty`: the
+    // recently deleted's items on their first row (ADR 0032).
+    let (chosen, name) = match (action.strip_prefix("list-rename="), action.as_str()) {
         (Some(name), _) => (objc2::sel!(renameNote:), Some(name.to_owned())),
-        (None, true) => (objc2::sel!(moveNote:), None),
+        (None, a) if a.starts_with("list-move=") => (objc2::sel!(moveNote:), None),
+        (None, "list-delete") => (objc2::sel!(deleteNote:), None),
+        (None, "list-restore") => (objc2::sel!(restoreDeleted:), None),
+        (None, "list-purge") => (objc2::sel!(purgeDeleted:), None),
+        (None, "list-empty") => (objc2::sel!(emptyDeleted:), None),
         _ => return,
     };
+    if table.selectedRow() < 0 && table.numberOfRows() > 0 {
+        table.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(0), false);
+    }
     let Some(menu) = table.menu() else { return };
+    // Filled for the row, as it is when the menu opens.
+    list.fill_menu(&menu);
     let items = menu.itemArray();
-    println!("list-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
+    println!("list-menu-items: {}", items.iter().map(|i| if i.isSeparatorItem() { "—".to_string() } else { i.title().to_string() }).collect::<Vec<_>>().join(" | "));
     let Some(item) = items.iter().find(|i| i.action() == Some(chosen)) else { return };
     let mtm = MainThreadMarker::new().expect("main thread");
     // SAFETY: the menu item's own target and action, sent as a click would.
@@ -696,6 +707,20 @@ pub fn new_folder_requested(sidebar: &crate::sidebar_view::SidebarSource, outlin
             window.makeFirstResponder(Some(outline));
         }
     }
+}
+
+/// `KNOTES_PROBE_ACTION=folder-delete=Folder`: Delete from the folder's menu in the sidebar (ADR
+/// 0032), its items printed first.
+pub fn folder_delete_requested(sidebar: &crate::sidebar_view::SidebarSource, outline: &objc2_app_kit::NSOutlineView) {
+    let Some(folder) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("folder-delete=").map(str::to_owned)) else { return };
+    let Some(menu) = outline.menu() else { return };
+    sidebar.fill_menu(&menu, Some(&knotes_app::SidebarItem::Folder(folder)));
+    let items = menu.itemArray();
+    println!("sidebar-menu-items: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
+    let Some(entry) = items.iter().find(|i| i.action() == Some(objc2::sel!(deleteFolder:))) else { return };
+    let mtm = MainThreadMarker::new().expect("main thread");
+    // SAFETY: the menu item's own target and action, sent as a click would.
+    unsafe { NSApplication::sharedApplication(mtm).sendAction_to_from(entry.action().expect("menu action"), entry.target().as_deref(), Some(&entry)) };
 }
 
 /// `KNOTES_PROBE_ACTION=folder-space=Folder=work` (or `none`, `new` with

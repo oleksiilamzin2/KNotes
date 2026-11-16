@@ -27,6 +27,7 @@ type OnClose = Box<dyn Fn(String)>;
 type OnFolderSpace = Box<dyn Fn(String, FolderChoice)>;
 type OnNewFolder = Box<dyn Fn(String)>;
 type OnRenameEnd = Box<dyn Fn()>;
+type OnDeleteFolder = Box<dyn Fn(String)>;
 
 /// A space chosen from a folder's menu (ADR 0030).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +60,8 @@ pub struct Ivars {
     on_new_folder: RefCell<Option<OnNewFolder>>,
     /// Called when editing a folder's name ends, renamed or not.
     on_rename_end: RefCell<Option<OnRenameEnd>>,
+    /// Called with a folder to move into the recently deleted (ADR 0032).
+    on_delete_folder: RefCell<Option<OnDeleteFolder>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -205,6 +208,15 @@ define_class!(
             }
         }
 
+        /// A folder's menu: the folder into the recently deleted.
+        #[unsafe(method(deleteFolder:))]
+        fn delete_folder(&self, item: &NSMenuItem) {
+            let folder = item.representedObject().and_then(|o| o.downcast::<NSString>().ok()).and_then(|k| SidebarItem::from_key(&k.to_string())).and_then(|i| drop_folder(&i).map(str::to_owned));
+            if let (Some(folder), Some(callback)) = (folder, self.ivars().on_delete_folder.borrow().as_ref()) {
+                callback(folder);
+            }
+        }
+
         #[unsafe(method(renameFolder:))]
         fn rename_folder(&self, _sender: Option<&AnyObject>) {
             if let Some((row, _)) = self.menu_folder() {
@@ -221,12 +233,12 @@ define_class!(
 
         #[unsafe(method(outlineView:heightOfRowByItem:))]
         fn row_height(&self, outline: &NSOutlineView, item: &AnyObject) -> f64 {
-            if matches!(item_of(item), Some(SidebarItem::Gap | SidebarItem::RestGap)) { GAP_HEIGHT } else { outline.rowHeight() }
+            if matches!(item_of(item), Some(SidebarItem::Gap | SidebarItem::RestGap | SidebarItem::DeletedGap)) { GAP_HEIGHT } else { outline.rowHeight() }
         }
 
         #[unsafe(method(outlineView:shouldSelectItem:))]
         fn should_select(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
-            !matches!(item_of(item), Some(SidebarItem::Gap | SidebarItem::RestGap))
+            !matches!(item_of(item), Some(SidebarItem::Gap | SidebarItem::RestGap | SidebarItem::DeletedGap))
         }
 
         #[unsafe(method(outlineViewSelectionDidChange:))]
@@ -254,6 +266,7 @@ impl SidebarSource {
             on_folder_space: RefCell::new(None),
             on_new_folder: RefCell::new(None),
             on_rename_end: RefCell::new(None),
+            on_delete_folder: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -274,6 +287,8 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
             SidebarItem::Tab(path) => (model.name(&item).to_owned(), Some(if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" })),
             SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), Some("rectangle.stack")),
+            SidebarItem::Deleted => (strings::RECENTLY_DELETED.to_owned(), Some("trash")),
+            SidebarItem::DeletedGap => return Some(NSView::new(self.mtm())),
         };
         let cell = cell(outline, self.mtm());
         // SAFETY: the cell views are built by `cell` with these outlets set.
@@ -331,7 +346,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     pub fn fill_menu(&self, menu: &NSMenu, item: Option<&SidebarItem>) {
         menu.removeAllItems();
         let entries: &[(&str, Sel)] = match item {
-            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:))],
+            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (strings::DELETE, sel!(deleteFolder:))],
             Some(SidebarItem::Tab(_)) => &[(strings::CLOSE_TAB, sel!(closeTabFromMenu:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))],
             // Below the rows: a new folder at the vault's top.
             None => &[(strings::NEW_FOLDER, sel!(newFolder:))],
@@ -413,6 +428,10 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
 
     pub fn on_new_folder(&self, callback: impl Fn(String) + 'static) {
         *self.ivars().on_new_folder.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_delete_folder(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_delete_folder.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_rename_end(&self, callback: impl Fn() + 'static) {

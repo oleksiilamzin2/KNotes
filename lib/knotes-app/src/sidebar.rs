@@ -19,6 +19,9 @@ pub enum SidebarItem {
     Tab(String),
     /// The rest of the vault, in a space (ADR 0030): its notes, and its folders or tags below.
     Rest,
+    /// The recently deleted (ADR 0032), and the empty space before them.
+    Deleted,
+    DeletedGap,
 }
 
 impl SidebarItem {
@@ -34,6 +37,8 @@ impl SidebarItem {
             Self::Tag(tag) => format!("t:{tag}"),
             Self::Tab(path) => format!("tab:{path}"),
             Self::Rest => "rest".into(),
+            Self::Deleted => "deleted".into(),
+            Self::DeletedGap => "deletedgap".into(),
         }
     }
 
@@ -44,6 +49,8 @@ impl SidebarItem {
             "gap" => Some(Self::Gap),
             "restgap" => Some(Self::RestGap),
             "rest" => Some(Self::Rest),
+            "deleted" => Some(Self::Deleted),
+            "deletedgap" => Some(Self::DeletedGap),
             _ => match key.split_once(':')? {
                 ("f", path) => Some(Self::Folder(path.into())),
                 ("t", tag) => Some(Self::Tag(tag.into())),
@@ -112,7 +119,9 @@ impl Sidebar {
     /// `with_subfolders` says whether a folder's list shows its subfolders' notes: its count
     /// counts what its list shows.
     /// `rest`: in a space, the rest of the vault, under a row of its own after the space's tree.
-    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode, inbox: Option<&str>, untagged: usize, with_subfolders: &dyn Fn(&str) -> bool, rest: Option<RestPart>) -> Self {
+    /// `deleted`: how many entries the recently deleted have (a row last, while there is any).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(folders: &FolderNode, tags: &[TagNode], mode: SidebarMode, inbox: Option<&str>, untagged: usize, with_subfolders: &dyn Fn(&str) -> bool, rest: Option<RestPart>, deleted: usize) -> Self {
         let mut entries = HashMap::new();
         let fixed = |count| Entry { name: String::new(), count, children: Vec::new() };
         entries.insert(SidebarItem::AllNotes, fixed(Some(folders.notes)));
@@ -146,6 +155,11 @@ impl Sidebar {
             entries.insert(SidebarItem::Rest, Entry { name: String::new(), count: Some(rest.notes), children });
             entries.insert(SidebarItem::RestGap, fixed(None));
             top.extend([SidebarItem::RestGap, SidebarItem::Rest]);
+        }
+        if deleted > 0 {
+            entries.insert(SidebarItem::DeletedGap, fixed(None));
+            entries.insert(SidebarItem::Deleted, fixed(Some(deleted)));
+            top.extend([SidebarItem::DeletedGap, SidebarItem::Deleted]);
         }
         Self { top, entries, inbox: inbox_item }
     }
