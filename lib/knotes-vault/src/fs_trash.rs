@@ -3,6 +3,7 @@
 //! text, dates and rules files stay) and `entry.json`: where it was, whether it is a folder,
 //! when it went, how many notes it holds, and the rules files of the folders above it.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -46,9 +47,16 @@ impl TrashStore for FsVault {
         Ok(TrashEntry { id, path: path.to_owned(), folder, deleted_ms: now_ms, notes })
     }
 
-    fn trashed(&self) -> io::Result<Vec<TrashEntry>> {
+    fn trashed_with(&self, known: &[TrashEntry]) -> io::Result<Vec<TrashEntry>> {
         let Ok(dirs) = fs::read_dir(self.root.join(TRASH)) else { return Ok(Vec::new()) };
-        let mut entries: Vec<TrashEntry> = dirs.filter_map(Result::ok).filter_map(|d| read_entry(&d.path()).map(|(entry, _)| entry)).collect();
+        let known: HashMap<&str, &TrashEntry> = known.iter().map(|e| (e.id.as_str(), e)).collect();
+        let mut entries: Vec<TrashEntry> = dirs
+            .filter_map(Result::ok)
+            .filter_map(|d| match known.get(d.file_name().to_str()?) {
+                Some(entry) => Some((*entry).clone()),
+                None => read_entry(&d.path()).map(|(entry, _)| entry),
+            })
+            .collect();
         entries.sort_by(|a, b| b.deleted_ms.cmp(&a.deleted_ms).then_with(|| b.id.cmp(&a.id)));
         Ok(entries)
     }

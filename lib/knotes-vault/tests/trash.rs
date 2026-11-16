@@ -106,3 +106,20 @@ fn an_entry_says_where_it_is_kept_so_it_can_be_read_there() {
     assert!(kept.starts_with(dir.path().join(".knotes/trash")), "{}", kept.display());
     assert!(vault.kept_at("../../etc").is_err());
 }
+
+#[test]
+fn entries_already_known_are_not_read_again_only_the_new_and_the_gone_change_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.md", "b.md", "c.md"] {
+        write(dir.path(), name, name);
+    }
+    let vault = FsVault::new(dir.path());
+    let a = vault.trash("a.md", NOW).unwrap();
+    let b = vault.trash("b.md", NOW + 1).unwrap();
+    let known = vault.trashed().unwrap();
+    // Read again, `a` would be skipped: it is not, being known.
+    fs::write(dir.path().join(".knotes/trash").join(&a.id).join("entry.json"), "not json").unwrap();
+    vault.purge(&b.id).unwrap();
+    let c = vault.trash("c.md", NOW + 2).unwrap();
+    assert_eq!(vault.trashed_with(&known).unwrap(), [c, a], "the new read, the gone dropped, the known kept; the newest first");
+}

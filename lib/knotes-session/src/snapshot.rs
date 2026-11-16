@@ -26,7 +26,8 @@ pub struct Snapshot {
     pub rules: Arc<HashMap<String, FolderRules>>,
     /// The vault's spaces and its folders' (ADR 0030), from the rules.
     pub spaces: Arc<Spaces>,
-    /// The recently deleted, the newest first (ADR 0032).
+    /// The recently deleted, the newest first (ADR 0032); only new entries read, the list kept
+    /// from the previous snapshot while the same.
     pub trash: Arc<Vec<TrashEntry>>,
     /// Link resolution for the editor (ADR 0013).
     pub links: Arc<LinkTargets>,
@@ -88,6 +89,11 @@ impl Snapshot {
             })
             .collect::<HashMap<String, FolderRules>>();
         let spaces = Spaces::from_rules(rules.iter().map(|(folder, rules)| (folder.as_str(), rules.object())));
+        let trash = rules_store.trashed_with(previous.map_or(&[], |p| p.trash.as_slice())).unwrap_or_default();
+        let trash = match previous.filter(|p| *p.trash == trash) {
+            Some(p) => Arc::clone(&p.trash),
+            None => Arc::new(trash),
+        };
         Ok(Self {
             rows: Arc::new(rows),
             catalog,
@@ -100,7 +106,7 @@ impl Snapshot {
             untagged,
             rules: Arc::new(rules),
             spaces: Arc::new(spaces),
-            trash: Arc::new(rules_store.trashed().unwrap_or_default()),
+            trash,
             changed,
         })
     }

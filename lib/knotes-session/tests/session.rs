@@ -176,3 +176,26 @@ fn snapshots_carry_each_tag_with_its_note_and_the_untagged_and_reuse_them_while_
     let tagged = wait_for(&events, |s| s.untagged.is_empty());
     assert_eq!(tagged.tags.iter().map(|t| (t.tag.as_str(), t.notes)).collect::<Vec<_>>(), [("area", 1), ("radar", 2)]);
 }
+
+#[test]
+fn fewer_days_set_while_the_vault_is_open_purge_at_once_and_snapshots_keep_the_rest_as_they_were() {
+    use knotes_core::TrashStore;
+    use std::sync::Arc;
+    let (vault, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for name in ["old.md", "new.md", "a.md"] {
+        fs::write(vault.path().join(name), name).unwrap();
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let day = 86_400_000;
+    let files = knotes_vault::FsVault::new(vault.path());
+    files.trash("old.md", now - 10 * day).unwrap();
+    files.trash("new.md", now - day).unwrap();
+    let (_session, events) = VaultSession::open(vault.path(), data.path()).unwrap();
+    let first = wait_for(&events, |s| s.rows.len() == 1 && s.trash.len() == 2);
+    fs::write(vault.path().join("a.md"), "a, longer").unwrap();
+    let later = wait_for(&events, |s| s.changed.iter().any(|p| p == "a.md"));
+    assert!(Arc::ptr_eq(&first.trash, &later.trash), "the same entries: the same list");
+    fs::write(vault.path().join(".knotes.json"), r#"{"trash": {"days": 5}}"#).unwrap();
+    let purged = wait_for(&events, |s| s.trash.len() == 1);
+    assert_eq!(purged.trash[0].path, "new.md");
+}

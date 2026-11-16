@@ -14,6 +14,10 @@ use crate::{Snapshot, VaultLock, index_dir};
 
 /// Changes within this window are synced together.
 const DEBOUNCE: Duration = Duration::from_millis(200);
+/// The expired among the recently deleted are looked for when the vault opens, when its root's
+/// rules change (its days may have), and after a change at most this often (they expire with
+/// time, not with changes).
+const PURGE_EVERY: Duration = Duration::from_secs(3600);
 /// Index maintenance runs this long after the last change; otherwise the thread sleeps until
 /// a message arrives (no polling: an idle app does not wake up).
 const MAINTENANCE_DELAY: Duration = Duration::from_secs(2);
@@ -82,6 +86,7 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
         Ok(tx.send(Event::Snapshot(snapshot)).is_ok())
     };
     purge_expired(&files);
+    let mut purged_at = std::time::Instant::now();
     send(&index, Vec::new())?;
     // Watch before syncing, so changes made during the sync are picked up afterwards.
     let _watcher = FsWatcher::with_callback(vault, DEBOUNCE, move |batch| changes.send(Control::Changed(batch)).is_ok())?;
@@ -108,8 +113,10 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
         };
         match message {
             Some(Control::Changed(changed)) => {
-                // The days may have changed with the root's rules; few entries to look at.
-                purge_expired(&files);
+                if purged_at.elapsed() >= PURGE_EVERY || changed.iter().any(|path| path == ".knotes.json" || path == ".knotes") {
+                    purge_expired(&files);
+                    purged_at = std::time::Instant::now();
+                }
                 let report = indexer.sync(&mut index)?;
                 if report.added + report.modified + report.removed >= LARGE_SYNC {
                     memory::give_back(&index);

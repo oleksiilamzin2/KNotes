@@ -17,7 +17,12 @@ pub trait TrashStore {
     /// above it, so that a restore brings back what they said.
     fn trash(&self, path: &str, now_ms: i64) -> std::io::Result<TrashEntry>;
     /// Every entry, the newest first.
-    fn trashed(&self) -> std::io::Result<Vec<TrashEntry>>;
+    fn trashed(&self) -> std::io::Result<Vec<TrashEntry>> {
+        self.trashed_with(&[])
+    }
+    /// Every entry, the newest first, those `known` (by id; an entry does not change) not read
+    /// again: what is looked at after every change to the vault.
+    fn trashed_with(&self, known: &[TrashEntry]) -> std::io::Result<Vec<TrashEntry>>;
     /// Moves the entry back where it was (the folders above made again with their rules,
     /// another name beside it when the place is taken); gives the path it has now.
     fn restore(&self, id: &str) -> std::io::Result<String>;
