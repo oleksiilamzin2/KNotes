@@ -79,3 +79,19 @@ TextKit 2 lays out no tables: `NSTextTable` blocks send a text view back to Text
   text and font.
 - The editor bench now drains an autorelease pool per step, as the run loop does per event:
   without it the cell measurements' temporary strings piled up to 300 MB in the bench.
+
+## Later (2026-11-16)
+
+- Keys typed at the end of the line above a table stay on that line: mid-edit the table still had
+  its old offsets, and keeping the cursor in cells moved it to the table's old start after the
+  first key, so the next keys went into its first cell, in reverse. The cursor is not moved while
+  an edit is under way.
+- A note starting with a table gets a line before it: the cursor may stand at the note's very
+  start, before the first cell, and what is typed there goes on a line of its own above the
+  table (a line break added after it, at once, the cursor before it). It went into the first
+  cell, a Return as a space.
+- The line break above a table is not deleted into its header (Forward Delete at the end of the
+  line above, or a selection ending at the table): the line joined the header (`Intro| a | b |`)
+  and the table was a table no more. An empty line above still goes.
+- Sorting a column compares text as the note list sorts names: numbers in it as numbers, and
+  Cyrillic in its alphabet's order (by code points є, і, ї and ґ came after я).

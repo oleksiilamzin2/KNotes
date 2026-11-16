@@ -53,3 +53,7 @@ named Knotes with bundle id `app.knotes.Knotes`.
   `RESCAN` (`""`): the vault is synced, and the window looks at the note open and the embedded
   notes on disk. A file registered but not read yet keeps its date less a nanosecond, not 0:
   it was listed on 01.01.1970.
+- 2026-11-16: names sort with Cyrillic in its alphabet's order (the note list by name, folders,
+  tags, a table's column, the AI's `list_notes` by name): by code points є, і, ї and ґ (and ё) came
+  after я, "Інжир" and "Ґанок" after "Яблуко". `natural_cmp` and `natural_key` moved to
+  knotes-core for all of them; the alphabets of Ukrainian and Russian are one order.

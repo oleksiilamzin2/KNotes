@@ -49,3 +49,8 @@ the reference (ADR 0011), with one change the owner asked for.
 |---|---|---|---|
 | 981 KB, 6000 list items and tasks | 31 ms | 17 ms | 5.6 ms (5.3 ms before; highlighting the whole note) |
 | 611 KB, ~1300 formulas | 19 ms | 4.7 ms | 2.2 ms |
+
+## Later (2026-11-16)
+
+- `- []` and a space typed in a fenced code block stay as typed: there they are an example, not
+  a task to make.
