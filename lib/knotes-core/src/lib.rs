@@ -1,5 +1,6 @@
 //! Domain model and traits (ports) of Knotes. No I/O lives here.
 
+mod natural_order;
 mod attachment_store;
 mod change_feed;
 mod closeness;
@@ -55,6 +56,7 @@ pub use note_parser::NoteParser;
 pub use note_rows::{NoteRow, NoteRows};
 pub use note_text::NoteText;
 pub use note_writer::NoteWriter;
+pub use natural_order::{natural_cmp, natural_key};
 pub use tag_index::TagIndex;
 pub use trash_store::{TrashEntry, TrashStore};
 pub use title_search::{TitleHit, TitleSearch};

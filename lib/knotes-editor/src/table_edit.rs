@@ -124,11 +124,12 @@ impl TableText {
     }
 
     /// Sorts the rows under the header by column `column`: numbers as numbers (before text),
-    /// text ignoring case; equal rows keep their order.
+    /// text as the note list sorts names (case ignored, numbers in it as numbers, Cyrillic in its
+    /// alphabet's order); equal rows keep their order.
     pub fn sort_by(&mut self, column: usize, ascending: bool) {
         let key = |row: &Vec<String>| {
             let cell = row.get(column).map_or("", |c| c.trim());
-            (cell.replace(',', ".").parse::<f64>().ok(), cell.to_lowercase())
+            (cell.replace(',', ".").parse::<f64>().ok(), knotes_core::natural_key(cell))
         };
         if self.rows.len() > 2 {
             self.rows[1..].sort_by(|a, b| {

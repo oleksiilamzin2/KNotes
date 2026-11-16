@@ -1,8 +1,26 @@
-//! Finder-like ordering: case-insensitive, digit runs compared as numbers ("2" < "10").
+//! Finder-like ordering: case-insensitive, digit runs compared as numbers ("2" < "10"), and
+//! Cyrillic letters in their alphabet's order.
 
 use std::cmp::Ordering;
 use std::iter::Peekable;
 use std::str::Chars;
+
+/// The Ukrainian and Russian alphabets in their order, together. Unicode puts є, і, ї, ґ (and ё)
+/// after я, so code points sorted "Інжир", "Їжак" and "Ґанок" after "Яблуко", "кіт" after "клен".
+const CYRILLIC: &str = "абвгґдеёєжзиіїйклмнопрстуфхцчшщъыьэюя";
+/// The alphabet's letters sort as these private-use code points, in its order.
+const CYRILLIC_BASE: u32 = 0xE000;
+
+/// `c` as it sorts, into `out`: lowercase (up to three chars), each alphabet letter as its place.
+/// How many chars it is.
+fn fold(c: char, out: &mut [char; 3]) -> usize {
+    let mut n = 0;
+    for lower in c.to_lowercase() {
+        out[n] = CYRILLIC.chars().position(|letter| letter == lower).map_or(lower, |i| char::from_u32(CYRILLIC_BASE + i as u32).expect("a private-use code point"));
+        n += 1;
+    }
+    n
+}
 
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
@@ -22,7 +40,9 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
             (Some(c), Some(d)) => {
                 x.next();
                 y.next();
-                let order = c.to_lowercase().cmp(d.to_lowercase());
+                let (mut c_sorts, mut d_sorts) = (['\0'; 3], ['\0'; 3]);
+                let (n, m) = (fold(c, &mut c_sorts), fold(d, &mut d_sorts));
+                let order = c_sorts[..n].cmp(&d_sorts[..m]);
                 if order != Ordering::Equal {
                     return order;
                 }
@@ -32,8 +52,9 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// A key whose plain byte order equals `natural_cmp` (up to the exact-text tie-break):
-/// lowercase, and every digit run written as its length (one char) followed by the digits
-/// without leading zeros. Built once per item, it makes sorting 50k titles ~4x faster.
+/// lowercase (Cyrillic letters as their places), and every digit run written as its length (one
+/// char) followed by the digits without leading zeros. Built once per item, it makes sorting 50k
+/// titles ~4x faster.
 pub fn natural_key(s: &str) -> String {
     let mut key = String::with_capacity(s.len() + 4);
     let mut chars = s.chars().peekable();
@@ -46,7 +67,9 @@ pub fn natural_key(s: &str) -> String {
             key.push_str(run);
         } else {
             chars.next();
-            key.extend(c.to_lowercase());
+            let mut sorts = ['\0'; 3];
+            let n = fold(c, &mut sorts);
+            key.extend(&sorts[..n]);
         }
     }
     key
@@ -72,6 +95,17 @@ mod tests {
         items.sort_by(|a, b| natural_cmp(a, b));
         by_key.sort_by_cached_key(|s| super::natural_key(s));
         assert_eq!(by_key, items);
+    }
+
+    #[test]
+    fn cyrillic_letters_sort_in_their_alphabet_s_order() {
+        let mut words = ["Яблуко", "Їжак", "Ґанок", "Гарбуз", "Інжир", "Ірис", "Єнот", "ежевика", "Апельсин", "кіт", "клен", "кит", "ёлка", "Zebra", "apple"];
+        let mut by_key = words;
+        words.sort_by(|a, b| natural_cmp(a, b));
+        by_key.sort_by_cached_key(|s| super::natural_key(s));
+        let order = ["apple", "Zebra", "Апельсин", "Гарбуз", "Ґанок", "ежевика", "ёлка", "Єнот", "Інжир", "Ірис", "Їжак", "кит", "кіт", "клен", "Яблуко"];
+        assert_eq!(words, order);
+        assert_eq!(by_key, order, "the key sorts as the comparison does");
     }
 
     #[test]

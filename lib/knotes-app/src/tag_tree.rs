@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::natural_order::natural_cmp;
+use knotes_core::natural_cmp;
 
 /// A tag in the sidebar; nested tags (`area/sub`) hang below their parent.
 #[derive(Debug, Clone, PartialEq, Eq)]

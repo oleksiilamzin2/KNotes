@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use knotes_core::FileKind;
 
 use crate::SpaceFolders;
-use crate::natural_order::natural_cmp;
+use knotes_core::natural_cmp;
 
 /// A folder of the vault; the root has an empty path and name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

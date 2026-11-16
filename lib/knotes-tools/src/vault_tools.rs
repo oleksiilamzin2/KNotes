@@ -627,7 +627,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             rows.retain(|r| tagged.contains(&r.path));
         }
         match args.get("sort").and_then(Value::as_str) {
-            Some("name") => rows.sort_by_key(|r| title_of(&r.path).to_lowercase()),
+            Some("name") => rows.sort_by_cached_key(|r| knotes_core::natural_key(&title_of(&r.path))),
             _ => rows.sort_by_key(|r| std::cmp::Reverse(r.mtime_ns)),
         }
         let total = rows.len();

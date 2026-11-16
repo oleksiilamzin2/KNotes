@@ -90,3 +90,12 @@ fn a_column_s_alignment_is_set() {
     t.set_align(1, Align::Center);
     assert_eq!(t.write(), "| a | b |\n| --- | :---: |\n");
 }
+
+#[test]
+fn sorting_ukrainian_words_follows_the_alphabet() {
+    // By code points є, і, ї and ґ came after я.
+    let mut table = TableText::parse("| Слово |\n| --- |\n| Яблуко |\n| Їжак |\n| Ґанок |\n| Гарбуз |\n| Інжир |\n| кит |\n| кіт |\n| клен |\n").unwrap();
+    table.sort_by(0, true);
+    let words: Vec<&str> = table.rows[1..].iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(words, ["Гарбуз", "Ґанок", "Інжир", "Їжак", "кит", "кіт", "клен", "Яблуко"]);
+}

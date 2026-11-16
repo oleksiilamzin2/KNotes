@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use knotes_core::{FileKind, NoteRow};
 
 use crate::SpaceList;
-use crate::natural_order::{natural_cmp, natural_key};
+use knotes_core::{natural_cmp, natural_key};
 use crate::space_list::Side;
 
 /// Current time and the local UTC offset (from the system), for date groups.
