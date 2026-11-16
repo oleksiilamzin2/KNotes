@@ -5,6 +5,7 @@ use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::anchor_scan::scan_anchors;
 use crate::chunking::{TopBlock, chunk};
+use crate::comments::comment_ranges;
 use crate::frontmatter::parse_frontmatter;
 use crate::link_target::{has_scheme, percent_decode, split_subpath};
 use crate::snippet::snippet;
@@ -65,10 +66,14 @@ impl NoteParser for MarkdownParser {
                 Event::Start(Tag::Link { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, false, span),
                 Event::Start(Tag::Image { link_type, dest_url, .. }) => c.start_link(link_type, dest_url, true, span),
                 Event::End(TagEnd::Link | TagEnd::Image) => c.end_link(),
-                Event::Start(Tag::CodeBlock(_)) => c.in_verbatim = true,
+                Event::Start(Tag::CodeBlock(_)) => {
+                    c.in_verbatim = true;
+                    c.verbatim.push(range.clone());
+                }
                 Event::End(TagEnd::CodeBlock) => c.in_verbatim = false,
                 Event::Start(Tag::MetadataBlock(_)) => {
                     c.in_verbatim = true;
+                    c.verbatim.push(range.clone());
                     c.yaml = Some((span, String::new()));
                 }
                 Event::End(TagEnd::MetadataBlock(_)) => c.end_frontmatter(),
@@ -79,12 +84,17 @@ impl NoteParser for MarkdownParser {
                     c.text(&t);
                     c.plain_text(range);
                 }
-                Event::Code(t) | Event::InlineMath(t) => c.text(&t),
+                Event::Code(t) | Event::InlineMath(t) => {
+                    c.verbatim.push(range.clone());
+                    c.text(&t);
+                }
+                Event::DisplayMath(_) => c.verbatim.push(range.clone()),
                 Event::SoftBreak | Event::HardBreak => c.text(" "),
                 _ => {}
             }
         }
         c.flush_run();
+        c.drop_commented();
         chunk(source, &c.top, self.max_block_bytes, &mut c.note.blocks);
         c.note.snippet = snippet(source, SNIPPET_CHARS);
         c.note
@@ -109,6 +119,8 @@ struct Collector<'s> {
     depth: u32,
     /// Top-level blocks (frontmatter excluded), input for chunking.
     top: Vec<TopBlock>,
+    /// Code, formulas and frontmatter: no comment starts there.
+    verbatim: Vec<Range<usize>>,
 }
 
 impl Collector<'_> {
@@ -127,6 +139,23 @@ impl Collector<'_> {
             _ if self.depth == 0 => self.top.push(TopBlock { range: range.clone(), heading: None }),
             _ => {}
         }
+    }
+
+    /// Leaves out the tags, links, anchors and headings inside `%%` comments, as Obsidian does.
+    fn drop_commented(&mut self) {
+        self.verbatim.sort_by_key(|r| r.start);
+        let comments = comment_ranges(self.source, &self.verbatim);
+        if comments.is_empty() {
+            return;
+        }
+        let commented = |span: &Span| {
+            let after = comments.partition_point(|c| c.start <= span.start as usize);
+            after > 0 && (span.start as usize) < comments[after - 1].end
+        };
+        self.note.tags.retain(|t| !commented(&t.span));
+        self.note.links.retain(|l| !commented(&l.span));
+        self.note.anchors.retain(|a| !commented(&a.span));
+        self.note.headings.retain(|h| !commented(&h.span));
     }
 
     fn end_frontmatter(&mut self) {
