@@ -192,7 +192,8 @@ impl OutlinePanel {
             outline.setTarget(Some(&source));
             outline.setAction(Some(sel!(headingClicked:)));
         }
-        let scroll = NSScrollView::new(mtm);
+        // Without the line the toolbar draws over a scroll view under it (ADR 0016).
+        let scroll: Retained<NSScrollView> = Retained::into_super(crate::quiet_scroll_view::QuietScrollView::new(mtm));
         scroll.setDocumentView(Some(&outline));
         scroll.setHasVerticalScroller(true);
         scroll.setAutohidesScrollers(true);

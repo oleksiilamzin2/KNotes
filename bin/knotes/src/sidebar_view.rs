@@ -623,7 +623,8 @@ pub fn outline(mtm: MainThreadMarker, source: &SidebarSource) -> (Retained<NSScr
     menu.setDelegate(Some(ProtocolObject::from_ref(source)));
     // SAFETY: a menu built here, kept by the outline.
     unsafe { outline.setMenu(Some(&menu)) };
-    let scroll = NSScrollView::new(mtm);
+    // Without the line the toolbar draws over a scroll view under it (ADR 0016).
+    let scroll: Retained<NSScrollView> = Retained::into_super(crate::quiet_scroll_view::QuietScrollView::new(mtm));
     scroll.setDocumentView(Some(&outline));
     scroll.setHasVerticalScroller(true);
     scroll.setDrawsBackground(false);
