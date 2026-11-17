@@ -88,6 +88,8 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
 /// Where a card's parts are in its note's text, for showing it (bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardParts {
+    /// The whole card, its deck's mark (or a list item's marker before it) to its id.
+    pub span: Range<usize>,
     /// Its deck's mark, `#@deck/sub` (with the brace that opens a card in braces).
     pub deck: Range<usize>,
     /// Its question; none for a cloze.
@@ -149,7 +151,7 @@ fn parts_of(text: &str, card: &Card) -> Option<CardParts> {
         let brace = last + body[last..].find('}')?;
         marks.push(within(brace..brace + 1));
     }
-    Some(CardParts { deck: within(mark..deck_end), question: question.map(within), marks })
+    Some(CardParts { span: card.span.clone(), deck: within(mark..deck_end), question: question.map(within), marks })
 }
 
 /// Where the frontmatter ends (0 without one): the `---` lines the text starts with.

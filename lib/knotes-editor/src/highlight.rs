@@ -119,6 +119,9 @@ pub struct Highlight {
     pub code_langs: Vec<CodeRun>,
     /// Obsidian callouts, sorted by start.
     pub callouts: Vec<CalloutRun>,
+    /// The cards that stand as blocks of their own (ADR 0037; a list item's does not), each
+    /// from its deck's mark to its end, sorted by start.
+    pub cards: Vec<Range<usize>>,
     /// Image embeds alone on their line (ADR 0020), sorted by start.
     pub images: Vec<ImageRun>,
     /// Markdown tables (ADR 0021), sorted by start.
@@ -220,6 +223,7 @@ impl Highlight {
             .chain(self.code_langs.iter().flat_map(|c| [c.block.start, c.block.end, c.code.start, c.code.end]))
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
+            .chain(self.cards.iter().flat_map(|c| [c.start, c.end]))
             .chain(self.footnotes.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.embeds.iter().flat_map(|e| [e.range.start, e.range.end]))
             .chain(self.tables.iter().flat_map(|t| {
@@ -242,6 +246,7 @@ impl Highlight {
                 .map(|f| FormulaRun { range: map(f.range.start)..map(f.range.end), tex: f.tex.clone(), display: f.display })
                 .collect(),
             code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
+            cards: self.cards.iter().map(|c| map(c.start)..map(c.end)).collect(),
             code_langs: self
                 .code_langs
                 .iter()
@@ -440,6 +445,9 @@ pub fn highlight(source: &str) -> Highlight {
     // A card's parts (ADR 0037): its deck, its question, what parts them.
     if source.contains(knotes_cards::DECK_MARK) {
         for card in knotes_cards::card_parts(source) {
+            if card.span.start == card.deck.start {
+                h.cards.push(card.span.clone());
+            }
             h.runs.push(Run { range: card.deck, style: Style::CardDeck });
             h.runs.extend(card.question.map(|range| Run { range, style: Style::CardQuestion }));
             h.runs.extend(card.marks.into_iter().map(|range| Run { range, style: Style::CardMark }));

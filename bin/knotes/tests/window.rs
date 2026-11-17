@@ -4207,4 +4207,11 @@ fn a_card_shows_its_deck_on_a_plate_its_question_strong_and_its_marks_muted() {
     }
     assert_eq!(runs.matches("[card-question]").count(), 2, "a cloze has no question apart: {runs}");
     assert_eq!(runs.matches("[card-mark]::").count(), 1, "only a card's: {runs}");
+    // Each stands as a block, as a quote does, with a bar of the cards' colour down its lines
+    // (the blank ones inside braces too): 1 + 5 + 1.
+    assert_eq!(out.matches("decoration: card ").count(), 7, "{out}");
+    assert!(!out.contains("decoration: quote "), "{out}");
+    // A list item's card keeps its item's look, and a quote its own bar.
+    let (_vault, out) = probe_notes(&[("n.md", "- #@мови cat::кіт\n\n> цитата\n\nкінець")], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    assert!(editor_runs(&out).contains("[card-deck]#@мови|") && !out.contains("decoration: card ") && out.matches("decoration: quote ").count() == 1, "{out}");
 }

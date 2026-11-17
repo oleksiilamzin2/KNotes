@@ -123,6 +123,16 @@ impl LivePreview {
                 canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
             }
         }
+        // A card stands as a block, as a quote does: its paragraphs indent past its bar.
+        for card in styled.cards.iter().filter(|c| meets(c)) {
+            let para = palette.para(Para { first_indent: QUOTE_INDENT, head_indent: QUOTE_INDENT, min_line: self.line_height(), ..Para::default() });
+            let mut at = card.start;
+            while at < card.end {
+                let paragraph = paragraph(storage, NSRange::new(at, 0));
+                canvas.paint(paragraph.0..paragraph.1, |p| p.para = para);
+                at = paragraph.1.max(at + 1);
+            }
+        }
         for block in styled.code_blocks.iter().filter(|c| meets(c)) {
             self.paint_code_block(&mut canvas, &mut palette, storage, &styled, block, overlaps(block, revealed));
         }
@@ -302,7 +312,7 @@ pub(super) fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'stati
         Style::FootnoteRef => (&look.footnote, &look.accent, "footnote"),
         Style::FootnoteLabel => (&look.body, &look.muted, "footnote-label"),
         Style::CardId => (&look.footnote, &look.muted, "card-id"),
-        Style::CardDeck => (&look.body, &look.accent, "card-deck"),
+        Style::CardDeck => (&look.body, &look.card, "card-deck"),
         Style::CardQuestion => (&look.bold, &look.text, "card-question"),
         Style::CardMark => (&look.body, &look.muted, "card-mark"),
     }

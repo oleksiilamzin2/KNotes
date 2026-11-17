@@ -46,7 +46,8 @@ pub enum Mark {
     /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
     Task { offset: usize, centre: f64, checked: bool },
     /// A quote level's bar down the whole paragraph, `x` from the text column's start.
-    QuoteBar { x: f64 },
+    /// `card`: a card's bar (ADR 0037), in the cards' colour, not the accent.
+    QuoteBar { x: f64, card: Option<Retained<NSColor>> },
     /// A code block's background across the column behind the paragraph, its corners rounded
     /// at the block's top and bottom.
     CodeBackground { top: bool, bottom: bool },
@@ -241,8 +242,11 @@ define_class!(
                     (Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::EmbedBox { .. }, _) => {}
                     (Mark::CalloutIcon { colour, symbol, label, font, .. }, _) => draw_callout_icon(rect, colour, symbol, label.as_deref(), font),
                     (Mark::External { .. }, _) => draw_external_arrow(rect),
-                    (Mark::QuoteBar { .. }, _) => {
-                        NSColor::controlAccentColor().setFill();
+                    (Mark::QuoteBar { card, .. }, _) => {
+                        match card {
+                            Some(colour) => colour.setFill(),
+                            None => NSColor::controlAccentColor().setFill(),
+                        }
                         // Square ends: the bars of consecutive lines join into one.
                         NSBezierPath::bezierPathWithRect(rect).fill();
                     }
@@ -301,7 +305,7 @@ impl PreviewFragment {
 
     /// Where `mark` is drawn, in this fragment's coordinates, once it is laid out.
     fn mark_rect(&self, mark: &Mark) -> Option<NSRect> {
-        if let Mark::QuoteBar { x } = mark {
+        if let Mark::QuoteBar { x, .. } = mark {
             let frame = self.layoutFragmentFrame();
             return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, 0.0), NSSize::new(QUOTE_BAR, frame.size.height)));
         }
@@ -426,7 +430,7 @@ impl PreviewFragment {
                         let kind = if *checked { "task-done" } else { "task" };
                         format!("decoration: {kind} {x:.1} {y:.1} {w:.1} {h:.1}")
                     }
-                    Mark::QuoteBar { .. } => format!("decoration: quote {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::QuoteBar { card, .. } => format!("decoration: {} {x:.1} {y:.1} {w:.1} {h:.1}", if card.is_some() { "card" } else { "quote" }),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::EmbedBox { below, .. } => format!("decoration: embed{} {x:.1} {y:.1} {w:.1} {h:.1}", if *below { "-below" } else { "" }),
                     Mark::CodeNumber { number, .. } => format!("decoration: code-number {number} {x:.1} {y:.1} {w:.1} {h:.1}"),

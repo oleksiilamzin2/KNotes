@@ -275,3 +275,11 @@ It is the first new feature since the owner's goal became to polish what exists.
   its line, the closing brace) muted. A cloze's `==words==` were highlighted already, as any.
 - Nothing is hidden or replaced: the text is as typed, so a card is edited as any line. No
   frame around a card, no button in it.
+
+## Built (2026-11-17): a card is a block, lilac
+
+- Owner: «блоки питань по типу > блоків, тільки оберемо бузковий колір». A card that stands
+  alone (not a list item's) shows as a quote does: a bar down its paragraphs, the blank ones
+  inside braces too, its text indented past it; the bar and the deck's mark lilac (`look.card`,
+  a step lighter in the dark look), where a quote's bar is the accent. `Highlight::cards` holds
+  such cards' ranges; the bar is the quote's mark with a colour. Still nothing hidden.

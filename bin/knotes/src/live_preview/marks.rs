@@ -231,6 +231,11 @@ impl LivePreview {
                 marks.push(Mark::TableRow { columns: Rc::clone(&columns), header: i == 0, top: i == 0, scrolled, controls });
             }
         }
+        // A card's bar down each of its paragraphs, the blank ones inside braces too.
+        let card = styled.cards.partition_point(|c| c.end < from);
+        if styled.cards.get(card).is_some_and(|c| c.start < to && (c.end > from || c.end == from && from == to)) {
+            marks.push(Mark::QuoteBar { x: 0.0, card: Some(look.card.clone()) });
+        }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
         if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
             marks.push(Mark::CodeBackground { top: from <= c.start, bottom: to >= c.end });
@@ -260,7 +265,7 @@ impl LivePreview {
             if let Style::QuoteMarker { depth } = run.style {
                 // A callout's lines show its box instead of bars.
                 if !styled.callouts.iter().any(|c| run.range.start >= c.range.start && run.range.start < c.range.end) {
-                    marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT }));
+                    marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT, card: None }));
                 }
                 continue;
             }
