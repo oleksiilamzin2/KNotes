@@ -649,6 +649,7 @@ name = "knotes-editor"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "knotes-cards",
  "knotes-core",
  "knotes-md",
  "pulldown-cmark",

@@ -37,6 +37,9 @@ pub enum Style {
     FootnoteRef,
     /// A footnote definition's `[^label]:`, shown muted.
     FootnoteLabel,
+    /// A card's id at its end, `^c-a1b2c3` (ADR 0037): the app's mark, not the user's text,
+    /// shown small and muted.
+    CardId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -427,6 +430,14 @@ pub fn highlight(source: &str) -> Highlight {
     let parsed = MarkdownParser::new().parse(source);
     for tag in parsed.tags {
         h.runs.push(Run { range: tag.span.start as usize..tag.span.end as usize, style: Style::Tag });
+    }
+    // A card's id: its last characters, after the `^`.
+    if source.contains(knotes_cards::ID_MARK) {
+        for card in knotes_cards::scan_cards(source) {
+            if let Some(id) = &card.id {
+                h.runs.push(Run { range: card.span.end - id.len() - 1..card.span.end, style: Style::CardId });
+            }
+        }
     }
     h.links = parsed.links.into_iter().map(|link| LinkRun { range: link.span.start as usize..link.span.end as usize, link }).collect();
     // A bare web address is a link with no markup: its text is the link.

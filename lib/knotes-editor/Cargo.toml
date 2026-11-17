@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 knotes-core.workspace = true
 knotes-md.workspace = true
+knotes-cards.workspace = true
 pulldown-cmark.workspace = true
 syntect.workspace = true
 two-face.workspace = true
