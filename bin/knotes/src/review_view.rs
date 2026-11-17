@@ -153,16 +153,24 @@ impl ReviewView {
         column.setSpacing(14.0);
         column.setTranslatesAutoresizingMaskIntoConstraints(false);
         view.addSubview(&column);
-        let wide = column.widthAnchor().constraintEqualToConstant(620.0);
-        // Wished for, never forced: stronger than the split view holds its columns, it widened the
-        // note column (and the window) even while hidden.
-        wide.setPriority(100.0);
+        // As wide as the note column lets it, 620 points at most. Tied to the column's width, not
+        // a width of its own: a wish for 620 points widened the column (and the window) even
+        // while hidden, and a weak one left the text as narrow as its shortest row.
+        let wide = column.widthAnchor().constraintEqualToAnchor_constant(&view.widthAnchor(), -64.0);
+        // Weaker than the split view holds its columns (250): stronger, it kept the note column
+        // from growing with the window. The texts hug nothing, or they would win over it.
+        wide.setPriority(240.0);
+        for field in [&header, &front, &back] {
+            field.setContentHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
+        }
+        column.setHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         let constraints = [
             column.topAnchor().constraintEqualToAnchor_constant(&view.safeAreaLayoutGuide().topAnchor(), 40.0),
             column.centerXAnchor().constraintEqualToAnchor(&view.centerXAnchor()),
             column.leadingAnchor().constraintGreaterThanOrEqualToAnchor_constant(&view.leadingAnchor(), 32.0),
             column.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&view.trailingAnchor(), -32.0),
             wide,
+            column.widthAnchor().constraintLessThanOrEqualToConstant(620.0),
             front.widthAnchor().constraintEqualToAnchor(&column.widthAnchor()),
             back.widthAnchor().constraintEqualToAnchor(&column.widthAnchor()),
             line.widthAnchor().constraintEqualToAnchor(&column.widthAnchor()),
