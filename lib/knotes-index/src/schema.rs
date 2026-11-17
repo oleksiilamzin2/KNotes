@@ -3,7 +3,8 @@
 /// 11: tags and links in a note's first line count again (version 10 left them out).
 /// 12: bare web addresses are links to websites.
 /// 13: PDFs' text is indexed and searched (ADR 0022).
-pub(crate) const VERSION: i64 = 13;
+/// 14: the notes' cards, their reviews and schedules (ADR 0037).
+pub(crate) const VERSION: i64 = 14;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
@@ -63,6 +64,40 @@ CREATE TABLE aliases(
     alias TEXT NOT NULL,
     PRIMARY KEY(file_id, ord)
 ) WITHOUT ROWID;
+-- A note's cards (ADR 0037), in its text's order.
+CREATE TABLE cards(
+    file_id INTEGER NOT NULL,
+    ord INTEGER NOT NULL,
+    deck TEXT NOT NULL,
+    -- Its lasting id (`c-a1b2c3`); NULL until it is given one.
+    card_id TEXT,
+    kind INTEGER NOT NULL,
+    start INTEGER NOT NULL,
+    end INTEGER NOT NULL,
+    PRIMARY KEY(file_id, ord)
+) WITHOUT ROWID;
+CREATE INDEX cards_by_deck ON cards(deck);
+CREATE INDEX cards_by_id ON cards(card_id);
+-- The reviews logged in the vault, every log's together: a card's, in time's order.
+CREATE TABLE reviews(
+    card_id TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    grade INTEGER NOT NULL,
+    PRIMARY KEY(card_id, at)
+) WITHOUT ROWID;
+-- How much of each log has been read (bytes).
+CREATE TABLE review_logs(name TEXT PRIMARY KEY, read INTEGER NOT NULL) WITHOUT ROWID;
+-- Where each reviewed card stands, worked out from its reviews.
+CREATE TABLE card_states(
+    card_id TEXT PRIMARY KEY,
+    stability REAL NOT NULL,
+    difficulty REAL NOT NULL,
+    last INTEGER NOT NULL,
+    due INTEGER NOT NULL,
+    reviews INTEGER NOT NULL,
+    lapses INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX card_states_by_due ON card_states(due);
 -- Search blocks; `id` is the rowid of the block in blocks_fts.
 CREATE TABLE blocks(
     id INTEGER PRIMARY KEY,

@@ -5,7 +5,9 @@
 mod card;
 mod fsrs;
 mod scan;
+mod schedule;
 
 pub use card::{Card, CardKind};
 pub use fsrs::{Fsrs, Grade, Memory};
 pub use scan::{DECK_MARK, ID_MARK, scan_cards};
+pub use schedule::{Schedule, parse_review, review_line, schedule};

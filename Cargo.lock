@@ -689,6 +689,7 @@ dependencies = [
 name = "knotes-index"
 version = "0.1.0"
 dependencies = [
+ "knotes-cards",
  "knotes-core",
  "knotes-md",
  "memmap2",

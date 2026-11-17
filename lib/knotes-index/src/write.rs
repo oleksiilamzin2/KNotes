@@ -54,6 +54,10 @@ impl IndexWriter for SqliteIndex {
                     delete_note_rows(&tx, id, &mut fts)?;
                     if let Some((source, parsed)) = note {
                         insert_note_rows(&tx, id, source, parsed, &mut fts)?;
+                        // A note's cards; a PDF's text is no Markdown and holds none.
+                        if file.kind == knotes_core::FileKind::Markdown {
+                            crate::cards::insert_cards(&tx, id, source)?;
+                        }
                         links.extend(parsed.links.iter().enumerate().map(|(ord, link)| NewLink {
                             file_id: id,
                             ord,
@@ -171,7 +175,7 @@ fn delete_note_rows(tx: &Transaction, id: i64, fts: &mut FtsWork) -> Result<(), 
     for rowid in st.query_map([id], |r| r.get(0))? {
         fts.deletes.push(rowid?);
     }
-    for table in ["blocks", "headings", "links", "tags", "aliases"] {
+    for table in ["blocks", "headings", "links", "tags", "aliases", "cards"] {
         tx.prepare_cached(&format!("DELETE FROM {table} WHERE file_id = ?1"))?.execute([id])?;
     }
     Ok(())

@@ -42,3 +42,27 @@ It is the first new feature since the owner's goal became to polish what exists.
   days until a card is due, `Fsrs::recall` the chance of recalling it.
 - Measured (M5 Pro, release): 100,000 cards in 10,000 notes (19 MB of text) scanned in 93 ms;
   200,000 reviews worked out in 2.5 ms.
+
+## Built (2026-11-17): the index
+
+- The index (schema 14) keeps a note's cards (`cards`: deck, id, where in the text), found by
+  `scan_cards` as the note is indexed (Markdown only; a note without `#@` is not scanned); the
+  reviews taken from the logs (`reviews`), how much of each log was read (`review_logs`), and
+  each reviewed card's schedule (`card_states`). The tables are a cache as the rest: a rebuilt
+  index reads the logs again from their start.
+- A review is a line of a log, `when<TAB>card id<TAB>grade` (`review_line`, `parse_review`).
+  `SqliteIndex::take_reviews` takes a log's text from where it was read to, keeps its whole
+  lines' reviews (a line still being written waits), and works out again the schedule of each
+  card they are of from all its reviews in time's order (`schedule`), whatever log they came
+  from: a second Mac's reviews arriving late fall into place. A card graded Again is due in ten
+  minutes, any other after its interval.
+- `CardIndex` (knotes-core): `deck_counts` gives each deck's own cards, those due and those
+  never reviewed; `due_cards` a deck's and its sub-decks' cards to review, the longest due
+  first, then the new ones.
+- Measured (M5 Pro, release) on 10,000 notes with 100,000 cards and a million reviews: the
+  cards add nothing one can see to indexing (447 ms for the notes, cards and all); the million
+  reviews are taken in 0.58 s (a rebuilt index's cost, once); one review in 0.12 ms; the decks'
+  counts (200 decks, 60,000 due) in 34 ms; a deck's next 200 cards in 1.3 ms, the whole vault's
+  in 42 ms.
+- To come before the window: the logs' files in the vault's `.knotes` folder (a log a Mac), read
+  by the indexer as they grow.

@@ -8,6 +8,7 @@ mod light_stemmer;
 mod link_resolver;
 mod link_targets;
 mod name_key;
+mod cards;
 mod read;
 mod schema;
 mod search;
