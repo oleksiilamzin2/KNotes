@@ -9,8 +9,9 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSUserDefaults, ns_str
 use crate::probe;
 use crate::vault_window::split_controller;
 
-/// Initial column widths (sidebar, list, chat) when the user has not resized them yet.
-const INITIAL_WIDTHS: [f64; 3] = [260.0, 340.0, 320.0];
+/// Initial column widths (sidebar, list, chat) when the user has not resized them yet: the
+/// owner's, measured on their window (2026-11-17); the note takes the rest.
+const INITIAL_WIDTHS: [f64; 3] = [233.0, 282.0, 317.0];
 const SPLIT_AUTOSAVE: &str = "KnotesMainSplit";
 
 pub fn build(

@@ -132,7 +132,8 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     assert!(edges.len() == 4 && edges[0] >= 200.0 && (edges[2] - edges[0] - edges[1]).abs() <= 2.0 && edges[1] > 200.0 && edges[3] > 300.0, "the list's part, then the note's: {parts}");
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
-    assert!(w[0] >= 240.0 && w[1] >= 300.0 && w[3] >= 280.0 && w[2] >= 400.0, "{widths}");
+    // The owner's default widths (2026-11-17): sidebar, list, the note with the rest, panel.
+    assert!(w[0] == 233.0 && w[1] == 282.0 && w[3] == 317.0 && w[2] >= 400.0, "{widths}");
 }
 
 fn list_titles(out: &str) -> Vec<String> {
@@ -1447,7 +1448,7 @@ fn the_window_opens_where_and_as_big_as_it_was_left() {
 fn the_list_gets_its_width_back_when_the_sidebar_comes_back() {
     let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "toggle-sidebar-twice"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
     let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
-    assert!((widths[1] - 340.0).abs() < 2.0, "the list as wide as before the sidebar went: {widths:?}");
+    assert!((widths[1] - 282.0).abs() < 2.0, "the list as wide as before the sidebar went: {widths:?}");
 }
 
 const PIC: &[u8] = include_bytes!("fixtures/pic-120x80.png");
