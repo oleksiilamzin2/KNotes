@@ -5,13 +5,55 @@
 
 use std::sync::{Arc, Mutex};
 
-use knotes_embed::ProcessEmbedder;
+use knotes_embed::{EmbedError, Embedder, Passage, ProcessEmbedder, Vector};
 use knotes_session::{AppSettings, app_data_dir};
 use knotes_vectors::MeaningModel;
 
 struct Chosen {
     model: Option<MeaningModel>,
-    embedder: Option<Arc<ProcessEmbedder>>,
+    embedder: Option<Arc<Watched>>,
+}
+
+/// The helper, each request's outcome noted for the settings: one that does not start, a model
+/// that will not load, fail silently otherwise (search by meaning becomes search by words, and
+/// no vectors are made), the settings saying the vectors are up to date.
+pub struct Watched(ProcessEmbedder);
+
+impl Watched {
+    /// Starts the helper ahead of a request (`ProcessEmbedder::warm`).
+    pub fn warm(&self) {
+        self.0.warm();
+    }
+}
+
+impl Embedder for Watched {
+    fn embed(&self, passages: &[Passage]) -> Result<Vec<Vector>, EmbedError> {
+        let result = self.0.embed(passages);
+        note_outcome(&result);
+        result
+    }
+}
+
+/// Why search by meaning does not work: its last request's failure; none once one works, or
+/// another model is chosen.
+static FAILING: Mutex<Option<String>> = Mutex::new(None);
+
+fn note_outcome<T>(result: &Result<T, EmbedError>) {
+    *FAILING.lock().unwrap_or_else(|e| e.into_inner()) = match result {
+        Ok(_) => None,
+        Err(EmbedError::Unavailable(why) | EmbedError::Failed(why)) => Some(why.clone()),
+    };
+}
+
+/// Why search by meaning fails now, if it does.
+pub fn failing() -> Option<String> {
+    FAILING.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Probe: search by meaning failing for `why` (`KNOTES_PROBE_MEANING_FAILING`), the probe
+/// starting no helper.
+pub fn probe_fail(why: &str) {
+    note_outcome::<()>(&Err(EmbedError::Failed(why.to_owned())));
 }
 
 /// Read from the settings at the first look.
@@ -33,7 +75,7 @@ pub fn model() -> Option<MeaningModel> {
 
 /// Its helper; none when off, in the probe (its windows never start a model) or without the
 /// helper and the model's file beside the app.
-pub fn embedder() -> Option<Arc<ProcessEmbedder>> {
+pub fn embedder() -> Option<Arc<Watched>> {
     with(|chosen| chosen.embedder.clone())
 }
 
@@ -47,6 +89,7 @@ pub fn choose(model: Option<MeaningModel>) {
         eprintln!("knotes: cannot save settings: {e}");
     }
     *CHOSEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(chosen(model));
+    *FAILING.lock().unwrap_or_else(|e| e.into_inner()) = None;
     GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -56,7 +99,7 @@ fn chosen(model: Option<MeaningModel>) -> Chosen {
     } else {
         model
             .and_then(|m| std::env::current_exe().ok().and_then(|exe| knotes_session::embedder_files(&exe, m.file())))
-            .map(|(helper, file)| Arc::new(ProcessEmbedder::new(helper, file)))
+            .map(|(helper, file)| Arc::new(Watched(ProcessEmbedder::new(helper, file))))
     };
     Chosen { model, embedder }
 }
@@ -149,6 +192,14 @@ mod tests {
     use std::time::Duration;
 
     use knotes_vectors::{MeaningModel, Progress};
+
+    #[test]
+    fn a_failing_request_is_kept_for_the_settings_until_one_works() {
+        super::note_outcome::<()>(&Err(knotes_embed::EmbedError::Unavailable("no model".into())));
+        assert_eq!(super::failing().as_deref(), Some("no model"));
+        super::note_outcome(&Ok(()));
+        assert_eq!(super::failing(), None);
+    }
 
     #[test]
     fn the_vaults_passes_add_up_and_their_speed_is_blocks_a_second() {

@@ -180,6 +180,10 @@ pub const SETTINGS_CLEAR: &str = "Очистити";
 pub const SETTINGS_REGENERATE: &str = "Перегенерувати";
 pub const SETTINGS_VECTORS_READY: &str = "Вектори актуальні";
 pub const SETTINGS_MEANING_IS_OFF: &str = "Пошук за змістом вимкнено";
+/// Search by meaning's model failing (it does not start, will not load, or dies): why.
+pub fn settings_meaning_failing(why: &str) -> String {
+    format!("Пошук за змістом не працює: {why}")
+}
 
 /// The vectors being made: notes done of all, and blocks a second.
 pub fn settings_making(done: usize, total: usize, per_second: f64) -> String {

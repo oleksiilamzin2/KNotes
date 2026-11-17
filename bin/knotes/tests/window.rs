@@ -3852,3 +3852,11 @@ fn a_pdf_that_does_not_open_says_why() {
     assert!(out.contains("failed: Не вдалося відкрити «broken»: Файл пошкоджений або це не PDF."), "{out}");
     assert!(out.contains("note-column: empty"), "{out}");
 }
+
+#[test]
+fn the_settings_say_why_search_by_meaning_fails_instead_of_the_vectors_being_up_to_date() {
+    let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SETTINGS", "1"), ("KNOTES_PROBE_MEANING_FAILING", "no model at /x/model.gguf")]);
+    assert!(out.contains("settings-progress: Пошук за змістом не працює: no model at /x/model.gguf\n"), "{out}");
+    let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SETTINGS", "1")]);
+    assert!(out.contains("settings-progress: Вектори актуальні\n"), "{out}");
+}

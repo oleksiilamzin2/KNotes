@@ -200,8 +200,20 @@ paths.
   silent longer is stopped (a late answer would be taken for the next request's) and the
   request fails, not asked again (which would make it wait as long once more). A helper that
   dies says how it ended ("exit status: 3").
+- **The settings say why it fails.** A helper that did not start, a model that would not load
+  or a helper dying at each request failed silently: search by meaning became search by words
+  (its errors are taken as no finds), the pass making the vectors wrote its error once to
+  stderr and cleared its progress as one done, and the settings said «Вектори актуальні». Each
+  request's outcome is now noted (`meaning::Watched`, around the helper all share); the
+  settings say «Пошук за змістом не працює: …» with the last failure until a request works or
+  another model is chosen.
+- **A failed pass waits before the next.** Each change of the index (each save, once settled)
+  started a pass again, the helper twice each time: with a helper that loads its model and dies,
+  two loads of 3 s on the GPU a save. After a failed pass the next comes after a minute,
+  doubled after each failure up to 30 minutes, whatever changes meanwhile; searches still ask.
 - Found sound: a helper dying in a request is started again and asked once more (an answer or
   an error in 0.1 to 0.4 s); one that exits idle is started at the next request; one whose app
   goes (quits or crashes) exits at once, its input closed; a missing model is said in each
   answer; a passage longer than the model's window is cut; warming never waits.
 - Left: a helper that has exited idle stays a zombie (no memory) until the next request.
+- Probe mode: `KNOTES_PROBE_MEANING_FAILING=why` (the probe starts no helper).

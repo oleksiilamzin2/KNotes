@@ -177,6 +177,11 @@ fn refresh(settings: &Settings) {
         regenerate.setHidden(!used);
     }
     match (in_use, crate::meaning::making()) {
+        // A pass under way works; one that failed said so in its place.
+        (Some(_), None) if let Some(why) = crate::meaning::failing() => {
+            settings.status.setStringValue(&NSString::from_str(&strings::settings_meaning_failing(&why)));
+            settings.progress.setHidden(true);
+        }
         (None, _) => {
             settings.status.setStringValue(&NSString::from_str(strings::SETTINGS_MEANING_IS_OFF));
             settings.progress.setHidden(true);

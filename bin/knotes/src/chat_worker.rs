@@ -182,18 +182,31 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, model: MeaningModel, 
     let spawned = std::thread::Builder::new().name("knotes-vectors".into()).spawn(move || {
         let paced = Paced(embedder);
         let mut told = false;
+        // After a failed pass, how long until the next.
+        let mut backoff: Option<Duration> = None;
         loop {
             // How far each pass goes, for the settings' progress bar.
             let pass = SqliteIndex::open_reader(&dir).and_then(|index| update_reporting(&index, &store(&dir, model)?, &paced, now_ns(), Which::Settled, &stop, &mut |p| crate::meaning::report(&dir, p)));
             crate::meaning::finished(&dir);
             let next = match pass {
-                Ok(updated) => updated.next,
+                Ok(updated) => {
+                    (told, backoff) = (false, None);
+                    updated.next
+                }
                 Err(e) => {
                     if !told {
                         eprintln!("knotes: search by meaning: {e}");
                         told = true;
                     }
-                    None
+                    // Not again at each change of the index (each save): a helper that will not
+                    // start, or loads its model and dies, would do so twice each time. A while
+                    // first, longer after each failure; searches still ask meanwhile.
+                    let wait = backoff.map_or(RETRY_FIRST, |last| (last * 2).min(RETRY_LAST));
+                    backoff = Some(wait);
+                    if !sleep_through(&wake, wait, &stop) {
+                        return;
+                    }
+                    continue;
                 }
             };
             let woke = match next {
@@ -208,6 +221,25 @@ fn keep_vectors(dir: PathBuf, embedder: Arc<dyn Embedder>, model: MeaningModel, 
         }
     });
     spawned.map_err(|e| eprintln!("knotes: cannot start keeping the vectors: {e}")).ok()
+}
+
+/// After a failed pass of the vectors, the wait before the next, doubled after each failure up
+/// to the last.
+const RETRY_FIRST: Duration = Duration::from_secs(60);
+const RETRY_LAST: Duration = Duration::from_secs(30 * 60);
+
+/// Waits `wait`, wakes meanwhile let pass; false when told to end (its waker dropped, or
+/// stopped).
+fn sleep_through(wake: &mpsc::Receiver<()>, wait: Duration, stop: &AtomicBool) -> bool {
+    let until = std::time::Instant::now() + wait;
+    loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        match wake.recv_timeout(left) {
+            Ok(()) if !stop.load(Ordering::Relaxed) => {}
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            Err(mpsc::RecvTimeoutError::Timeout) => return !stop.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// Embeds at once the documents of the vault indexed in `dir` changed too lately for the
@@ -345,6 +377,37 @@ mod tests {
         assert_eq!(embedded(), 1, "not woken: nothing looked at");
         wake.send(()).unwrap();
         wait_for(|| embedded() == 2);
+        drop(wake);
+        thread.join().unwrap();
+    }
+
+    /// Fails every request, counting them.
+    #[derive(Default)]
+    struct Failing(AtomicUsize);
+
+    impl Embedder for Failing {
+        fn embed(&self, _passages: &[Passage]) -> Result<Vec<Vector>, EmbedError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Err(EmbedError::Failed("the helper stopped answering".into()))
+        }
+    }
+
+    #[test]
+    fn a_failed_pass_of_the_vectors_waits_before_the_next_however_often_the_index_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = SqliteIndex::open(dir.path()).unwrap();
+        add(&mut index, "a.md", "First note.");
+        let embedder = Arc::new(Failing::default());
+        let (wake, woken) = mpsc::channel();
+        let thread = super::keep_vectors(dir.path().to_path_buf(), Arc::clone(&embedder) as Arc<dyn Embedder>, knotes_vectors::MeaningModel::DEFAULT, woken, Duration::from_millis(20), Arc::new(AtomicBool::new(false))).unwrap();
+        let asked = || embedder.0.load(Ordering::Relaxed);
+        wait_for(|| asked() == 1);
+        // Saved again and again: each save woke a pass, and each pass started the helper twice.
+        for _ in 0..10 {
+            wake.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        assert_eq!(asked(), 1, "no pass before the wait is over");
         drop(wake);
         thread.join().unwrap();
     }
