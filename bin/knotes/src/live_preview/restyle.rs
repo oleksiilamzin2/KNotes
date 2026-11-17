@@ -312,7 +312,7 @@ pub(super) fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'stati
         Style::FootnoteRef => (&look.footnote, &look.accent, "footnote"),
         Style::FootnoteLabel => (&look.body, &look.muted, "footnote-label"),
         Style::CardId => (&look.footnote, &look.muted, "card-id"),
-        Style::CardDeck => (&look.body, &look.card, "card-deck"),
+        Style::CardDeck => (&look.body, &look.card_deck, "card-deck"),
         Style::CardQuestion => (&look.bold, &look.text, "card-question"),
         Style::CardMark => (&look.body, &look.muted, "card-mark"),
     }

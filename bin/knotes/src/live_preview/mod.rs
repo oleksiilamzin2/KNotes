@@ -110,8 +110,10 @@ struct Look {
     error: Retained<NSColor>,
     /// Callout colours (ADR 0018), by `callout_look`'s index.
     callouts: Vec<Retained<NSColor>>,
-    /// A card's bar and its deck's mark (ADR 0037): lilac, the owner's choice.
+    /// A card's bar (ADR 0037): lilac, the owner's choice; and its deck's mark, the same hue
+    /// brighter (the owner found the bar's too pale for a name).
     card: Retained<NSColor>,
+    card_deck: Retained<NSColor>,
     clear: Retained<NSColor>,
     /// Attribute sets and paragraph styles, made once and shared.
     paint: PaintCache,
@@ -441,6 +443,7 @@ impl LivePreview {
                 NSColor::systemGrayColor(),
             ],
             card: appearance_color(0x9A7F_D9, 0xB7A3_F5),
+            card_deck: appearance_color(0x7A4D_F0, 0xA78B_FF),
             clear: NSColor::clearColor(),
             paint: PaintCache::new(STYLE_KEY, BODY_SIZE * FOOTNOTE_RAISE),
             footnote: NSFont::systemFontOfSize(BODY_SIZE * FOOTNOTE_SCALE),
