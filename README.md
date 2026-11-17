@@ -128,6 +128,8 @@ Tests:
 ```sh
 cargo test --workspace                   # everything, the window tests included
 cargo test --workspace --exclude knotes  # without the window tests: much faster
+scripts/test.sh deck card                # the fast ones, then the window tests named so
+scripts/test.sh all                      # everything
 ```
 
 The window tests launch the real app hundreds of times; its windows are transparent then and it
