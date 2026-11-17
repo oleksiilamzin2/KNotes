@@ -1,0 +1,9 @@
+[package]
+name = "knotes-cards"
+description = "Spaced-repetition cards written in notes, and their FSRS schedule (ADR 0037)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

@@ -37,6 +37,7 @@ knotes-llama = { path = "lib/knotes-llama" }
 knotes-vectors = { path = "lib/knotes-vectors" }
 knotes-chat = { path = "lib/knotes-chat" }
 knotes-spaces = { path = "lib/knotes-spaces" }
+knotes-cards = { path = "lib/knotes-cards" }
 ureq = { version = "3.5.2", default-features = false, features = ["native-tls-no-default"] }
 security-framework = { version = "3.7.0", default-features = false }
 knotes-alloc = { path = "lib/knotes-alloc" }
