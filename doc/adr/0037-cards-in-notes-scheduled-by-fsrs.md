@@ -104,3 +104,18 @@ It is the first new feature since the owner's goal became to polish what exists.
 - Left: cards show as plain text, in the review and in the note (no live preview of a card, no
   Markdown in the review); no limit of new cards a day; the review covers the note open, whose
   name stays in the toolbar's row.
+
+## Built (2026-11-17): a tab, braces, links
+
+- **A deck's review is a tab of its own** (`deck://path` among the tabs' paths, which no vault
+  path can be), opened beside the one shown: the note open keeps its tab. A note opened while
+  the review shows opens beside it. The tab is kept for the next launch while its deck has
+  cards. The list's column hides while a card shows.
+- **A card in braces holds several paragraphs** (owner's syntax): a line `#@deck{`, the
+  question, a line `?`, the answer, a line `}`; blank lines inside do not end it. Its id goes
+  after the brace (`} ^c-a1b2c3`). «Зробити картку» writes one so when what is selected has a
+  blank line.
+- **Links in a card's text work in the review**: `[[note]]`, `[[note|shown]]` and
+  `[shown](address)` show as in the note (`text_runs`) and are clicked: a note's opens it in a
+  tab beside the review's, the web's in the browser. The question and the answer are one text
+  that scrolls, the buttons under it. In the note itself a card's links were links already.

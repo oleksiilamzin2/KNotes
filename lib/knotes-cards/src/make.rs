@@ -18,7 +18,8 @@ pub fn card_id(seed: u64) -> String {
 
 /// Whether `selected` reads as a card already: a question and its answer, or a cloze.
 pub fn asks(selected: &str) -> bool {
-    !scan_cards(&format!("{DECK_MARK}x {}", selected.trim())).is_empty()
+    let selected = selected.trim();
+    !scan_cards(&format!("{DECK_MARK}x {selected}")).is_empty() || !scan_cards(&format!("{DECK_MARK}x{{\n{selected}\n}}")).is_empty()
 }
 
 /// The edit that makes `text[selection]` a card of `deck` with the id `id`: the range to
@@ -33,14 +34,23 @@ pub fn make_card(text: &str, selection: Range<usize>, deck: &str, question: Opti
     if selected.is_empty() || deck.is_empty() {
         return None;
     }
-    // No blank line inside a card: it would end it.
-    let lines: Vec<&str> = selected.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
-    let body = match question.map(str::trim).filter(|q| !q.is_empty()) {
-        Some(question) if lines.len() == 1 => format!("{question}::{}", lines[0]),
-        Some(question) => format!("{question}\n?\n{}", lines.join("\n")),
-        None => lines.join("\n"),
+    let question = question.map(str::trim).filter(|q| !q.is_empty());
+    let lines: Vec<&str> = selected.lines().map(str::trim_end).collect();
+    let card = if lines.iter().any(|l| l.trim().is_empty()) {
+        // Several paragraphs: in braces, where a blank line does not end the card.
+        let body = match question {
+            Some(question) => format!("{question}\n?\n{}", lines.join("\n")),
+            None => lines.join("\n"),
+        };
+        format!("{DECK_MARK}{deck}{{\n{body}\n}} ^{id}")
+    } else {
+        let body = match question {
+            Some(question) if lines.len() == 1 => format!("{question}::{}", lines[0]),
+            Some(question) => format!("{question}\n?\n{}", lines.join("\n")),
+            None => lines.join("\n"),
+        };
+        format!("{DECK_MARK}{deck} {body} ^{id}")
     };
-    let card = format!("{DECK_MARK}{deck} {body} ^{id}");
     (scan_cards(&card).len() == 1).then_some(())?;
     let range = start..start + selected.len();
     let before = match &text[..range.start] {

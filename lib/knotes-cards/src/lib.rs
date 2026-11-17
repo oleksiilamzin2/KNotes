@@ -5,11 +5,13 @@
 mod card;
 mod fsrs;
 mod make;
+mod runs;
 mod scan;
 mod schedule;
 
 pub use card::{Card, CardKind};
 pub use fsrs::{Fsrs, Grade, Memory};
 pub use make::{asks, card_id, give_id, make_card};
+pub use runs::{CardLink, Run, text_runs};
 pub use scan::{DECK_MARK, ID_MARK, scan_cards};
 pub use schedule::{Schedule, parse_review, review_line, schedule};

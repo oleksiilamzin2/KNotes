@@ -5,6 +5,9 @@
 //! - `#@deck question`, a line `?`, the answer — over several lines;
 //! - `#@deck a text with ==words== left out` — a cloze.
 //!
+//! Or in braces, where blank lines do not end it (a question or an answer of several
+//! paragraphs): a line `#@deck{`, the question, a line `?`, the answer, a line `}`.
+//!
 //! Its id, `^c-a1b2c3`, ends its last line (as Obsidian's block ids do). Code blocks and the
 //! frontmatter hold no cards.
 
@@ -23,6 +26,8 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
     // The lines of the card being read: each one's range in `text`.
     let mut open: Vec<Range<usize>> = Vec::new();
     let mut fence: Option<(char, usize)> = None;
+    // A card in braces being read: its deck, where its first line starts, its lines so far.
+    let mut block: Option<(&str, usize, Vec<&str>)> = None;
     let mut at = 0;
     let frontmatter_end = frontmatter_end(text);
     for line in text.split_inclusive('\n') {
@@ -30,6 +35,19 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
         at += line.len();
         let content = &text[range.clone()];
         if range.start < frontmatter_end {
+            continue;
+        }
+        // In braces: every line is the card's, blank ones too, until the line that closes it.
+        if let Some((deck, start, lines)) = &mut block {
+            match closing(content) {
+                Some(id) => {
+                    if let Some((kind, front, back)) = asked(lines) {
+                        cards.push(Card { deck: (*deck).to_owned(), id: id.map(str::to_owned), kind, front, back, span: *start..range.end });
+                    }
+                    block = None;
+                }
+                None => lines.push(content),
+            }
             continue;
         }
         // A fenced code block, from its fence to one as long of the same character.
@@ -50,7 +68,10 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
                 }
             }
         }
-        if content.trim().is_empty() {
+        if let Some(deck) = block_deck(after_marker(content)) {
+            close(text, &mut open, &mut cards);
+            block = Some((deck, range.start, Vec::new()));
+        } else if content.trim().is_empty() {
             close(text, &mut open, &mut cards);
         } else if deck_of(after_marker(content)).is_some() {
             // A card right under another, no blank line between.
@@ -101,6 +122,37 @@ fn deck_of(text: &str) -> Option<(&str, &str)> {
     let deck = rest[..len].trim_matches('/');
     let after = &rest[len..];
     (!deck.is_empty() && (after.is_empty() || after.starts_with(char::is_whitespace))).then(|| (deck, after.trim_start()))
+}
+
+/// The deck of a line that opens a card in braces: `#@a/b{`.
+fn block_deck(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix(DECK_MARK)?;
+    let len = rest.char_indices().find(|&(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))).map_or(rest.len(), |(i, _)| i);
+    let deck = rest[..len].trim_matches('/');
+    (!deck.is_empty() && rest[len..].trim() == "{").then_some(deck)
+}
+
+/// Whether `line` closes a card in braces (`}`), and the id after it if it has one (`} ^c-1`).
+fn closing(line: &str) -> Option<Option<&str>> {
+    let rest = line.trim().strip_prefix('}')?.trim();
+    if rest.is_empty() {
+        return Some(None);
+    }
+    let id = rest.strip_prefix('^')?;
+    (id.starts_with("c-") && id.len() > 2 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).then_some(Some(id))
+}
+
+/// What the lines inside braces ask: a question and an answer apart on a `?` line, or a cloze.
+fn asked(lines: &[&str]) -> Option<(CardKind, String, String)> {
+    let (kind, front, back) = match lines.iter().position(|l| l.trim() == "?") {
+        Some(split) => (CardKind::Basic, lines[..split].join("\n"), lines[split + 1..].join("\n")),
+        None => {
+            let (front, back) = cloze(&lines.join("\n"))?;
+            (CardKind::Cloze, front, back)
+        }
+    };
+    let (front, back) = (front.trim().to_owned(), back.trim().to_owned());
+    (!front.is_empty() && !back.is_empty()).then_some((kind, front, back))
 }
 
 /// The card `lines` make, if they make one, onto `cards`; the lines are let go.

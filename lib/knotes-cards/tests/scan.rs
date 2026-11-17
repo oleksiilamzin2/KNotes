@@ -44,3 +44,23 @@ fn an_id_is_only_one_at_the_end_after_a_space() {
     let card = &scan_cards("#@a q\n?\na\n^c-9z")[0];
     assert_eq!((card.id.as_deref(), card.back.as_str()), (Some("c-9z"), "a"), "on a line of its own");
 }
+
+#[test]
+fn a_card_in_braces_holds_several_paragraphs() {
+    let text = "Вступ.\n\n#@історія/козаки{\nКоли була битва?\n\nІ де саме?\n?\n1659 року.\n\nПід Конотопом, див. [[Конотоп]].\n} ^c-k9\n\nпісля";
+    let cards = scan_cards(text);
+    assert_eq!(cards.len(), 1);
+    let card = &cards[0];
+    assert_eq!((card.deck.as_str(), card.id.as_deref(), card.kind), ("історія/козаки", Some("c-k9"), CardKind::Basic));
+    assert_eq!(card.front, "Коли була битва?\n\nІ де саме?");
+    assert_eq!(card.back, "1659 року.\n\nПід Конотопом, див. [[Конотоп]].");
+    assert_eq!(&text[card.span.clone()], "#@історія/козаки{\nКоли була битва?\n\nІ де саме?\n?\n1659 року.\n\nПід Конотопом, див. [[Конотоп]].\n} ^c-k9");
+    // No id yet; a cloze over paragraphs; one never closed is no card, and what follows it is read.
+    assert_eq!(scan_cards("#@a{\nq\n?\na\n}")[0].id, None);
+    let cloze = &scan_cards("- #@гео{\nСтолиця ==Австралії==.\n\nІ ще абзац.\n}")[0];
+    assert_eq!((cloze.kind, cloze.front.as_str()), (CardKind::Cloze, "Столиця […].\n\nІ ще абзац."));
+    assert!(scan_cards("#@a{\nq\n?\na\n\nкінець без дужки").is_empty());
+    assert!(scan_cards("#@a{\nлише текст\n}").is_empty(), "it asks nothing");
+    let two: Vec<String> = scan_cards("#@a{\nq\n?\na\n}\n#@b q2::a2").into_iter().map(|c| c.deck).collect();
+    assert_eq!(two, ["a", "b"]);
+}

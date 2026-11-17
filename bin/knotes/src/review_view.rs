@@ -4,23 +4,28 @@
 
 use std::cell::RefCell;
 
-use knotes_cards::Grade;
+use knotes_cards::{CardLink, Grade, text_runs};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSBox, NSBoxType, NSButton, NSColor, NSFont, NSLayoutConstraint, NSLineBreakMode, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation, NSView};
-use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSSize, NSString};
+use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
+use objc2_app_kit::{
+    NSBox, NSBoxType, NSButton, NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSLayoutConstraint, NSLineBreakMode, NSLinkAttributeName, NSScrollView, NSStackView,
+    NSTextDelegate, NSTextField, NSTextView, NSTextViewDelegate, NSUserInterfaceLayoutOrientation, NSView,
+};
+use objc2_foundation::{NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSObject, NSObjectProtocol, NSSize, NSString};
 
 use crate::strings;
 
 /// What a button of the review asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asked {
     Start,
     ShowAnswer,
     Grade(Grade),
     /// The note the card is written in.
     OpenNote,
+    /// A link in the card's text, clicked.
+    Link(CardLink),
 }
 
 type OnAsked = Box<dyn Fn(Asked)>;
@@ -39,6 +44,23 @@ define_class!(
     struct ReviewTarget;
 
     unsafe impl NSObjectProtocol for ReviewTarget {}
+
+    unsafe impl NSTextDelegate for ReviewTarget {}
+
+    unsafe impl NSTextViewDelegate for ReviewTarget {
+        /// A link in the card's text: a note's (`note:target`) or the web's.
+        #[unsafe(method(textView:clickedOnLink:atIndex:))]
+        fn clicked_on_link(&self, _view: &NSTextView, link: &AnyObject, _index: usize) -> bool {
+            let link = link.downcast_ref::<NSString>().map(|s| s.to_string());
+            if let Some(link) = &link {
+                self.ask(Asked::Link(match link.strip_prefix(NOTE_LINK) {
+                    Some(target) => CardLink::Note(target.to_owned()),
+                    None => CardLink::Web(link.clone()),
+                }));
+            }
+            link.is_some()
+        }
+    }
 
     impl ReviewTarget {
         #[unsafe(method(reviewStart:))]
@@ -73,6 +95,9 @@ impl ReviewTarget {
     }
 }
 
+/// What a link to a note starts with, as the text keeps it.
+const NOTE_LINK: &str = "note:";
+
 /// What the review shows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shown {
@@ -88,9 +113,8 @@ pub enum Shown {
 pub struct ReviewView {
     pub view: Retained<NSView>,
     header: Retained<NSTextField>,
-    front: Retained<NSTextField>,
-    line: Retained<NSBox>,
-    back: Retained<NSTextField>,
+    /// The card's question and, under it, its answer: text that scrolls, its links clicked.
+    text: Retained<NSTextView>,
     start: Retained<NSButton>,
     show: Retained<NSButton>,
     grades: Retained<NSStackView>,
@@ -127,10 +151,21 @@ impl ReviewView {
             button
         };
         let header = text(NSFont::smallSystemFontSize(), &NSColor::secondaryLabelColor());
-        let front = text(18.0, &NSColor::labelColor());
-        let back = text(16.0, &NSColor::labelColor());
-        let line = NSBox::new(mtm);
-        line.setBoxType(NSBoxType::Separator);
+        let scroll: Retained<NSScrollView> = NSTextView::scrollableTextView(mtm);
+        scroll.setDrawsBackground(false);
+        scroll.setHasVerticalScroller(true);
+        scroll.setAutohidesScrollers(true);
+        let card: Retained<NSTextView> = scroll.documentView().and_then(|v| v.downcast::<NSTextView>().ok()).expect("a scrollable text view holds one");
+        card.setEditable(false);
+        card.setSelectable(true);
+        card.setDrawsBackground(false);
+        card.setTextContainerInset(NSSize::new(0.0, 0.0));
+        // Flush with the line above it and the buttons below.
+        // SAFETY: the text view's own container.
+        if let Some(container) = unsafe { card.textContainer() } {
+            container.setLineFragmentPadding(0.0);
+        }
+        card.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*target)));
         let start = button(strings::REVIEW_START, sel!(reviewStart:), "\r");
         let show = button(strings::REVIEW_SHOW_ANSWER, sel!(reviewShow:), " ");
         let grade_buttons = [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| {
@@ -146,37 +181,48 @@ impl ReviewView {
         let open = button(strings::REVIEW_OPEN_NOTE, sel!(reviewOpen:), "");
         open.setBordered(false);
         open.setContentTintColor(Some(&NSColor::linkColor()));
-        let rows: [&NSView; 8] = [&header, &front, &line, &back, &start, &show, &grades, &open];
-        let column = NSStackView::stackViewWithViews(&NSArray::from_slice(&rows), mtm);
-        column.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        column.setAlignment(objc2_app_kit::NSLayoutAttribute::Leading);
-        column.setSpacing(14.0);
-        column.setTranslatesAutoresizingMaskIntoConstraints(false);
+        // The buttons under the text, at the column's bottom.
+        let rows: [&NSView; 4] = [&start, &show, &grades, &open];
+        let controls = NSStackView::stackViewWithViews(&NSArray::from_slice(&rows), mtm);
+        controls.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        controls.setAlignment(objc2_app_kit::NSLayoutAttribute::Leading);
+        controls.setSpacing(12.0);
+        let column = NSView::new(mtm);
+        for part in [&*header as &NSView, &scroll, &controls, &column] {
+            part.setTranslatesAutoresizingMaskIntoConstraints(false);
+        }
+        for part in [&*header as &NSView, &scroll, &controls] {
+            column.addSubview(part);
+        }
         view.addSubview(&column);
         // As wide as the note column lets it, 620 points at most. Tied to the column's width, not
         // a width of its own: a wish for 620 points widened the column (and the window) even
-        // while hidden, and a weak one left the text as narrow as its shortest row.
+        // while hidden. Weaker than the split view holds its columns (250): stronger, it kept
+        // the note column from growing with the window.
         let wide = column.widthAnchor().constraintEqualToAnchor_constant(&view.widthAnchor(), -64.0);
-        // Weaker than the split view holds its columns (250): stronger, it kept the note column
-        // from growing with the window. The texts hug nothing, or they would win over it.
         wide.setPriority(240.0);
-        for field in [&header, &front, &back] {
-            field.setContentHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
-        }
-        column.setHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
+        header.setContentHuggingPriority_forOrientation(1.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         let constraints = [
             column.topAnchor().constraintEqualToAnchor_constant(&view.safeAreaLayoutGuide().topAnchor(), 40.0),
+            column.bottomAnchor().constraintEqualToAnchor_constant(&view.bottomAnchor(), -28.0),
             column.centerXAnchor().constraintEqualToAnchor(&view.centerXAnchor()),
             column.leadingAnchor().constraintGreaterThanOrEqualToAnchor_constant(&view.leadingAnchor(), 32.0),
             column.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&view.trailingAnchor(), -32.0),
             wide,
             column.widthAnchor().constraintLessThanOrEqualToConstant(620.0),
-            front.widthAnchor().constraintEqualToAnchor(&column.widthAnchor()),
-            back.widthAnchor().constraintEqualToAnchor(&column.widthAnchor()),
-            line.widthAnchor().constraintEqualToAnchor(&column.widthAnchor()),
+            header.topAnchor().constraintEqualToAnchor(&column.topAnchor()),
+            header.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
+            header.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
+            scroll.topAnchor().constraintEqualToAnchor_constant(&header.bottomAnchor(), 14.0),
+            scroll.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
+            scroll.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
+            scroll.bottomAnchor().constraintEqualToAnchor_constant(&controls.topAnchor(), -16.0),
+            controls.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
+            controls.trailingAnchor().constraintLessThanOrEqualToAnchor(&column.trailingAnchor()),
+            controls.bottomAnchor().constraintEqualToAnchor(&column.bottomAnchor()),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
-        Self { view, header, front, line, back, start, show, grades, grade_buttons, open, target, shown: RefCell::new(None) }
+        Self { view, header, text: card, start, show, grades, grade_buttons, open, target, shown: RefCell::new(None) }
     }
 
     /// Called with what a button asks for.
@@ -187,18 +233,16 @@ impl ReviewView {
     /// Shows `shown`; hidden with none.
     pub fn show(&self, shown: Option<Shown>) {
         self.view.setHidden(shown.is_none());
-        let set = |field: &NSTextField, text: &str| field.setStringValue(&NSString::from_str(text));
         let (card, answered, waiting) = match &shown {
             Some(Shown::Waiting { deck, cards, more }) => {
-                set(&self.header, deck);
-                set(&self.front, &if *cards == 0 { strings::REVIEW_NOTHING.to_owned() } else { strings::review_waiting(*cards, *more) });
+                self.header.setStringValue(&NSString::from_str(deck));
+                self.set_text(&if *cards == 0 { strings::REVIEW_NOTHING.to_owned() } else { strings::review_waiting(*cards, *more) }, None);
                 (false, false, *cards > 0)
             }
             Some(Shown::Card { deck, done, left, front, answer }) => {
-                set(&self.header, &strings::review_progress(deck, *done, *left));
-                set(&self.front, front);
-                if let Some((back, comes_back)) = answer {
-                    set(&self.back, back);
+                self.header.setStringValue(&NSString::from_str(&strings::review_progress(deck, *done, *left)));
+                self.set_text(front, answer.as_ref().map(|(back, _)| back.as_str()));
+                if let Some((_, comes_back)) = answer {
                     for ((button, name), when) in self.grade_buttons.iter().zip(strings::GRADES).zip(comes_back) {
                         button.setTitle(&NSString::from_str(&format!("{name} · {when}")));
                     }
@@ -206,19 +250,68 @@ impl ReviewView {
                 (true, answer.is_some(), false)
             }
             Some(Shown::Done { deck, reviewed }) => {
-                set(&self.header, deck);
-                set(&self.front, &strings::review_done(*reviewed));
+                self.header.setStringValue(&NSString::from_str(deck));
+                self.set_text(&strings::review_done(*reviewed), None);
                 (false, false, false)
             }
             None => (false, false, false),
         };
         self.start.setHidden(!waiting);
         self.show.setHidden(!card || answered);
-        self.line.setHidden(!answered);
-        self.back.setHidden(!answered);
         self.grades.setHidden(!answered);
         self.open.setHidden(!card);
         *self.shown.borrow_mut() = shown;
+    }
+
+    /// The text shown: `front`, and under a rule `back` when there is one; their links (wiki and
+    /// Markdown ones) as links to click.
+    fn set_text(&self, front: &str, back: Option<&str>) {
+        let whole = NSMutableAttributedString::new();
+        let piece = |text: &str, size: f64, colour: &NSColor, link: Option<&CardLink>| {
+            let font = NSFont::systemFontOfSize(size);
+            // SAFETY: AppKit's attribute name constants live for the whole process.
+            let (font_key, colour_key, link_key) = unsafe { (NSFontAttributeName, NSForegroundColorAttributeName, NSLinkAttributeName) };
+            let mut keys = vec![font_key, colour_key];
+            let mut values: Vec<Retained<AnyObject>> = vec![Retained::into_super(Retained::into_super(font)), Retained::into_super(Retained::into_super(colour.retain()))];
+            if let Some(link) = link {
+                let address = match link {
+                    CardLink::Note(target) => format!("{NOTE_LINK}{target}"),
+                    CardLink::Web(address) => address.clone(),
+                };
+                keys.push(link_key);
+                values.push(Retained::into_super(Retained::into_super(NSString::from_str(&address))));
+            }
+            let attributes = NSDictionary::from_retained_objects(&keys, &values);
+            // SAFETY: a font, a colour and a string are those attributes' value types.
+            let run = unsafe { NSAttributedString::initWithString_attributes(NSAttributedString::alloc(), &NSString::from_str(text), Some(&attributes)) };
+            whole.appendAttributedString(&run);
+        };
+        let label = NSColor::labelColor();
+        for run in text_runs(front) {
+            piece(&run.text, 18.0, &label, run.link.as_ref());
+        }
+        if let Some(back) = back {
+            piece("\n\n———\n\n", 12.0, &NSColor::tertiaryLabelColor(), None);
+            for run in text_runs(back) {
+                piece(&run.text, 16.0, &label, run.link.as_ref());
+            }
+        }
+        // SAFETY: the text view's own storage.
+        if let Some(storage) = unsafe { self.text.textStorage() } {
+            storage.setAttributedString(&whole);
+        }
+        self.text.scrollPoint(objc2_foundation::NSPoint::new(0.0, 0.0));
+    }
+
+    /// A click on the `n`th link of the text shown (probe mode).
+    pub fn click_link(&self, n: usize) {
+        let shown = self.shown.borrow().clone();
+        let Some(Shown::Card { front, answer, .. }) = shown else { return };
+        let back = answer.map(|(back, _)| back).unwrap_or_default();
+        let link = text_runs(&front).into_iter().chain(text_runs(&back)).filter_map(|run| run.link).nth(n);
+        if let Some(link) = link {
+            self.target.ask(Asked::Link(link));
+        }
     }
 
     /// What it shows, for the probe: `waiting мови 3`, `question мови 0/3 | cat`,
@@ -246,6 +339,7 @@ impl ReviewView {
             Asked::ShowAnswer => &self.show,
             Asked::Grade(grade) => &self.grade_buttons[grade as usize - 1],
             Asked::OpenNote => &self.open,
+            Asked::Link(_) => return,
         };
         if !button.isHiddenOrHasHiddenAncestor() {
             // SAFETY: a click on the view's own button.

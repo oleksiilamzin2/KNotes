@@ -11,10 +11,12 @@ fn a_selection_becomes_the_answer_of_a_card_in_a_paragraph_of_its_own() {
     assert_eq!(made("Кіт — це тварина.", "тварина", "біологія", Some("Хто такий кіт?")).unwrap(), "Кіт — це \n\n#@біологія Хто такий кіт?::тварина ^c-abc123\n\n.");
     assert_eq!(made("Вступ.\n\n1659 року.\n\nДалі.", "1659 року.", "історія", Some("Коли?")).unwrap(), "Вступ.\n\n#@історія Коли?::1659 року. ^c-abc123\n\nДалі.", "blank lines there already");
     assert_eq!(made("рядок\nвідповідь\nще", "відповідь", "a", Some("q")).unwrap(), "рядок\n\n#@a q::відповідь ^c-abc123\n\nще");
-    let long = made("Перший рядок.\n\nДругий рядок.", "Перший рядок.\n\nДругий рядок.", "a/b", Some("Що?")).unwrap();
-    assert_eq!(long, "#@a/b Що?\n?\nПерший рядок.\nДругий рядок. ^c-abc123", "several lines: apart on a ? line, no blank line inside");
+    let lines = made("Перший рядок.\nДругий рядок.", "Перший рядок.\nДругий рядок.", "a/b", Some("Що?")).unwrap();
+    assert_eq!(lines, "#@a/b Що?\n?\nПерший рядок.\nДругий рядок. ^c-abc123", "several lines: apart on a ? line");
+    let long = made("Перший абзац.\n\nДругий абзац.", "Перший абзац.\n\nДругий абзац.", "a/b", Some("Що?")).unwrap();
+    assert_eq!(long, "#@a/b{\nЩо?\n?\nПерший абзац.\n\nДругий абзац.\n} ^c-abc123", "several paragraphs: in braces, the blank line kept");
     let cards = scan_cards(&long);
-    assert_eq!((cards[0].front.as_str(), cards[0].back.as_str(), cards[0].id.as_deref()), ("Що?", "Перший рядок.\nДругий рядок.", Some("c-abc123")));
+    assert_eq!((cards[0].front.as_str(), cards[0].back.as_str(), cards[0].id.as_deref()), ("Що?", "Перший абзац.\n\nДругий абзац.", Some("c-abc123")));
 }
 
 #[test]

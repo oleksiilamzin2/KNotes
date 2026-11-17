@@ -4066,3 +4066,30 @@ fn a_deck_s_review_is_a_tab_of_its_own_beside_the_documents() {
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "tab:deck://історія"), ("KNOTES_PROBE_REVIEW", "start")]);
     assert_eq!(review_line_of(&out), "question історія 0/1 | Коли була битва? (list hidden)", "{out}");
 }
+
+#[test]
+fn a_card_in_braces_is_reviewed_with_its_paragraphs_and_its_links_open_their_notes() {
+    let notes = [
+        ("Битви.md", "Вступ.\n\n#@історія{\nКоли була битва?\n\nІ де саме?\n?\n1659 року.\n\nПід Конотопом, див. [[Конотоп]] і [сайт](https://example.com).\n}\n\nДалі."),
+        ("Конотоп.md", "Місто на Сумщині."),
+    ];
+    let open = [("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "d:історія")];
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
+    assert!(review_line_of(&out).starts_with("answer історія 0/1 | Коли була битва?⏎⏎І де саме? | 1659 року.⏎⏎Під Конотопом, див. [[Конотоп]] і [сайт](https://example.com). | Знову"), "both paragraphs of each: {out}");
+    // Its first link clicked: the note it names, in a tab beside the review's.
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,link0")]);
+    assert!(out.contains("note: Конотоп.md") && out.contains("sidebar: історія | Конотоп\n"), "{out}");
+    // Graded: its id goes after its closing brace.
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3")]);
+    let note = std::fs::read_to_string(vault.path().join("Битви.md")).unwrap();
+    assert!(note.contains("\n} ^c-") && note.ends_with("\n\nДалі."), "{note} {out}");
+}
+
+#[test]
+fn a_card_s_id_shows_small_and_muted_in_the_note() {
+    let note = "#@мови cat::кіт ^c-h0a1ek\n\n#@історія{\nКоли?\n?\nТоді.\n} ^c-zz9\n\nтекст ^c-не-картка\n\nкінець";
+    let (_vault, out) = probe_notes(&[("n.md", note)], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[card-id]^c-h0a1ek|") && runs.contains("[card-id]^c-zz9|"), "{runs}");
+    assert!(!runs.contains("[card-id]^c-не"), "only a card's: {runs}");
+}

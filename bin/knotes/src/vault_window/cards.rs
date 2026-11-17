@@ -142,6 +142,10 @@ impl VaultWindow {
                 self.show_review();
             }
             Asked::Grade(grade) => self.grade_card(grade),
+            // A link in the card's text: the note it names (in a tab beside the review's), or
+            // the web's address in the browser.
+            Asked::Link(knotes_cards::CardLink::Note(target)) => self.open_chat_link(&target),
+            Asked::Link(knotes_cards::CardLink::Web(address)) => super::links::open_url(&address),
             Asked::OpenNote => {
                 let at = self.review.borrow().as_ref().and_then(|r| r.current.as_ref()).map(|c| (c.card.path.clone(), c.card.start as usize));
                 if let Some((path, start)) = at
@@ -267,6 +271,11 @@ impl VaultWindow {
                 "start" => Asked::Start,
                 "show" => Asked::ShowAnswer,
                 "open" => Asked::OpenNote,
+                // `link0`: the first link of the card's text.
+                link if link.starts_with("link") => {
+                    self.review_view.click_link(link[4..].parse().unwrap_or(0));
+                    continue;
+                }
                 grade => match grade.parse().ok().and_then(Grade::from_number) {
                     Some(grade) => Asked::Grade(grade),
                     None => continue,
