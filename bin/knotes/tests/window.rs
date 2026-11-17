@@ -118,8 +118,8 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, flexible-space, panel",
-        "the sidebar's button, nothing, the panel's button"
+        "toggle-sidebar, space, tabs, space, new-tab, space, panel",
+        "the sidebar's button, the tabs, a new tab's button, the panel's button, each apart"
     );
     // What belongs to the list and the note is in the row under the toolbar, each part over its
     // column.
@@ -2459,11 +2459,9 @@ fn tabs_home() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
-/// `vault` probed with the tabs shown in the sidebar (every launch starts on the folders).
+/// `vault` probed with a HOME kept between launches (the tabs are along the toolbar).
 fn probe_tabs(vault: &tempfile::TempDir, home: &tempfile::TempDir, env: &[(&str, &str)]) -> String {
-    let mut env = env.to_vec();
-    env.push(("KNOTES_PROBE_SIDEBAR", "tabs"));
-    probe_env(&[vault.path()], Some(home.path()), &env)
+    probe_env(&[vault.path()], Some(home.path()), env)
 }
 
 /// A vault with two notes and a PDF the first links to.
@@ -2475,18 +2473,22 @@ fn tabs_vault() -> tempfile::TempDir {
     vault
 }
 
-/// The sidebar's rows and the one selected (`sidebar:` and `sidebar-selected:` lines).
+/// The tabs along the toolbar and the one shown (`tabs:` and `tab-shown:` lines).
 fn sidebar_tabs(out: &str) -> (String, String) {
-    let line = |name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{out}")).to_owned();
-    (line("sidebar: "), line("sidebar-selected: "))
+    let line = |name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{out}")).trim_end().to_owned();
+    (line("tabs:").trim_start().to_owned(), line("tab-shown: "))
 }
 
 #[test]
 fn a_note_opens_in_the_tab_shown_and_a_pdf_in_a_new_tab_beside_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
-    assert!(out.contains("sidebar-mode: tabs"), "{out}");
-    assert!(out.contains("sidebar-segments: Вкладки, Теки, Теги, Картки\n"), "tabs first (owner's order): {out}");
+    assert!(out.contains("sidebar-segments: Теки, Теги, Картки\n"), "the tabs are no list of the sidebar's: {out}");
+    // The strip fills the toolbar between the sidebar's toggle and the panel's.
+    let strip = out.lines().find_map(|l| l.strip_prefix("tab-strip: width=")).unwrap_or_else(|| panic!("{out}"));
+    let (width, of) = strip.split_once(" of ").unwrap();
+    let of = of.split(' ').next().unwrap();
+    assert!(width.parse::<f64>().unwrap() > 0.7 * of.parse::<f64>().unwrap(), "{strip}");
     assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()), "b.md in a.md's tab");
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
@@ -2500,6 +2502,15 @@ fn a_note_opens_in_a_new_tab_from_the_list_s_menu_and_a_document_with_a_tab_brin
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()));
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
     assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "a".to_owned()));
+}
+
+#[test]
+fn the_button_after_the_tabs_makes_a_new_note_in_a_tab_of_its_own() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB_BUTTON", "1")]);
+    let (tabs, shown) = sidebar_tabs(&out);
+    assert!(tabs.starts_with("a | ") && tabs.matches(" | ").count() == 1 && shown != "a", "a.md keeps its tab, the new note has one beside it: {out}");
+    assert!(std::fs::read_dir(vault.path()).unwrap().flatten().count() > 3 || vault.path().join("Вхідні").is_dir(), "the note was made: {out}");
 }
 
 #[test]
@@ -3180,15 +3191,10 @@ fn files_in_spaces_show_their_space_s_dot_in_the_whole_vault() {
 }
 
 #[test]
-fn a_folder_shows_the_dot_of_the_space_it_sets_and_a_tab_of_another_space_its_own() {
+fn a_folder_shows_the_dot_of_the_space_it_sets() {
     let vault = spaced_vault();
     let out = probe_with(&[vault.path()], None);
     assert!(out.contains("sidebar-marks: Home • Дім | Work • Робота"), "{out}");
-    // Tabs opened in the whole vault come back in the space.
-    let home = tempfile::tempdir().unwrap();
-    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Home/c.md"), ("KNOTES_PROBE_NEW_TAB", "Work/a.md")]);
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SIDEBAR", "tabs")]);
-    assert!(out.contains("sidebar-marks: c • Дім\n"), "the tab of another space marked, the space's own not: {out}");
 }
 
 #[test]
@@ -4165,14 +4171,17 @@ fn a_deck_s_review_is_a_tab_of_its_own_beside_the_documents() {
     // A note open, then a deck chosen: the note keeps its tab, the review gets one beside it.
     let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Мови.md")]);
     assert!(out.contains("note: Мови.md"), "{out}");
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "d:історія")]);
-    assert!(out.contains("sidebar: Мови | історія\n"), "two tabs: {out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:історія")]);
+    assert!(out.contains("tabs: Мови | історія\n") && out.contains("tab-shown: історія\n"), "two tabs: {out}");
     assert_eq!(review_line_of(&out), "waiting історія 1", "{out}");
     assert!(out.contains("note-title: історія\n"), "the deck's name where a document's is: {out}");
     // The note's tab clicked: the note again, the review's tab kept; and back to the review.
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "tab:Мови.md")]);
-    assert!(out.contains("sidebar: Мови | історія\n") && review_line_of(&out) == "hidden" && out.contains("note: Мови.md"), "{out}");
-    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "tab:deck://історія"), ("KNOTES_PROBE_REVIEW", "start")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_TAB_CLICK", "Мови.md")]);
+    assert!(out.contains("tabs: Мови | історія\n") && review_line_of(&out) == "hidden" && out.contains("note: Мови.md"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_TAB_CLICK", "deck://історія")]);
+    assert_eq!(review_line_of(&out), "waiting історія 1", "{out}");
+    // The next launch comes back to the review's tab.
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_REVIEW", "start")]);
     assert_eq!(review_line_of(&out), "question історія 0/1 | Коли була битва? (list hidden)", "{out}");
 }
 
@@ -4182,12 +4191,12 @@ fn a_card_in_braces_is_reviewed_with_its_paragraphs_and_its_links_open_their_not
         ("Битви.md", "Вступ.\n\n#@історія{\nКоли була битва?\n\nІ де саме?\n?\n1659 року.\n\nПід Конотопом, див. [[Конотоп]] і [сайт](https://example.com).\n}\n\nДалі."),
         ("Конотоп.md", "Місто на Сумщині."),
     ];
-    let open = [("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "d:історія")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:історія")];
     let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
     assert!(review_line_of(&out).starts_with("answer історія 0/1 | Коли була битва?⏎⏎І де саме? | 1659 року.⏎⏎Під Конотопом, див. [[Конотоп]] і [сайт](https://example.com). | Знову"), "both paragraphs of each: {out}");
     // Its first link clicked: the note it names, in a tab beside the review's.
     let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,link0")]);
-    assert!(out.contains("note: Конотоп.md") && out.contains("sidebar: історія | Конотоп\n"), "{out}");
+    assert!(out.contains("note: Конотоп.md") && out.contains("tabs: історія | Конотоп\n"), "{out}");
     // Graded: its id goes after its closing brace.
     let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3")]);
     let note = std::fs::read_to_string(vault.path().join("Битви.md")).unwrap();

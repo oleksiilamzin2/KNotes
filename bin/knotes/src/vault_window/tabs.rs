@@ -6,6 +6,21 @@ use super::*;
 pub(super) const TABS_FILE: &str = "tabs.json";
 
 impl VaultWindow {
+    /// The tabs along the toolbar, as they are now.
+    pub(super) fn show_tabs(&self) {
+        let tabs = self.tabs.borrow();
+        let shown = tabs
+            .paths()
+            .map(|path| {
+                let deck = super::cards::deck_of_tab(path);
+                let name = deck.map_or_else(|| document_name(path).to_owned(), |deck| deck.rsplit('/').next().unwrap_or(deck).to_owned());
+                let symbol = if deck.is_some() { "rectangle.stack" } else if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" };
+                crate::tab_strip::Tab { path: path.to_owned(), name, symbol }
+            })
+            .collect();
+        self.tab_strip.set(shown, tabs.current());
+    }
+
     /// Closes `path`'s tab: the document shown stays, or its neighbour's shows, or nothing.
     /// False when it stays open: its note's edits could not be written and the user chose to
     /// stay.
@@ -70,6 +85,7 @@ impl VaultWindow {
         let on_review = self.tabs.borrow().current_path().is_some_and(|shown| super::cards::deck_of_tab(shown).is_some());
         let beside = self.new_tab_next.replace(false) || FileKind::from_path(path) == FileKind::Pdf || on_review;
         let place = if beside { self.tabs.borrow_mut().open_beside(path) } else { self.tabs.borrow_mut().navigate(path) };
+        self.show_tabs();
         if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
             self.rebuild_sidebar();
             self.highlight(&SidebarItem::Gap);
@@ -104,6 +120,8 @@ impl VaultWindow {
 
     /// Writes the tabs and their places for the next launch.
     pub(super) fn save_tabs(&self) {
+        // Written as the tabs change: shown as they are, too.
+        self.show_tabs();
         let Some(file) = self.tabs_file() else { return };
         let text = self.tabs.borrow().to_json().to_string();
         let tmp = file.with_extension("json.tmp");
@@ -124,6 +142,7 @@ impl VaultWindow {
         if let Some(path) = current {
             self.open_note(&path, true);
         }
+        self.show_tabs();
     }
 
     /// Opens `path` in a new tab beside the tab shown (the list's menu).
@@ -136,7 +155,7 @@ impl VaultWindow {
     /// `other`'s tab clicked, then the tab shown before (probe mode).
     pub fn tab_trip(&self, other: &str) {
         let Some(back) = self.tabs.borrow().current_path().map(str::to_owned) else { return };
-        self.select(SidebarItem::Tab(other.to_owned()));
-        self.select(SidebarItem::Tab(back));
+        self.open_note(other, true);
+        self.open_note(&back, true);
     }
 }

@@ -776,11 +776,6 @@ impl SidebarCell {
         unsafe { msg_send![super(this), init] }
     }
 
-    /// Whether the row is a tab's (probe mode).
-    pub fn is_closable(&self) -> bool {
-        self.ivars().closable.get()
-    }
-
     fn show_cross(&self, pointed: bool) {
         if let Some(close) = close_button(self) {
             close.setHidden(!(pointed && self.ivars().closable.get()));

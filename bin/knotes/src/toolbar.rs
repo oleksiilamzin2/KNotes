@@ -24,6 +24,10 @@ use knotes_app::{PanelMode, SearchMode, SidebarMode};
 
 use crate::strings;
 
+/// The tabs, along the toolbar between the sidebar's toggle and the panel's (ADR 0024).
+pub const TABS: &str = "knotes.tabs";
+/// After the tabs: a new tab, with a new note in it.
+pub const NEW_TAB: &str = "knotes.new-tab";
 pub const SEARCH: &str = "knotes.search";
 /// The list's search field, in the place of the list's name while the search shows.
 pub const SEARCH_FIELD: &str = "knotes.search-field";
@@ -89,6 +93,9 @@ pub struct Ivars {
     on_panel_mode: RefCell<Option<OnPanelMode>>,
     /// The row under the toolbar: its parts over the list and over the note, and its controls.
     row: RefCell<Option<Row>>,
+    /// The tabs' strip, the toolbar's item between its two toggles.
+    tabs: RefCell<Option<Retained<NSView>>>,
+    on_new_tab: RefCell<Option<Box<dyn Fn()>>>,
     /// Back/forward availability, applied when the group item is created later.
     history_state: Cell<(bool, bool)>,
 }
@@ -139,6 +146,13 @@ define_class!(
     }
 
     impl ToolbarDelegate {
+        #[unsafe(method(newTab:))]
+        fn new_tab(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_new_tab.borrow().as_ref() {
+                callback();
+            }
+        }
+
         #[unsafe(method(newNote:))]
         fn new_note(&self, _sender: Option<&AnyObject>) {
             if let Some(callback) = self.ivars().on_new_note.borrow().as_ref() {
@@ -149,9 +163,8 @@ define_class!(
         #[unsafe(method(sidebarMode:))]
         fn sidebar_mode_chosen(&self, sender: &NSButton) {
             let mode = match sender.tag() {
-                0 => SidebarMode::Tabs,
-                2 => SidebarMode::Tags,
-                3 => SidebarMode::Cards,
+                1 => SidebarMode::Tags,
+                2 => SidebarMode::Cards,
                 _ => SidebarMode::Folders,
             };
             self.set_sidebar_mode(mode);
@@ -265,6 +278,8 @@ define_class!(
 impl ToolbarDelegate {
     pub fn new(mtm: MainThreadMarker, split_view: Retained<NSSplitView>, list_menu: Retained<NSMenu>) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars {
+            tabs: RefCell::new(None),
+            on_new_tab: RefCell::new(None),
             split_view,
             list_menu,
             on_navigate: RefCell::new(None),
@@ -292,6 +307,11 @@ impl ToolbarDelegate {
             history_state: Cell::new((false, false)),
         });
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// Called by the button after the tabs.
+    pub fn on_new_tab(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_new_tab.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_new_note(&self, callback: impl Fn() + 'static) {
@@ -544,13 +564,13 @@ impl ToolbarDelegate {
         choose(&panels, panel_index(self.ivars().panel_mode_state.get()));
         over_panel.setHidden(!self.ivars().panel_shown.get());
         row.addSubview(&over_panel);
-        // Over the sidebar, what it lists: tabs, folders or tags (tabs first, owner's order), three
-        // small buttons in its middle, the one chosen in the accent colour.
+        // Over the sidebar, what it lists: folders, tags or the cards' decks, three small buttons
+        // in its middle, the one chosen in the accent colour. (The tabs were a fourth; they are
+        // along the toolbar now.)
         let modes = [
-            button(SIDEBAR_MODE_IDS[0], "square.on.square", strings::TABS, sel!(sidebarMode:)),
-            button(SIDEBAR_MODE_IDS[1], "folder", strings::FOLDERS, sel!(sidebarMode:)),
-            button(SIDEBAR_MODE_IDS[2], "tag", strings::TAGS, sel!(sidebarMode:)),
-            button(SIDEBAR_MODE_IDS[3], "rectangle.stack", strings::CARDS, sel!(sidebarMode:)),
+            button(SIDEBAR_MODE_IDS[0], "folder", strings::FOLDERS, sel!(sidebarMode:)),
+            button(SIDEBAR_MODE_IDS[1], "tag", strings::TAGS, sel!(sidebarMode:)),
+            button(SIDEBAR_MODE_IDS[2], "rectangle.stack", strings::CARDS, sel!(sidebarMode:)),
         ];
         switch(&over_sidebar, &modes);
         choose(&modes, mode_index(self.ivars().sidebar_mode_state.get()));
@@ -627,6 +647,35 @@ impl ToolbarDelegate {
     fn make_item(&self, id: &NSString) -> Option<Retained<NSToolbarItem>> {
         let mtm = self.mtm();
         match id.to_string().as_str() {
+            TABS => {
+                let strip = self.ivars().tabs.borrow().clone()?;
+                let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), id);
+                item.setLabel(&NSString::from_str(strings::TABS));
+                // As wide as the toolbar lets it between the toggles: the toolbar gives an item
+                // whose view may be wider what is left.
+                strip.setTranslatesAutoresizingMaskIntoConstraints(false);
+                let wide = strip.widthAnchor().constraintEqualToConstant(4000.0);
+                wide.setPriority(200.0);
+                NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+                    strip.heightAnchor().constraintEqualToConstant(crate::tab_strip::HEIGHT),
+                    strip.widthAnchor().constraintGreaterThanOrEqualToConstant(120.0),
+                    wide,
+                ]));
+                item.setView(Some(&strip));
+                // No frame of the toolbar's around it: the strip draws its own capsule, and the
+                // two, one inside the other and not as tall, showed as a double edge.
+                item.setBordered(false);
+                Some(item)
+            }
+            NEW_TAB => {
+                let item = button(mtm, id, "plus", strings::NEW_TAB);
+                // SAFETY: the delegate outlives its toolbar's items and takes the action.
+                unsafe {
+                    item.setTarget(Some(self));
+                    item.setAction(Some(sel!(newTab:)));
+                }
+                Some(item)
+            }
             PANEL => {
                 let item = button(mtm, id, "sidebar.right", strings::TOGGLE_PANEL);
                 // Up the responder chain to the split view controller.
@@ -718,18 +767,28 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         ]
     };
     let custom = |s: &str| NSString::from_str(s);
+    // SAFETY: as above.
+    let space = unsafe { objc2_app_kit::NSToolbarSpaceItemIdentifier };
     NSArray::from_retained_slice(&[
         system[0].copy(),
-        // Empty between the sidebar's switch and the panel's, at the right edge: what belongs
-        // to the list and the note is in the row below (`second_row`).
-        system[2].copy(),
+        // Between the sidebar's toggle and the panel's: the tabs, a space at each side (next to
+        // one another the toolbar puts items on one piece of glass, and the panel's button
+        // stood inside the tabs' frame). What belongs to the list and the note is in the row
+        // below (`second_row`).
+        space.copy(),
+        custom(TABS),
+        // A round button of its own after the tabs, as the reference's.
+        space.copy(),
+        custom(NEW_TAB),
+        space.copy(),
         custom(PANEL),
     ])
 }
 
 /// `search_field`: the list's search field, which the row under the toolbar shows in the place
 /// of the list's name.
-pub fn install(window: &objc2_app_kit::NSWindow, delegate: &ToolbarDelegate, search_field: &NSSearchField) {
+pub fn install(window: &objc2_app_kit::NSWindow, delegate: &ToolbarDelegate, search_field: &NSSearchField, tabs: &NSView) {
+    *delegate.ivars().tabs.borrow_mut() = Some(objc2::Message::retain(tabs));
     let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(window.mtm()), ns_string!("KnotesMainToolbar"));
     toolbar.setDelegate(Some(ProtocolObject::from_ref(delegate)));
     toolbar.setDisplayMode(objc2_app_kit::NSToolbarDisplayMode::IconOnly);
@@ -757,7 +816,7 @@ struct Row {
     view: Retained<NSView>,
     over_sidebar: Retained<NSView>,
     /// Tabs, folders, tags.
-    modes: [Retained<NSButton>; 4],
+    modes: [Retained<NSButton>; 3],
     over_panel: Retained<NSView>,
     /// The AI, the outline, the links.
     panels: [Retained<NSButton>; 3],
@@ -780,7 +839,7 @@ fn choose(buttons: &[Retained<NSButton>], index: isize) {
 }
 
 /// The row's buttons for what the sidebar lists: tabs, folders, tags, the cards' decks.
-pub const SIDEBAR_MODE_IDS: [&str; 4] = ["knotes.sidebar-tabs", "knotes.sidebar-folders", "knotes.sidebar-tags", "knotes.sidebar-cards"];
+pub const SIDEBAR_MODE_IDS: [&str; 3] = ["knotes.sidebar-folders", "knotes.sidebar-tags", "knotes.sidebar-cards"];
 
 /// The row's buttons for what the panel shows: the AI, the outline, the links.
 pub const PANEL_MODE_IDS: [&str; 3] = ["knotes.panel-ai", "knotes.panel-outline", "knotes.panel-links"];
@@ -802,10 +861,11 @@ fn button(mtm: MainThreadMarker, id: &NSString, symbol_name: &str, label: &str) 
 
 fn mode_index(mode: SidebarMode) -> isize {
     match mode {
-        SidebarMode::Tabs => 0,
-        SidebarMode::Folders => 1,
-        SidebarMode::Tags => 2,
-        SidebarMode::Cards => 3,
+        SidebarMode::Folders => 0,
+        SidebarMode::Tags => 1,
+        SidebarMode::Cards => 2,
+        // The tabs are no list of the sidebar's any more.
+        SidebarMode::Tabs => -1,
     }
 }
 

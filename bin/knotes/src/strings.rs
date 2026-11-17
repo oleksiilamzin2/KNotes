@@ -322,6 +322,7 @@ pub const CHAT: &str = "Чат";
 pub const AI: &str = "ШІ";
 pub const TABS: &str = "Вкладки";
 pub const CLOSE_TAB: &str = "Закрити вкладку";
+pub const NEW_TAB: &str = "Нова вкладка";
 pub const CLOSE_OTHER_TABS: &str = "Закрити інші вкладки";
 pub const OPEN_IN_NEW_TAB: &str = "Відкрити в новій вкладці";
 pub const OUTLINE: &str = "Зміст";

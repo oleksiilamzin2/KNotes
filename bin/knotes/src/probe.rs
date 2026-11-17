@@ -349,48 +349,6 @@ pub fn pdf_width_requested(window: &std::rc::Rc<VaultWindow>) {
     });
 }
 
-/// A click on the cross of `path`'s tab in the sidebar: its button pressed.
-pub fn tab_close_requested(outline: &NSOutlineView, sidebar: &crate::sidebar_view::SidebarSource, path: &str) {
-    // SAFETY: the item object comes from the outline view's data source.
-    let row = unsafe { outline.rowForItem(Some(&sidebar.object_for(&knotes_app::SidebarItem::Tab(path.to_owned())))) };
-    let cell = (row >= 0).then(|| outline.viewAtColumn_row_makeIfNecessary(0, row, true)).flatten().and_then(|v| v.downcast::<NSTableCellView>().ok());
-    // The pointer over the row first: the cross shows only then.
-    if let Some(cell) = cell.as_deref() {
-        pointer_over(cell, true);
-    }
-    if let Some(button) = cell.as_deref().and_then(crate::sidebar_view::close_button) {
-        // SAFETY: a click with no sender, as the button's own.
-        unsafe { button.performClick(None) };
-    }
-}
-
-/// The pointer coming over `view` (or leaving it), the event AppKit's tracking area sends.
-fn pointer_over(view: &objc2_app_kit::NSView, entering: bool) {
-    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSResponder};
-    let Some(window) = view.window() else { return };
-    let kind = if entering { NSEventType::MouseEntered } else { NSEventType::MouseExited };
-    // SAFETY: no user data.
-    let event = unsafe {
-        NSEvent::enterExitEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_trackingNumber_userData(
-            kind, objc2_foundation::NSPoint::new(0.0, 0.0), NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 0, std::ptr::null_mut(),
-        )
-    };
-    if let Some(event) = event {
-        if entering { NSResponder::mouseEntered(view, &event) } else { NSResponder::mouseExited(view, &event) }
-    }
-}
-
-/// Whether each tab's cross shows, in the sidebar's order.
-fn report_tab_crosses(outline: &NSOutlineView) {
-    let shown: Vec<&str> = (0..outline.numberOfRows())
-        .filter_map(|row| outline.viewAtColumn_row_makeIfNecessary(0, row, true)?.downcast::<NSTableCellView>().ok())
-        .filter_map(|cell| crate::sidebar_view::close_button(&cell).map(|b| (cell, b)))
-        .filter(|(cell, _)| cell.downcast_ref::<crate::sidebar_view::SidebarCell>().is_some_and(|c| c.is_closable()))
-        .map(|(_, b)| if b.isHidden() { "hidden" } else { "shown" })
-        .collect();
-    println!("tab-crosses: {}", shown.join(" "));
-}
-
 /// `KNOTES_PROBE_CHAT_SEND=first|second`: those questions asked in the chat, 600 ms apart (with
 /// `KNOTES_PROBE_CHAT` naming OpenAI's answers); `KNOTES_PROBE_CHAT_TOGGLE_DOC=1` crosses out
 /// the document offered first; `KNOTES_PROBE_CHAT_EFFORT=high` chooses that effort.
@@ -455,10 +413,9 @@ pub fn sidebar_mode_requested(window: &NSWindow) {
     // `KNOTES_PROBE_SIDEBAR=tabs`: the same, beside another action.
     let asked = std::env::var("KNOTES_PROBE_SIDEBAR").map(|m| format!("sidebar={m}")).or_else(|_| std::env::var("KNOTES_PROBE_ACTION"));
     let index = match asked.as_deref() {
-        Ok("sidebar=folders") => 1,
-        Ok("sidebar=tags") => 2,
-        Ok("sidebar=tabs") => 0,
-        Ok("sidebar=cards") => 3,
+        Ok("sidebar=folders") => 0,
+        Ok("sidebar=tags") => 1,
+        Ok("sidebar=cards") => 2,
         _ => return,
     };
     let Some(button) = sidebar_switch(window).into_iter().nth(index as usize) else { return };
@@ -943,6 +900,19 @@ pub fn schedule(with_sidebar: bool) {
     });
 }
 
+/// `KNOTES_PROBE_NEW_TAB_BUTTON=1`: a click on the toolbar's button after the tabs, its action
+/// sent to its target as the toolbar sends it.
+pub fn new_tab_button_requested(window: &NSWindow) {
+    if std::env::var_os("KNOTES_PROBE_NEW_TAB_BUTTON").is_none() {
+        return;
+    }
+    let item = window.toolbar().and_then(|toolbar| toolbar.items().iter().find(|item| item.itemIdentifier().to_string() == crate::toolbar::NEW_TAB));
+    if let Some((item, action)) = item.and_then(|item| item.action().map(|action| (item, action))) {
+        // SAFETY: the item's own action and target, with it as the sender.
+        unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, item.target().as_deref(), Some(&item)) };
+    }
+}
+
 fn report_toolbar(window: &NSWindow) {
     let Some(toolbar) = window.toolbar() else { return };
     // SAFETY: AppKit's identifier constants are immutable strings for the process lifetime.
@@ -951,6 +921,7 @@ fn report_toolbar(window: &NSWindow) {
             (NSToolbarToggleSidebarItemIdentifier, "toggle-sidebar"),
             (NSToolbarSidebarTrackingSeparatorItemIdentifier, "sidebar-separator"),
             (NSToolbarFlexibleSpaceItemIdentifier, "flexible-space"),
+            (objc2_app_kit::NSToolbarSpaceItemIdentifier, "space"),
             (NSToolbarInspectorTrackingSeparatorItemIdentifier, "inspector-separator"),
         ]
     };
@@ -1101,22 +1072,24 @@ fn tabs_requested(window: &VaultWindow) {
         window.window.displayIfNeeded();
         window.connections_panel.click(&line);
     }
+    // `KNOTES_PROBE_TAB_CLOSE=a.md`: a click on the cross of that document's tab.
     if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLOSE") {
         window.window.displayIfNeeded();
-        tab_close_requested(&window.outline, &window.sidebar, &path);
+        // The pointer over the tab, then a press in the middle of its cross.
+        let tab = window.tab_strip.tab_of(&path);
+        window.tab_strip.hover(tab);
+        if let Some(at) = tab.and_then(|tab| window.tab_strip.cross_middle(tab)) {
+            window.tab_strip.press(at);
+        }
         window.window.displayIfNeeded();
     }
-    // `KNOTES_PROBE_TAB_HOVER=a.md` (or `a.md:out`): the pointer comes over that tab's row
-    // (or comes and leaves).
+    // `KNOTES_PROBE_TAB_HOVER=a.md` (or `a.md:out`): the pointer comes over that tab (or comes
+    // and leaves).
     if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_HOVER") {
         let (path, out) = spec.split_once(':').map_or((spec.as_str(), false), |(p, o)| (p, o == "out"));
-        // SAFETY: the item object comes from the outline view's data source.
-        let row = unsafe { window.outline.rowForItem(Some(&window.sidebar.object_for(&knotes_app::SidebarItem::Tab(path.to_owned())))) };
-        if let Some(cell) = (row >= 0).then(|| window.outline.viewAtColumn_row_makeIfNecessary(0, row, true)).flatten() {
-            pointer_over(&cell, true);
-            if out {
-                pointer_over(&cell, false);
-            }
+        window.tab_strip.hover(window.tab_strip.tab_of(path));
+        if out {
+            window.tab_strip.hover(None);
         }
     }
     // `KNOTES_PROBE_PDF_KEYS=space,right,cmd-down`: those keys pressed in the PDF viewer.
@@ -1168,18 +1141,11 @@ fn tabs_requested(window: &VaultWindow) {
     // its items printed (or one chosen).
     if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_MENU") {
         let (path, choice) = spec.split_once(':').map_or((spec.as_str(), None), |(p, c)| (p, Some(c)));
-        let menu = objc2_app_kit::NSMenu::new(window.window.mtm());
-        window.sidebar.fill_menu(&menu, Some(&knotes_app::SidebarItem::Tab(path.to_owned())));
-        let items = menu.itemArray();
-        println!("tab-menu: {}", items.iter().map(|i| i.title().to_string()).collect::<Vec<_>>().join(" | "));
-        let chosen = match choice {
-            Some("close") => items.iter().next(),
-            Some("others") => items.iter().nth(1),
-            _ => None,
-        };
-        if let Some(item) = chosen {
-            // SAFETY: the item's own action and target, with it as the sender, as a click sends.
-            unsafe { NSApplication::sharedApplication(window.window.mtm()).sendAction_to_from(item.action().expect("menu action"), item.target().as_deref(), Some(&item)) };
+        println!("tab-menu: {}", window.tab_strip.menu_titles().join(" | "));
+        match (window.tab_strip.tab_of(path), choice) {
+            (Some(tab), Some("close")) => window.tab_strip.close(tab),
+            (Some(tab), Some("others")) => window.tab_strip.close_others(tab),
+            _ => {}
         }
     }
     // `KNOTES_PROBE_MENU_KEY=w`: the main menu's item for Cmd and that key, chosen as the key
@@ -1370,10 +1336,9 @@ fn report_sidebar_mode(window: &NSWindow) {
     let chosen = buttons.iter().position(|b| b.state() == objc2_app_kit::NSControlStateValueOn);
     let mode = match (buttons.first().map(|b| b.isHiddenOrHasHiddenAncestor()), chosen) {
         (Some(true), _) => "hidden",
-        (Some(false), Some(0)) => "tabs",
-        (Some(false), Some(1)) => "folders",
-        (Some(false), Some(2)) => "tags",
-        (Some(false), Some(3)) => "cards",
+        (Some(false), Some(0)) => "folders",
+        (Some(false), Some(1)) => "tags",
+        (Some(false), Some(2)) => "cards",
         _ => "none",
     };
     let collapsed = window
@@ -1396,7 +1361,6 @@ fn report_sidebar(outline: &NSOutlineView) {
         })
         .collect();
     println!("sidebar: {}", rows.join(" | "));
-    report_tab_crosses(outline);
     let selected = outline.selectedRow();
     let name = (selected >= 0)
         .then(|| outline.viewAtColumn_row_makeIfNecessary(0, selected, true))
@@ -1493,6 +1457,12 @@ fn report_note(window: &VaultWindow) {
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);
     println!("path-bar: {}", window.path_bar.describe());
+    // The tabs along the toolbar, the one shown, their crosses, and how wide the strip is.
+    println!("tabs: {}", window.tab_strip.names().join(" | "));
+    println!("tab-shown: {}", window.tab_strip.shown().unwrap_or_else(|| "none".to_owned()));
+    println!("tab-crosses: {}", window.tab_strip.crosses());
+    let strip = window.tab_strip.convertRect_toView(window.tab_strip.bounds(), None);
+    println!("tab-strip: width={:.0} of {:.0} (x {:.0} to {:.0})", strip.size.width, window.window.frame().size.width, strip.origin.x, strip.origin.x + strip.size.width);
     println!("review: {}", window.describe_review().replace('\n', "⏎"));
     let stats = window.describe_deck_stats();
     if !stats.is_empty() {

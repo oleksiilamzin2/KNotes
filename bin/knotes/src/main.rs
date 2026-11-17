@@ -37,6 +37,7 @@ mod settings_window;
 mod sidebar_view;
 mod space_switcher;
 mod space_ui;
+mod tab_strip;
 mod strings;
 mod text_paint;
 mod toolbar;

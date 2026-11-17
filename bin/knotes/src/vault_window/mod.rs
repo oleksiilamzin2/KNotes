@@ -216,6 +216,8 @@ pub struct VaultWindow {
     outline_jump: Cell<Option<(usize, f64)>>,
     /// Kept alive here: the toolbar holds its delegate weakly.
     toolbar_delegate: Retained<ToolbarDelegate>,
+    /// The tabs, along the toolbar (ADR 0024).
+    pub tab_strip: Retained<crate::tab_strip::TabStrip>,
     /// The space switcher at the sidebar's foot (ADR 0030).
     space_switcher: Retained<SpaceSwitcher>,
     state: RefCell<State>,
@@ -386,7 +388,8 @@ impl VaultWindow {
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
         search_bar.set_target(toolbar.as_ref());
         search_bar.set_meaning_on(crate::meaning::model().is_some());
-        toolbar::install(&window, &toolbar, &search_bar.field);
+        let tab_strip = crate::tab_strip::TabStrip::new(mtm);
+        toolbar::install(&window, &toolbar, &search_bar.field, &tab_strip);
         let state = State {
             selection: SidebarItem::AllNotes,
             rows: Arc::new(Vec::new()),
@@ -458,6 +461,7 @@ impl VaultWindow {
             outline_due: Cell::new(false),
             outline_jump: Cell::new(None),
             toolbar_delegate: toolbar,
+            tab_strip,
             space_switcher,
             state: RefCell::new(state),
             highlighting: Cell::new(false),
@@ -759,6 +763,25 @@ impl VaultWindow {
                 window.open_in_new_tab(&path);
             }
         });
+        // The tabs along the toolbar: a click shows a tab's document, its cross closes it.
+        let weak_tab: Weak<Self> = Rc::downgrade(&this);
+        this.tab_strip.on_select(move |path| {
+            if let Some(window) = weak_tab.upgrade() {
+                window.open_note(&path, true);
+            }
+        });
+        let weak_tab: Weak<Self> = Rc::downgrade(&this);
+        this.tab_strip.on_close(move |path| {
+            if let Some(window) = weak_tab.upgrade() {
+                window.close_tab(&path);
+            }
+        });
+        let weak_tab: Weak<Self> = Rc::downgrade(&this);
+        this.tab_strip.on_close_others(move |path| {
+            if let Some(window) = weak_tab.upgrade() {
+                window.close_other_tabs(&path);
+            }
+        });
         let weak_close: Weak<Self> = Rc::downgrade(&this);
         this.sidebar.on_close(move |path| {
             if let Some(window) = weak_close.upgrade() {
@@ -798,6 +821,15 @@ impl VaultWindow {
                 && !window.shows_deleted(&id)
             {
                 window.show_deleted(&id);
+            }
+        });
+        // The button after the tabs: a new note in a tab of its own beside the one shown.
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_new_tab(move || {
+            if let Some(window) = weak.upgrade() {
+                window.new_tab_next.set(true);
+                window.new_note();
+                window.new_tab_next.set(false);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -1064,6 +1096,7 @@ impl VaultWindow {
                 None => vault.join(p).is_file(),
             });
         }
+        self.show_tabs();
         self.rebuild_sidebar();
         if !self.tabs_restored.replace(true) {
             self.restore_tabs();

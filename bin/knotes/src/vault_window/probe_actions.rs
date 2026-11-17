@@ -183,11 +183,12 @@ impl VaultWindow {
         if let Ok(path) = std::env::var("KNOTES_PROBE_NEW_TAB") {
             self.open_in_new_tab(&path);
         }
+        probe::new_tab_button_requested(&self.window);
         // `KNOTES_PROBE_TAB_CLICK=a.md`: a click on that document's tab, after the opening.
         if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLICK") {
-            let item = SidebarItem::Tab(path);
-            self.highlight(&item);
-            self.select(item);
+            if let Some(tab) = self.tab_strip.tab_of(&path) {
+                self.tab_strip.click(tab);
+            }
         }
         // After the click: it may open a PDF to rename.
         probe::toolbar_rename_requested(&self.window);
