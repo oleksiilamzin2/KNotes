@@ -163,6 +163,9 @@ impl VaultWindow {
         self.embeds.clear();
         self.show_pdf(Some(path));
         self.show_note_column();
+        if self.pdf_view.borrow().is_none() {
+            self.tell_pdf_unopened(path);
+        }
         if from_note && let Some(viewer) = self.pdf_view.borrow().as_ref() {
             self.window.makeFirstResponder(Some(viewer.pages_view()));
         }
@@ -184,6 +187,17 @@ impl VaultWindow {
         self.refresh_panel();
         self.update_navigation();
         true
+    }
+
+    /// Says why the PDF at `path` does not open (the column shows no document).
+    fn tell_pdf_unopened(&self, path: &str) {
+        let Some(vault) = self.vault() else { return };
+        let why = match crate::image_loader::pdf_trouble(&vault.join(path)) {
+            crate::image_loader::PdfTrouble::Unreadable(e) => e.to_string(),
+            crate::image_loader::PdfTrouble::Locked => strings::PDF_LOCKED.to_owned(),
+            crate::image_loader::PdfTrouble::Damaged => strings::PDF_DAMAGED.to_owned(),
+        };
+        self.tell_failed(&strings::open_failed(document_name(path)), &why);
     }
 
     /// The PDF open changed on the disk. Written again (exported anew, annotated in Preview), it

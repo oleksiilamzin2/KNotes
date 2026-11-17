@@ -46,13 +46,39 @@ fn pdf_page(file: &Path, page: Option<u32>) -> Option<CFRetained<CGPDFPage>> {
 }
 
 /// Each page's size in points (rotation applied) of the PDF in `file`; `None` when it does not
-/// open.
+/// open, or is locked by a password (its pages would draw blank).
 pub fn pdf_page_sizes(file: &Path) -> Option<Vec<NSSize>> {
     let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
     // SAFETY: NSURL and CFURL are toll-free bridged.
     let document = CGPDFDocument::with_url(Some(unsafe { &*(Retained::as_ptr(&url).cast::<CFURL>()) }))?;
+    if !CGPDFDocument::is_unlocked(Some(&document)) {
+        return None;
+    }
     let count = CGPDFDocument::number_of_pages(Some(&document));
     Some((1..=count).filter_map(|n| CGPDFDocument::page(Some(&document), n)).map(|p| page_size(&p)).collect())
+}
+
+/// Why a PDF does not open in the viewer (`pdf_page_sizes` gave none).
+pub enum PdfTrouble {
+    /// The file cannot be read (gone, not allowed, offline in iCloud).
+    Unreadable(std::io::Error),
+    /// Locked by a password.
+    Locked,
+    /// Not a PDF, damaged, or without pages.
+    Damaged,
+}
+
+/// Why the PDF in `file` does not open.
+pub fn pdf_trouble(file: &Path) -> PdfTrouble {
+    if let Err(e) = std::fs::File::open(file) {
+        return PdfTrouble::Unreadable(e);
+    }
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&file.to_string_lossy()));
+    // SAFETY: NSURL and CFURL are toll-free bridged.
+    match CGPDFDocument::with_url(Some(unsafe { &*(Retained::as_ptr(&url).cast::<CFURL>()) })) {
+        Some(document) if !CGPDFDocument::is_unlocked(Some(&document)) => PdfTrouble::Locked,
+        _ => PdfTrouble::Damaged,
+    }
 }
 
 /// How many pages the PDF in `file` has.

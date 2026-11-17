@@ -441,9 +441,19 @@ impl PdfPages {
             return;
         }
         let Some(visible) = self.shown() else { return };
-        let top = visible.origin.y + self.enclosingScrollView().map_or(0.0, |s| s.contentInsets().top) + 1.0;
+        // Where a jump puts a page's top (as `top_place` counts): the view where a jump to a
+        // page left it shows that page, scrolled there any other way too (the gap after a page
+        // counted as its, the page before it was shown).
+        let top = visible.origin.y + self.enclosingScrollView().map_or(0.0, |s| s.contentInsets().top) + MARGIN + 1.0;
+        // The page jumped to stays the one shown while it is in view (a last page cannot reach
+        // the top); scrolled out of it any way at all (the scroller, a drag selecting text, not
+        // only the wheel), it no longer is: the label, the outline and the pages kept followed
+        // the page a PDF opened at, or a link named, wherever the view went.
+        if self.ivars().jumped.get() && !frames.get(self.ivars().current.get()).is_some_and(|f| intersects(*f, visible)) {
+            self.ivars().jumped.set(false);
+        }
         if !self.ivars().jumped.get() {
-            let at_top = frames.iter().position(|f| f.origin.y + f.size.height + GAP > top).unwrap_or(frames.len() - 1);
+            let at_top = frames.iter().position(|f| f.origin.y + f.size.height > top).unwrap_or(frames.len() - 1);
             self.ivars().current.set(at_top);
         }
         let current = self.ivars().current.get();
@@ -889,6 +899,14 @@ impl PdfViewer {
         let mut pages: Vec<(usize, &'static str, f64)> = images.iter().map(|(i, image)| (i + 1, image.shows(), image.size.width)).collect();
         pages.sort_by_key(|p| p.0);
         pages.iter().map(|(page, shows, width)| format!("{page}:{shows}:{width:.0}")).collect()
+    }
+
+    /// Scrolls page `page` (index) to the top as the scroller does, no jump (probe mode).
+    pub fn scroll_as_scroller(&self, page: usize) {
+        let Some(frame) = self.pages.ivars().frames.borrow().get(page).copied() else { return };
+        let clip = self.scroll.contentView();
+        clip.scrollToPoint(NSPoint::new(clip.bounds().origin.x, frame.origin.y - MARGIN - self.scroll.contentInsets().top));
+        self.scroll.reflectScrolledClipView(&clip);
     }
 
     /// The pages kept drawn (from 1), in order (probe mode).

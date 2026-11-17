@@ -365,6 +365,9 @@ pub const TRASH_DAYS_FAILED: &str = "Не вдалося зберегти, ск�
 pub fn open_failed(name: &str) -> String {
     format!("Не вдалося відкрити «{name}»")
 }
+/// Why a PDF does not open (ADR 0022).
+pub const PDF_LOCKED: &str = "Цей PDF захищено паролем, а такі Knotes не відкриває. Відкрийте його в Перегляді.";
+pub const PDF_DAMAGED: &str = "Файл пошкоджений або це не PDF.";
 pub const VAULT_BUSY: &str = "Цю базу вже відкрито в іншому вікні або в іншому запущеному Knotes.";
 /// Why, and the files it was about: "Permission denied. «a», «b»".
 pub fn failed_files(error: &str, names: &[&str]) -> String {

@@ -3829,3 +3829,26 @@ fn a_pdf_deleted_outside_while_open_closes() {
     assert!(out.contains("pdf-view: hidden") && out.contains("note-column: empty"), "{out}");
 }
 
+#[test]
+fn the_page_shown_follows_the_scroller_after_a_pdf_opened_or_jumped() {
+    let notes = [("a.md", "See [[long.pdf]] here\n\nend")];
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    for jump in [None, Some("15")] {
+        let mut env = open.to_vec();
+        env.extend(jump.map(|page| ("KNOTES_PROBE_PDF_GO", page)));
+        env.push(("KNOTES_PROBE_PDF_SCROLLER", "3"));
+        let (_vault, out) = probe_images(&notes, &[("long.pdf", &pdf_of(30))], &env);
+        assert!(out.contains("pdf-view: long.pdf 3/30") && out.contains("pdf-page-label: сторінка 3 з 30"), "{jump:?}: {out}");
+        let kept = pages_kept(&out);
+        assert!(kept.contains(&3) && kept.iter().all(|p| (1..=5).contains(p)), "{jump:?}: around page 3 only: {kept:?}");
+    }
+}
+
+#[test]
+fn a_pdf_that_does_not_open_says_why() {
+    let notes = [("a.md", "See [[broken.pdf]] here\n\nend")];
+    let env = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")];
+    let (_vault, out) = probe_images(&notes, &[("broken.pdf", b"not a PDF at all")], &env);
+    assert!(out.contains("failed: Не вдалося відкрити «broken»: Файл пошкоджений або це не PDF."), "{out}");
+    assert!(out.contains("note-column: empty"), "{out}");
+}

@@ -183,6 +183,13 @@ impl VaultWindow {
             self.window.displayIfNeeded();
             self.pdf_go_to(page);
         }
+        // `KNOTES_PROBE_PDF_SCROLLER=3`: the scroller dragged until page 3 is at the top.
+        if let Some(page) = std::env::var("KNOTES_PROBE_PDF_SCROLLER").ok().and_then(|p| p.parse::<usize>().ok()) {
+            if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+                self.window.displayIfNeeded();
+                viewer.scroll_as_scroller(page.saturating_sub(1));
+            }
+        }
         if std::env::var("KNOTES_PROBE_AFTER_CLICK").as_deref() == Ok("back") {
             // Shown first, as on screen.
             self.window.displayIfNeeded();
