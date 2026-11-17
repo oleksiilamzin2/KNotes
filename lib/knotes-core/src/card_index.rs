@@ -26,6 +26,15 @@ pub struct DueCard {
     pub due: Option<i64>,
 }
 
+/// What is remembered of a reviewed card: FSRS's stability (days) and difficulty (1 to 10), and
+/// when it was last reviewed (seconds since 1970).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CardState {
+    pub stability: f64,
+    pub difficulty: f64,
+    pub last: i64,
+}
+
 /// The cards the vault's notes hold (ADR 0037), their decks, and what is due.
 pub trait CardIndex {
     /// Every deck with its own cards counted, those due by `until` (seconds since 1970) and
@@ -37,4 +46,6 @@ pub trait CardIndex {
     fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize) -> Result<Vec<DueCard>, BoxError>;
     /// The notes holding a card of `deck` or of a deck under it, sorted by path.
     fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError>;
+    /// Where the card `id` stands; none for one never reviewed.
+    fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError>;
 }

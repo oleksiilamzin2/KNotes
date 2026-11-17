@@ -78,6 +78,9 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
         Some(tagged(item(mtm, s::FIND_NEXT, sel!(performTextFinderAction:), "g", cmd(none)), NSTextFinderAction::NextMatch.0)),
         Some(tagged(item(mtm, s::FIND_PREVIOUS, sel!(performTextFinderAction:), "g", cmd(NSEventModifierFlags::Shift)), NSTextFinderAction::PreviousMatch.0)),
         Some(item(mtm, s::SEARCH_NOTES, sel!(searchNotes:), "f", cmd(NSEventModifierFlags::Shift))),
+        None,
+        // What is selected in the note becomes a card (ADR 0037).
+        Some(item(mtm, s::MAKE_CARD, sel!(makeCard:), "k", cmd(NSEventModifierFlags::Shift))),
     ]);
     submenu(mtm, &bar, s::MENU_VIEW, &[
         Some(item(mtm, s::TOGGLE_SIDEBAR, sel!(toggleSidebar:), "s", cmd(NSEventModifierFlags::Control))),

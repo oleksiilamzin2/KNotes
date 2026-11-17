@@ -95,6 +95,8 @@ impl VaultWindow {
         if FileKind::from_path(path) == FileKind::Pdf {
             return self.open_pdf(path, None, record);
         }
+        // A document opened takes the note column from a deck's review.
+        self.hide_review();
         self.remember_place();
         if !self.leave() {
             return self.stay();
@@ -144,6 +146,7 @@ impl VaultWindow {
     /// Opens the PDF at `path` in place of the note (ADR 0022), at page `page` (from 1). False
     /// when the note open stays (its edits could not be written and the user chose to stay).
     pub fn open_pdf(&self, path: &str, page: Option<u32>, record: bool) -> bool {
+        self.hide_review();
         self.remember_place();
         if !self.leave() {
             return self.stay();

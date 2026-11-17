@@ -82,3 +82,25 @@ It is the first new feature since the owner's goal became to polish what exists.
 - Left: what is due is counted at the snapshot's time, so a card that falls due while nothing
   changes is counted with the next change; the review itself and making a card from a note are
   to come.
+
+## Built (2026-11-17): a card made from a note, and the review
+
+- **Edit → «Зробити картку»** (⇧⌘K, and first in the note's context menu with something
+  selected): what is selected becomes a card where it is. Its deck is asked (the decks there
+  are to choose from, the last one used offered) and its question, the selection being the
+  answer; a selection that asks already (`question::answer`, a cloze) is asked only its deck.
+  The card gets a paragraph of its own and its id at once (`make_card`, `card_id`); it is
+  written as typed (Undo takes it back) and saved.
+- **A deck chosen in the sidebar shows its review** in the note column: how many cards wait
+  and «Почати». Then a card's question; «Показати відповідь» (Space); its answer and four
+  grades (keys 1 to 4), each saying when the card would come back («Добре · 3 д»), worked out
+  from the card's state (`CardIndex::card_state`); «Відкрити нотатку» goes to the card in its
+  note. A review takes the 200 cards longest due (then the new ones); a card graded Again comes
+  back at its end. A document opened, or another list chosen, ends it.
+- **A grade** writes a line to this Mac's log in the vault (`AppSettings::device_name`, made
+  once: `mac-a1b2c3`); a card with no id is given one in its note first (`give_id`; what is
+  typed and not saved is written before, not written over). The card is read from its note as
+  it is now (by its id, or where it was): one gone or changed since is passed over.
+- Left: cards show as plain text, in the review and in the note (no live preview of a card, no
+  Markdown in the review); no limit of new cards a day; the review covers the note open, whose
+  name stays in the toolbar's row.

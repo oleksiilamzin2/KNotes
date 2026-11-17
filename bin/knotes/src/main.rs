@@ -27,6 +27,7 @@ mod probe;
 mod quick_look;
 mod quiet_scroll_view;
 mod rename_dialog;
+mod review_view;
 mod search_bar;
 mod search_worker;
 mod settings_spaces;

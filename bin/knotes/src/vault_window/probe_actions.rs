@@ -22,6 +22,10 @@ impl VaultWindow {
             self.highlight(&item);
             self.select(item);
         }
+        // `KNOTES_PROBE_REVIEW=start,show,3`: clicks in a deck's review (ADR 0037).
+        if let Ok(clicks) = std::env::var("KNOTES_PROBE_REVIEW") {
+            self.probe_review(&clicks);
+        }
         if let Some(option) = probe::requested_option() {
             self.choose(option);
         }
@@ -63,6 +67,12 @@ impl VaultWindow {
             }
             if let Some((path, folder)) = action.strip_prefix("drop-path=").and_then(|s| s.split_once('=')) {
                 self.move_note_to(path, folder);
+            }
+            // `make-card=6,7`: those characters of the open note (UTF-16: where, how many)
+            // selected, then Edit → Make a Card (its deck and question from `KNOTES_PROBE_CARD`).
+            if let Some((at, len)) = action.strip_prefix("make-card=").and_then(|r| r.split_once(',')).and_then(|(a, l)| Some((a.parse().ok()?, l.parse().ok()?))) {
+                self.note_text.setSelectedRange(NSRange::new(at, len));
+                self.make_card();
             }
             // `path-bar=1`: a click on that item of the path bar (0: the vault).
             if let Some(index) = action.strip_prefix("path-bar=").and_then(|i| i.parse().ok()) {

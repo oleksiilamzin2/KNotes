@@ -3976,3 +3976,70 @@ fn the_sidebar_s_cards_mode_lists_the_decks_with_their_cards_to_review_and_a_dec
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
     assert!(out.contains("sidebar: історія (0) | мови (2)\n"), "{out}");
 }
+
+/// A vault with cards in two decks.
+const CARD_NOTES: [(&str, &str); 2] = [
+    ("Мови.md", "Слова.\n\n#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес\n"),
+    ("Історія.md", "#@історія Коли була битва?\n?\n1659 року. ^c-4\n"),
+];
+
+fn review_line_of(out: &str) -> &str {
+    out.lines().find_map(|l| l.strip_prefix("review: ")).unwrap_or_else(|| panic!("{out}"))
+}
+
+#[test]
+fn a_deck_chosen_shows_its_cards_to_review_and_the_review_asks_then_answers() {
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    let (_vault, out) = probe_notes(&CARD_NOTES, &open);
+    assert_eq!(review_line_of(&out), "waiting мови 2", "{out}");
+    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start")]);
+    assert_eq!(review_line_of(&out), "question мови 0/2 | cat", "the first card's question, its answer not shown: {out}");
+    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
+    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д", "{out}");
+    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show")]);
+    assert_eq!(review_line_of(&out), "answer історія 0/1 | Коли була битва? | 1659 року. | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д", "{out}");
+    // Another list chosen: the review goes.
+    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start"), ("KNOTES_PROBE_OPEN", "Мови.md")]);
+    assert_eq!(review_line_of(&out), "hidden", "a note opened takes the column: {out}");
+}
+
+#[test]
+fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    // cat graded Good, dog (no id yet) graded Again: it comes back at the end.
+    let (vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show,1")]);
+    assert_eq!(review_line_of(&out), "question мови 2/1 | dog", "graded Again, it is asked again: {out}");
+    let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
+    assert_eq!(logs.len(), 1, "this Mac's log");
+    let log = std::fs::read_to_string(logs[0].path()).unwrap();
+    let lines: Vec<Vec<&str>> = log.lines().map(|l| l.split('\t').collect()).collect();
+    assert_eq!(lines.len(), 2, "{log}");
+    assert_eq!((lines[0][1], lines[0][2]), ("c-1", "3"));
+    let note = std::fs::read_to_string(vault.path().join("Мови.md")).unwrap();
+    let given = lines[1][1];
+    assert!(given.starts_with("c-") && note.contains(&format!("#@мови/англійська dog::пес ^{given}\n")) && lines[1][2] == "1", "its id written at its end: {note} {log}");
+    // Next time: cat is due in three days, dog in ten minutes; nothing waits now.
+    let out = probe_env(&[vault.path()], None, &open);
+    assert_eq!(review_line_of(&out), "waiting мови 0", "{out}");
+    assert!(out.contains("sidebar: історія (1) | мови (0)\n"), "{out}");
+    // The last card graded: the review is done.
+    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
+    assert_eq!(review_line_of(&out), "done історія 1", "{out}");
+}
+
+#[test]
+fn what_is_selected_in_a_note_becomes_a_card() {
+    let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
+    // «тварина» (9..16) the answer to a question asked.
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_ACTION", "make-card=9,7"), ("KNOTES_PROBE_CARD", "біологія/звірі|Хто такий кіт?")]);
+    let note = std::fs::read_to_string(vault.path().join("n.md")).unwrap();
+    let id = note.split(" ^").nth(1).and_then(|rest| rest.split('\n').next()).unwrap_or_else(|| panic!("{note}")).to_owned();
+    assert_eq!(note, format!("Кіт — це \n\n#@біологія/звірі Хто такий кіт?::тварина ^{id}\n\n.\n\nкінець"), "{out}");
+    assert!(id.starts_with("c-") && id.len() == 8, "{id}");
+    // Its deck is there the next time.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
+    assert!(out.contains("sidebar: біологія (1)\n"), "{out}");
+    // Nothing selected, or no deck given: nothing is written.
+    let (vault, _) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_ACTION", "make-card=9,7")]);
+    assert_eq!(std::fs::read_to_string(vault.path().join("n.md")).unwrap(), notes[0].1);
+}

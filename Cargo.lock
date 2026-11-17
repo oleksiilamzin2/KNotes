@@ -567,6 +567,7 @@ dependencies = [
  "dispatch2",
  "knotes-alloc",
  "knotes-app",
+ "knotes-cards",
  "knotes-chat",
  "knotes-core",
  "knotes-editor",

@@ -14,6 +14,7 @@ mod trash;
 mod spaces;
 mod probe_actions;
 mod ai;
+mod cards;
 
 use self::{completion::*, editing::*, find::*, list::*};
 
@@ -150,6 +151,11 @@ pub struct VaultWindow {
     pub note_text: Retained<NoteTextView>,
     /// Where the open document is in the vault, at the bottom of the note column.
     pub path_bar: crate::path_bar::PathBar,
+    /// A deck's review, over the note column (ADR 0037), and the review under way.
+    review_view: crate::review_view::ReviewView,
+    review: RefCell<Option<cards::Review>>,
+    /// The deck the last card was made in, offered for the next.
+    last_deck: RefCell<String>,
     /// The search row over the note list.
     pub search_bar: SearchBar,
     /// Find in the open note (Cmd+F), over the note.
@@ -296,7 +302,16 @@ impl VaultWindow {
         let menus = live_preview.clone();
         note_text.on_context_menu(move |view, point, menu| {
             let menu = menus.link_context_menu(view, point, menu);
-            menus.table_context_menu(view, point, menu)
+            let menu = menus.table_context_menu(view, point, menu);
+            // «Зробити картку» first, with something selected (ADR 0037); sent up to the app.
+            if let Some(menu) = menu.as_ref().filter(|_| view.selectedRange().length > 0) {
+                let mtm = MainThreadMarker::from(view);
+                // SAFETY: no target: the action goes up the responder chain to the app's delegate.
+                let item = unsafe { objc2_app_kit::NSMenuItem::initWithTitle_action_keyEquivalent(<objc2_app_kit::NSMenuItem as objc2::MainThreadOnly>::alloc(mtm), &NSString::from_str(strings::MAKE_CARD), Some(sel!(makeCard:)), &NSString::new()) };
+                menu.insertItem_atIndex(&item, 0);
+                menu.insertItem_atIndex(&objc2_app_kit::NSMenuItem::separatorItem(mtm), 1);
+            }
+            menu
         });
         // Weak: the text view keeps its callbacks, and the text view is the live preview's.
         let preview = live_preview.clone();
@@ -324,6 +339,16 @@ impl VaultWindow {
             c.setActive(true);
         }
         find_bar.set_bottom(crate::path_bar::HEIGHT);
+        let review_view = crate::review_view::ReviewView::new(mtm);
+        find_bar.column.addSubview(&review_view.view);
+        for c in [
+            review_view.view.topAnchor().constraintEqualToAnchor(&find_bar.column.topAnchor()),
+            review_view.view.leadingAnchor().constraintEqualToAnchor(&find_bar.column.leadingAnchor()),
+            review_view.view.trailingAnchor().constraintEqualToAnchor(&find_bar.column.trailingAnchor()),
+            review_view.view.bottomAnchor().constraintEqualToAnchor(&find_bar.column.bottomAnchor()),
+        ] {
+            c.setActive(true);
+        }
         no_document.centerXAnchor().constraintEqualToAnchor(&find_bar.column.centerXAnchor()).setActive(true);
         no_document.centerYAnchor().constraintEqualToAnchor(&find_bar.column.centerYAnchor()).setActive(true);
         let chat = ChatPanel::new(mtm, knotes_session::app_data_dir());
@@ -389,6 +414,9 @@ impl VaultWindow {
             list_menu,
             note_text,
             path_bar,
+            review_view,
+            review: RefCell::new(None),
+            last_deck: RefCell::new(String::new()),
             search_bar,
             find_bar,
             pdf_view: RefCell::new(None),
@@ -784,6 +812,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        let weak_review: Weak<Self> = Rc::downgrade(&this);
+        this.review_view.on_asked(move |asked| {
+            if let Some(window) = weak_review.upgrade() {
+                window.review_asked(asked);
+            }
+        });
         let weak_path: Weak<Self> = Rc::downgrade(&this);
         this.path_bar.on_folder(move |folder| {
             if let Some(window) = weak_path.upgrade() {

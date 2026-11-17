@@ -176,7 +176,7 @@ impl VaultWindow {
 
 /// `view`'s text from `old` to `new` by the part between their common start and end, as an edit
 /// that can be undone; the selection and the scroll stay where they were.
-fn replace_changed(view: &NSTextView, old: &str, new: &str) {
+pub(super) fn replace_changed(view: &NSTextView, old: &str, new: &str) {
     let start = old.char_indices().zip(new.chars()).take_while(|((_, a), b)| a == b).last().map_or(0, |((i, c), _)| i + c.len_utf8());
     let (old_rest, new_rest) = (&old[start..], &new[start..]);
     let end = old_rest.chars().rev().zip(new_rest.chars().rev()).take_while(|(a, b)| a == b).map(|(c, _)| c.len_utf8()).sum::<usize>();

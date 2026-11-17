@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use knotes_cards::{CardKind, Fsrs, Grade, parse_review, scan_cards, schedule};
-use knotes_core::{BoxError, CardIndex, DeckCount, DueCard};
+use knotes_core::{BoxError, CardIndex, CardState, DeckCount, DueCard};
 use rusqlite::{Transaction, params};
 
 use crate::SqliteIndex;
@@ -101,6 +101,12 @@ impl CardIndex for SqliteIndex {
             Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError> {
+        use rusqlite::OptionalExtension;
+        let mut st = self.conn.prepare_cached("SELECT stability, difficulty, last FROM card_states WHERE card_id = ?1")?;
+        Ok(st.query_row([id], |r| Ok(CardState { stability: r.get(0)?, difficulty: r.get(1)?, last: r.get(2)? })).optional()?)
     }
 
     fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError> {

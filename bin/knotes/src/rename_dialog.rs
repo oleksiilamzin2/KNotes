@@ -82,6 +82,51 @@ pub fn ask_space_name(mtm: MainThreadMarker) -> Option<String> {
     (alert.runModal() == NSAlertFirstButtonReturn).then(|| field.stringValue().to_string().trim().to_owned()).filter(|n| !n.is_empty())
 }
 
+/// Asks a new card's deck (`decks` to choose from, `last` offered) and, when `need_question`,
+/// its question; none when cancelled or left without a deck. In probe mode
+/// `KNOTES_PROBE_CARD=deck|question`.
+pub fn ask_card(mtm: MainThreadMarker, decks: &[String], last: &str, need_question: bool) -> Option<(String, Option<String>)> {
+    let answer = |deck: String, question: String| {
+        let deck = deck.trim().trim_matches('/').to_owned();
+        let question = Some(question.trim().to_owned()).filter(|q| !q.is_empty());
+        (!deck.is_empty() && (question.is_some() || !need_question)).then_some((deck, question.filter(|_| need_question)))
+    };
+    if probe::enabled() {
+        let asked = std::env::var("KNOTES_PROBE_CARD").ok()?;
+        let (deck, question) = asked.split_once('|').unwrap_or((&asked, ""));
+        return answer(deck.to_owned(), question.to_owned());
+    }
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(strings::CARD_QUESTION));
+    let deck = objc2_app_kit::NSComboBox::initWithFrame(objc2_app_kit::NSComboBox::alloc(mtm), NSRect::new(NSPoint::new(0.0, 32.0), NSSize::new(320.0, 26.0)));
+    deck.setPlaceholderString(Some(&NSString::from_str(strings::CARD_DECK)));
+    for name in decks {
+        // SAFETY: a string, as a combo box's items are.
+        unsafe { deck.addItemWithObjectValue(&NSString::from_str(name)) };
+    }
+    deck.setCompletes(true);
+    deck.setStringValue(&NSString::from_str(last));
+    let question = NSTextField::initWithFrame(NSTextField::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 24.0)));
+    question.setPlaceholderString(Some(&NSString::from_str(strings::CARD_ASKS)));
+    question.setHidden(!need_question);
+    let fields = objc2_app_kit::NSView::initWithFrame(objc2_app_kit::NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 60.0)));
+    fields.addSubview(&deck);
+    fields.addSubview(&question);
+    alert.setAccessoryView(Some(&fields));
+    // The question first when the deck is known already.
+    if need_question && !last.is_empty() {
+        alert.window().setInitialFirstResponder(Some(&question));
+    } else {
+        alert.window().setInitialFirstResponder(Some(&deck));
+    }
+    // SAFETY: both fields live in the alert's accessory view.
+    unsafe { deck.setNextKeyView(Some(&question)) };
+    for title in [strings::CREATE, strings::CANCEL] {
+        alert.addButtonWithTitle(&NSString::from_str(title));
+    }
+    (alert.runModal() == NSAlertFirstButtonReturn).then(|| answer(deck.stringValue().to_string(), question.stringValue().to_string())).flatten()
+}
+
 /// A typed folder as a vault path: no slashes at its ends, `/` the root.
 fn folder_of(typed: &str) -> String {
     typed.trim().trim_matches('/').to_owned()

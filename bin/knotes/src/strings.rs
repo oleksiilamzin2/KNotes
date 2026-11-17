@@ -3,6 +3,47 @@
 pub const ALL_NOTES: &str = "Усі нотатки";
 pub const FOLDERS: &str = "Теки";
 pub const TAGS: &str = "Теги";
+/// Cards (ADR 0037): making one from a note, and a deck's review.
+pub const MAKE_CARD: &str = "Зробити картку";
+pub const CARD_QUESTION: &str = "Нова картка";
+pub const CARD_DECK: &str = "Колода (наприклад: мови/англійська)";
+pub const CARD_ASKS: &str = "Питання (виділене стане відповіддю)";
+pub const CARD_NOTHING_SELECTED: &str = "Нічого не виділено";
+pub const CARD_NOTHING_SELECTED_DETAILS: &str = "Виділіть у нотатці текст, який має стати карткою.";
+pub const CARD_NOT_MADE: &str = "Не вдалося зробити картку";
+pub const CARD_NOT_MADE_DETAILS: &str = "Потрібні колода (літери, цифри, «/») і питання.";
+pub const CARD_MOVED: &str = "картку в нотатці змінено; почніть повторення знову";
+pub const REVIEW_START: &str = "Почати";
+pub const REVIEW_SHOW_ANSWER: &str = "Показати відповідь";
+pub const REVIEW_OPEN_NOTE: &str = "Відкрити нотатку";
+pub const REVIEW_NOTHING: &str = "У цій колоді зараз нема чого повторювати.";
+pub const REVIEW_AGAIN_IN: &str = "10 хв";
+pub const GRADES: [&str; 4] = ["Знову", "Важко", "Добре", "Легко"];
+/// "12 карток до повторення", "200+ карток до повторення".
+pub fn review_waiting(cards: usize, more: bool) -> String {
+    let word = knotes_app::plural_uk(cards as u64, "картка", "картки", "карток");
+    format!("{cards}{} {word} до повторення", if more { "+" } else { "" })
+}
+/// "мови/англійська · повторено 2, лишилось 5".
+pub fn review_progress(deck: &str, done: usize, left: usize) -> String {
+    format!("{deck} · повторено {done}, лишилось {left}")
+}
+pub fn review_done(reviewed: usize) -> String {
+    format!("Готово. Повторено {reviewed} {}.", knotes_app::plural_uk(reviewed as u64, "картку", "картки", "карток"))
+}
+/// When a card comes back: "3 д", "2 міс", "1,5 р".
+pub fn review_interval(days: f64) -> String {
+    if days < 30.0 {
+        format!("{days:.0} д")
+    } else if days < 365.0 {
+        format!("{:.0} міс", days / 30.0)
+    } else {
+        format!("{:.1} р", days / 365.0).replace('.', ",")
+    }
+}
+pub fn review_failed(note: &str) -> String {
+    format!("Не вдалося записати повторення картки з «{note}»")
+}
 /// The sidebar's fourth mode: the decks of the notes' cards (ADR 0037).
 pub const CARDS: &str = "Картки";
 /// The space switcher at the sidebar's foot (ADR 0030).

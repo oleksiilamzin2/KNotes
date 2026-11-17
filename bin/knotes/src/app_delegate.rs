@@ -182,6 +182,14 @@ define_class!(
             }
         }
 
+        /// Edit → Make a Card: what is selected in the note of the window in front.
+        #[unsafe(method(makeCard:))]
+        fn make_card(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.make_card();
+            }
+        }
+
         /// Edit → Search Notes: the search over the note list.
         #[unsafe(method(searchNotes:))]
         fn search_notes(&self, _sender: Option<&AnyObject>) {

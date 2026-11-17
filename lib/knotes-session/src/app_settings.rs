@@ -26,6 +26,8 @@ pub struct AppSettings {
     pub chat_effort: Option<String>,
     /// The model search by meaning runs on (`MeaningModel::key`), `off`, or none: the default.
     pub meaning_model: Option<String>,
+    /// This Mac's name for its review log in a vault (ADR 0037): letters and digits, made once.
+    pub device: Option<String>,
 }
 
 impl AppSettings {
@@ -43,7 +45,23 @@ impl AppSettings {
             chat_model: value.get("chatModel").and_then(Value::as_str).map(str::to_string),
             chat_effort: value.get("chatEffort").and_then(Value::as_str).map(str::to_string),
             meaning_model: value.get("meaningModel").and_then(Value::as_str).map(str::to_string),
+            device: value.get("device").and_then(Value::as_str).filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).map(str::to_string),
         }
+    }
+
+    /// This Mac's name for its review logs, made (and kept in the settings) the first time.
+    pub fn device_name(app_data: &Path) -> String {
+        let mut settings = Self::load(app_data);
+        if let Some(device) = &settings.device {
+            return device.clone();
+        }
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64) ^ u64::from(std::process::id());
+        let device = format!("mac-{}", &knotes_cards::card_id(seed)[2..]);
+        settings.device = Some(device.clone());
+        if let Err(e) = settings.save(app_data) {
+            eprintln!("knotes: cannot save settings: {e}");
+        }
+        device
     }
 
     /// Written to a temporary file and renamed, so a crash never leaves half a file.
@@ -56,6 +74,7 @@ impl AppSettings {
             "chatModel": self.chat_model,
             "chatEffort": self.chat_effort,
             "meaningModel": self.meaning_model,
+            "device": self.device,
         });
         let tmp = app_data.join(format!("{SETTINGS_FILE}.tmp"));
         fs::write(&tmp, serde_json::to_string_pretty(&value).map_err(io::Error::other)? + "\n")?;
