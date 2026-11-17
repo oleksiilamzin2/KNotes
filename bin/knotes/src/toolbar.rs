@@ -16,7 +16,7 @@ use objc2_app_kit::{
 use objc2::AllocAnyThread;
 use objc2_foundation::{NSArray, NSCopying, NSDate, NSDateFormatter, NSDateFormatterStyle, NSLocale, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLayoutAttribute, NSBox, NSBoxType, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSLayoutConstraint, NSLayoutConstraintOrientation, NSLineBreakMode, NSResponder, NSSplitViewDidResizeSubviewsNotification, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSApplication, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventType, NSFocusRingType, NSFont, NSLayoutAttribute, NSBox, NSBoxType, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSLayoutConstraint, NSLayoutConstraintOrientation, NSLineBreakMode, NSResponder, NSSplitViewDidResizeSubviewsNotification, NSTextField, NSTextFieldDelegate, NSTextView,
     NSUserInterfaceItemIdentification, NSView, NSViewFrameDidChangeNotification,
 };
 
@@ -62,6 +62,8 @@ pub struct Ivars {
     on_search_mode: RefCell<Option<OnSearchMode>>,
     /// Called with the name typed over the open note's.
     on_note_title: RefCell<Option<OnSearch>>,
+    /// Called when editing the name ends by a key (Return or Escape): the note takes the keys.
+    on_title_done: RefCell<Option<OnNewNote>>,
     /// The open note's name field, once the toolbar has made it, and the name it shows.
     note_title: RefCell<Option<Retained<TitleField>>>,
     note_title_state: RefCell<String>,
@@ -109,6 +111,7 @@ define_class!(
                     window.makeFirstResponder(None);
                 }
                 end_editing(control);
+                self.title_done();
             }
             cancel
         }
@@ -212,6 +215,11 @@ define_class!(
                 window.makeFirstResponder(None);
             }
             end_editing(sender);
+            // Ended by Return, not by a click elsewhere (which keeps the focus it gave).
+            let by_key = NSApplication::sharedApplication(self.mtm()).currentEvent().is_some_and(|e| e.r#type() == NSEventType::KeyDown);
+            if by_key {
+                self.title_done();
+            }
         }
 
         #[unsafe(method(navigateBack:))]
@@ -255,6 +263,7 @@ impl ToolbarDelegate {
             on_toggle_search: RefCell::new(None),
             on_search_mode: RefCell::new(None),
             on_note_title: RefCell::new(None),
+            on_title_done: RefCell::new(None),
             note_title: RefCell::new(None),
             note_title_state: RefCell::new(String::new()),
             note_date: RefCell::new(None),
@@ -343,11 +352,15 @@ impl ToolbarDelegate {
     /// Shows the name of the document open, editable to rename it when `renamable` (a note),
     /// unless it is being edited; under it, when it was last changed (seconds since 1970).
     pub fn set_note_title(&self, name: &str, renamable: bool, changed: Option<f64>) {
-        *self.ivars().note_title_state.borrow_mut() = name.to_owned();
+        let before = self.ivars().note_title_state.replace(name.to_owned());
         self.ivars().note_title_renamable.set(renamable);
         if let Some(field) = self.ivars().note_title.borrow().as_ref() {
             field.ivars().set(renamable);
-            if field.currentEditor().is_none() {
+            // Being edited, it keeps what is typed; untouched (a new note's «Без назви» while the
+            // note is named after its first line), it follows: left as it was, the end of the
+            // editing renamed the note back.
+            let untouched = field.currentEditor().is_some() && field.stringValue().to_string() == before;
+            if field.currentEditor().is_none() || untouched {
                 field.setStringValue(&NSString::from_str(name));
             }
         }
@@ -359,6 +372,28 @@ impl ToolbarDelegate {
         }
     }
 
+
+    /// Called when editing the name ends by Return or Escape.
+    pub fn on_title_done(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_title_done.borrow_mut() = Some(Box::new(callback));
+    }
+
+    fn title_done(&self) {
+        if let Some(callback) = self.ivars().on_title_done.borrow().as_ref() {
+            callback();
+        }
+    }
+
+    /// Lets a new note's name be typed: the field empty, its «Без назви» grey in it until a
+    /// letter is typed, the cursor there (no selection flashing over the name, owner's word).
+    /// Left empty, the note keeps its name.
+    pub fn begin_naming(&self) {
+        if let Some(title) = self.ivars().note_title.borrow().as_ref() {
+            title.setPlaceholderString(Some(&NSString::from_str(&self.ivars().note_title_state.borrow())));
+            title.setStringValue(&NSString::new());
+            title.begin_editing();
+        }
+    }
 
     pub fn set_history(&self, can_back: bool, can_forward: bool) {
         self.ivars().history_state.set((can_back, can_forward));
@@ -425,6 +460,9 @@ impl ToolbarDelegate {
         let title = TitleField::new(mtm, self.ivars().note_title_renamable.get());
         title.setBezeled(false);
         title.setDrawsBackground(false);
+        // No focus ring while it is edited: it grew in as an animation, which stuttered while a new
+        // note was being made (owner's report); the cursor and the grey «Без назви» say enough.
+        title.setFocusRingType(NSFocusRingType::None);
         title.setFont(Some(&NSFont::boldSystemFontOfSize(small)));
         title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         title.setIdentifier(Some(&NSString::from_str(NOTE_TITLE)));

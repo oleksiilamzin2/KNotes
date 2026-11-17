@@ -284,7 +284,9 @@ impl VaultWindow {
             editing.document = Document::untitled();
         }
         self.highlight_open_note();
-        self.window.makeFirstResponder(Some(&self.note_text));
+        // Its name first (owner's request): typed over «Без назви» and Return, it is the note's,
+        // and the text takes the keys; Escape leaves it to be named after its first line.
+        self.toolbar_delegate.begin_naming();
     }
 
     /// Saves and names a new note after its first line: the user leaves the note (another

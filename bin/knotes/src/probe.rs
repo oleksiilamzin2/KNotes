@@ -975,6 +975,9 @@ fn report_toolbar(window: &NSWindow) {
     if let Some(date) = note_title_line(window, 1) {
         println!("note-date: {}", date.stringValue());
     }
+    if let Some(field) = note_title_field(window) {
+        println!("note-title-focus: {}", if field.currentEditor().is_some() { "editing" } else { "no" });
+    }
     // The row under the toolbar: what it holds over the list and over the note, and where
     // those parts are (their left edge and width).
     let text = |id: &str| crate::toolbar::row_control(window, id).and_then(|v| v.downcast::<objc2_app_kit::NSTextField>().ok()).map(|f| f.stringValue().to_string()).unwrap_or_default();
@@ -1024,10 +1027,11 @@ pub fn title_clicks_requested(window: &NSWindow) {
     println!("note-title-editing: {state}");
 }
 
-/// `KNOTES_PROBE_ACTION=toolbar-rename=New name`: the name typed over the open note's in the
-/// toolbar and Return pressed.
+/// `KNOTES_PROBE_ACTION=toolbar-rename=New name` (or `KNOTES_PROBE_TITLE_NAME=New name`, beside
+/// another action): the name typed over the open document's and Return pressed.
 pub fn toolbar_rename_requested(window: &NSWindow) {
-    let Some(name) = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("toolbar-rename=").map(str::to_owned)) else { return };
+    let asked = std::env::var("KNOTES_PROBE_ACTION").ok().and_then(|a| a.strip_prefix("toolbar-rename=").map(str::to_owned));
+    let Some(name) = asked.or_else(|| std::env::var("KNOTES_PROBE_TITLE_NAME").ok()) else { return };
     let Some(field) = note_title_field(window) else { return };
     field.setStringValue(&NSString::from_str(&name));
     let mtm = MainThreadMarker::new().expect("main thread");

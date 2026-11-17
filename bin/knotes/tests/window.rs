@@ -585,11 +585,11 @@ fn a_cold_index_leaves_no_more_memory_behind_than_a_warm_start() {
 }
 
 #[test]
-fn cmd_n_creates_an_untitled_note_in_the_selected_folder_and_focuses_it() {
+fn cmd_n_creates_an_untitled_note_in_the_selected_folder_and_focuses_its_name() {
     let (vault, out) = probe_notes(&[("Projects/a.md", "a")], &[("KNOTES_PROBE_SELECT", "f:Projects"), ("KNOTES_PROBE_ACTION", "new")]);
     assert!(vault.path().join("Projects/Без назви.md").is_file(), "{out}");
     assert!(out.contains("note: Projects/Без назви.md"), "{out}");
-    assert!(out.contains("focus: editor"), "{out}");
+    assert!(out.contains("note-title-focus: editing\n"), "its name first, to type (owner's request): {out}");
 }
 
 #[test]
@@ -3892,4 +3892,33 @@ fn the_path_bar_shows_where_the_note_is_and_opens_its_folders() {
     assert!(out.contains("title: Усі нотатки\n"), "the vault: all notes: {out}");
     let (_vault, out) = probe_notes(&notes, &[]);
     assert!(out.contains("path-bar: hidden\n"), "no document open: {out}");
+}
+
+/// The vault's notes, by their path, with what they hold.
+fn vault_notes(vault: &std::path::Path) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut folders = vec![vault.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() && !entry.file_name().to_string_lossy().starts_with('.') {
+                folders.push(path);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                found.push((path.strip_prefix(vault).unwrap().to_string_lossy().into_owned(), std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+#[test]
+fn a_new_note_starts_with_its_name_to_type_and_keeps_the_name_typed() {
+    let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "new")]);
+    assert!(out.contains("note-title-focus: editing\n") && out.contains("note-title: \n"), "its name to type, the field empty («Без назви» grey in it): {out}");
+    // Named there, it is not named again after its first line.
+    let (vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "new"), ("KNOTES_PROBE_TITLE_NAME", "Мій план"), ("KNOTES_PROBE_TYPE", "Перший рядок\nдалі")]);
+    let notes = vault_notes(vault.path());
+    assert!(notes.iter().any(|(path, text)| path.ends_with("Мій план.md") && text == "Перший рядок\nдалі"), "{notes:?} {out}");
+    assert!(!notes.iter().any(|(path, _)| path.contains("Перший рядок")), "{notes:?}");
 }

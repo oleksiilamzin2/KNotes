@@ -779,12 +779,27 @@ impl VaultWindow {
                 window.show_folder(&folder);
             }
         });
+        let weak_done: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_title_done(move || {
+            if let Some(window) = weak_done.upgrade()
+                && window.open_path().is_some()
+            {
+                window.window.makeFirstResponder(Some(&window.note_text));
+            }
+        });
         let weak_title: Weak<Self> = Rc::downgrade(&this);
         this.toolbar_delegate.on_note_title(move |name| {
             let Some(window) = weak_title.upgrade() else { return };
             let pdf = window.pdf_path.borrow().clone();
             let renamed = match (window.open_path(), pdf) {
-                (Some(note), _) => window.rename_note(&note, &name),
+                (Some(note), _) => {
+                    let renamed = window.rename_note(&note, &name);
+                    // Named by the user: no longer after its first line.
+                    if renamed && let Some(editing) = window.editing.borrow_mut().as_mut() {
+                        editing.document.named();
+                    }
+                    renamed
+                }
                 (None, Some(pdf)) => window.rename_pdf(&pdf, &name),
                 (None, None) => false,
             };
