@@ -67,11 +67,12 @@ fn a_helper_that_hangs_is_stopped_at_the_deadline_and_the_next_request_starts_an
     // answer.
     let pid = dir.path().join("hung.pid");
     std::fs::write(&script, format!("#!/bin/sh\nif [ -e '{0}' ]; then read line; cat \"$1\"; else echo $$ > '{0}'; read line; sleep 30; fi\n", pid.display())).unwrap();
-    let embedder = ProcessEmbedder::with_deadline(&script, &answer, std::time::Duration::from_millis(300));
+    // Long enough for the stand-in to start under load (the whole suite running beside it).
+    let embedder = ProcessEmbedder::with_deadline(&script, &answer, std::time::Duration::from_secs(2));
     let start = std::time::Instant::now();
     let hung = embedder.embed(&[Passage::Query("бойлер".into())]);
     assert!(matches!(&hung, Err(EmbedError::Failed(why)) if why.contains("did not answer")), "{hung:?}");
-    assert!(start.elapsed() < std::time::Duration::from_secs(5), "not asked again: {:?}", start.elapsed());
+    assert!(start.elapsed() < std::time::Duration::from_secs(4), "not asked again: {:?}", start.elapsed());
     let pid = std::fs::read_to_string(&pid).unwrap();
     let alive = std::process::Command::new("kill").args(["-0", pid.trim()]).status().unwrap().success();
     assert!(!alive, "the hung helper was stopped");
