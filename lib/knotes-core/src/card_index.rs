@@ -59,6 +59,30 @@ pub struct Reviewed {
     pub lapses: u32,
 }
 
+/// How a deck with those under it stands (for its statistics).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeckStats {
+    pub cards: usize,
+    /// Never reviewed.
+    pub fresh: usize,
+    /// Reviewed, and due again within `MATURE_DAYS` of the last review; the rest are mature.
+    pub young: usize,
+    pub mature: usize,
+    /// The reviewed cards due each day from today on (`FORECAST_DAYS` and today): today's with
+    /// those overdue first.
+    pub due_by_day: Vec<usize>,
+    /// Each of the last `PAST_DAYS` days, today last: its reviews, and how many of them were
+    /// graded Again.
+    pub reviews_by_day: Vec<(usize, usize)>,
+    /// Those days' reviews by grade: Again, Hard, Good, Easy.
+    pub grades: [usize; 4],
+}
+
+/// A card whose interval is this many days or more is mature (Anki's measure).
+pub const MATURE_DAYS: i64 = 21;
+pub const FORECAST_DAYS: usize = 30;
+pub const PAST_DAYS: usize = 30;
+
 /// The cards the vault's notes hold (ADR 0037), their decks, and what is due.
 pub trait CardIndex {
     /// Every deck with its own cards counted, those due by `until` (seconds since 1970) and
@@ -68,6 +92,9 @@ pub trait CardIndex {
     /// those due, the longest due first, then those never reviewed in their notes' order;
     /// `limit` at most, and of those never reviewed `new` at most (the day's new cards).
     fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize) -> Result<Vec<DueCard>, BoxError>;
+    /// The reviewed cards of `deck` and the decks under it not due by `after` yet, the soonest
+    /// due first, `limit` at most: what a review ahead of the schedule asks.
+    fn cards_ahead(&self, deck: &str, after: i64, limit: usize) -> Result<Vec<DueCard>, BoxError>;
     /// The decks with cards first reviewed at `since` or later (seconds since 1970), each with
     /// how many of its own: the new cards a day has taken already.
     fn introduced(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError>;
@@ -76,6 +103,8 @@ pub trait CardIndex {
     /// Every card of `deck` and the decks under it (of every deck for none), in the note `path`
     /// only when given; by note, then in the note's order.
     fn card_rows(&self, deck: Option<&str>, path: Option<&str>) -> Result<Vec<CardRow>, BoxError>;
+    /// How `deck` with those under it stands; `day_start`: when today began (seconds since 1970).
+    fn deck_stats(&self, deck: &str, day_start: i64) -> Result<DeckStats, BoxError>;
     /// Where the card `id` stands; none for one never reviewed.
     fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError>;
 }

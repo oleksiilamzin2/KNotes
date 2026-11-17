@@ -125,4 +125,36 @@ fn a_deck_s_settings_move_when_its_cards_are_due_and_limit_its_new_cards() {
     assert_eq!(ids(2), [Some("c-1".to_owned()), Some("c-2".into()), Some("c-3".into())]);
     assert_eq!(ids(9).len(), 4);
     assert_eq!(index.due_cards(Some("мови"), now + 30 * DAY, 2, 9).unwrap().len(), 2, "the limit of all kept");
+    // Ahead of the schedule: the reviewed ones not due yet, the deck's and those under it.
+    let ahead = |deck, after| -> Vec<Option<String>> { index.cards_ahead(deck, after, 10).unwrap().into_iter().map(|c| c.id).collect() };
+    assert_eq!((ahead("мови", now), ahead("мови", now + 2 * DAY), ahead("історія", now)), (vec![Some("c-1".to_owned())], vec![], vec![Some("c-4".to_owned())]));
+}
+
+#[test]
+fn a_deck_s_statistics_count_its_cards_its_reviews_by_day_and_what_comes_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови hello::привіт ^c-3\n\n#@історія Коли?::Тоді ^c-4\n\n#@мови bye::бувай\n");
+    // Today began at `day`; it is noon.
+    let day = 100 * DAY;
+    let now = day + DAY / 2;
+    // c-1: Good 40 days ago, Easy 37 days ago (mature, due far off); Again today (due in ten minutes).
+    // c-2: Good yesterday (young, due in two days). c-3: Good 5 days ago (due the day before yesterday: overdue).
+    let log = review_line(now - 40 * DAY, "c-1", Grade::Good)
+        + &review_line(now - 37 * DAY, "c-1", Grade::Easy)
+        + &review_line(now, "c-1", Grade::Again)
+        + &review_line(now - DAY, "c-2", Grade::Good)
+        + &review_line(now - 5 * DAY, "c-3", Grade::Good)
+        + &review_line(now, "c-4", Grade::Good);
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &DeckSettings::default()).unwrap();
+    let stats = index.deck_stats("мови", day).unwrap();
+    assert_eq!((stats.cards, stats.fresh, stats.young, stats.mature), (4, 1, 3, 0), "forgotten, c-1 is young again");
+    assert_eq!((stats.due_by_day.len(), stats.due_by_day[0], stats.due_by_day[2], stats.due_by_day.iter().sum::<usize>()), (31, 2, 1, 3), "today's with the overdue, then by day");
+    assert_eq!(stats.reviews_by_day.len(), 30);
+    assert_eq!((stats.reviews_by_day[29], stats.reviews_by_day[28], stats.reviews_by_day[24]), ((1, 1), (1, 0), (1, 0)), "today last; the other deck's not counted");
+    assert_eq!(stats.reviews_by_day.iter().map(|d| d.0).sum::<usize>(), 3, "older than thirty days: not there");
+    assert_eq!(stats.grades, [1, 0, 2, 0], "Again once, Good twice");
+    let english = index.deck_stats("мови/англійська", day).unwrap();
+    assert_eq!((english.cards, english.fresh, english.young), (2, 0, 2));
+    assert_eq!(index.deck_stats("нема", day).unwrap().cards, 0);
 }

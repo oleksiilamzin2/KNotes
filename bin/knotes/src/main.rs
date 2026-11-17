@@ -12,6 +12,7 @@ mod connections_worker;
 mod find_bar;
 mod image_loader;
 mod completion_panel;
+mod deck_charts;
 mod preview_fragment;
 mod list_menu;
 mod live_preview;

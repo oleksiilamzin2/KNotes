@@ -160,3 +160,33 @@ It is the first new feature since the owner's goal became to polish what exists.
 - Index schema 15 (`first`, `deck_settings`): built again from the notes and the logs.
 - Not done: learning steps, the longest interval, reviews a day, burying and suspending;
   weights fitted to the user's reviews; `list_decks` does not give the settings.
+
+## Built (2026-11-17): a deck's statistics
+
+- A deck chosen and not started shows, small under what waits in it, how it stands with the
+  decks under it (`CardIndex::deck_stats`): its cards new, young and mature (due 21 days or
+  more after the last review: Anki's measure); today's reviews and the last 30 days' with the
+  share recalled (not graded Again), a bar a day; and what comes due tomorrow, in 7 days and
+  in 30, a bar a day; and those days' grades.
+- **Drawn as charts** (owner: «справжні графіки як у Anki»; the first version was text with
+  block characters): one view (`DeckCharts`) in place of the card's text, scrolled when taller
+  than the column. The cards as one bar in three parts with its legend; what comes due and
+  the reviews (the forgotten over the recalled) as a bar a day on one scale each, three lines
+  with their numbers; the grades as four rows. The bar under the pointer says its day and its
+  number where the chart's sums stand. Three hues apart for every eye, their own steps in the
+  dark look; text in the labels' colours. The same in words is the view's VoiceOver label
+  (and the probe's `deck-stats:` line). No cumulative line over the forecast as Anki draws:
+  it needs a second scale.
+- What comes due counts the reviewed cards as scheduled now: no new cards to come, no
+  reviews those days will add. Days are the Mac's, from local midnight.
+- Not done: a card's ease and intervals spread, the hours reviewed at, time spent (not
+  logged), the whole vault's statistics, statistics for the agent.
+
+## Built (2026-11-17): a review ahead of the schedule
+
+- Beside «Почати», «Повторити наперед (N)» (owner asked for a button to review a deck when
+  nothing is due; of three ways offered he chose the one that logs): after what is due, the
+  deck's reviewed cards not due yet, the soonest due first (`CardIndex::cards_ahead`), up to
+  the review's 200. Their grades are logged and schedule them as any review's (FSRS counts
+  the days since the last one, so an early Good lengthens the interval little). Shown while
+  the deck has such cards; new cards past the day's number are not asked.

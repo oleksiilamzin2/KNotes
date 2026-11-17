@@ -4023,6 +4023,18 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     let out = probe_env(&[vault.path()], None, &open);
     assert_eq!(review_line_of(&out), "waiting мови 0", "{out}");
     assert!(out.contains("sidebar: історія (1) | мови (0)\n"), "{out}");
+    // Ahead of the schedule (owner's button): dog, due in ten minutes, then cat, in three days;
+    // graded, the review is logged as any other.
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "ahead")]);
+    assert_eq!(review_line_of(&out), "question мови 0/2 | dog (list hidden)", "{out}");
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "ahead,show,3,show")]);
+    assert!(review_line_of(&out).starts_with("answer мови 1/1 | cat | кіт | Знову · 10 хв, "), "{out}");
+    // A launch of the test is a Mac of its own, with its own log.
+    let logged: usize = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().map(|log| std::fs::read_to_string(log.path()).unwrap().lines().count()).sum();
+    assert_eq!(logged, 3, "{out}");
+    // A deck with nothing reviewed has nothing ahead: the button asks nothing.
+    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "ahead")]);
+    assert_eq!(review_line_of(&out), "waiting історія 1", "{out}");
     // The last card graded: the review is done.
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
     assert_eq!(review_line_of(&out), "done історія 1", "the list's column back with the review's end: {out}");
@@ -4056,6 +4068,31 @@ fn a_deck_s_settings_limit_its_new_cards_and_move_its_intervals() {
     let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:мови/німецька"), ("KNOTES_PROBE_DECK_SETTINGS", "|")]);
     assert!(!std::fs::read_to_string(&file).unwrap().contains("німецька"), "{out}");
     assert_eq!(review_line_of(&out), "waiting мови/німецька 1", "{out}");
+}
+
+#[test]
+fn a_deck_waiting_shows_its_statistics() {
+    let notes = [("Мови.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови/німецька Hund::пес ^c-3\n"), ("Історія.md", "#@історія Коли?::Тоді ^c-4\n")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    let stats = |out: &str| out.lines().find_map(|l| l.strip_prefix("deck-stats: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    let (vault, out) = probe_notes(&notes, &open);
+    assert_eq!(stats(&out), "Карток: 3 — нових 3, молодих 0, зрілих 0⏎⏎Сьогодні: повторів не було⏎За 30 днів: повторів не було⏎⏎Прийде на повторення: завтра 0 · за 7 днів 0 · за 30 днів 0", "{out}");
+    // cat graded Good then forgotten a moment ago (back in ten minutes), dog Good (in three days).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{}\tc-1\t3\n{now}\tc-1\t1\n{now}\tc-2\t3\n{now}\tc-4\t3\n", now - 1)).unwrap();
+    let out = probe_env(&[vault.path()], None, &open);
+    let shown = stats(&out);
+    let lines: Vec<&str> = shown.split('⏎').collect();
+    assert_eq!(lines[0], "Карток: 3 — нових 1, молодих 2, зрілих 0", "{out}");
+    assert_eq!((lines[2], lines[3]), ("Сьогодні: 3 повтори, згадано 67 %", "За 30 днів: 3 повтори, згадано 67 %"), "the other deck's review not counted: {out}");
+    assert_eq!(lines[4], format!("{}█", "▁".repeat(29)), "a bar a day, today last: {out}");
+    assert_eq!(lines[6], "Прийде на повторення: завтра 0 · за 7 днів 1 · за 30 днів 1", "{out}");
+    assert_eq!(lines[7].chars().filter(|c| *c == '█').count(), 1, "{out}");
+    // A deck with no cards to ask still says how it stands; no deck shown, nothing said.
+    let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія")]);
+    assert!(stats(&out).starts_with("Карток: 1 — нових 0, молодих 1, зрілих 0⏎"), "{out}");
+    assert!(!probe_env(&[vault.path()], None, &[open[0]]).contains("deck-stats:"));
 }
 
 #[test]

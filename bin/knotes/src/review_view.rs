@@ -20,6 +20,8 @@ use crate::strings;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asked {
     Start,
+    /// The deck's cards not due yet too (the owner's «повторювати колоду» out of schedule).
+    StartAhead,
     ShowAnswer,
     Grade(Grade),
     /// The note the card is written in.
@@ -63,6 +65,11 @@ define_class!(
     }
 
     impl ReviewTarget {
+        #[unsafe(method(reviewAhead:))]
+        fn review_ahead(&self, _sender: Option<&AnyObject>) {
+            self.ask(Asked::StartAhead);
+        }
+
         #[unsafe(method(reviewStart:))]
         fn start(&self, _sender: Option<&AnyObject>) {
             self.ask(Asked::Start);
@@ -101,8 +108,10 @@ const NOTE_LINK: &str = "note:";
 /// What the review shows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shown {
-    /// A deck chosen: its name, how many cards wait (`more`: at least that many), not started.
-    Waiting { deck: String, cards: usize, more: bool },
+    /// A deck chosen: its name, how many cards wait (`more`: at least that many), not started;
+    /// under it the deck's statistics, as text (empty for none).
+    /// `ahead`: how many reviewed cards are not due yet (`ahead_more`: at least that many).
+    Waiting { deck: String, cards: usize, more: bool, stats: String, charts: Option<knotes_core::DeckStats>, ahead: usize, ahead_more: bool },
     /// A card's question; with `answer`, its answer and the grades, each with when the card
     /// would come back (Again, Hard, Good, Easy).
     Card { deck: String, done: usize, left: usize, front: String, answer: Option<(String, [String; 4])> },
@@ -115,7 +124,14 @@ pub struct ReviewView {
     header: Retained<NSTextField>,
     /// The card's question and, under it, its answer: text that scrolls, its links clicked.
     text: Retained<NSTextView>,
+    /// The text's scroll view, and the one of a waiting deck's charts that takes its place.
+    text_scroll: Retained<NSScrollView>,
+    charts_scroll: Retained<NSScrollView>,
+    charts: Retained<crate::deck_charts::DeckCharts>,
     start: Retained<NSButton>,
+    /// Beside it: the deck's cards not due yet too.
+    ahead: Retained<NSButton>,
+    starts: Retained<NSStackView>,
     show: Retained<NSButton>,
     grades: Retained<NSStackView>,
     grade_buttons: [Retained<NSButton>; 4],
@@ -166,6 +182,15 @@ impl ReviewView {
             container.setLineFragmentPadding(0.0);
         }
         card.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*target)));
+        // A waiting deck's charts, where the card's text is: as wide as it, scrolled when taller.
+        let charts = crate::deck_charts::DeckCharts::new(mtm);
+        charts.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let charts_scroll = NSScrollView::new(mtm);
+        charts_scroll.setDrawsBackground(false);
+        charts_scroll.setHasVerticalScroller(true);
+        charts_scroll.setAutohidesScrollers(true);
+        charts_scroll.setDocumentView(Some(&charts));
+        charts_scroll.setHidden(true);
         let start = button(strings::REVIEW_START, sel!(reviewStart:), "\r");
         let show = button(strings::REVIEW_SHOW_ANSWER, sel!(reviewShow:), " ");
         let grade_buttons = [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| {
@@ -182,18 +207,25 @@ impl ReviewView {
         open.setBordered(false);
         open.setContentTintColor(Some(&NSColor::linkColor()));
         // The buttons under the text, at the column's bottom.
-        let rows: [&NSView; 4] = [&start, &show, &grades, &open];
+        let ahead = button("", sel!(reviewAhead:), "");
+        ahead.setToolTip(Some(&NSString::from_str(strings::REVIEW_AHEAD_HELP)));
+        let both: [&NSView; 2] = [&start, &ahead];
+        let starts = NSStackView::stackViewWithViews(&NSArray::from_slice(&both), mtm);
+        starts.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        starts.setSpacing(8.0);
+        let rows: [&NSView; 4] = [&starts, &show, &grades, &open];
         let controls = NSStackView::stackViewWithViews(&NSArray::from_slice(&rows), mtm);
         controls.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
         controls.setAlignment(objc2_app_kit::NSLayoutAttribute::Leading);
         controls.setSpacing(12.0);
         let column = NSView::new(mtm);
-        for part in [&*header as &NSView, &scroll, &controls, &column] {
+        for part in [&*header as &NSView, &scroll, &charts_scroll, &controls, &column] {
             part.setTranslatesAutoresizingMaskIntoConstraints(false);
         }
-        for part in [&*header as &NSView, &scroll, &controls] {
+        for part in [&*header as &NSView, &scroll, &charts_scroll, &controls] {
             column.addSubview(part);
         }
+        let clip = charts_scroll.contentView();
         view.addSubview(&column);
         // As wide as the note column lets it, 620 points at most. Tied to the column's width, not
         // a width of its own: a wish for 620 points widened the column (and the window) even
@@ -217,12 +249,20 @@ impl ReviewView {
             scroll.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
             scroll.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
             scroll.bottomAnchor().constraintEqualToAnchor_constant(&controls.topAnchor(), -16.0),
+            charts_scroll.topAnchor().constraintEqualToAnchor(&scroll.topAnchor()),
+            charts_scroll.leadingAnchor().constraintEqualToAnchor(&scroll.leadingAnchor()),
+            charts_scroll.trailingAnchor().constraintEqualToAnchor(&scroll.trailingAnchor()),
+            charts_scroll.bottomAnchor().constraintEqualToAnchor(&scroll.bottomAnchor()),
+            charts.topAnchor().constraintEqualToAnchor(&clip.topAnchor()),
+            charts.leadingAnchor().constraintEqualToAnchor(&clip.leadingAnchor()),
+            charts.trailingAnchor().constraintEqualToAnchor(&clip.trailingAnchor()),
+            charts.heightAnchor().constraintEqualToConstant(crate::deck_charts::HEIGHT),
             controls.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
             controls.trailingAnchor().constraintLessThanOrEqualToAnchor(&column.trailingAnchor()),
             controls.bottomAnchor().constraintEqualToAnchor(&column.bottomAnchor()),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
-        Self { view, header, text: card, start, show, grades, grade_buttons, open, target, shown: RefCell::new(None) }
+        Self { view, header, text: card, text_scroll: scroll, charts_scroll, charts, start, ahead, starts, show, grades, grade_buttons, open, target, shown: RefCell::new(None) }
     }
 
     /// Called with what a button asks for.
@@ -234,14 +274,20 @@ impl ReviewView {
     pub fn show(&self, shown: Option<Shown>) {
         self.view.setHidden(shown.is_none());
         let (card, answered, waiting) = match &shown {
-            Some(Shown::Waiting { deck, cards, more }) => {
+            Some(Shown::Waiting { deck, cards, more, stats, charts, ahead, ahead_more }) => {
+                self.ahead.setTitle(&NSString::from_str(&strings::review_ahead(*ahead, *ahead_more)));
                 self.header.setStringValue(&NSString::from_str(deck));
-                self.set_text(&if *cards == 0 { strings::REVIEW_NOTHING.to_owned() } else { strings::review_waiting(*cards, *more) }, None);
+                let waits = if *cards == 0 { strings::REVIEW_NOTHING.to_owned() } else { strings::review_waiting(*cards, *more) };
+                // The charts say it above themselves; without them, the text.
+                match charts {
+                    Some(charts) => self.charts.set(&waits, charts.clone(), stats),
+                    None => self.set_text(&waits, None, Some(stats).filter(|s| !s.is_empty())),
+                }
                 (false, false, *cards > 0)
             }
             Some(Shown::Card { deck, done, left, front, answer }) => {
                 self.header.setStringValue(&NSString::from_str(&strings::review_progress(deck, *done, *left)));
-                self.set_text(front, answer.as_ref().map(|(back, _)| back.as_str()));
+                self.set_text(front, answer.as_ref().map(|(back, _)| back.as_str()), None);
                 if let Some((_, comes_back)) = answer {
                     for ((button, name), when) in self.grade_buttons.iter().zip(strings::GRADES).zip(comes_back) {
                         button.setTitle(&NSString::from_str(&format!("{name} · {when}")));
@@ -251,12 +297,18 @@ impl ReviewView {
             }
             Some(Shown::Done { deck, reviewed }) => {
                 self.header.setStringValue(&NSString::from_str(deck));
-                self.set_text(&strings::review_done(*reviewed), None);
+                self.set_text(&strings::review_done(*reviewed), None, None);
                 (false, false, false)
             }
             None => (false, false, false),
         };
+        let charts = matches!(&shown, Some(Shown::Waiting { charts: Some(_), .. }));
+        self.charts_scroll.setHidden(!charts);
+        self.text_scroll.setHidden(charts);
+        let ahead = matches!(&shown, Some(Shown::Waiting { ahead, .. }) if *ahead > 0);
         self.start.setHidden(!waiting);
+        self.ahead.setHidden(!ahead);
+        self.starts.setHidden(!waiting && !ahead);
         self.show.setHidden(!card || answered);
         self.grades.setHidden(!answered);
         self.open.setHidden(!card);
@@ -265,7 +317,7 @@ impl ReviewView {
 
     /// The text shown: `front`, and under a rule `back` when there is one; their links (wiki and
     /// Markdown ones) as links to click.
-    fn set_text(&self, front: &str, back: Option<&str>) {
+    fn set_text(&self, front: &str, back: Option<&str>, small: Option<&String>) {
         let whole = NSMutableAttributedString::new();
         let piece = |text: &str, size: f64, colour: &NSColor, link: Option<&CardLink>| {
             let font = NSFont::systemFontOfSize(size);
@@ -296,6 +348,10 @@ impl ReviewView {
                 piece(&run.text, 16.0, &label, run.link.as_ref());
             }
         }
+        // A deck's statistics: small and quiet under what waits.
+        if let Some(small) = small {
+            piece(&format!("\n\n{small}"), 13.0, &NSColor::secondaryLabelColor(), None);
+        }
         // SAFETY: the text view's own storage.
         if let Some(storage) = unsafe { self.text.textStorage() } {
             storage.setAttributedString(&whole);
@@ -321,7 +377,7 @@ impl ReviewView {
             return "hidden".to_owned();
         }
         match &*self.shown.borrow() {
-            Some(Shown::Waiting { deck, cards, more }) => format!("waiting {deck} {cards}{}", if *more { "+" } else { "" }),
+            Some(Shown::Waiting { deck, cards, more, .. }) => format!("waiting {deck} {cards}{}", if *more { "+" } else { "" }),
             Some(Shown::Card { deck, done, left, front, answer: None }) => format!("question {deck} {done}/{left} | {front}"),
             Some(Shown::Card { deck, done, left, front, answer: Some((back, _)) }) => {
                 let grades: Vec<String> = self.grade_buttons.iter().map(|b| b.title().to_string()).collect();
@@ -332,10 +388,19 @@ impl ReviewView {
         }
     }
 
+    /// The waiting deck's statistics as shown (probe mode); empty for none.
+    pub fn describe_stats(&self) -> String {
+        match &*self.shown.borrow() {
+            Some(Shown::Waiting { stats, .. }) => stats.clone(),
+            _ => String::new(),
+        }
+    }
+
     /// A click on the button that asks for `asked` (probe mode); nothing when it is hidden.
     pub fn click(&self, asked: Asked) {
         let button = match asked {
             Asked::Start => &self.start,
+            Asked::StartAhead => &self.ahead,
             Asked::ShowAnswer => &self.show,
             Asked::Grade(grade) => &self.grade_buttons[grade as usize - 1],
             Asked::OpenNote => &self.open,

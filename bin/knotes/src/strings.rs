@@ -24,6 +24,11 @@ pub fn deck_settings_of(deck: &str) -> String {
 }
 
 pub const REVIEW_START: &str = "Почати";
+/// The button that reviews a deck's cards not due yet: "Повторити наперед (12)".
+pub fn review_ahead(cards: usize, more: bool) -> String {
+    format!("Повторити наперед ({cards}{})", if more { "+" } else { "" })
+}
+pub const REVIEW_AHEAD_HELP: &str = "Повторити й ті картки колоди, яким за розкладом ще не час. Оцінки записуються та змінюють розклад.";
 pub const REVIEW_SHOW_ANSWER: &str = "Показати відповідь";
 pub const REVIEW_OPEN_NOTE: &str = "Відкрити нотатку";
 pub const REVIEW_NOTHING: &str = "У цій колоді зараз нема чого повторювати.";
@@ -34,6 +39,128 @@ pub fn review_waiting(cards: usize, more: bool) -> String {
     let word = knotes_app::plural_uk(cards as u64, "картка", "картки", "карток");
     format!("{cards}{} {word} до повторення", if more { "+" } else { "" })
 }
+/// A deck's statistics, under what waits in it: its cards by how well they are known, the
+/// reviews of today and of the last days with the share recalled, and what comes due.
+pub fn deck_stats(stats: &knotes_core::DeckStats) -> String {
+    if stats.cards == 0 {
+        return String::new();
+    }
+    let reviews = |days: &[(usize, usize)]| {
+        let (all, again) = days.iter().fold((0, 0), |(all, again), day| (all + day.0, again + day.1));
+        let word = knotes_app::plural_uk(all as u64, "повтор", "повтори", "повторів");
+        match all {
+            0 => "повторів не було".to_owned(),
+            _ => format!("{all} {word}, згадано {} %", ((all - again) * 100 + all / 2) / all),
+        }
+    };
+    let past = &stats.reviews_by_day;
+    let due = &stats.due_by_day;
+    let coming = |days: usize| due.iter().skip(1).take(days).sum::<usize>();
+    let mut lines = vec![
+        format!("Карток: {} — нових {}, молодих {}, зрілих {}", stats.cards, stats.fresh, stats.young, stats.mature),
+        String::new(),
+        format!("Сьогодні: {}", reviews(&past[past.len().saturating_sub(1)..])),
+        format!("За {} днів: {}", past.len(), reviews(past)),
+    ];
+    if past.iter().any(|day| day.0 > 0) {
+        lines.push(bars(&past.iter().map(|day| day.0).collect::<Vec<_>>()));
+    }
+    lines.push(String::new());
+    lines.push(format!("Прийде на повторення: завтра {} · за 7 днів {} · за {} днів {}", coming(1), coming(7), due.len().saturating_sub(1), coming(due.len())));
+    if coming(due.len()) > 0 {
+        lines.push(bars(&due[1..]));
+    }
+    if stats.grades.iter().any(|n| *n > 0) {
+        lines.push(String::new());
+        lines.push(format!("Оцінки: {}", GRADES.iter().zip(stats.grades).map(|(name, n)| format!("{name} {n}")).collect::<Vec<_>>().join(", ")));
+    }
+    lines.join("\n")
+}
+
+pub const CHART_CARDS: &str = "Картки";
+pub const CHART_NEW: &str = "Нові";
+pub const CHART_YOUNG: &str = "Молоді";
+pub const CHART_MATURE: &str = "Зрілі";
+pub const CHART_DUE: &str = "Прийде на повторення";
+pub const CHART_TODAY: &str = "сьогодні";
+pub const CHART_NOTHING_DUE: &str = "Нічого не заплановано";
+pub const CHART_NO_REVIEWS: &str = "Повторів ще не було";
+pub const CHART_RECALLED: &str = "Згадано";
+pub const CHART_FORGOTTEN: &str = "Забуто";
+
+fn cards_word(n: usize) -> &'static str {
+    knotes_app::plural_uk(n as u64, "картка", "картки", "карток")
+}
+
+fn reviews_word(n: usize) -> &'static str {
+    knotes_app::plural_uk(n as u64, "повтор", "повтори", "повторів")
+}
+
+/// "120 карток".
+pub fn chart_cards(cards: usize) -> String {
+    format!("{cards} {}", cards_word(cards))
+}
+
+/// The bar pointed at: "через 5 дн.: 12 карток".
+pub fn chart_due_day(day: usize, cards: usize) -> String {
+    let when = match day {
+        0 => "сьогодні".to_owned(),
+        1 => "завтра".to_owned(),
+        _ => format!("через {day} дн."),
+    };
+    format!("{when}: {cards} {}", cards_word(cards))
+}
+
+/// "завтра 3 · за 7 днів 20 · за 30 днів 61".
+pub fn chart_due_sums(tomorrow: usize, week: usize, days: usize, all: usize) -> String {
+    format!("завтра {tomorrow} · за 7 днів {week} · за {days} днів {all}")
+}
+
+/// Under a day of the forecast: "+10 дн.".
+pub fn chart_days_ahead(days: usize) -> String {
+    format!("+{days} дн.")
+}
+
+/// Under a day of the reviews: "−20 дн.".
+pub fn chart_days_ago(days: usize) -> String {
+    format!("−{days} дн.")
+}
+
+/// "Повтори за 30 днів".
+pub fn chart_reviews(days: usize) -> String {
+    format!("Повтори за {days} днів")
+}
+
+/// "Оцінки за 30 днів".
+pub fn chart_grades(days: usize) -> String {
+    format!("Оцінки за {days} днів")
+}
+
+/// The bar pointed at: "3 дн. тому: 14 повторів, забуто 2".
+pub fn chart_reviews_day(ago: usize, reviews: usize, forgotten: usize) -> String {
+    let when = match ago {
+        0 => "сьогодні".to_owned(),
+        1 => "вчора".to_owned(),
+        _ => format!("{ago} дн. тому"),
+    };
+    format!("{when}: {reviews} {}, забуто {forgotten}", reviews_word(reviews))
+}
+
+/// "340 повторів · згадано 85 %".
+pub fn chart_reviews_sums(reviews: usize, forgotten: usize) -> String {
+    match reviews {
+        0 => String::new(),
+        _ => format!("{reviews} {} · згадано {} %", reviews_word(reviews), ((reviews - forgotten) * 100 + reviews / 2) / reviews),
+    }
+}
+
+/// Counts as bars, one a day, the tallest the largest: «▁▃█▂».
+fn bars(counts: &[usize]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let most = counts.iter().copied().max().unwrap_or(0).max(1);
+    counts.iter().map(|&n| if n == 0 { '▁' } else { BARS[(n * 7).div_ceil(most).min(7)] }).collect()
+}
+
 /// "мови/англійська · повторено 2, лишилось 5".
 pub fn review_progress(deck: &str, done: usize, left: usize) -> String {
     format!("{deck} · повторено {done}, лишилось {left}")

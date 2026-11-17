@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use knotes_cards::{CardKind, DeckSettings, Fsrs, Grade, parse_review, scan_cards, schedule};
-use knotes_core::{BoxError, CardIndex, CardRow, CardState, DeckCount, DueCard, Reviewed};
+use knotes_core::{BoxError, CardIndex, CardRow, CardState, DeckCount, DeckStats, DueCard, FORECAST_DAYS, MATURE_DAYS, PAST_DAYS, Reviewed};
 use rusqlite::{Transaction, params};
 
 use crate::SqliteIndex;
@@ -143,6 +143,19 @@ impl CardIndex for SqliteIndex {
         Ok(cards)
     }
 
+    fn cards_ahead(&self, deck: &str, after: i64, limit: usize) -> Result<Vec<DueCard>, BoxError> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.due
+             FROM cards c JOIN files f ON f.id = c.file_id JOIN card_states s ON s.card_id = c.card_id
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due > ?4
+             ORDER BY s.due, f.path, c.ord LIMIT ?5",
+        )?;
+        let rows = st.query_map(params![deck, format!("{deck}/"), format!("{deck}0"), after, limit as i64], |r| {
+            Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     fn introduced(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError> {
         let mut st = self.conn.prepare_cached(
             "SELECT c.deck, COUNT(*) FROM card_states s JOIN cards c ON c.card_id = s.card_id WHERE s.first >= ?1 GROUP BY c.deck ORDER BY c.deck",
@@ -168,6 +181,51 @@ impl CardIndex for SqliteIndex {
             Ok(CardRow { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, reviewed })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn deck_stats(&self, deck: &str, day_start: i64) -> Result<DeckStats, BoxError> {
+        const DAY: i64 = 86_400;
+        let (from, to) = (format!("{deck}/"), format!("{deck}0"));
+        let mut stats = DeckStats { due_by_day: vec![0; FORECAST_DAYS + 1], reviews_by_day: vec![(0, 0); PAST_DAYS], ..DeckStats::default() };
+        let count = |r: &rusqlite::Row, i: usize| r.get::<_, i64>(i).map(|n| n as usize);
+        (stats.cards, stats.fresh, stats.mature) = self
+            .conn
+            .prepare_cached(
+                "SELECT COUNT(*), COUNT(CASE WHEN s.card_id IS NULL THEN 1 END), COUNT(CASE WHEN s.due - s.last >= ?4 THEN 1 END)
+                 FROM cards c LEFT JOIN card_states s ON s.card_id = c.card_id WHERE c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)",
+            )?
+            .query_row(params![deck, from, to, MATURE_DAYS * DAY], |r| Ok((count(r, 0)?, count(r, 1)?, count(r, 2)?)))?;
+        stats.young = stats.cards - stats.fresh - stats.mature;
+        let mut st = self.conn.prepare_cached(
+            "SELECT CASE WHEN s.due < ?4 THEN 0 ELSE (s.due - ?4) / 86400 END, COUNT(*)
+             FROM cards c JOIN card_states s ON s.card_id = c.card_id
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due < ?5 GROUP BY 1",
+        )?;
+        for row in st.query_map(params![deck, from, to, day_start, day_start + (FORECAST_DAYS as i64 + 1) * DAY], |r| Ok((count(r, 0)?, count(r, 1)?)))? {
+            let (day, cards) = row?;
+            stats.due_by_day[day] = cards;
+        }
+        let since = day_start - (PAST_DAYS as i64 - 1) * DAY;
+        let mut st = self.conn.prepare_cached(
+            "SELECT (r.at - ?4) / 86400, COUNT(*), COUNT(CASE WHEN r.grade = 1 THEN 1 END)
+             FROM cards c JOIN reviews r ON r.card_id = c.card_id
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND r.at >= ?4 AND r.at < ?5 GROUP BY 1",
+        )?;
+        for row in st.query_map(params![deck, from, to, since, day_start + DAY], |r| Ok((count(r, 0)?, count(r, 1)?, count(r, 2)?)))? {
+            let (day, reviews, again) = row?;
+            stats.reviews_by_day[day] = (reviews, again);
+        }
+        let mut st = self.conn.prepare_cached(
+            "SELECT r.grade, COUNT(*) FROM cards c JOIN reviews r ON r.card_id = c.card_id
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND r.at >= ?4 AND r.at < ?5 GROUP BY 1",
+        )?;
+        for row in st.query_map(params![deck, from, to, since, day_start + DAY], |r| Ok((count(r, 0)?, count(r, 1)?)))? {
+            let (grade, reviews) = row?;
+            if let Some(of_grade) = stats.grades.get_mut(grade.wrapping_sub(1)) {
+                *of_grade = reviews;
+            }
+        }
+        Ok(stats)
     }
 
     fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError> {

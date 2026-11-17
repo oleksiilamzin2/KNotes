@@ -114,7 +114,7 @@ impl VaultWindow {
         let cards = self.due_cards(deck);
         self.show_list_column(true);
         *self.review.borrow_mut() = None;
-        self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS }));
+        self.show_waiting(deck, &cards);
         self.update_navigation();
     }
 
@@ -136,6 +136,30 @@ impl VaultWindow {
         let today: usize = reader.introduced(day_start()).unwrap_or_default().iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
         let new = (self.deck_settings.borrow().new_a_day(deck) as usize).saturating_sub(today);
         reader.due_cards(Some(deck), now(), REVIEW_CARDS, new).unwrap_or_default()
+    }
+
+    /// `deck`'s reviewed cards not due yet, the soonest due first.
+    fn cards_ahead(&self, deck: &str, limit: usize) -> Vec<DueCard> {
+        let mut state = self.state.borrow_mut();
+        self.ensure_reader(&mut state);
+        state.reader.as_ref().and_then(|r| r.cards_ahead(deck, now(), limit).ok()).unwrap_or_default()
+    }
+
+    /// A deck not started: how many of its cards wait, and its statistics.
+    fn show_waiting(&self, deck: &str, cards: &[DueCard]) {
+        let stats = {
+            let mut state = self.state.borrow_mut();
+            self.ensure_reader(&mut state);
+            state.reader.as_ref().and_then(|r| r.deck_stats(deck, day_start()).ok()).filter(|stats| stats.cards > 0)
+        };
+        let said = stats.as_ref().map(strings::deck_stats).unwrap_or_default();
+        let ahead = self.cards_ahead(deck, REVIEW_CARDS);
+        self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS, stats: said, charts: stats, ahead: ahead.len(), ahead_more: ahead.len() == REVIEW_CARDS }));
+    }
+
+    /// The waiting deck's statistics (probe mode).
+    pub fn describe_deck_stats(&self) -> String {
+        self.review_view.describe_stats()
     }
 
     /// The decks' tree with what each asks now, from the last snapshot's counts, the vault's
@@ -173,16 +197,20 @@ impl VaultWindow {
         let waiting = self.review_deck.borrow().clone().filter(|_| self.review.borrow().is_none());
         if let Some(deck) = waiting {
             let cards = self.due_cards(&deck);
-            self.review_view.show(Some(Shown::Waiting { deck, cards: cards.len(), more: cards.len() == REVIEW_CARDS }));
+            self.show_waiting(&deck, &cards);
         }
     }
 
     /// A button of the review.
     pub(super) fn review_asked(&self, asked: Asked) {
         match asked {
-            Asked::Start => {
+            Asked::Start | Asked::StartAhead => {
                 let Some(deck) = self.review_deck.borrow().clone() else { return };
-                let queue = self.due_cards(&deck).into();
+                let mut queue: VecDeque<DueCard> = self.due_cards(&deck).into();
+                // Ahead of the schedule: after what is due, the cards not due yet, the soonest first.
+                if asked == Asked::StartAhead {
+                    queue.extend(self.cards_ahead(&deck, REVIEW_CARDS.saturating_sub(queue.len())));
+                }
                 *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0 });
                 self.next_card();
             }
@@ -321,6 +349,7 @@ impl VaultWindow {
         for click in clicks.split(',') {
             let asked = match click.trim() {
                 "start" => Asked::Start,
+                "ahead" => Asked::StartAhead,
                 "show" => Asked::ShowAnswer,
                 "open" => Asked::OpenNote,
                 // `link0`: the first link of the card's text.
