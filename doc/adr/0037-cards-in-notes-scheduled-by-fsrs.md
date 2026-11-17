@@ -221,3 +221,19 @@ It is the first new feature since the owner's goal became to polish what exists.
   AI holds one, they are left out and said so, the counts made without that note's cards.
 - A day begins at the user's midnight: the app tells the tools its clock's offset, the MCP
   server asks `date +%z` (UTC's midnight if that fails).
+
+## Built (2026-11-17): decks follow the spaces
+
+- Owner: «привяжи колоди до просторів відповідно до файлів». In a space (ADR 0030) the decks
+  are those its notes' cards are in, and each is the space's part of it: the sidebar's counts,
+  a review's cards (the due, the day's new, the ones ahead), the statistics with their reviews,
+  and the deck's notes in the list. A deck is no one space's: «мови» with cards in two spaces
+  shows in both, each with its own. The whole vault shows all.
+- The index knows no spaces. In a space the window reads every card's row and keeps those the
+  space holds (`space_rows`), then counts and queues them as the index does for all
+  (`knotes_app::deck_rows`); `deck_stats` takes which notes count. The whole vault is still
+  counted by SQLite. A space of a vault with 100 000 cards reads them all at each snapshot.
+- A deck's settings stay the deck's, the same in every space; its day's new cards are counted
+  in the space reviewed (two spaces' parts of one deck each take the deck's number).
+- With `deck_stats` taking the notes that count, `list_decks` gives a deck's reviews without
+  those of notes kept from the AI, where it gave none.

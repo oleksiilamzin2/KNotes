@@ -1,5 +1,6 @@
 //! View models of the Knotes window: plain Rust, no AppKit.
 
+pub mod deck_rows;
 mod connections;
 mod find_in_text;
 mod folder_rules;

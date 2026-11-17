@@ -691,21 +691,17 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             }
             let under = format!("{deck}/");
             let of_deck = |row: &&knotes_core::CardRow| row.deck == deck || row.deck.starts_with(&under);
-            // What comes due, from the cards shown; the reviews, from the index, which counts
-            // every card of the deck: left out when a note kept from the AI holds one.
             let coming = |days: i64| rows.iter().filter(of_deck).filter(|r| !kept.holds(&r.path)).filter(|r| r.reviewed.is_some_and(|s| s.due >= today + DAY && s.due < today + (days + 1) * DAY)).count();
-            let mut statistics = json!({"due_tomorrow": coming(1), "due_in_7_days": coming(7), "due_in_30_days": coming(30)});
-            if rows.iter().filter(of_deck).any(|r| kept.holds(&r.path)) {
-                statistics["reviews"] = json!("left out: a note kept from the AI holds cards of this deck");
-            } else {
-                let stats = self.index.deck_stats(deck, today).map_err(failed)?;
-                let (reviews, forgotten) = stats.reviews_by_day.iter().fold((0, 0), |(all, again), day| (all + day.0, again + day.1));
-                let [again, hard, good, easy] = stats.grades;
-                statistics["reviews_today"] = json!(stats.reviews_by_day.last().map_or(0, |day| day.0));
-                statistics["reviews_in_30_days"] = json!(reviews);
-                statistics["recalled_percent"] = json!(((reviews - forgotten) * 100 + reviews / 2).checked_div(reviews));
-                statistics["grades_in_30_days"] = json!({"again": again, "hard": hard, "good": good, "easy": easy});
-            }
+            // The reviews of the cards shown: those of notes kept from the AI are not counted.
+            let stats = self.index.deck_stats(deck, today, &|path| !kept.holds(path)).map_err(failed)?;
+            let (reviews, forgotten) = stats.reviews_by_day.iter().fold((0, 0), |(all, again), day| (all + day.0, again + day.1));
+            let [again, hard, good, easy] = stats.grades;
+            let statistics = json!({
+                "due_tomorrow": coming(1), "due_in_7_days": coming(7), "due_in_30_days": coming(30),
+                "reviews_today": stats.reviews_by_day.last().map_or(0, |day| day.0), "reviews_in_30_days": reviews,
+                "recalled_percent": ((reviews - forgotten) * 100 + reviews / 2).checked_div(reviews),
+                "grades_in_30_days": {"again": again, "hard": hard, "good": good, "easy": easy},
+            });
             result["deck"] = json!(deck);
             result["statistics"] = statistics;
         }

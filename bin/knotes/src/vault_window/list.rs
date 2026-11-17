@@ -235,7 +235,9 @@ impl VaultWindow {
     pub(super) fn notes_with_deck(&self, state: &mut State, deck: &str) -> HashSet<String> {
         use knotes_core::CardIndex;
         self.ensure_reader(state);
-        state.reader.as_ref().and_then(|r| r.deck_notes(deck).ok()).unwrap_or_default().into_iter().collect()
+        let notes = state.reader.as_ref().and_then(|r| r.deck_notes(deck).ok()).unwrap_or_default();
+        // In a space, its notes only: the deck is the space's part of it.
+        notes.into_iter().filter(|path| state.space.as_ref().is_none_or(|id| state.spaces.holds(path, id))).collect()
     }
 
     pub(super) fn exists(&self, item: &SidebarItem) -> bool {

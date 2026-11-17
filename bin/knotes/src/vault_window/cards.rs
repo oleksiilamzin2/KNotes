@@ -4,7 +4,8 @@
 use std::collections::VecDeque;
 
 use knotes_cards::{DeckSettings, Fsrs, Grade, Memory, asks, card_id, give_id, make_card, review_line, scan_cards};
-use knotes_core::{CardIndex, CardState, DueCard};
+use knotes_app::deck_rows;
+use knotes_core::{CardIndex, CardRow, CardState, DueCard};
 
 use super::*;
 use crate::review_view::{Asked, Shown};
@@ -126,51 +127,70 @@ impl VaultWindow {
         self.review_view.show(None);
     }
 
+    /// In a space (ADR 0030), the cards written in its notes: its decks are those, counted and
+    /// reviewed from them (owner's request: decks follow the spaces by their files). None for
+    /// the whole vault, which the index counts itself.
+    fn space_rows(&self, state: &mut State) -> Option<Vec<CardRow>> {
+        let id = state.space.clone()?;
+        self.ensure_reader(state);
+        let mut rows = state.reader.as_ref().and_then(|r| r.card_rows(None, None).ok()).unwrap_or_default();
+        rows.retain(|row| state.spaces.holds(&row.path, &id));
+        Some(rows)
+    }
+
     /// The cards `deck` asks now: those due, and of the new as many as it still asks today.
     fn due_cards(&self, deck: &str) -> Vec<DueCard> {
         let mut state = self.state.borrow_mut();
+        let rows = self.space_rows(&mut state);
         self.ensure_reader(&mut state);
         let Some(reader) = state.reader.as_ref() else { return Vec::new() };
         // Asked of the index, not as the last snapshot had it: a review just done counts.
         let under = format!("{deck}/");
-        let today: usize = reader.introduced(day_start()).unwrap_or_default().iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
-        let new = (self.deck_settings.borrow().new_a_day(deck) as usize).saturating_sub(today);
-        reader.due_cards(Some(deck), now(), REVIEW_CARDS, new).unwrap_or_default()
-    }
-
-    /// `deck`'s reviewed cards not due yet, the soonest due first.
-    fn cards_ahead(&self, deck: &str, limit: usize) -> Vec<DueCard> {
-        let mut state = self.state.borrow_mut();
-        self.ensure_reader(&mut state);
-        state.reader.as_ref().and_then(|r| r.cards_ahead(deck, now(), limit).ok()).unwrap_or_default()
-    }
-
-    /// A deck not started: how many of its cards wait, and its statistics.
-    fn show_waiting(&self, deck: &str, cards: &[DueCard]) {
-        let stats = {
-            let mut state = self.state.borrow_mut();
-            self.ensure_reader(&mut state);
-            state.reader.as_ref().and_then(|r| r.deck_stats(deck, day_start()).ok()).filter(|stats| stats.cards > 0)
+        let introduced = match &rows {
+            Some(rows) => deck_rows::introduced(rows, day_start()),
+            None => reader.introduced(day_start()).unwrap_or_default(),
         };
-        let said = stats.as_ref().map(strings::deck_stats).unwrap_or_default();
-        let ahead = self.cards_ahead(deck, REVIEW_CARDS);
-        self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS, stats: said, charts: stats, ahead: ahead.len(), ahead_more: ahead.len() == REVIEW_CARDS }));
+        let today: usize = introduced.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
+        let new = (self.deck_settings.borrow().new_a_day(deck) as usize).saturating_sub(today);
+        match &rows {
+            Some(rows) => deck_rows::due_cards(rows, deck, now(), REVIEW_CARDS, new),
+            None => reader.due_cards(Some(deck), now(), REVIEW_CARDS, new).unwrap_or_default(),
+        }
     }
 
-    /// The waiting deck's statistics (probe mode).
-    pub fn describe_deck_stats(&self) -> String {
-        self.review_view.describe_stats()
-    }
-
-    /// The decks' tree with what each asks now, from the last snapshot's counts, the vault's
-    /// settings as its file has them, and the new cards today has taken.
+    /// The decks' tree with what each asks now, from the last snapshot's counts (in a space,
+    /// its notes' cards), the vault's settings as its file has them, and the new cards today
+    /// has taken.
     pub(super) fn count_decks(&self, state: &mut State) -> Vec<TagNode> {
         let settings = state.vault.clone().and_then(|vault| FsVault::new(&vault).read_deck_settings().ok()).map(|text| DeckSettings::parse(&text)).unwrap_or_default();
-        self.ensure_reader(state);
-        let introduced = state.reader.as_ref().and_then(|r| r.introduced(day_start()).ok()).unwrap_or_default();
-        let tree = knotes_app::deck_tree(&self.deck_counts.borrow(), &introduced, &|deck| settings.new_a_day(deck) as usize);
+        let new_a_day = |deck: &str| settings.new_a_day(deck) as usize;
+        let tree = match self.space_rows(state) {
+            Some(rows) => knotes_app::deck_tree(&deck_rows::deck_counts(&rows, now()), &deck_rows::introduced(&rows, day_start()), &new_a_day),
+            None => {
+                self.ensure_reader(state);
+                let introduced = state.reader.as_ref().and_then(|r| r.introduced(day_start()).ok()).unwrap_or_default();
+                knotes_app::deck_tree(&self.deck_counts.borrow(), &introduced, &new_a_day)
+            }
+        };
         *self.deck_settings.borrow_mut() = settings;
         tree
+    }
+
+    /// The decks counted again and shown: the window's space changed, or a deck's settings.
+    pub(super) fn recount_decks(&self) {
+        {
+            let mut state = self.state.borrow_mut();
+            state.decks = Arc::new(self.count_decks(&mut state));
+        }
+        if self.state.borrow().sidebar_mode == SidebarMode::Cards {
+            self.rebuild_sidebar();
+        }
+        // A deck waiting to be started says how many cards it asks now.
+        let waiting = self.review_deck.borrow().clone().filter(|_| self.review.borrow().is_none());
+        if let Some(deck) = waiting {
+            let cards = self.due_cards(&deck);
+            self.show_waiting(&deck, &cards);
+        }
     }
 
     /// A deck's menu → its settings: asked, written to the vault's file (the session schedules
@@ -186,19 +206,37 @@ impl VaultWindow {
             self.tell_failed(strings::DECK_SETTINGS_NOT_SAVED, &e.to_string());
             return;
         }
-        {
+        self.recount_decks();
+    }
+
+    /// `deck`'s reviewed cards not due yet, the soonest due first; in a space, of its notes'.
+    fn cards_ahead(&self, deck: &str, limit: usize) -> Vec<DueCard> {
+        let mut state = self.state.borrow_mut();
+        if let Some(rows) = self.space_rows(&mut state) {
+            return deck_rows::cards_ahead(&rows, deck, now(), limit);
+        }
+        self.ensure_reader(&mut state);
+        state.reader.as_ref().and_then(|r| r.cards_ahead(deck, now(), limit).ok()).unwrap_or_default()
+    }
+
+    /// A deck not started: how many of its cards wait, and its statistics.
+    fn show_waiting(&self, deck: &str, cards: &[DueCard]) {
+        let stats = {
             let mut state = self.state.borrow_mut();
-            state.decks = Arc::new(self.count_decks(&mut state));
-        }
-        if self.state.borrow().sidebar_mode == SidebarMode::Cards {
-            self.rebuild_sidebar();
-        }
-        // A deck waiting to be started says how many cards it asks now.
-        let waiting = self.review_deck.borrow().clone().filter(|_| self.review.borrow().is_none());
-        if let Some(deck) = waiting {
-            let cards = self.due_cards(&deck);
-            self.show_waiting(&deck, &cards);
-        }
+            self.ensure_reader(&mut state);
+            // In a space, of its notes' cards.
+            let (spaces, space) = (Arc::clone(&state.spaces), state.space.clone());
+            let holds = |path: &str| space.as_ref().is_none_or(|id| spaces.holds(path, id));
+            state.reader.as_ref().and_then(|r| r.deck_stats(deck, day_start(), &holds).ok()).filter(|stats| stats.cards > 0)
+        };
+        let said = stats.as_ref().map(strings::deck_stats).unwrap_or_default();
+        let ahead = self.cards_ahead(deck, REVIEW_CARDS);
+        self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS, stats: said, charts: stats, ahead: ahead.len(), ahead_more: ahead.len() == REVIEW_CARDS }));
+    }
+
+    /// The waiting deck's statistics (probe mode).
+    pub fn describe_deck_stats(&self) -> String {
+        self.review_view.describe_stats()
     }
 
     /// A button of the review.

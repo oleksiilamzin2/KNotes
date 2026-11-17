@@ -147,14 +147,21 @@ fn a_deck_s_statistics_count_its_cards_its_reviews_by_day_and_what_comes_due() {
         + &review_line(now - 5 * DAY, "c-3", Grade::Good)
         + &review_line(now, "c-4", Grade::Good);
     index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &DeckSettings::default()).unwrap();
-    let stats = index.deck_stats("мови", day).unwrap();
+    let stats = index.deck_stats("мови", day, &|_| true).unwrap();
     assert_eq!((stats.cards, stats.fresh, stats.young, stats.mature), (4, 1, 3, 0), "forgotten, c-1 is young again");
     assert_eq!((stats.due_by_day.len(), stats.due_by_day[0], stats.due_by_day[2], stats.due_by_day.iter().sum::<usize>()), (31, 2, 1, 3), "today's with the overdue, then by day");
     assert_eq!(stats.reviews_by_day.len(), 30);
     assert_eq!((stats.reviews_by_day[29], stats.reviews_by_day[28], stats.reviews_by_day[24]), ((1, 1), (1, 0), (1, 0)), "today last; the other deck's not counted");
     assert_eq!(stats.reviews_by_day.iter().map(|d| d.0).sum::<usize>(), 3, "older than thirty days: not there");
     assert_eq!(stats.grades, [1, 0, 2, 0], "Again once, Good twice");
-    let english = index.deck_stats("мови/англійська", day).unwrap();
+    let english = index.deck_stats("мови/англійська", day, &|_| true).unwrap();
     assert_eq!((english.cards, english.fresh, english.young), (2, 0, 2));
-    assert_eq!(index.deck_stats("нема", day).unwrap().cards, 0);
+    assert_eq!(index.deck_stats("нема", day, &|_| true).unwrap().cards, 0);
+    // A part of the vault's notes (a space's): the cards and the reviews of the others left out.
+    put(&mut index, "b.md", "#@мови x::y ^c-7\n");
+    index.take_reviews("other.tsv", 0, &review_line(now, "c-7", Grade::Easy), &Fsrs::default(), &DeckSettings::default()).unwrap();
+    let all = index.deck_stats("мови", day, &|_| true).unwrap();
+    let part = index.deck_stats("мови", day, &|path| path == "a.md").unwrap();
+    assert_eq!((all.cards, all.reviews_by_day[29], all.grades), (5, (2, 1), [1, 0, 2, 1]));
+    assert_eq!(part, stats, "as before the other note came");
 }

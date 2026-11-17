@@ -4096,6 +4096,43 @@ fn a_deck_waiting_shows_its_statistics() {
 }
 
 #[test]
+fn a_space_s_decks_are_those_of_its_notes_cards() {
+    let vault = spaced_vault();
+    for (path, text) in [
+        ("Work/a.md", "#@мови cat::кіт ^c-1\n\n#@робота task::завдання ^c-2\n"),
+        ("Home/c.md", "#@мови dog::пес ^c-3\n\n#@дім tea::чай ^c-4\n"),
+        ("top.md", "#@мови sun::сонце ^c-5\n"),
+    ] {
+        std::fs::write(vault.path().join(path), text).unwrap();
+    }
+    // dog reviewed a moment ago: due in three days.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{now}\tc-3\t3\n")).unwrap();
+    let cards = ("KNOTES_PROBE_SIDEBAR", "cards");
+    let sidebar = |out: &str| out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    let stats = |out: &str| out.lines().find_map(|l| l.strip_prefix("deck-stats: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    // The whole vault: every deck, with all its cards.
+    let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", ""), ("KNOTES_PROBE_SELECT", "d:мови")]);
+    assert_eq!(sidebar(&out), "дім (1) | мови (2) | робота (1)", "{out}");
+    assert!(stats(&out).starts_with("Карток: 3 — нових 2, молодих 1, зрілих 0⏎"), "{out}");
+    // Work: the decks its notes' cards are in, with those cards only.
+    let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SELECT", "d:мови")]);
+    assert_eq!(sidebar(&out), "мови (1) | робота (1)", "{out}");
+    assert_eq!(review_line_of(&out), "waiting мови 1", "{out}");
+    assert_eq!(list_titles(&out), ["a"], "the deck's notes in the space: {out}");
+    assert!(stats(&out).starts_with("Карток: 1 — нових 1, молодих 0, зрілих 0⏎⏎Сьогодні: повторів не було⏎"), "another space's review is not its: {out}");
+    let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SELECT", "d:мови"), ("KNOTES_PROBE_REVIEW", "start")]);
+    assert_eq!(review_line_of(&out), "question мови 0/1 | cat (list hidden)", "{out}");
+    // Home: its own, the reviewed card not waiting but there to review ahead.
+    let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "home"), ("KNOTES_PROBE_SELECT", "d:мови")]);
+    assert_eq!(sidebar(&out), "дім (1) | мови (0)", "{out}");
+    assert!(stats(&out).starts_with("Карток: 1 — нових 0, молодих 1, зрілих 0⏎⏎Сьогодні: 1 повтор, згадано 100 %⏎"), "{out}");
+    let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "home"), ("KNOTES_PROBE_SELECT", "d:мови"), ("KNOTES_PROBE_REVIEW", "ahead")]);
+    assert_eq!(review_line_of(&out), "question мови 0/1 | dog (list hidden)", "{out}");
+}
+
+#[test]
 fn what_is_selected_in_a_note_becomes_a_card() {
     let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
     // «тварина» (9..16) the answer to a question asked.

@@ -663,14 +663,13 @@ fn list_decks_gives_a_deck_s_statistics_when_asked() {
         "the card reviewed a minute ago comes back in three days; older reviews are past the 30 days"
     );
     assert!(matches!(v.tools.call("list_decks", &json!({"deck": "таємне"})), Err(ToolError::BadArguments(why)) if why.ends_with("the decks: мови, мови/англійська")), "a kept note's deck is no deck");
-    // A note kept from the AI with a card of the deck: its reviews are not told apart, so none are given.
-    write(v._dirs.0.path(), "Hidden.md", "#no-ai\n\n#@мови/англійська secret::таємниця ^c-8\n");
+    // A note kept from the AI with a card of the deck: neither its card nor its reviews are counted.
+    write(v._dirs.0.path(), "Hidden.md", "#no-ai\n\n#@мови/англійська secret::таємниця ^c-9\n");
     let mut index = SqliteIndex::open(v._dirs.1.path()).unwrap();
     Indexer::with_documents(FsVault::new(v._dirs.0.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
     let tools = VaultTools::new(SqliteIndex::open_reader(v._dirs.1.path()).unwrap(), FsVault::new(v._dirs.0.path()), Pdfs);
-    let asked = tools.call("list_decks", &json!({"deck": "мови"})).unwrap();
-    assert_eq!(asked["decks"][0]["cards"], 4, "its card is not counted");
-    assert_eq!(asked["statistics"], json!({"due_tomorrow": 0, "due_in_7_days": 1, "due_in_30_days": 1, "reviews": "left out: a note kept from the AI holds cards of this deck"}));
+    let kept = tools.call("list_decks", &json!({"deck": "мови"})).unwrap();
+    assert_eq!((&kept["decks"][0]["cards"], &kept["statistics"]), (&json!(4), &asked["statistics"]), "c-9 was reviewed a minute ago too");
 }
 
 #[test]

@@ -105,8 +105,9 @@ pub trait CardIndex {
     /// Every card of `deck` and the decks under it (of every deck for none), in the note `path`
     /// only when given; by note, then in the note's order.
     fn card_rows(&self, deck: Option<&str>, path: Option<&str>) -> Result<Vec<CardRow>, BoxError>;
-    /// How `deck` with those under it stands; `day_start`: when today began (seconds since 1970).
-    fn deck_stats(&self, deck: &str, day_start: i64) -> Result<DeckStats, BoxError>;
+    /// How `deck` with those under it stands, of the cards in the notes `holds` says (a
+    /// space's, or all); `day_start`: when today began (seconds since 1970).
+    fn deck_stats(&self, deck: &str, day_start: i64, holds: &dyn Fn(&str) -> bool) -> Result<DeckStats, BoxError>;
     /// Where the card `id` stands; none for one never reviewed.
     fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError>;
 }
