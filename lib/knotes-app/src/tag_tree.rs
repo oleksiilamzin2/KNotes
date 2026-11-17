@@ -37,19 +37,31 @@ pub fn tag_tree(counts: &[(String, usize)]) -> Vec<TagNode> {
 }
 
 /// The decks of the vault's cards as a tree (ADR 0037), as tags nest: each deck, and each
-/// parent a path names, with the cards to review in it and under it (those due and those never
-/// reviewed). `decks`: each deck's own (`DeckCount`), in any order.
-pub fn deck_tree(decks: &[knotes_core::DeckCount]) -> Vec<TagNode> {
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for deck in decks {
-        let waiting = deck.due + deck.fresh;
-        *counts.entry(deck.deck.as_str()).or_default() += waiting;
-        for (i, _) in deck.deck.match_indices('/') {
-            *counts.entry(&deck.deck[..i]).or_default() += waiting;
+/// parent a path names, with the cards to review in it and under it: those due, and of those
+/// never reviewed as many as the deck still asks today. `decks`: each deck's own (`DeckCount`),
+/// in any order; `introduced`: each deck's own new cards first reviewed today; `new_a_day`: how
+/// many new cards a day a deck asks.
+pub fn deck_tree(decks: &[knotes_core::DeckCount], introduced: &[(String, usize)], new_a_day: &dyn Fn(&str) -> usize) -> Vec<TagNode> {
+    // Of a deck with those under it: the due, the never reviewed, today's new.
+    let mut counts: std::collections::BTreeMap<String, [usize; 3]> = std::collections::BTreeMap::new();
+    let mut add = |deck: &str, which: usize, n: usize| {
+        for at in deck.match_indices('/').map(|(i, _)| i).chain([deck.len()]) {
+            counts.entry(deck[..at].to_owned()).or_default()[which] += n;
         }
+    };
+    for deck in decks {
+        add(&deck.deck, 0, deck.due);
+        add(&deck.deck, 1, deck.fresh);
+    }
+    // A deck whose cards are gone has none to count.
+    for (deck, n) in introduced.iter().filter(|(deck, _)| decks.iter().any(|d| d.deck == *deck)) {
+        add(deck, 2, *n);
     }
     // Every parent before its children, as `tag_tree` takes them.
-    let counts: Vec<(String, usize)> = counts.into_iter().map(|(deck, n)| (deck.to_owned(), n)).collect();
+    let counts: Vec<(String, usize)> = counts.into_iter().map(|(deck, [due, fresh, today])| {
+            let waiting = due + fresh.min(new_a_day(&deck).saturating_sub(today));
+            (deck, waiting)
+        }).collect();
     tag_tree(&counts)
 }
 

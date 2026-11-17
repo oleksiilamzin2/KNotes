@@ -3,6 +3,7 @@
 //! a grade in, the next memory and interval out.
 
 mod card;
+mod deck_settings;
 mod fsrs;
 mod make;
 mod runs;
@@ -10,6 +11,7 @@ mod scan;
 mod schedule;
 
 pub use card::{Card, CardKind};
+pub use deck_settings::{DeckSetting, DeckSettings, NEW_A_DAY, RETENTION, RETENTION_RANGE};
 pub use fsrs::{Fsrs, Grade, Memory};
 pub use make::{asks, card_id, give_id, make_card};
 pub use runs::{CardLink, Run, text_runs};

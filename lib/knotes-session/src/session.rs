@@ -206,11 +206,27 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
     }
 }
 
-/// Takes into the index what the vault's review logs hold past where each was read to; how many
-/// reviews were new. A log that cannot be read is left for the next time, and said.
+/// Takes into the index what the vault's review logs hold past where each was read to, and the
+/// decks' settings when they changed (the cards are scheduled again); how many reviews were
+/// new (one more for settings changed, so that the window hears of them). A log that cannot be
+/// read is left for the next time, and said.
 fn take_reviews(index: &mut SqliteIndex, files: &FsVault) -> usize {
     let fsrs = knotes_cards::Fsrs::default();
     let mut new = 0;
+    // Settings that cannot be read now: the cards stay as scheduled, new reviews by the defaults.
+    let settings = match files.read_deck_settings() {
+        Ok(text) => {
+            match index.take_deck_settings(&text, &fsrs) {
+                Ok(changed) => new += usize::from(changed),
+                Err(e) => eprintln!("knotes: cannot take the decks' settings: {e}"),
+            }
+            knotes_cards::DeckSettings::parse(&text)
+        }
+        Err(e) => {
+            eprintln!("knotes: cannot read the decks' settings: {e}");
+            knotes_cards::DeckSettings::default()
+        }
+    };
     for (name, size) in files.review_logs().unwrap_or_default() {
         let read = index.reviews_read(&name).unwrap_or(0);
         // Shorter than what was read: replaced (restored from a backup); read again whole.
@@ -218,7 +234,7 @@ fn take_reviews(index: &mut SqliteIndex, files: &FsVault) -> usize {
         if size == from {
             continue;
         }
-        match files.read_review_log(&name, from).map_err(BoxError::from).and_then(|text| index.take_reviews(&name, from, &text, &fsrs)) {
+        match files.read_review_log(&name, from).map_err(BoxError::from).and_then(|text| index.take_reviews(&name, from, &text, &fsrs, &settings)) {
             Ok(taken) => new += taken,
             Err(e) => eprintln!("knotes: cannot read the review log {name}: {e}"),
         }

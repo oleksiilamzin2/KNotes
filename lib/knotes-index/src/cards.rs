@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use knotes_cards::{CardKind, Fsrs, Grade, parse_review, scan_cards, schedule};
+use knotes_cards::{CardKind, DeckSettings, Fsrs, Grade, parse_review, scan_cards, schedule};
 use knotes_core::{BoxError, CardIndex, CardRow, CardState, DeckCount, DueCard, Reviewed};
 use rusqlite::{Transaction, params};
 
@@ -28,6 +28,27 @@ pub(crate) fn insert_cards(tx: &Transaction, file_id: i64, source: &str) -> Resu
 }
 
 impl SqliteIndex {
+    /// Takes `text` (what `.knotes/decks.json` holds) as the decks' settings: when it is not
+    /// the one the schedule was worked out with, every reviewed card's is worked out again
+    /// (a deck's chance of recall moves when its cards are due). Says whether it was.
+    pub fn take_deck_settings(&mut self, text: &str, fsrs: &Fsrs) -> Result<bool, BoxError> {
+        use rusqlite::OptionalExtension;
+        let tx = self.conn.transaction()?;
+        let had: Option<String> = tx.query_row("SELECT text FROM deck_settings", [], |r| r.get(0)).optional()?;
+        // An index new, or built again: its reviews are taken with these settings at once.
+        if had.as_deref() == Some(text) {
+            return Ok(false);
+        }
+        let settings = DeckSettings::parse(text);
+        let ids: Vec<String> = tx.prepare("SELECT card_id FROM card_states")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        for id in &ids {
+            put_schedule(&tx, id, fsrs, &settings)?;
+        }
+        tx.execute("INSERT OR REPLACE INTO deck_settings(id, text) VALUES (0, ?1)", [text])?;
+        tx.commit()?;
+        Ok(had.is_some() || !ids.is_empty())
+    }
+
     /// How much of the review log `name` has been read (bytes).
     pub fn reviews_read(&self, name: &str) -> Result<u64, BoxError> {
         let mut st = self.conn.prepare_cached("SELECT read FROM review_logs WHERE name = ?1")?;
@@ -38,8 +59,9 @@ impl SqliteIndex {
     /// Takes in `text`, what the review log `name` holds from byte `from` on (as `reviews_read`
     /// gave it): its whole lines' reviews are kept, and the schedule of each card they are of is
     /// worked out again from all its reviews, in time's order, whatever log they came from (a
-    /// second Mac's arrive late). Gives how many reviews were new.
-    pub fn take_reviews(&mut self, name: &str, from: u64, text: &str, fsrs: &Fsrs) -> Result<usize, BoxError> {
+    /// second Mac's arrive late), due at the chance of recall its deck sets (`settings`; a card
+    /// no note holds, at `fsrs`'s). Gives how many reviews were new.
+    pub fn take_reviews(&mut self, name: &str, from: u64, text: &str, fsrs: &Fsrs, settings: &DeckSettings) -> Result<usize, BoxError> {
         // A line still being written waits for its end.
         let whole = text.rfind('\n').map_or(0, |end| end + 1);
         let tx = self.conn.transaction()?;
@@ -53,24 +75,31 @@ impl SqliteIndex {
                     cards.insert(card);
                 }
             }
-            let mut of_card = tx.prepare_cached("SELECT at, grade FROM reviews WHERE card_id = ?1 ORDER BY at")?;
-            let mut put = tx.prepare_cached(
-                "INSERT OR REPLACE INTO card_states(card_id, stability, difficulty, last, due, reviews, lapses) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            )?;
             for card in cards {
-                let reviews: Vec<(i64, Grade)> = of_card
-                    .query_map([card], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
-                    .filter_map(|row| row.ok().and_then(|(at, grade)| Some((at, Grade::from_number(grade)?))))
-                    .collect();
-                if let Some(s) = schedule(fsrs, reviews) {
-                    put.execute(params![card, s.memory.stability, s.memory.difficulty, s.last, s.due, s.reviews, s.lapses])?;
-                }
+                put_schedule(&tx, card, fsrs, settings)?;
             }
             tx.prepare_cached("INSERT OR REPLACE INTO review_logs(name, read) VALUES (?1, ?2)")?.execute(params![name, (from + whole as u64) as i64])?;
         }
         tx.commit()?;
         Ok(new)
     }
+}
+
+/// Works out the schedule of the card `id` again from all its reviews, in time's order.
+fn put_schedule(tx: &Transaction, id: &str, fsrs: &Fsrs, settings: &DeckSettings) -> Result<(), BoxError> {
+    use rusqlite::OptionalExtension;
+    let reviews: Vec<(i64, Grade)> = tx
+        .prepare_cached("SELECT at, grade FROM reviews WHERE card_id = ?1 ORDER BY at")?
+        .query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+        .filter_map(|row| row.ok().and_then(|(at, grade)| Some((at, Grade::from_number(grade)?))))
+        .collect();
+    let deck: Option<String> = tx.prepare_cached("SELECT deck FROM cards WHERE card_id = ?1 LIMIT 1")?.query_row([id], |r| r.get(0)).optional()?;
+    let fsrs = Fsrs { retention: deck.map_or(fsrs.retention, |deck| settings.retention(&deck)), ..fsrs.clone() };
+    if let Some(s) = schedule(&fsrs, reviews) {
+        tx.prepare_cached("INSERT OR REPLACE INTO card_states(card_id, stability, difficulty, first, last, due, reviews, lapses) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?
+            .execute(params![id, s.memory.stability, s.memory.difficulty, s.first, s.last, s.due, s.reviews, s.lapses])?;
+    }
+    Ok(())
 }
 
 impl CardIndex for SqliteIndex {
@@ -85,21 +114,40 @@ impl CardIndex for SqliteIndex {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize) -> Result<Vec<DueCard>, BoxError> {
+    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize) -> Result<Vec<DueCard>, BoxError> {
         // A deck and those under it: `deck` itself, and the range [deck + '/', deck + '0').
         let (own, from, to) = match deck {
             Some(deck) => (deck.to_owned(), format!("{deck}/"), format!("{deck}0")),
             None => (String::new(), String::new(), "\u{10FFFF}".to_owned()),
         };
+        let card = |r: &rusqlite::Row| Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? });
         let mut st = self.conn.prepare_cached(
             "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.due
-             FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
-             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND (s.card_id IS NULL OR s.due <= ?4)
-             ORDER BY s.due IS NULL, s.due, f.path, c.ord LIMIT ?5",
+             FROM cards c JOIN files f ON f.id = c.file_id JOIN card_states s ON s.card_id = c.card_id
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due <= ?4
+             ORDER BY s.due, f.path, c.ord LIMIT ?5",
         )?;
-        let rows = st.query_map(params![own, from, to, until, limit as i64], |r| {
-            Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? })
-        })?;
+        let mut cards: Vec<DueCard> = st.query_map(params![own, from, to, until, limit as i64], card)?.collect::<Result<_, _>>()?;
+        let new = new.min(limit - cards.len());
+        if new > 0 {
+            let mut st = self.conn.prepare_cached(
+                "SELECT f.path, c.start, c.end, c.deck, c.card_id, NULL
+                 FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
+                 WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.card_id IS NULL
+                 ORDER BY f.path, c.ord LIMIT ?4",
+            )?;
+            for row in st.query_map(params![own, from, to, new as i64], card)? {
+                cards.push(row?);
+            }
+        }
+        Ok(cards)
+    }
+
+    fn introduced(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT c.deck, COUNT(*) FROM card_states s JOIN cards c ON c.card_id = s.card_id WHERE s.first >= ?1 GROUP BY c.deck ORDER BY c.deck",
+        )?;
+        let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 

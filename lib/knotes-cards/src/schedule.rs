@@ -10,7 +10,8 @@ const AGAIN: i64 = 600;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Schedule {
     pub memory: Memory,
-    /// When it was last reviewed, and when it is due (seconds since 1970).
+    /// When it was first reviewed, last reviewed, and when it is due (seconds since 1970).
+    pub first: i64,
     pub last: i64,
     pub due: i64,
     pub reviews: u32,
@@ -29,6 +30,7 @@ pub fn schedule(fsrs: &Fsrs, reviews: impl IntoIterator<Item = (i64, Grade)>) ->
         let due = if grade == Grade::Again { when + AGAIN } else { when + fsrs.interval(memory.stability) as i64 * DAY };
         at = Some(Schedule {
             memory,
+            first: at.map_or(when, |s| s.first),
             last: when,
             due,
             reviews: at.map_or(0, |s| s.reviews) + 1,

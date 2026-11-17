@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use knotes_cards::{Fsrs, Grade, Memory, asks, card_id, give_id, make_card, review_line, scan_cards};
+use knotes_cards::{DeckSettings, Fsrs, Grade, Memory, asks, card_id, give_id, make_card, review_line, scan_cards};
 use knotes_core::{CardIndex, CardState, DueCard};
 
 use super::*;
@@ -37,6 +37,12 @@ struct Current {
     back: String,
     /// Its answer shows.
     answered: bool,
+}
+
+/// When today began, by the Mac's clock (seconds since 1970): a day's new cards count from it.
+fn day_start() -> i64 {
+    let offset = objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT() as i64;
+    (now() + offset).div_euclid(86_400) * 86_400 - offset
 }
 
 fn now() -> i64 {
@@ -120,10 +126,55 @@ impl VaultWindow {
         self.review_view.show(None);
     }
 
+    /// The cards `deck` asks now: those due, and of the new as many as it still asks today.
     fn due_cards(&self, deck: &str) -> Vec<DueCard> {
         let mut state = self.state.borrow_mut();
         self.ensure_reader(&mut state);
-        state.reader.as_ref().and_then(|r| r.due_cards(Some(deck), now(), REVIEW_CARDS).ok()).unwrap_or_default()
+        let Some(reader) = state.reader.as_ref() else { return Vec::new() };
+        // Asked of the index, not as the last snapshot had it: a review just done counts.
+        let under = format!("{deck}/");
+        let today: usize = reader.introduced(day_start()).unwrap_or_default().iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
+        let new = (self.deck_settings.borrow().new_a_day(deck) as usize).saturating_sub(today);
+        reader.due_cards(Some(deck), now(), REVIEW_CARDS, new).unwrap_or_default()
+    }
+
+    /// The decks' tree with what each asks now, from the last snapshot's counts, the vault's
+    /// settings as its file has them, and the new cards today has taken.
+    pub(super) fn count_decks(&self, state: &mut State) -> Vec<TagNode> {
+        let settings = state.vault.clone().and_then(|vault| FsVault::new(&vault).read_deck_settings().ok()).map(|text| DeckSettings::parse(&text)).unwrap_or_default();
+        self.ensure_reader(state);
+        let introduced = state.reader.as_ref().and_then(|r| r.introduced(day_start()).ok()).unwrap_or_default();
+        let tree = knotes_app::deck_tree(&self.deck_counts.borrow(), &introduced, &|deck| settings.new_a_day(deck) as usize);
+        *self.deck_settings.borrow_mut() = settings;
+        tree
+    }
+
+    /// A deck's menu → its settings: asked, written to the vault's file (the session schedules
+    /// the cards again by them), and the decks counted again at once.
+    pub(super) fn set_deck(&self, deck: &str) {
+        let Some(vault) = self.vault() else { return };
+        let files = FsVault::new(&vault);
+        // As the file has them now: another Mac may have written since.
+        let mut settings = files.read_deck_settings().map(|text| DeckSettings::parse(&text)).unwrap_or_default();
+        let Some(asked) = rename_dialog::ask_deck_settings(MainThreadMarker::from(&*self.window), deck, settings.own(deck), settings.inherited(deck)) else { return };
+        settings.set(deck, asked);
+        if let Err(e) = files.write_deck_settings(&settings.to_text()) {
+            self.tell_failed(strings::DECK_SETTINGS_NOT_SAVED, &e.to_string());
+            return;
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            state.decks = Arc::new(self.count_decks(&mut state));
+        }
+        if self.state.borrow().sidebar_mode == SidebarMode::Cards {
+            self.rebuild_sidebar();
+        }
+        // A deck waiting to be started says how many cards it asks now.
+        let waiting = self.review_deck.borrow().clone().filter(|_| self.review.borrow().is_none());
+        if let Some(deck) = waiting {
+            let cards = self.due_cards(&deck);
+            self.review_view.show(Some(Shown::Waiting { deck, cards: cards.len(), more: cards.len() == REVIEW_CARDS }));
+        }
     }
 
     /// A button of the review.
@@ -205,7 +256,8 @@ impl VaultWindow {
                 Some(current) => {
                     let answer = current.answered.then(|| {
                         let state = current.card.id.as_deref().and_then(|id| self.card_state(id));
-                        let (fsrs, at) = (Fsrs::default(), now());
+                        // Due at the chance of recall the card's deck sets.
+                        let (fsrs, at) = (Fsrs { retention: self.deck_settings.borrow().retention(&current.card.deck), ..Fsrs::default() }, now());
                         (current.back.clone(), [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| comes_back(&fsrs, state, at, grade)))
                     });
                     Shown::Card { deck: review.deck.clone(), done: review.reviewed, left: review.queue.len() + 1, front: current.front.clone(), answer }

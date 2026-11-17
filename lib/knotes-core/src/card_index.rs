@@ -66,8 +66,11 @@ pub trait CardIndex {
     fn deck_counts(&self, until: i64) -> Result<Vec<DeckCount>, BoxError>;
     /// The cards to review by `until` in `deck` and the decks under it (every deck for none):
     /// those due, the longest due first, then those never reviewed in their notes' order;
-    /// `limit` at most.
-    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize) -> Result<Vec<DueCard>, BoxError>;
+    /// `limit` at most, and of those never reviewed `new` at most (the day's new cards).
+    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize) -> Result<Vec<DueCard>, BoxError>;
+    /// The decks with cards first reviewed at `since` or later (seconds since 1970), each with
+    /// how many of its own: the new cards a day has taken already.
+    fn introduced(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError>;
     /// The notes holding a card of `deck` or of a deck under it, sorted by path.
     fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError>;
     /// Every card of `deck` and the decks under it (of every deck for none), in the note `path`

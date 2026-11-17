@@ -136,3 +136,27 @@ It is the first new feature since the owner's goal became to polish what exists.
   and answers are read from the indexed text of the page's notes only.
 - Not done: the agent grades nothing and makes no card (the tools read only). An MCP server
   beside a closed Knotes sees the reviews last taken into the index.
+
+## Built (2026-11-17): a deck's settings
+
+- **Two settings a deck** (owner asked for what Anki has; these first): the chance of recall
+  its cards come back at (0.9 unless set, 0.7 to 0.97) and its new cards a day (20 unless set,
+  Anki's; before, every new card was asked at once). A deck that sets none takes the nearest
+  deck's above (`DeckSettings`). Set from the deck's menu in the sidebar («Налаштування
+  колоди…»): two fields, empty for «as above», whose placeholders say what above gives.
+- **Kept in the vault**, `.knotes/decks.json` (`{"мови": {"retention": 0.85, "new_a_day":
+  10}}`): they go with the notes to the user's other Macs, as the review logs do. Keys Knotes
+  does not know stay when it writes the file.
+- **The chance of recall moves when a card is due**, not what is remembered of it: the session
+  schedules a reviewed card by its deck's (`put_schedule`), and when the file's text is not the
+  one the index scheduled with (kept in `deck_settings`), every reviewed card again
+  (`take_deck_settings`). A card moved to a deck with another chance keeps its day until its
+  next review or the next change of settings.
+- **The day's new cards**: `card_states.first` is a card's first review; a deck with those
+  under it has taken today as many new cards as were first reviewed since local midnight
+  (`CardIndex::introduced`), and asks what is left of its own number (`due_cards`'s `new`); the
+  sidebar counts the same (`deck_tree`). A deck's number bounds the deck reviewed, with those
+  under it; a deck above does not bound a review started in one below (Anki does).
+- Index schema 15 (`first`, `deck_settings`): built again from the notes and the logs.
+- Not done: learning steps, the longest interval, reviews a day, burying and suspending;
+  weights fitted to the user's reviews; `list_decks` does not give the settings.

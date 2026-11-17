@@ -158,6 +158,10 @@ pub struct VaultWindow {
     review_deck: RefCell<Option<String>>,
     /// The deck the last card was made in, offered for the next.
     last_deck: RefCell<String>,
+    /// The decks' settings, as the vault's file had them when the decks were last counted.
+    deck_settings: RefCell<knotes_cards::DeckSettings>,
+    /// The decks' own counts of the last snapshot (for counting again when settings change).
+    deck_counts: RefCell<Arc<Vec<knotes_core::DeckCount>>>,
     /// The search row over the note list.
     pub search_bar: SearchBar,
     /// Find in the open note (Cmd+F), over the note.
@@ -422,6 +426,8 @@ impl VaultWindow {
             review: RefCell::new(None),
             review_deck: RefCell::new(None),
             last_deck: RefCell::new(String::new()),
+            deck_settings: RefCell::default(),
+            deck_counts: RefCell::default(),
             search_bar,
             find_bar,
             pdf_view: RefCell::new(None),
@@ -682,6 +688,12 @@ impl VaultWindow {
         this.list.on_ai(move |path| {
             if let Some(window) = weak_ai.upgrade() {
                 window.toggle_ai(&path);
+            }
+        });
+        let weak_deck: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_deck_settings(move |deck| {
+            if let Some(window) = weak_deck.upgrade() {
+                window.set_deck(&deck);
             }
         });
         let weak_folder_ai: Weak<Self> = Rc::downgrade(&this);
@@ -998,7 +1010,8 @@ impl VaultWindow {
             state.folders = Arc::clone(&snapshot.folders);
             state.folder_paths = Arc::clone(&snapshot.folder_paths);
             state.tags = Arc::clone(&snapshot.tags);
-            state.decks = Arc::new(knotes_app::deck_tree(&snapshot.decks));
+            *self.deck_counts.borrow_mut() = Arc::clone(&snapshot.decks);
+            state.decks = Arc::new(self.count_decks(&mut state));
             state.untagged = Arc::clone(&snapshot.untagged);
             state.tagged = Arc::clone(&snapshot.tagged);
             state.space_tags = Arc::clone(&snapshot.space_tags);

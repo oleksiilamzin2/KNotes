@@ -4030,6 +4030,35 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
 }
 
 #[test]
+fn a_deck_s_settings_limit_its_new_cards_and_move_its_intervals() {
+    let notes = [("Мови.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови/німецька Hund::пес ^c-3\n"), ("Історія.md", "#@історія Коли?::Тоді ^c-4\n")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    // Set from the deck's menu: recalled at 85%, two new cards a day. Written to the vault.
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "85|2")]);
+    let file = vault.path().join(".knotes/decks.json");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\n  \"мови\": {\n    \"new_a_day\": 2,\n    \"retention\": 0.85\n  }\n}\n", "{out}");
+    assert!(out.contains("sidebar: історія (1) | мови (2)\n"), "counted again at once: {out}");
+    assert_eq!(review_line_of(&out), "waiting мови 2", "{out}");
+    // The next launch: the same, and the intervals longer (a card forgotten more often is seen less).
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
+    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 10 хв, Важко · 2 д, Добре · 5 д, Легко · 26 д (list hidden)", "{out}");
+    // One of the day's two taken (cat, reviewed a moment ago): one more new card today.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{now}\tc-1\t3\n")).unwrap();
+    let out = probe_env(&[vault.path()], None, &open);
+    assert!(out.contains("sidebar: історія (1) | мови (1)\n"), "{out}");
+    assert_eq!(review_line_of(&out), "waiting мови 1", "{out}");
+    // A deck under it sets its own; an empty field takes the deck's above again.
+    let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:мови/німецька"), ("KNOTES_PROBE_DECK_SETTINGS", "|0")]);
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"мови/німецька\": {\n    \"new_a_day\": 0\n  }"), "{out}");
+    assert_eq!(review_line_of(&out), "waiting мови/німецька 0", "{out}");
+    let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:мови/німецька"), ("KNOTES_PROBE_DECK_SETTINGS", "|")]);
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("німецька"), "{out}");
+    assert_eq!(review_line_of(&out), "waiting мови/німецька 1", "{out}");
+}
+
+#[test]
 fn what_is_selected_in_a_note_becomes_a_card() {
     let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
     // «тварина» (9..16) the answer to a question asked.

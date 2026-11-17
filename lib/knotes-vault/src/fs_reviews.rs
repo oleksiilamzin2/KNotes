@@ -9,6 +9,8 @@ use crate::FsVault;
 /// Where the logs are, inside the vault.
 const REVIEWS: &str = ".knotes/reviews";
 const EXTENSION: &str = "tsv";
+/// The decks' settings, inside the vault: they go with it to the user's other Macs.
+const DECKS: &str = ".knotes/decks.json";
 
 impl FsVault {
     /// Appends `line` (a review's, with its line break) to the log `name`, made with its folder
@@ -22,6 +24,25 @@ impl FsVault {
         let mut file = fs::OpenOptions::new().create(true).append(true).open(dir.join(format!("{name}.{EXTENSION}")))?;
         file.write_all(line.as_bytes())?;
         file.sync_data()
+    }
+
+    /// The text of the decks' settings; empty without the file.
+    pub fn read_deck_settings(&self) -> io::Result<String> {
+        match fs::read_to_string(self.root.join(DECKS)) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+            read => read,
+        }
+    }
+
+    /// Writes the decks' settings, whole (through a temporary file: never half of it).
+    pub fn write_deck_settings(&self, text: &str) -> io::Result<()> {
+        self.make_knotes_folder()?;
+        let target = self.root.join(DECKS);
+        let dir = target.parent().unwrap_or(&self.root);
+        fs::create_dir_all(dir)?;
+        let tmp = dir.join(".decks.json.knotes-tmp");
+        fs::write(&tmp, text)?;
+        fs::rename(tmp, target)
     }
 
     /// The logs there are, each with its size in bytes, sorted by name; none without the folder.

@@ -66,6 +66,8 @@ pub struct Ivars {
     /// folder from it or show it (ADR 0036).
     ai: RefCell<Arc<KeptFromAi>>,
     on_folder_ai: RefCell<Option<OnDeleteFolder>>,
+    /// What a deck's menu calls for its settings.
+    on_deck_settings: RefCell<Option<OnDeleteFolder>>,
     outline: RefCell<Weak<NSOutlineView>>,
     /// The folder whose row name is being edited, and that name field.
     renaming: RefCell<Option<(String, Retained<NSTextField>)>>,
@@ -230,6 +232,15 @@ define_class!(
             }
         }
 
+        /// A deck's menu: its settings (ADR 0037).
+        #[unsafe(method(deckSettings:))]
+        fn deck_settings(&self, item: &NSMenuItem) {
+            let deck = item.representedObject().and_then(|o| o.downcast::<NSString>().ok()).and_then(|k| SidebarItem::from_key(&k.to_string()));
+            if let (Some(SidebarItem::Deck(deck)), Some(callback)) = (deck, self.ivars().on_deck_settings.borrow().as_ref()) {
+                callback(deck);
+            }
+        }
+
         #[unsafe(method(renameFolder:))]
         fn rename_folder(&self, _sender: Option<&AnyObject>) {
             if let Some((row, _)) = self.menu_folder() {
@@ -282,6 +293,7 @@ impl SidebarSource {
             on_delete_folder: RefCell::new(None),
             ai: RefCell::new(Arc::default()),
             on_folder_ai: RefCell::new(None),
+            on_deck_settings: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
             renaming: RefCell::new(None),
             objects: RefCell::new(HashMap::new()),
@@ -369,6 +381,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let entries: &[(&str, Sel)] = match item {
             Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (ai, sel!(toggleFolderAi:)), (strings::DELETE, sel!(deleteFolder:))],
             Some(SidebarItem::Tab(_)) => &[(strings::CLOSE_TAB, sel!(closeTabFromMenu:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))],
+            Some(SidebarItem::Deck(_)) => &[(strings::DECK_SETTINGS, sel!(deckSettings:))],
             // Below the rows: a new folder at the vault's top.
             None => &[(strings::NEW_FOLDER, sel!(newFolder:))],
             _ => &[],
@@ -428,6 +441,11 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     /// What is kept from the AI, whose folders and tabs the rows mark (ADR 0036).
     pub fn set_ai(&self, ai: Arc<KeptFromAi>) {
         *self.ivars().ai.borrow_mut() = ai;
+    }
+
+    /// Called with a deck whose menu asks its settings.
+    pub fn on_deck_settings(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_deck_settings.borrow_mut() = Some(Box::new(callback));
     }
 
     /// Called with a folder its menu keeps from the AI or shows it.

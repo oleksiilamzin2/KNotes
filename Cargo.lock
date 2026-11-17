@@ -626,6 +626,9 @@ dependencies = [
 [[package]]
 name = "knotes-cards"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "knotes-chat"

@@ -22,6 +22,13 @@ impl VaultWindow {
             self.highlight(&item);
             self.select(item);
         }
+        // `KNOTES_PROBE_DECK_SETTINGS=85|10`: the chosen deck's menu → its settings, so typed.
+        let chosen = self.review_deck.borrow().clone();
+        if std::env::var_os("KNOTES_PROBE_DECK_SETTINGS").is_some()
+            && let Some(deck) = chosen
+        {
+            self.set_deck(&deck);
+        }
         // `KNOTES_PROBE_REVIEW=start,show,3`: clicks in a deck's review (ADR 0037).
         if let Ok(clicks) = std::env::var("KNOTES_PROBE_REVIEW") {
             self.probe_review(&clicks);

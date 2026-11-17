@@ -4,7 +4,7 @@
 /// 12: bare web addresses are links to websites.
 /// 13: PDFs' text is indexed and searched (ADR 0022).
 /// 14: the notes' cards, their reviews and schedules (ADR 0037).
-pub(crate) const VERSION: i64 = 14;
+pub(crate) const VERSION: i64 = 15;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
@@ -92,12 +92,16 @@ CREATE TABLE card_states(
     card_id TEXT PRIMARY KEY,
     stability REAL NOT NULL,
     difficulty REAL NOT NULL,
+    -- Its first review: the day it was new.
+    first INTEGER NOT NULL,
     last INTEGER NOT NULL,
     due INTEGER NOT NULL,
     reviews INTEGER NOT NULL,
     lapses INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX card_states_by_due ON card_states(due);
+-- The decks' settings the schedule was worked out with (the text of `.knotes/decks.json`).
+CREATE TABLE deck_settings(id INTEGER PRIMARY KEY CHECK (id = 0), text TEXT NOT NULL);
 -- Search blocks; `id` is the rowid of the block in blocks_fts.
 CREATE TABLE blocks(
     id INTEGER PRIMARY KEY,

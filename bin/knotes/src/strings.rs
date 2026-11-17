@@ -13,6 +13,16 @@ pub const CARD_NOTHING_SELECTED_DETAILS: &str = "Виділіть у нотат�
 pub const CARD_NOT_MADE: &str = "Не вдалося зробити картку";
 pub const CARD_NOT_MADE_DETAILS: &str = "Потрібні колода (літери, цифри, «/») і питання.";
 pub const CARD_MOVED: &str = "картку в нотатці змінено; почніть повторення знову";
+pub const DECK_SETTINGS: &str = "Налаштування колоди…";
+pub const DECK_SETTINGS_DETAILS: &str = "Порожнє поле — як у колоди вище. Запам'ятовування: з якою ймовірністю ви маєте згадати картку, коли вона приходить на повторення (70–97 %); що вище, то частіше повтори. Діє на цю колоду та вкладені.";
+pub const DECK_RETENTION: &str = "Запам'ятовування, %";
+pub const DECK_NEW_A_DAY: &str = "Нових карток на день";
+pub const DECK_SETTINGS_NOT_SAVED: &str = "Не вдалося зберегти налаштування колоди";
+/// The settings dialog's title: «Колода «англійська»».
+pub fn deck_settings_of(deck: &str) -> String {
+    format!("Колода «{deck}»")
+}
+
 pub const REVIEW_START: &str = "Почати";
 pub const REVIEW_SHOW_ANSWER: &str = "Показати відповідь";
 pub const REVIEW_OPEN_NOTE: &str = "Відкрити нотатку";

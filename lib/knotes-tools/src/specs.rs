@@ -101,7 +101,7 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "list_decks",
-            description: "The decks of the user's flashcards (spaced repetition, FSRS; they may call them картки, колоди, повтори). A card is written in a note's text: `#@deck/sub question::answer`, the question and the answer apart on a `?` line, words to recall as `==words==`, or several paragraphs as `#@deck{ question ? answer }`; `^c-a1b2c3` at its end is its id. Decks nest by `/`. Each deck comes with its cards and those of the decks under it: how many (`cards`), how many reviewed before and due again now (`due`), how many never reviewed (`new`); then the same for the whole vault. What the user is to review now is `due` and `new` together.",
+            description: "The decks of the user's flashcards (spaced repetition, FSRS; they may call them картки, колоди, повтори). A card is written in a note's text: `#@deck/sub question::answer`, the question and the answer apart on a `?` line, words to recall as `==words==`, or several paragraphs as `#@deck{ question ? answer }`; `^c-a1b2c3` at its end is its id. Decks nest by `/`. Each deck comes with its cards and those of the decks under it: how many (`cards`), how many reviewed before and due again now (`due`), how many never reviewed (`new`); then the same for the whole vault. The app asks the `due` ones, and of the `new` only as many a day as the deck is set to (20 unless the user set another).",
             parameters: json!({"type": "object", "properties": {}, "additionalProperties": false}),
         },
         ToolSpec {

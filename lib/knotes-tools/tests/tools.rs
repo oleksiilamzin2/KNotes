@@ -629,7 +629,7 @@ fn card_vault() -> Vault {
         + &review_line(now - 40 * day, "c-3", Grade::Good)
         + &review_line(now - 35 * day, "c-3", Grade::Again)
         + &review_line(now - 60, "c-9", Grade::Good);
-    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default()).unwrap();
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &knotes_cards::DeckSettings::default()).unwrap();
     let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
     Vault { _dirs: (dir, idx), tools }
 }

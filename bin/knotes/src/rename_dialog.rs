@@ -127,6 +127,51 @@ pub fn ask_card(mtm: MainThreadMarker, decks: &[String], last: &str, need_questi
     (alert.runModal() == NSAlertFirstButtonReturn).then(|| answer(deck.stringValue().to_string(), question.stringValue().to_string())).flatten()
 }
 
+/// A deck's settings as typed: its chance of recall in percent («85», «85,5», or «0.85») and
+/// its new cards a day; an empty field, or one that says nothing, is none (as the deck above).
+pub fn typed_deck_setting(retention: &str, new_a_day: &str) -> knotes_cards::DeckSetting {
+    let (low, high) = knotes_cards::RETENTION_RANGE;
+    let retention = retention.trim().trim_end_matches('%').trim().replace(',', ".").parse::<f64>().ok().filter(|r| r.is_finite() && *r > 0.0);
+    let retention = retention.map(|r| if r <= 1.0 { r } else { r / 100.0 }).map(|r| ((r * 1000.0).round() / 1000.0).clamp(low, high));
+    knotes_cards::DeckSetting { retention, new_a_day: new_a_day.trim().parse().ok() }
+}
+
+/// Asks `deck`'s settings: its own in the fields, what the deck above gives (`inherited`: the
+/// chance of recall, the new cards a day) as their placeholders; none when cancelled. In probe
+/// mode `KNOTES_PROBE_DECK_SETTINGS=85|10`.
+pub fn ask_deck_settings(mtm: MainThreadMarker, deck: &str, own: knotes_cards::DeckSetting, inherited: (f64, u32)) -> Option<knotes_cards::DeckSetting> {
+    if probe::enabled() {
+        let asked = std::env::var("KNOTES_PROBE_DECK_SETTINGS").ok()?;
+        let (retention, new) = asked.split_once('|').unwrap_or((&asked, ""));
+        return Some(typed_deck_setting(retention, new));
+    }
+    let percent = |r: f64| format!("{}", (r * 1000.0).round() / 10.0).replace('.', ",");
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&strings::deck_settings_of(deck)));
+    alert.setInformativeText(&NSString::from_str(strings::DECK_SETTINGS_DETAILS));
+    let fields = objc2_app_kit::NSView::initWithFrame(objc2_app_kit::NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 60.0)));
+    let row = |y: f64, label: &str, value: Option<String>, placeholder: String| {
+        let name = NSTextField::labelWithString(&NSString::from_str(label), mtm);
+        name.setFrame(NSRect::new(NSPoint::new(0.0, y + 3.0), NSSize::new(210.0, 18.0)));
+        let field = NSTextField::initWithFrame(NSTextField::alloc(mtm), NSRect::new(NSPoint::new(220.0, y), NSSize::new(100.0, 24.0)));
+        field.setPlaceholderString(Some(&NSString::from_str(&placeholder)));
+        field.setStringValue(&NSString::from_str(&value.unwrap_or_default()));
+        fields.addSubview(&name);
+        fields.addSubview(&field);
+        field
+    };
+    let retention = row(34.0, strings::DECK_RETENTION, own.retention.map(percent), percent(inherited.0));
+    let new = row(2.0, strings::DECK_NEW_A_DAY, own.new_a_day.map(|n| n.to_string()), inherited.1.to_string());
+    alert.setAccessoryView(Some(&fields));
+    alert.window().setInitialFirstResponder(Some(&retention));
+    // SAFETY: both fields live in the alert's accessory view.
+    unsafe { retention.setNextKeyView(Some(&new)) };
+    for title in [strings::SAVE, strings::CANCEL] {
+        alert.addButtonWithTitle(&NSString::from_str(title));
+    }
+    (alert.runModal() == NSAlertFirstButtonReturn).then(|| typed_deck_setting(&retention.stringValue().to_string(), &new.stringValue().to_string()))
+}
+
 /// A typed folder as a vault path: no slashes at its ends, `/` the root.
 fn folder_of(typed: &str) -> String {
     typed.trim().trim_matches('/').to_owned()
