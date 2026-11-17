@@ -235,6 +235,8 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             "list_tasks" => self.list_tasks(args),
             "list_tags" => self.list_tags(),
             "list_spaces" => Ok(self.list_spaces()),
+            "list_decks" => self.list_decks(),
+            "list_cards" => self.list_cards(args),
             _ => Err(ToolError::Unknown(name.to_owned())),
         }
     }
@@ -627,6 +629,85 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         Ok(json!({"notes": notes, "total": total, "next_offset": next}))
     }
 
+    /// The decks of the notes' cards (ADR 0037), each with the cards in it and under it, as the
+    /// sidebar counts them; without the cards of notes kept from the AI.
+    fn list_decks(&self) -> Result<Value, ToolError> {
+        let (kept, now) = (self.kept(), now());
+        let mut decks: BTreeMap<String, [usize; 3]> = BTreeMap::new();
+        let mut all = [0; 3];
+        for row in self.index.card_rows(None, None).map_err(failed)?.into_iter().filter(|r| !kept.holds(&r.path)) {
+            let counted = [1, usize::from(standing(&row, now) == "due"), usize::from(row.reviewed.is_none())];
+            let parents = row.deck.match_indices('/').map(|(i, _)| &row.deck[..i]);
+            for deck in parents.chain([row.deck.as_str()]) {
+                let counts = decks.entry(deck.to_owned()).or_default();
+                (0..3).for_each(|i| counts[i] += counted[i]);
+            }
+            (0..3).for_each(|i| all[i] += counted[i]);
+        }
+        let decks: Vec<Value> = decks.into_iter().map(|(deck, [cards, due, new])| json!({"deck": deck, "cards": cards, "due": due, "new": new})).collect();
+        Ok(json!({"decks": decks, "cards": all[0], "due": all[1], "new": all[2]}))
+    }
+
+    /// The cards of a deck or a note, each with its question, its answer and where it stands.
+    fn list_cards(&self, args: &Value) -> Result<Value, ToolError> {
+        let offset = count_arg(args, "offset", 0, usize::MAX);
+        let limit = count_arg(args, "limit", 30, 100).max(1);
+        let deck = args.get("deck").and_then(Value::as_str).map(|d| d.trim().trim_start_matches(knotes_cards::DECK_MARK).trim_matches('/')).filter(|d| !d.is_empty());
+        let path = match args.get("path") {
+            Some(_) => {
+                let path = self.document(args)?;
+                self.shared(&path)?;
+                Some(path)
+            }
+            None => None,
+        };
+        let (kept, now) = (self.kept(), now());
+        let mut rows = self.index.card_rows(deck, path.as_deref()).map_err(failed)?;
+        rows.retain(|r| !kept.holds(&r.path));
+        match args.get("state").and_then(Value::as_str) {
+            Some("due") => rows.retain(|r| standing(r, now) == "due"),
+            Some("new") => rows.retain(|r| r.reviewed.is_none()),
+            Some("to_review") => rows.retain(|r| standing(r, now) != "later"),
+            _ => {}
+        }
+        // Stable: the cards that compare equal stay by note, in the note's order.
+        match args.get("sort").and_then(Value::as_str) {
+            Some("forgotten") => rows.sort_by_key(|r| std::cmp::Reverse(r.reviewed.map_or(0, |s| s.lapses))),
+            Some("note") => {}
+            // As the review asks them: the due (the longest due first), the new, then the rest
+            // as they come due.
+            _ => rows.sort_by_key(|r| (["due", "new", "later"].iter().position(|s| *s == standing(r, now)), r.reviewed.map(|s| s.due))),
+        }
+        let total = rows.len();
+        let mut texts: HashMap<String, Vec<knotes_cards::Card>> = HashMap::new();
+        let cards: Vec<Value> = rows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|row| {
+                // As indexed: the row's place is in that text.
+                let written = texts.entry(row.path.clone()).or_insert_with(|| self.text_of(&row.path).map(|t| knotes_cards::scan_cards(&t)).unwrap_or_default());
+                let found = written.iter().find(|c| c.span.start == row.start as usize);
+                let mut card = json!({
+                    "deck": row.deck, "path": row.path, "title": title_of(&row.path), "id": row.id, "state": standing(&row, now),
+                    "question": found.map(|c| cut(&c.front)), "answer": found.map(|c| cut(&c.back)),
+                });
+                if let Some(s) = row.reviewed {
+                    let tenth = |n: f64| (n * 10.0).round() / 10.0;
+                    card["due"] = json!(utc_minute(s.due));
+                    card["last_reviewed"] = json!(utc_minute(s.state.last));
+                    card["reviews"] = json!(s.reviews);
+                    card["forgotten"] = json!(s.lapses);
+                    card["stability_days"] = json!(tenth(s.state.stability));
+                    card["difficulty"] = json!(tenth(s.state.difficulty));
+                }
+                card
+            })
+            .collect();
+        let next = (offset + limit < total).then_some(offset + limit);
+        Ok(json!({"cards": cards, "total": total, "next_offset": next}))
+    }
+
     fn list_tags(&self) -> Result<Value, ToolError> {
         let mut counts = self.tag_counts(&self.kept());
         counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -892,6 +973,20 @@ pub fn without_question_words(query: &str) -> String {
 }
 
 /// The index's documents' titles and aliases, to find them by.
+/// Seconds since 1970.
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+/// Where a card stands at `now`: `new` (never reviewed), `due`, or `later`.
+fn standing(card: &knotes_core::CardRow, now: i64) -> &'static str {
+    match card.reviewed {
+        None => "new",
+        Some(s) if s.due <= now => "due",
+        Some(_) => "later",
+    }
+}
+
 fn titles_of(index: &impl ToolIndex) -> TitleIndex {
     TitleIndex::new(index.catalog().unwrap_or_default().into_iter().map(|e| (e.path, e.aliases)))
 }

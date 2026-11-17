@@ -44,7 +44,7 @@ pub use document_text::{DocumentText, NoDocuments};
 pub use file_states::{FileState, FileStates};
 pub use folder_lister::FolderLister;
 pub use folder_rules_store::FolderRulesStore;
-pub use card_index::{CardIndex, CardState, DeckCount, DueCard};
+pub use card_index::{CardIndex, CardRow, CardState, DeckCount, DueCard, Reviewed};
 pub use index_writer::{IndexChange, IndexWriter};
 pub use link_graph::{BackLink, LinkGraph, OutLink};
 pub use link_resolver::LinkResolver;

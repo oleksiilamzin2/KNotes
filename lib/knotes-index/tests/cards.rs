@@ -77,3 +77,22 @@ fn a_second_log_s_earlier_reviews_are_worked_in_in_time_s_order() {
     index.take_reviews("mac.tsv", read, &review_line(both, "c-1", Grade::Easy), &fsrs).unwrap();
     assert!(index.due_cards(None, i64::MAX, 1).unwrap()[0].due.unwrap() > both);
 }
+
+#[test]
+fn card_rows_list_a_deck_s_or_a_note_s_cards_with_their_schedule() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови hello::привіт\n");
+    put(&mut index, "b.md", "#@мовиці x::y ^c-2\n\n#@мови/німецька Hund::пес ^c-3\n");
+    let now = 1_000_000;
+    let log = review_line(now, "c-1", Grade::Good) + &review_line(now + DAY, "c-1", Grade::Again);
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default()).unwrap();
+    let ids = |deck, path| -> Vec<Option<String>> { index.card_rows(deck, path).unwrap().into_iter().map(|c| c.id).collect() };
+    assert_eq!(ids(None, None), [Some("c-1".to_owned()), None, Some("c-2".into()), Some("c-3".into())], "by note, in its order");
+    assert_eq!(ids(Some("мови"), None), [Some("c-1".to_owned()), None, Some("c-3".into())], "the deck and those under it, not one its name starts");
+    assert_eq!(ids(Some("мови"), Some("b.md")), [Some("c-3".to_owned())]);
+    let rows = index.card_rows(None, Some("a.md")).unwrap();
+    let cat = rows[0].reviewed.unwrap();
+    assert_eq!((cat.reviews, cat.lapses, cat.state.last, cat.due), (2, 1, now + DAY, now + DAY + 600));
+    assert_eq!((rows[1].reviewed, rows[1].deck.as_str(), rows[1].start), (None, "мови", 50));
+}

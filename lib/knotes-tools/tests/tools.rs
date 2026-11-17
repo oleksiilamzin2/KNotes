@@ -62,7 +62,7 @@ fn call(vault: &Vault, name: &str, args: Value) -> Value {
 #[test]
 fn every_tool_is_described_with_a_json_schema() {
     let names: Vec<&str> = VaultTools::<SqliteIndex, FsVault, Pdfs>::specs().iter().map(|s| s.name).collect();
-    assert_eq!(names, ["search", "find_by_title", "read_note", "read_pdf", "outline", "links", "related", "list_notes", "list_tasks", "list_tags", "list_spaces"]);
+    assert_eq!(names, ["search", "find_by_title", "read_note", "read_pdf", "outline", "links", "related", "list_notes", "list_tasks", "list_tags", "list_spaces", "list_decks", "list_cards"]);
     for spec in VaultTools::<SqliteIndex, FsVault, Pdfs>::specs() {
         assert_eq!(spec.parameters["type"], "object", "{}", spec.name);
         assert!(!spec.description.is_empty());
@@ -611,4 +611,65 @@ fn a_pdf_its_folder_lists_as_kept_from_the_ai_no_tool_shows() {
     assert!(tools.call("read_pdf", &json!({"path": "Docs/plan.pdf"})).is_ok(), "its neighbour is shared");
     let found = tools.call("search", &json!({"query": "radar budget"})).unwrap();
     assert!(!found.to_string().contains("budget.pdf"), "{found}");
+}
+
+/// A vault with cards: three in English (one due, one reviewed a minute ago, one forgotten and
+/// due), one new in the deck above, one in a note kept from the AI.
+fn card_vault() -> Vault {
+    use knotes_cards::{Fsrs, Grade, review_line};
+    let (dir, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(dir.path(), "Words.md", "# Words\n\n#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови/англійська{\nWhat is a *fox*?\n\nIn one word.\n?\nлисиця\n} ^c-3\n\n#@мови hello::привіт\n");
+    write(dir.path(), "Secret.md", "#no-ai\n\n#@таємне pin::1234 ^c-9\n");
+    let mut index = SqliteIndex::open(idx.path()).unwrap();
+    Indexer::with_documents(FsVault::new(dir.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let day = 86_400;
+    let log = review_line(now - 30 * day, "c-1", Grade::Good)
+        + &review_line(now - 60, "c-2", Grade::Good)
+        + &review_line(now - 40 * day, "c-3", Grade::Good)
+        + &review_line(now - 35 * day, "c-3", Grade::Again)
+        + &review_line(now - 60, "c-9", Grade::Good);
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default()).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
+    Vault { _dirs: (dir, idx), tools }
+}
+
+#[test]
+fn list_decks_counts_each_deck_with_those_under_it() {
+    let v = card_vault();
+    assert_eq!(
+        call(&v, "list_decks", json!({})),
+        json!({"decks": [{"deck": "мови", "cards": 4, "due": 2, "new": 1}, {"deck": "мови/англійська", "cards": 3, "due": 2, "new": 0}], "cards": 4, "due": 2, "new": 1}),
+        "the kept note's deck is not there"
+    );
+    assert_eq!(call(&vault(), "list_decks", json!({})), json!({"decks": [], "cards": 0, "due": 0, "new": 0}));
+}
+
+#[test]
+fn list_cards_gives_questions_answers_and_the_schedule() {
+    let v = card_vault();
+    let all = call(&v, "list_cards", json!({}));
+    let ids = |found: &Value| -> Vec<String> { found["cards"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap_or("-").to_owned()).collect() };
+    assert_eq!((ids(&all), &all["total"], &all["next_offset"]), (vec!["c-3".to_owned(), "c-1".into(), "-".into(), "c-2".into()], &json!(4), &Value::Null), "the longest due, the due, the new, the rest");
+    let fox = &all["cards"][0];
+    assert_eq!((&fox["deck"], &fox["path"], &fox["title"], &fox["state"]), (&json!("мови/англійська"), &json!("Words.md"), &json!("Words"), &json!("due")));
+    assert_eq!((&fox["question"], &fox["answer"]), (&json!("What is a *fox*?\n\nIn one word."), &json!("лисиця")));
+    assert_eq!((&fox["reviews"], &fox["forgotten"]), (&json!(2), &json!(1)));
+    assert!(fox["due"].as_str().unwrap().ends_with('Z') && fox["last_reviewed"].as_str().unwrap().ends_with('Z') && fox["stability_days"].is_number() && fox["difficulty"].is_number(), "{fox}");
+    let new = &all["cards"][2];
+    assert_eq!((&new["state"], &new["question"], &new["answer"], &new["id"], new.get("due")), (&json!("new"), &json!("hello"), &json!("привіт"), &Value::Null, None));
+    assert_eq!(all["cards"][3]["state"], "later");
+    // By deck (its own only, or with those under it), by state, by note.
+    assert_eq!(ids(&call(&v, "list_cards", json!({"deck": "мови/англійська", "sort": "note"}))), ["c-1", "c-2", "c-3"]);
+    assert_eq!(ids(&call(&v, "list_cards", json!({"deck": "#@мови/", "state": "to_review"}))), ["c-3", "c-1", "-"]);
+    assert_eq!(ids(&call(&v, "list_cards", json!({"state": "due"}))), ["c-3", "c-1"]);
+    assert_eq!(ids(&call(&v, "list_cards", json!({"state": "new"}))), ["-"]);
+    assert_eq!(ids(&call(&v, "list_cards", json!({"sort": "forgotten", "limit": 1}))), ["c-3"]);
+    assert_eq!(ids(&call(&v, "list_cards", json!({"path": "Words.md"}))).len(), 4);
+    let paged = call(&v, "list_cards", json!({"limit": 3, "sort": "note"}));
+    assert_eq!((ids(&paged), &paged["next_offset"]), (vec!["c-1".to_owned(), "c-2".into(), "c-3".into()], &json!(3)));
+    // A note kept from the AI: its cards nowhere, itself refused.
+    assert_eq!(call(&v, "list_cards", json!({"deck": "таємне"}))["total"], 0);
+    assert_eq!(v.tools.call("list_cards", &json!({"path": "Secret.md"})), Err(ToolError::Excluded("Secret.md".into())));
+    assert_eq!(v.tools.call("list_cards", &json!({"path": "Nope.md"})), Err(ToolError::NotFound("Nope.md".into())));
 }

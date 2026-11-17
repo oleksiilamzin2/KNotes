@@ -35,6 +35,30 @@ pub struct CardState {
     pub last: i64,
 }
 
+/// A card where it is written, with where it stands (for the tools' lists).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CardRow {
+    /// Its note, and where the card is in the note's text (bytes).
+    pub path: String,
+    pub start: u32,
+    pub end: u32,
+    pub deck: String,
+    /// Its lasting id; none for a card not given one yet.
+    pub id: Option<String>,
+    /// None for a card never reviewed.
+    pub reviewed: Option<Reviewed>,
+}
+
+/// A reviewed card's schedule: what is remembered of it, when it is due again (seconds since
+/// 1970), how many times it was reviewed and how many of them forgotten.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reviewed {
+    pub state: CardState,
+    pub due: i64,
+    pub reviews: u32,
+    pub lapses: u32,
+}
+
 /// The cards the vault's notes hold (ADR 0037), their decks, and what is due.
 pub trait CardIndex {
     /// Every deck with its own cards counted, those due by `until` (seconds since 1970) and
@@ -46,6 +70,9 @@ pub trait CardIndex {
     fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize) -> Result<Vec<DueCard>, BoxError>;
     /// The notes holding a card of `deck` or of a deck under it, sorted by path.
     fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError>;
+    /// Every card of `deck` and the decks under it (of every deck for none), in the note `path`
+    /// only when given; by note, then in the note's order.
+    fn card_rows(&self, deck: Option<&str>, path: Option<&str>) -> Result<Vec<CardRow>, BoxError>;
     /// Where the card `id` stands; none for one never reviewed.
     fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError>;
 }

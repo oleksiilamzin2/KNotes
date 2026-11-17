@@ -99,5 +99,22 @@ pub fn specs() -> Vec<ToolSpec> {
             description: "The vault's spaces: named sets of its folders the user works in (they may call them spaces, простори, профілі, воркспейси or сфери), each with the folders whose rules put them in it and how many notes it has, the folders in every space (`shared`, shown in each), and the space the user's window is in (`current`, none for the whole vault). search and list_notes take a space's name as `space`.",
             parameters: json!({"type": "object", "properties": {}, "additionalProperties": false}),
         },
+        ToolSpec {
+            name: "list_decks",
+            description: "The decks of the user's flashcards (spaced repetition, FSRS; they may call them картки, колоди, повтори). A card is written in a note's text: `#@deck/sub question::answer`, the question and the answer apart on a `?` line, words to recall as `==words==`, or several paragraphs as `#@deck{ question ? answer }`; `^c-a1b2c3` at its end is its id. Decks nest by `/`. Each deck comes with its cards and those of the decks under it: how many (`cards`), how many reviewed before and due again now (`due`), how many never reviewed (`new`); then the same for the whole vault. What the user is to review now is `due` and `new` together.",
+            parameters: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        },
+        ToolSpec {
+            name: "list_cards",
+            description: "The user's flashcards, of a deck (with the decks under it), of a note, or all: each with its deck, its note (`path`), its `question` and `answer`, and where it stands (`state`): `new` (never reviewed), `due` (to review now) or `later`. A reviewed card says when it is due (`due`, UTC) and was last reviewed (`last_reviewed`), how many times it was reviewed (`reviews`) and how many of them forgotten (`forgotten`), and FSRS's memory of it: `stability_days` (after that many days the user recalls it 9 times of 10) and `difficulty` (1 easy to 10 hard). Says how many there are in all (`total`) and, when more follow, where the next page starts (`next_offset`). Reading only: cards are reviewed in the app.",
+            parameters: json!({"type": "object", "properties": {
+                "deck": {"type": "string", "description": "A deck's path as list_decks gives it, e.g. \"мови/англійська\": its cards and those of the decks under it."},
+                "path": {"type": "string", "description": "A note's path in the vault: only its cards."},
+                "state": {"type": "string", "enum": ["all", "to_review", "due", "new"], "description": "All by default; `to_review` is due and new together."},
+                "sort": {"type": "string", "enum": ["review", "forgotten", "note"], "description": "`review` by default: the due (the longest due first), the new, then the rest as they come due; `forgotten`: the most often forgotten first; `note`: by note, in its text's order."},
+                "limit": {"type": "integer", "description": "30 by default, 100 at most."},
+                "offset": {"type": "integer", "description": "Where the page starts: a previous call's `next_offset`, 0 by default."}
+            }, "additionalProperties": false}),
+        },
     ]
 }

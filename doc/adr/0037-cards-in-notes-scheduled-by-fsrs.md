@@ -119,3 +119,20 @@ It is the first new feature since the owner's goal became to polish what exists.
   `[shown](address)` show as in the note (`text_runs`) and are clicked: a note's opens it in a
   tab beside the review's, the web's in the browser. The question and the answer are one text
   that scrolls, the buttons under it. In the note itself a card's links were links already.
+
+## Built (2026-11-17): the chat and MCP see the cards
+
+- The vault's tools (ADR 0027) knew nothing of cards: a card was a line of its note. Two more,
+  reading only: **`list_decks`** (every deck with the cards in it and under it, as the sidebar
+  counts: all, due now, never reviewed; then the vault's) and **`list_cards`** (a deck's with
+  those under it, a note's, or all: question, answer, note, `new`/`due`/`later`, and for a
+  reviewed one when it is due and was last reviewed, its reviews, how many forgotten, FSRS's
+  stability and difficulty; by state, sorted as the review asks them, by the most forgotten, or
+  by note). `list_decks`'s description tells the syntax; the chat's instructions and the MCP
+  server's name the two.
+- One query serves both: `CardIndex::card_rows(deck, note)`. The cards of a note kept from the
+  AI (ADR 0036) are left out there and from the counts, so the counts are made in the tool, not
+  by `deck_counts`: every card's row is read (100 000: one indexed join, no text). Questions
+  and answers are read from the indexed text of the page's notes only.
+- Not done: the agent grades nothing and makes no card (the tools read only). An MCP server
+  beside a closed Knotes sees the reviews last taken into the index.
