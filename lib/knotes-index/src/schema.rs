@@ -7,7 +7,8 @@
 /// 15: a card's first review and the decks' settings the schedule was worked out with.
 /// 16: FSRS as the reference counts (whole days, a forgotten card's bound): scheduled again.
 /// 17: the cards' first reviews are indexed (a day's new cards were found by reading them all).
-pub(crate) const VERSION: i64 = 17;
+/// 18: a card's learning step; the cards are scheduled again with the steps.
+pub(crate) const VERSION: i64 = 18;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
@@ -100,7 +101,11 @@ CREATE TABLE card_states(
     last INTEGER NOT NULL,
     due INTEGER NOT NULL,
     reviews INTEGER NOT NULL,
-    lapses INTEGER NOT NULL
+    lapses INTEGER NOT NULL,
+    -- The step it waits at while it is learned (NULL: its days have begun), and whether it is
+    -- learned again after it was forgotten.
+    step INTEGER,
+    relearning INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX card_states_by_due ON card_states(due);
 CREATE INDEX card_states_by_first ON card_states(first);

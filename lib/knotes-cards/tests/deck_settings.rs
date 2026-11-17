@@ -7,8 +7,8 @@ fn a_deck_takes_what_the_nearest_deck_above_sets() {
     assert_eq!((settings.retention("мови/англійська"), settings.new_a_day("мови/англійська")), (0.85, 10), "from above");
     assert_eq!((settings.retention("мови/англійська/слова"), settings.new_a_day("мови/англійська/слова")), (0.85, 0), "its own, the rest from above");
     assert_eq!((settings.retention("мовиці"), settings.new_a_day("історія")), (RETENTION, NEW_A_DAY), "no deck says: the defaults");
-    assert_eq!(settings.inherited("мови/англійська"), (0.85, 10));
-    assert_eq!(settings.inherited("мови"), (RETENTION, NEW_A_DAY));
+    assert_eq!(settings.inherited("мови/англійська"), (0.85, 10, vec![1, 10]));
+    assert_eq!(settings.inherited("мови"), (RETENTION, NEW_A_DAY, vec![1, 10]));
     assert_eq!(settings.own("мови/англійська"), DeckSetting::default());
 }
 
@@ -16,13 +16,28 @@ fn a_deck_takes_what_the_nearest_deck_above_sets() {
 fn settings_are_written_as_read_and_a_damaged_file_sets_nothing() {
     let mut settings = DeckSettings::parse(r#"{"a": {"retention": 0.99, "later": true}, "b": 5, "c": {"retention": "x"}}"#);
     assert_eq!(settings.retention("a"), 0.97, "brought into range");
-    settings.set("b/c", DeckSetting { retention: None, new_a_day: Some(5) });
-    settings.set("a", DeckSetting { retention: Some(0.8), new_a_day: None });
+    settings.set("b/c", DeckSetting { retention: None, new_a_day: Some(5), steps: None });
+    settings.set("a", DeckSetting { retention: Some(0.8), new_a_day: None, steps: None });
     let text = settings.to_text();
     assert_eq!(text, "{\n  \"a\": {\n    \"later\": true,\n    \"retention\": 0.8\n  },\n  \"b/c\": {\n    \"new_a_day\": 5\n  }\n}\n", "another's key kept, a deck setting nothing left out");
-    assert_eq!(DeckSettings::parse(&text).own("b/c"), DeckSetting { retention: None, new_a_day: Some(5) });
+    assert_eq!(DeckSettings::parse(&text).own("b/c"), DeckSetting { retention: None, new_a_day: Some(5), steps: None });
     for damaged in ["", "[]", "{", "null"] {
         assert_eq!(DeckSettings::parse(damaged), DeckSettings::default(), "{damaged:?}");
     }
     assert_eq!(DeckSettings::default().to_text(), "{}\n");
+}
+
+#[test]
+fn a_deck_s_steps_are_its_own_the_nearest_above_or_the_vault_s() {
+    let settings = DeckSettings::parse(r#"{"": {"steps": [5], "new_a_day": 7}, "мови": {"steps": []}, "мови/англійська": {"steps": [2, 0, 15, 9999]}}"#);
+    assert_eq!(settings.step_minutes("історія"), [5], "the vault's own, above every deck");
+    assert_eq!((settings.new_a_day("історія/давня"), settings.retention("історія")), (7, RETENTION));
+    assert!(settings.step_minutes("мови").is_empty() && settings.steps("мови/німецька").learning.is_empty(), "none: a new card's days begin at once");
+    assert_eq!(settings.step_minutes("мови/англійська"), [2, 15, 1440], "no step of nothing, none longer than a day");
+    assert_eq!(settings.steps("мови/англійська"), knotes_cards::Steps { learning: vec![120, 900, 86_400], relearning: vec![600] });
+    assert_eq!(DeckSettings::default().step_minutes("x"), [1, 10]);
+    let mut set = DeckSettings::default();
+    set.set("a", DeckSetting { retention: None, new_a_day: None, steps: Some(vec![]) });
+    assert_eq!(set.to_text(), "{\n  \"a\": {\n    \"steps\": []\n  }\n}\n");
+    assert_eq!(DeckSettings::parse(&set.to_text()).own("a").steps, Some(vec![]));
 }

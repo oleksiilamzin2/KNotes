@@ -5,6 +5,12 @@ use knotes_md::MarkdownParser;
 
 const DAY: i64 = 86_400;
 
+/// No learning steps (a new card's days begin at its first review): these tests are of the
+/// days; the steps have their own.
+fn no_steps() -> DeckSettings {
+    DeckSettings::parse(r#"{"": {"steps": []}}"#)
+}
+
 fn put(index: &mut SqliteIndex, path: &str, text: &str) {
     let parsed = MarkdownParser::new().parse(text);
     let kind = if path.ends_with(".pdf") { FileKind::Pdf } else { FileKind::Markdown };
@@ -39,23 +45,23 @@ fn reviews_taken_from_the_logs_schedule_the_cards() {
     put(&mut index, "a.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови hello::привіт ^c-3\n\n#@мови/німецька Hund::пес\n");
     let fsrs = Fsrs::default();
     let now = 1_000_000;
-    // c-1 Good (due in 3 days), c-2 Again (due in ten minutes); the last line still being written.
+    // c-1 Good (due in 3 days), c-2 Again (with no steps: due in a day); the last line still being written.
     let log = review_line(now, "c-1", Grade::Good) + &review_line(now, "c-2", Grade::Again) + "10000";
-    assert_eq!(index.take_reviews("mac.tsv", 0, &log, &fsrs, &DeckSettings::default()).unwrap(), 2);
+    assert_eq!(index.take_reviews("mac.tsv", 0, &log, &fsrs, &no_steps()).unwrap(), 2);
     let read = index.reviews_read("mac.tsv").unwrap();
     assert_eq!(read as usize, log.len() - 5, "up to the last whole line");
-    assert_eq!(index.take_reviews("mac.tsv", 0, &log, &fsrs, &DeckSettings::default()).unwrap(), 0, "read again: nothing new");
+    assert_eq!(index.take_reviews("mac.tsv", 0, &log, &fsrs, &no_steps()).unwrap(), 0, "read again: nothing new");
     let decks = |until| index.deck_counts(until).unwrap();
-    assert_eq!(decks(now + 3600), [count("мови", 1, 0, 1), count("мови/англійська", 2, 1, 0), count("мови/німецька", 1, 0, 1)]);
+    assert_eq!(decks(now + DAY), [count("мови", 1, 0, 1), count("мови/англійська", 2, 1, 0), count("мови/німецька", 1, 0, 1)]);
     assert_eq!(decks(now + 3 * DAY)[1], count("мови/англійська", 2, 2, 0));
     // What to review in a deck and those under it: the due first (the longest due first), then
     // the new, in the note's order.
     let due: Vec<(Option<String>, Option<i64>)> = index.due_cards(Some("мови"), now + 3 * DAY, 10, 100).unwrap().into_iter().map(|c| (c.id, c.due)).collect();
-    assert_eq!(due, [(Some("c-2".into()), Some(now + 600)), (Some("c-1".into()), Some(now + 3 * DAY)), (Some("c-3".into()), None), (None, None)]);
-    let english: Vec<Option<String>> = index.due_cards(Some("мови/англійська"), now + 3600, 10, 100).unwrap().into_iter().map(|c| c.id).collect();
+    assert_eq!(due, [(Some("c-2".into()), Some(now + DAY)), (Some("c-1".into()), Some(now + 3 * DAY)), (Some("c-3".into()), None), (None, None)]);
+    let english: Vec<Option<String>> = index.due_cards(Some("мови/англійська"), now + DAY, 10, 100).unwrap().into_iter().map(|c| c.id).collect();
     assert_eq!(english, [Some("c-2".to_owned())], "its own, and only the due");
-    assert_eq!(index.due_cards(None, now + 3600, 2, 100).unwrap().len(), 2, "every deck, the limit kept");
-    let card = &index.due_cards(Some("мови/англійська"), now + 3600, 1, 100).unwrap()[0];
+    assert_eq!(index.due_cards(None, now + DAY, 2, 100).unwrap().len(), 2, "every deck, the limit kept");
+    let card = &index.due_cards(Some("мови/англійська"), now + DAY, 1, 100).unwrap()[0];
     assert_eq!((card.path.as_str(), card.start, card.deck.as_str()), ("a.md", 50, "мови/англійська"), "where it is written");
 }
 
@@ -66,15 +72,15 @@ fn a_second_log_s_earlier_reviews_are_worked_in_in_time_s_order() {
     put(&mut index, "a.md", "#@a q::a ^c-1\n");
     let fsrs = Fsrs::default();
     let now = 1_000_000;
-    index.take_reviews("mac.tsv", 0, &review_line(now, "c-1", Grade::Good), &fsrs, &DeckSettings::default()).unwrap();
+    index.take_reviews("mac.tsv", 0, &review_line(now, "c-1", Grade::Good), &fsrs, &no_steps()).unwrap();
     let alone = index.due_cards(None, i64::MAX, 1, 100).unwrap()[0].due.unwrap();
     // Another Mac reviewed it three days before; its log arrives later.
-    index.take_reviews("other.tsv", 0, &review_line(now - 3 * DAY, "c-1", Grade::Good), &fsrs, &DeckSettings::default()).unwrap();
+    index.take_reviews("other.tsv", 0, &review_line(now - 3 * DAY, "c-1", Grade::Good), &fsrs, &no_steps()).unwrap();
     let both = index.due_cards(None, i64::MAX, 1, 100).unwrap()[0].due.unwrap();
     assert!(both > alone, "a second review, not a first: due later ({alone} then {both})");
     // More of the first log, read from where it was.
     let read = index.reviews_read("mac.tsv").unwrap();
-    index.take_reviews("mac.tsv", read, &review_line(both, "c-1", Grade::Easy), &fsrs, &DeckSettings::default()).unwrap();
+    index.take_reviews("mac.tsv", read, &review_line(both, "c-1", Grade::Easy), &fsrs, &no_steps()).unwrap();
     assert!(index.due_cards(None, i64::MAX, 1, 100).unwrap()[0].due.unwrap() > both);
 }
 
@@ -86,7 +92,7 @@ fn card_rows_list_a_deck_s_or_a_note_s_cards_with_their_schedule() {
     put(&mut index, "b.md", "#@мовиці x::y ^c-2\n\n#@мови/німецька Hund::пес ^c-3\n");
     let now = 1_000_000;
     let log = review_line(now, "c-1", Grade::Good) + &review_line(now + DAY, "c-1", Grade::Again);
-    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &DeckSettings::default()).unwrap();
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &no_steps()).unwrap();
     let ids = |deck, path| -> Vec<Option<String>> { index.card_rows(deck, path).unwrap().into_iter().map(|c| c.id).collect() };
     assert_eq!(ids(None, None), [Some("c-1".to_owned()), None, Some("c-2".into()), Some("c-3".into())], "by note, in its order");
     assert_eq!(ids(Some("мови"), None), [Some("c-1".to_owned()), None, Some("c-3".into())], "the deck and those under it, not one its name starts");
@@ -104,7 +110,7 @@ fn a_deck_s_settings_move_when_its_cards_are_due_and_limit_its_new_cards() {
     put(&mut index, "a.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови hello::привіт ^c-3\n\n#@історія Коли?::Тоді ^c-4\n\n#@мови bye::бувай\n");
     let fsrs = Fsrs::default();
     let now = 1_000_000;
-    let mut settings = DeckSettings::parse(r#"{"мови": {"retention": 0.8}}"#);
+    let mut settings = DeckSettings::parse(r#"{"": {"steps": []}, "мови": {"retention": 0.8}}"#);
     assert!(!index.take_deck_settings(&settings.to_text(), &fsrs).unwrap(), "nothing reviewed yet: nothing to schedule again");
     let log = review_line(now, "c-1", Grade::Good) + &review_line(now, "c-4", Grade::Good) + &review_line(now, "c-9", Grade::Good);
     index.take_reviews("mac.tsv", 0, &log, &fsrs, &settings).unwrap();
@@ -112,7 +118,7 @@ fn a_deck_s_settings_move_when_its_cards_are_due_and_limit_its_new_cards() {
     // Good's first stability is 3.173 days: due at 90% in 3 days, at 80% (its deck above says) in 8.
     assert_eq!((due(&index, "c-1"), due(&index, "c-4")), (now + 8 * DAY, now + 3 * DAY));
     // The settings changed: every reviewed card is scheduled again, once.
-    settings = DeckSettings::parse(r#"{"мови/англійська": {"retention": 0.95}, "історія": {"retention": 0.8}}"#);
+    settings = DeckSettings::parse(r#"{"": {"steps": []}, "мови/англійська": {"retention": 0.95}, "історія": {"retention": 0.8}}"#);
     assert!(index.take_deck_settings(&settings.to_text(), &fsrs).unwrap());
     assert!(!index.take_deck_settings(&settings.to_text(), &fsrs).unwrap(), "the same again: nothing to do");
     assert_eq!((due(&index, "c-1"), due(&index, "c-4")), (now + DAY, now + 8 * DAY));
@@ -146,7 +152,7 @@ fn a_deck_s_statistics_count_its_cards_its_reviews_by_day_and_what_comes_due() {
         + &review_line(now - DAY, "c-2", Grade::Good)
         + &review_line(now - 5 * DAY, "c-3", Grade::Good)
         + &review_line(now, "c-4", Grade::Good);
-    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &DeckSettings::default()).unwrap();
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &no_steps()).unwrap();
     let stats = index.deck_stats("мови", day, &|_| true).unwrap();
     assert_eq!((stats.cards, stats.fresh, stats.young, stats.mature), (4, 1, 3, 0), "forgotten, c-1 is young again");
     assert_eq!((stats.due_by_day.len(), stats.due_by_day[0], stats.due_by_day[2], stats.due_by_day.iter().sum::<usize>()), (31, 2, 1, 3), "today's with the overdue, then by day");
@@ -159,9 +165,37 @@ fn a_deck_s_statistics_count_its_cards_its_reviews_by_day_and_what_comes_due() {
     assert_eq!(index.deck_stats("нема", day, &|_| true).unwrap().cards, 0);
     // A part of the vault's notes (a space's): the cards and the reviews of the others left out.
     put(&mut index, "b.md", "#@мови x::y ^c-7\n");
-    index.take_reviews("other.tsv", 0, &review_line(now, "c-7", Grade::Easy), &Fsrs::default(), &DeckSettings::default()).unwrap();
+    index.take_reviews("other.tsv", 0, &review_line(now, "c-7", Grade::Easy), &Fsrs::default(), &no_steps()).unwrap();
     let all = index.deck_stats("мови", day, &|_| true).unwrap();
     let part = index.deck_stats("мови", day, &|path| path == "a.md").unwrap();
     assert_eq!((all.cards, all.reviews_by_day[29], all.grades), (5, (2, 1), [1, 0, 2, 1]));
     assert_eq!(part, stats, "as before the other note came");
+}
+
+#[test]
+fn a_new_card_is_learned_in_its_deck_s_steps() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-2\n\n#@історія Коли?::Тоді ^c-3\n");
+    let fsrs = Fsrs::default();
+    let now = 1_000_000;
+    // The defaults (a minute, ten minutes) but for історія, which has none.
+    let settings = DeckSettings::parse(r#"{"історія": {"steps": []}}"#);
+    let log = review_line(now, "c-1", Grade::Good) + &review_line(now, "c-2", Grade::Again) + &review_line(now, "c-3", Grade::Good);
+    index.take_reviews("mac.tsv", 0, &log, &fsrs, &settings).unwrap();
+    let stands = |index: &SqliteIndex, id: &str| {
+        let state = index.card_state(id).unwrap().unwrap();
+        let due = index.card_rows(None, None).unwrap().into_iter().find(|c| c.id.as_deref() == Some(id)).unwrap().reviewed.unwrap().due;
+        (due - now, state.step, state.relearning)
+    };
+    assert_eq!(stands(&index, "c-1"), (600, Some(1), false), "Good: its second step");
+    assert_eq!(stands(&index, "c-2"), (60, Some(0), false), "Again: its first");
+    assert_eq!(stands(&index, "c-3"), (3 * DAY, None, false), "no steps: its days");
+    // Good again ten minutes later: its days begin.
+    index.take_reviews("mac.tsv", log.len() as u64, &review_line(now + 600, "c-1", Grade::Good), &fsrs, &settings).unwrap();
+    let (wait, step, _) = stands(&index, "c-1");
+    assert_eq!((wait, step), (600 + 4 * DAY, None));
+    // The deck's steps taken away: scheduled again, its first Good began its days.
+    assert!(index.take_deck_settings(r#"{"мови": {"steps": []}}"#, &fsrs).unwrap());
+    assert_eq!(stands(&index, "c-2"), (DAY, None, false), "Again with no step: its days too, the shortest");
 }

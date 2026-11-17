@@ -283,3 +283,25 @@ It is the first new feature since the owner's goal became to polish what exists.
   inside braces too, its text indented past it; the bar and the deck's mark lilac (`look.card`,
   a step lighter in the dark look), where a quote's bar is the accent. `Highlight::cards` holds
   such cards' ranges; the bar is the quote's mark with a colour. Still nothing hidden.
+
+## Built (2026-11-17): learning steps
+
+- A new card graded Good went straight to its days (three). It is learned in steps first now,
+  as the reference schedules them (py-fsrs 4.1.2, read for the rules) and as Anki does: a
+  minute, then ten, then its days. Again goes to the first step, Hard stays at its step (at
+  the first, between it and the next), Good to the next and past the last to its days, Easy to
+  its days at once. A card forgotten after its days began is learned again in one step of ten
+  minutes (what «Again → ten minutes» was). The memory is FSRS's as before: the steps move
+  only when a card is due. `review` gives the schedule after one review (the fold and the
+  grades' labels both use it); the reference's own test with its steps passes whole (0, 4, 14,
+  44, 125, 328, 0, 0, 7, 16, 34, 71, 142 days).
+- **A deck's setting**, the third: the steps' minutes («1 10»; «0»: none), its own or the
+  nearest deck's above; `.knotes/decks.json` holds `"steps": [1, 10]`. The deck `""` is above
+  every deck (the vault's own; no dialog for it). Without steps a new card's days begin at its
+  first review, Again too (a day).
+- **In a review** a card still being learned after its grade comes back at the review's end
+  (before, only one graded Again did); when nothing else is left it is asked at once, not held
+  for its minutes.
+- Index schema 18 (`step`, `relearning`): every card is scheduled again from the logs with the
+  steps. A card reviewed once and graded Good before this stands at its second step: it is due
+  at once, and its next Good begins its days.

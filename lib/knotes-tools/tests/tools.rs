@@ -629,7 +629,7 @@ fn card_vault() -> Vault {
         + &review_line(now - 40 * day, "c-3", Grade::Good)
         + &review_line(now - 35 * day, "c-3", Grade::Again)
         + &review_line(now - 60, "c-9", Grade::Good);
-    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &knotes_cards::DeckSettings::default()).unwrap();
+    index.take_reviews("mac.tsv", 0, &log, &Fsrs::default(), &knotes_cards::DeckSettings::parse(r#"{"": {"steps": []}}"#)).unwrap();
     let tools = VaultTools::new(SqliteIndex::open_reader(idx.path()).unwrap(), FsVault::new(dir.path()), Pdfs);
     Vault { _dirs: (dir, idx), tools }
 }
@@ -638,7 +638,7 @@ fn card_vault() -> Vault {
 fn list_decks_counts_each_deck_with_those_under_it_as_the_app_does() {
     let v = card_vault();
     let deck = |deck: &str, cards: usize, new: usize, due: usize, to_review: usize| {
-        json!({"deck": deck, "cards": cards, "new": new, "young": cards - new, "mature": 0, "due": due, "to_review": to_review, "new_a_day": 20, "new_today": 1, "retention": 0.9})
+        json!({"deck": deck, "cards": cards, "new": new, "young": cards - new, "mature": 0, "due": due, "to_review": to_review, "new_a_day": 20, "new_today": 1, "retention": 0.9, "learning_steps_minutes": [1, 10]})
     };
     assert_eq!(
         call(&v, "list_decks", json!({})),

@@ -87,14 +87,21 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// When a card would come back, said short: «10 хв», «3 д», «2 міс», «1,5 р».
-fn comes_back(fsrs: &Fsrs, state: Option<CardState>, at: i64, grade: Grade) -> String {
-    if grade == Grade::Again {
-        return strings::REVIEW_AGAIN_IN.to_owned();
+/// Where the card would stand graded `grade` at `at`: from what the index knows of it (none:
+/// a new card), by its deck's chance of recall and steps.
+fn graded(settings: &DeckSettings, deck: &str, state: Option<CardState>, at: i64, grade: Grade) -> knotes_cards::Schedule {
+    let fsrs = Fsrs { retention: settings.retention(deck), ..Fsrs::default() };
+    let before = state.map(|s| knotes_cards::Schedule::standing(Memory { stability: s.stability, difficulty: s.difficulty }, s.last, s.step, s.relearning));
+    knotes_cards::review(&fsrs, &settings.steps(deck), before.as_ref(), at, grade)
+}
+
+/// When a card would come back, said short: «10 хв» while it is learned, then «3 д», «2 міс»,
+/// «1,5 р».
+fn comes_back(after: &knotes_cards::Schedule) -> String {
+    match after.step {
+        Some(_) => strings::review_wait(after.due - after.last),
+        None => strings::review_interval(((after.due - after.last) as f64 / DAY).round()),
     }
-    let days_since = state.map_or(0.0, |s| (at - s.last).max(0) as f64 / DAY);
-    let memory = fsrs.review(state.map(|s| Memory { stability: s.stability, difficulty: s.difficulty }), days_since, grade);
-    strings::review_interval(fsrs.interval(memory.stability))
 }
 
 impl VaultWindow {
@@ -359,9 +366,9 @@ impl VaultWindow {
                 Some(current) => {
                     let answer = current.answered.then(|| {
                         let state = current.card.id.as_deref().and_then(|id| self.card_state(id));
-                        // Due at the chance of recall the card's deck sets.
-                        let (fsrs, at) = (Fsrs { retention: self.deck_settings.borrow().retention(&current.card.deck), ..Fsrs::default() }, now());
-                        (current.back.clone(), [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| comes_back(&fsrs, state, at, grade)))
+                        let at = now();
+                        let settings = self.deck_settings.borrow();
+                        (current.back.clone(), [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| comes_back(&graded(&settings, &current.card.deck, state, at, grade))))
                     });
                     Shown::Card { deck: review.deck.clone(), done: review.reviewed, left: review.queue.len() + 1, front: current.front.clone(), answer }
                 }
@@ -400,6 +407,10 @@ impl VaultWindow {
             card.id = Some(id);
         }
         let id = card.id.clone().unwrap_or_default();
+        // Where it stood before this review (the index has not taken it yet): whether it is
+        // still learned after it, and so asked again in this review.
+        let state = self.card_state(&id);
+        let learned = graded(&self.deck_settings.borrow(), &card.deck, state, now(), grade).step.is_some();
         let device = knotes_session::AppSettings::device_name(&knotes_session::app_data_dir());
         if let Err(e) = files.append_review(&device, &review_line(now(), &id, grade)) {
             self.tell_failed(&strings::review_failed(document_name(&card.path)), &e);
@@ -407,7 +418,7 @@ impl VaultWindow {
         }
         if let Some(review) = self.review.borrow_mut().as_mut() {
             review.reviewed += 1;
-            if grade == Grade::Again {
+            if learned {
                 review.queue.push_back(card);
             }
         }

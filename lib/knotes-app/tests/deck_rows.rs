@@ -3,7 +3,7 @@ use knotes_core::{CardRow, CardState, DeckCount, Reviewed};
 
 /// A card of `deck` in `path`, never reviewed, or first reviewed at `first` and due at `due`.
 fn card(path: &str, deck: &str, id: &str, reviewed: Option<(i64, i64)>) -> CardRow {
-    let reviewed = reviewed.map(|(first, due)| Reviewed { state: CardState { stability: 3.0, difficulty: 5.0, last: first }, first, due, reviews: 1, lapses: 0 });
+    let reviewed = reviewed.map(|(first, due)| Reviewed { state: CardState { stability: 3.0, difficulty: 5.0, last: first, step: None, relearning: false }, first, due, reviews: 1, lapses: 0 });
     CardRow { path: path.into(), start: 0, end: 1, deck: deck.into(), id: Some(id.into()), reviewed }
 }
 

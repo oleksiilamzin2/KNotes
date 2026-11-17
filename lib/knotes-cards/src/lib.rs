@@ -11,9 +11,9 @@ mod scan;
 mod schedule;
 
 pub use card::{Card, CardKind};
-pub use deck_settings::{DeckSetting, DeckSettings, NEW_A_DAY, RETENTION, RETENTION_RANGE};
+pub use deck_settings::{DeckSetting, DeckSettings, NEW_A_DAY, RETENTION, RETENTION_RANGE, STEPS};
 pub use fsrs::{Fsrs, Grade, Memory};
 pub use make::{asks, card_id, give_id, make_card};
 pub use runs::{CardLink, Run, text_runs};
 pub use scan::{CardParts, DECK_MARK, ID_MARK, card_parts, scan_cards};
-pub use schedule::{Schedule, parse_review, review_line, schedule};
+pub use schedule::{Schedule, Steps, parse_review, review, review_line, schedule};

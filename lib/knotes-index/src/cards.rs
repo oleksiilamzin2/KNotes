@@ -94,10 +94,14 @@ fn put_schedule(tx: &Transaction, id: &str, fsrs: &Fsrs, settings: &DeckSettings
         .filter_map(|row| row.ok().and_then(|(at, grade)| Some((at, Grade::from_number(grade)?))))
         .collect();
     let deck: Option<String> = tx.prepare_cached("SELECT deck FROM cards WHERE card_id = ?1 LIMIT 1")?.query_row([id], |r| r.get(0)).optional()?;
+    // Its deck's chance of recall and steps; a card no note holds, the defaults.
+    let steps = deck.as_deref().map_or_else(knotes_cards::Steps::default, |deck| settings.steps(deck));
     let fsrs = Fsrs { retention: deck.map_or(fsrs.retention, |deck| settings.retention(&deck)), ..fsrs.clone() };
-    if let Some(s) = schedule(&fsrs, reviews) {
-        tx.prepare_cached("INSERT OR REPLACE INTO card_states(card_id, stability, difficulty, first, last, due, reviews, lapses) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")?
-            .execute(params![id, s.memory.stability, s.memory.difficulty, s.first, s.last, s.due, s.reviews, s.lapses])?;
+    if let Some(s) = schedule(&fsrs, &steps, reviews) {
+        tx.prepare_cached(
+            "INSERT OR REPLACE INTO card_states(card_id, stability, difficulty, first, last, due, reviews, lapses, step, relearning) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )?
+        .execute(params![id, s.memory.stability, s.memory.difficulty, s.first, s.last, s.due, s.reviews, s.lapses, s.step, s.relearning])?;
     }
     Ok(())
 }
@@ -170,14 +174,14 @@ impl CardIndex for SqliteIndex {
         // As `due_cards` takes a deck and those under it.
         let (from, to) = (deck.map(|d| format!("{d}/")), deck.map(|d| format!("{d}0")));
         let mut st = self.conn.prepare_cached(
-            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses, s.first
+            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses, s.first, s.step, s.relearning
              FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
              WHERE (?1 IS NULL OR c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND (?4 IS NULL OR f.path = ?4)
              ORDER BY f.path, c.ord",
         )?;
         let rows = st.query_map(params![deck, from, to, path], |r| {
             let reviewed = match r.get::<_, Option<f64>>(5)? {
-                Some(stability) => Some(Reviewed { state: CardState { stability, difficulty: r.get(6)?, last: r.get(7)? }, first: r.get(11)?, due: r.get(8)?, reviews: r.get(9)?, lapses: r.get(10)? }),
+                Some(stability) => Some(Reviewed { state: CardState { stability, difficulty: r.get(6)?, last: r.get(7)?, step: r.get(12)?, relearning: r.get(13)? }, first: r.get(11)?, due: r.get(8)?, reviews: r.get(9)?, lapses: r.get(10)? }),
                 None => None,
             };
             Ok(CardRow { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, reviewed })
@@ -225,8 +229,8 @@ impl CardIndex for SqliteIndex {
 
     fn card_state(&self, id: &str) -> Result<Option<CardState>, BoxError> {
         use rusqlite::OptionalExtension;
-        let mut st = self.conn.prepare_cached("SELECT stability, difficulty, last FROM card_states WHERE card_id = ?1")?;
-        Ok(st.query_row([id], |r| Ok(CardState { stability: r.get(0)?, difficulty: r.get(1)?, last: r.get(2)? })).optional()?)
+        let mut st = self.conn.prepare_cached("SELECT stability, difficulty, last, step, relearning FROM card_states WHERE card_id = ?1")?;
+        Ok(st.query_row([id], |r| Ok(CardState { stability: r.get(0)?, difficulty: r.get(1)?, last: r.get(2)?, step: r.get(3)?, relearning: r.get(4)? })).optional()?)
     }
 
     fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError> {

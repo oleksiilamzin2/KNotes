@@ -14,9 +14,10 @@ pub const CARD_NOT_MADE: &str = "Не вдалося зробити картку
 pub const CARD_NOT_MADE_DETAILS: &str = "Потрібні колода (літери, цифри, «/») і питання.";
 pub const CARD_MOVED: &str = "картку в нотатці змінено; почніть повторення знову";
 pub const DECK_SETTINGS: &str = "Налаштування колоди…";
-pub const DECK_SETTINGS_DETAILS: &str = "Порожнє поле — як у колоди вище. Запам'ятовування: з якою ймовірністю ви маєте згадати картку, коли вона приходить на повторення (70–97 %); що вище, то частіше повтори. Діє на цю колоду та вкладені.";
+pub const DECK_SETTINGS_DETAILS: &str = "Порожнє поле — як у колоди вище. Запам'ятовування: з якою ймовірністю ви маєте згадати картку, коли вона приходить на повторення (70–97 %); що вище, то частіше повтори. Кроки навчання: через скільки хвилин нова картка повертається, перш ніж піти на дні («1 10»; «0» — без кроків). Діє на цю колоду та вкладені.";
 pub const DECK_RETENTION: &str = "Запам'ятовування, %";
 pub const DECK_NEW_A_DAY: &str = "Нових карток на день";
+pub const DECK_STEPS: &str = "Кроки навчання, хв";
 pub const DECK_SETTINGS_NOT_SAVED: &str = "Не вдалося зберегти налаштування колоди";
 /// The settings dialog's title: «Колода «англійська»».
 pub fn deck_settings_of(deck: &str) -> String {
@@ -32,7 +33,6 @@ pub const REVIEW_AHEAD_HELP: &str = "Повторити й ті картки к�
 pub const REVIEW_SHOW_ANSWER: &str = "Показати відповідь";
 pub const REVIEW_OPEN_NOTE: &str = "Відкрити нотатку";
 pub const REVIEW_NOTHING: &str = "У цій колоді зараз нема чого повторювати.";
-pub const REVIEW_AGAIN_IN: &str = "10 хв";
 pub const GRADES: [&str; 4] = ["Знову", "Важко", "Добре", "Легко"];
 /// "12 карток до повторення", "200+ карток до повторення".
 pub fn review_waiting(cards: usize, more: bool) -> String {
@@ -167,6 +167,11 @@ pub fn review_progress(deck: &str, done: usize, left: usize) -> String {
 }
 pub fn review_done(reviewed: usize) -> String {
     format!("Готово. Повторено {reviewed} {}.", knotes_app::plural_uk(reviewed as u64, "картку", "картки", "карток"))
+}
+/// When a card being learned comes back: "1 хв", "10 хв", "2 год".
+pub fn review_wait(seconds: i64) -> String {
+    let minutes = (seconds as f64 / 60.0).round().max(1.0);
+    if minutes < 60.0 { format!("{minutes:.0} хв") } else { format!("{:.0} год", minutes / 60.0) }
 }
 /// When a card comes back: "3 д", "2 міс", "1,5 р".
 pub fn review_interval(days: f64) -> String {

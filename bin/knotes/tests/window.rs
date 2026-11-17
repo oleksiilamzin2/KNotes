@@ -3996,9 +3996,9 @@ fn a_deck_chosen_shows_its_cards_to_review_and_the_review_asks_then_answers() {
     assert_eq!(review_line_of(&out), "question мови 0/2 | cat (list hidden)", "the first card's question, its answer not shown: {out}");
 
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
-    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д (list hidden)", "the list's column hidden while a card shows: {out}");
+    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 1 хв, Важко · 6 хв, Добре · 10 хв, Легко · 16 д (list hidden)", "a new card is learned in steps; the list's column hidden while a card shows: {out}");
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show")]);
-    assert_eq!(review_line_of(&out), "answer історія 0/1 | Коли була битва? | 1659 року. | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д (list hidden)", "{out}");
+    assert_eq!(review_line_of(&out), "answer історія 0/1 | Коли була битва? | 1659 року. | Знову · 1 хв, Важко · 6 хв, Добре · 10 хв, Легко · 16 д (list hidden)", "{out}");
     // Another list chosen: the review goes.
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start"), ("KNOTES_PROBE_OPEN", "Мови.md")]);
     assert_eq!(review_line_of(&out), "hidden", "a note opened takes the column: {out}");
@@ -4007,9 +4007,10 @@ fn a_deck_chosen_shows_its_cards_to_review_and_the_review_asks_then_answers() {
 #[test]
 fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
-    // cat graded Good, dog (no id yet) graded Again: it comes back at the end.
+    // cat graded Good, dog (no id yet) graded Again: both are still learned (their steps), and
+    // come back at the review's end, cat first.
     let (vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show,1")]);
-    assert_eq!(review_line_of(&out), "question мови 2/1 | dog (list hidden)", "graded Again, it is asked again: {out}");
+    assert_eq!(review_line_of(&out), "question мови 2/2 | cat (list hidden)", "still learned, they are asked again: {out}");
     let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
     assert_eq!(logs.len(), 1, "this Mac's log");
     let log = std::fs::read_to_string(logs[0].path()).unwrap();
@@ -4019,16 +4020,16 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     let note = std::fs::read_to_string(vault.path().join("Мови.md")).unwrap();
     let given = lines[1][1];
     assert!(given.starts_with("c-") && note.contains(&format!("#@мови/англійська dog::пес ^{given}\n")) && lines[1][2] == "1", "its id written at its end: {note} {log}");
-    // Next time: cat is due in three days, dog in ten minutes; nothing waits now.
+    // Next time: cat is due in ten minutes, dog in one; nothing waits now.
     let out = probe_env(&[vault.path()], None, &open);
     assert_eq!(review_line_of(&out), "waiting мови 0", "{out}");
     assert!(out.contains("sidebar: історія (1) | мови (0)\n"), "{out}");
-    // Ahead of the schedule (owner's button): dog, due in ten minutes, then cat, in three days;
+    // Ahead of the schedule (owner's button): dog, due in a minute, then cat, in ten;
     // graded, the review is logged as any other.
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "ahead")]);
     assert_eq!(review_line_of(&out), "question мови 0/2 | dog (list hidden)", "{out}");
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "ahead,show,3,show")]);
-    assert!(review_line_of(&out).starts_with("answer мови 1/1 | cat | кіт | Знову · 10 хв, "), "{out}");
+    assert!(review_line_of(&out).starts_with("answer мови 1/2 | cat | кіт | Знову · 1 хв, "), "{out}");
     // A launch of the test is a Mac of its own, with its own log.
     let logged: usize = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().map(|log| std::fs::read_to_string(log.path()).unwrap().lines().count()).sum();
     assert_eq!(logged, 3, "{out}");
@@ -4045,15 +4046,16 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
 fn a_deck_s_settings_limit_its_new_cards_and_move_its_intervals() {
     let notes = [("Мови.md", "#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n\n#@мови/німецька Hund::пес ^c-3\n"), ("Історія.md", "#@історія Коли?::Тоді ^c-4\n")];
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
-    // Set from the deck's menu: recalled at 85%, two new cards a day. Written to the vault.
-    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "85|2")]);
+    // Set from the deck's menu: recalled at 85%, two new cards a day, no learning steps.
+    // Written to the vault.
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "85|2|0")]);
     let file = vault.path().join(".knotes/decks.json");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\n  \"мови\": {\n    \"new_a_day\": 2,\n    \"retention\": 0.85\n  }\n}\n", "{out}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\n  \"мови\": {\n    \"new_a_day\": 2,\n    \"retention\": 0.85,\n    \"steps\": []\n  }\n}\n", "{out}");
     assert!(out.contains("sidebar: історія (1) | мови (2)\n"), "counted again at once: {out}");
     assert_eq!(review_line_of(&out), "waiting мови 2", "{out}");
     // The next launch: the same, and the intervals longer (a card forgotten more often is seen less).
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
-    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 10 хв, Важко · 2 д, Добре · 5 д, Легко · 26 д (list hidden)", "{out}");
+    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 1 д, Важко · 2 д, Добре · 5 д, Легко · 26 д (list hidden)", "{out}");
     // One of the day's two taken (cat, reviewed a moment ago): one more new card today.
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
@@ -4061,6 +4063,10 @@ fn a_deck_s_settings_limit_its_new_cards_and_move_its_intervals() {
     let out = probe_env(&[vault.path()], None, &open);
     assert!(out.contains("sidebar: історія (1) | мови (1)\n"), "{out}");
     assert_eq!(review_line_of(&out), "waiting мови 1", "{out}");
+    // Its steps set: a new card comes back in minutes before its days.
+    let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:мови/німецька"), ("KNOTES_PROBE_DECK_SETTINGS", "||2, 20"), ("KNOTES_PROBE_REVIEW", "start,show")]);
+    assert_eq!(review_line_of(&out), "answer мови/німецька 0/1 | Hund | пес | Знову · 2 хв, Важко · 11 хв, Добре · 20 хв, Легко · 26 д (list hidden)", "{out}");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"steps\": [\n      2,\n      20\n    ]"), "{out}");
     // A deck under it sets its own; an empty field takes the deck's above again.
     let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:мови/німецька"), ("KNOTES_PROBE_DECK_SETTINGS", "|0")]);
     assert!(std::fs::read_to_string(&file).unwrap().contains("\"мови/німецька\": {\n    \"new_a_day\": 0\n  }"), "{out}");
@@ -4077,17 +4083,17 @@ fn a_deck_waiting_shows_its_statistics() {
     let stats = |out: &str| out.lines().find_map(|l| l.strip_prefix("deck-stats: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
     let (vault, out) = probe_notes(&notes, &open);
     assert_eq!(stats(&out), "Карток: 3 — нових 3, молодих 0, зрілих 0⏎⏎Сьогодні: повторів не було⏎За 30 днів: повторів не було⏎⏎Прийде на повторення: завтра 0 · за 7 днів 0 · за 30 днів 0", "{out}");
-    // cat graded Good then forgotten a moment ago (back in ten minutes), dog Good (in three days).
+    // cat graded Good then forgotten a moment ago (learned again), dog Easy (its days begin: sixteen).
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
-    std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{}\tc-1\t3\n{now}\tc-1\t1\n{now}\tc-2\t3\n{now}\tc-4\t3\n", now - 1)).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{}\tc-1\t3\n{now}\tc-1\t1\n{now}\tc-2\t4\n{now}\tc-4\t3\n", now - 1)).unwrap();
     let out = probe_env(&[vault.path()], None, &open);
     let shown = stats(&out);
     let lines: Vec<&str> = shown.split('⏎').collect();
     assert_eq!(lines[0], "Карток: 3 — нових 1, молодих 2, зрілих 0", "{out}");
     assert_eq!((lines[2], lines[3]), ("Сьогодні: 3 повтори, згадано 67 %", "За 30 днів: 3 повтори, згадано 67 %"), "the other deck's review not counted: {out}");
     assert_eq!(lines[4], format!("{}█", "▁".repeat(29)), "a bar a day, today last: {out}");
-    assert_eq!(lines[6], "Прийде на повторення: завтра 0 · за 7 днів 1 · за 30 днів 1", "{out}");
+    assert_eq!(lines[6], "Прийде на повторення: завтра 0 · за 7 днів 0 · за 30 днів 1", "{out}");
     assert_eq!(lines[7].chars().filter(|c| *c == '█').count(), 1, "{out}");
     // A deck with no cards to ask still says how it stands; no deck shown, nothing said.
     let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія")]);

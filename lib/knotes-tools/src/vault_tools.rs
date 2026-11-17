@@ -680,7 +680,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 let [cards, due, new, young, mature, new_today] = *counts;
                 json!({
                     "deck": deck, "cards": cards, "new": new, "young": young, "mature": mature, "due": due, "to_review": asks(deck, counts),
-                    "new_a_day": settings.new_a_day(deck), "new_today": new_today, "retention": settings.retention(deck),
+                    "new_a_day": settings.new_a_day(deck), "new_today": new_today, "retention": settings.retention(deck), "learning_steps_minutes": settings.step_minutes(deck),
                 })
             })
             .collect();

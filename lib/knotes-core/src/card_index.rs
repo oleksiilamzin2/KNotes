@@ -33,6 +33,10 @@ pub struct CardState {
     pub stability: f64,
     pub difficulty: f64,
     pub last: i64,
+    /// The step it waits at while it is learned (`relearning`: after it was forgotten); none
+    /// once its days have begun.
+    pub step: Option<u8>,
+    pub relearning: bool,
 }
 
 /// A card where it is written, with where it stands (for the tools' lists).
