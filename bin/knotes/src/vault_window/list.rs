@@ -131,6 +131,7 @@ impl VaultWindow {
             self.table.reloadData();
             self.window.setTitle(&NSString::from_str(strings::RECENTLY_DELETED));
             self.window.setSubtitle(&NSString::from_str(&strings::entries_count(trash.len())));
+            self.toolbar_delegate.set_list_title(strings::RECENTLY_DELETED, &strings::entries_count(trash.len()));
             self.highlight_open_note();
             return;
         }
@@ -191,7 +192,10 @@ impl VaultWindow {
             &NSNumber::numberWithUnsignedLongLong(count as u64),
             NSNumberFormatterStyle::DecimalStyle,
         );
-        self.window.setSubtitle(&NSString::from_str(&strings::notes_count(count, &formatted.to_string())));
+        let notes = strings::notes_count(count, &formatted.to_string());
+        self.window.setSubtitle(&NSString::from_str(&notes));
+        // Shown in the row under the toolbar (the window's own title is hidden).
+        self.toolbar_delegate.set_list_title(&title, &notes);
     }
 
     /// Selects the open note's row (it moves when the note is saved), or none if it is not listed.

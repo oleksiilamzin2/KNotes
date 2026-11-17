@@ -1,8 +1,7 @@
-//! The search row at the top of the note list column (ADR 0015): shown by the magnifying
-//! glass in the toolbar, it spans the column under the toolbar while the list scrolls
-//! beneath it. A field in the toolbar itself would not fit next to the list title. The field
-//! takes the column's width, the mode switch the row under it: beside the field, three
-//! segments left it a few letters wide.
+//! The list's search (ADR 0015), shown by the magnifying glass in the row under the toolbar:
+//! the field takes the place of the list's name in that row (`toolbar::second_row` puts it
+//! there), the mode switch a row of its own at the top of the list column, the list scrolling
+//! beneath it. Beside the field, three segments left it a few letters wide.
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -13,15 +12,16 @@ use objc2_foundation::{NSArray, NSEdgeInsets, NSString};
 
 use crate::strings;
 
-/// Height of the search row: the field, the switch under it and padding.
-const BAR_HEIGHT: f64 = 64.0;
+/// Height of the switch's row: the switch and padding.
+const BAR_HEIGHT: f64 = 32.0;
 const SIDE_PADDING: f64 = 12.0;
-/// Space above the field, between it and the switch.
+/// Space above the switch.
 const GAP: f64 = 6.0;
 
 pub struct SearchBar {
-    /// The list column: the search row over the note list's scroll view.
+    /// The list column: the switch's row over the note list's scroll view.
     pub column: Retained<NSView>,
+    /// In the row under the toolbar, in place of the list's name while the search shows.
     pub field: Retained<NSSearchField>,
     /// Files, content or meaning: rewrites the query's operator (`content:`, `meaning:`), which
     /// stays the truth.
@@ -48,8 +48,7 @@ impl SearchBar {
             cell.setWraps(false);
             cell.setUsesSingleLineMode(true);
         }
-        field.setTranslatesAutoresizingMaskIntoConstraints(false);
-        bar.addSubview(&field);
+        field.setHidden(true);
         let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::SEARCH_FILES), NSString::from_str(strings::SEARCH_CONTENT), NSString::from_str(strings::SEARCH_MEANING)]);
         // SAFETY: labels and no target yet (`set_target` sets it).
         let mode = unsafe { NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&labels, NSSegmentSwitchTracking::SelectOne, None, None, mtm) };
@@ -64,12 +63,9 @@ impl SearchBar {
             bar.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
             bar.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
             bar.heightAnchor().constraintEqualToConstant(BAR_HEIGHT),
-            field.leadingAnchor().constraintEqualToAnchor_constant(&bar.leadingAnchor(), SIDE_PADDING),
-            field.trailingAnchor().constraintEqualToAnchor_constant(&bar.trailingAnchor(), -SIDE_PADDING),
-            field.topAnchor().constraintEqualToAnchor_constant(&bar.topAnchor(), GAP),
             mode.leadingAnchor().constraintEqualToAnchor_constant(&bar.leadingAnchor(), SIDE_PADDING),
             mode.trailingAnchor().constraintEqualToAnchor_constant(&bar.trailingAnchor(), -SIDE_PADDING),
-            mode.topAnchor().constraintEqualToAnchor_constant(&field.bottomAnchor(), GAP),
+            mode.topAnchor().constraintEqualToAnchor_constant(&bar.topAnchor(), GAP),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
         Self { column, field, mode, bar, scroll }
@@ -121,10 +117,12 @@ impl SearchBar {
         !self.bar.isHidden()
     }
 
-    /// Shows the row with the cursor in the field, or hides it and clears the field. The list
-    /// gets the row's height as extra top inset, so no note hides behind it.
+    /// Shows the field and the switch's row with the cursor in the field, or hides them and
+    /// clears the field. The list gets the row's height as extra top inset, so no note hides
+    /// behind it.
     pub fn show(&self, shown: bool) {
         self.bar.setHidden(!shown);
+        self.field.setHidden(!shown);
         let top = if shown { BAR_HEIGHT } else { 0.0 };
         self.scroll.setAdditionalSafeAreaInsets(NSEdgeInsets { top, left: 0.0, bottom: 0.0, right: 0.0 });
         if shown {

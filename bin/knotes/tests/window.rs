@@ -118,8 +118,18 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title, flexible-space, inspector-separator, flexible-space, panel-mode(3), panel"
+        "toggle-sidebar, flexible-space, panel",
+        "the sidebar's button, nothing, the panel's button"
     );
+    // What belongs to the list and the note is in the row under the toolbar, each part over its
+    // column.
+    let row = out.lines().find_map(|l| l.strip_prefix("second-row: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(row.contains(" [search] [list-options] | [new-note] [back] [forward] "), "{row}");
+    let parts = out.lines().find_map(|l| l.strip_prefix("second-row-parts: ")).unwrap_or_else(|| panic!("{out}"));
+    let edges: Vec<f64> = parts.split([' ', '+']).filter_map(|n| n.parse().ok()).collect();
+    // The row spans the window: the list's part starts where the sidebar ends (it begins under
+    // the row too), the note's where the list's ends.
+    assert!(edges.len() == 4 && edges[0] >= 200.0 && (edges[2] - edges[0] - edges[1]).abs() <= 2.0 && edges[1] > 200.0 && edges[3] > 300.0, "the list's part, then the note's: {parts}");
     let widths = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap_or_else(|| panic!("{out}"));
     let w: Vec<f64> = widths.split(' ').map(|x| x.parse().unwrap()).collect();
     assert!(w[0] >= 240.0 && w[1] >= 300.0 && w[3] >= 280.0 && w[2] >= 400.0, "{widths}");
@@ -658,21 +668,22 @@ fn the_panel_switch_hides_with_the_panel() {
     assert!(out.contains("panel: hidden"), "{out}");
 }
 
-/// x of the toolbar's separator line and of the list/note column boundary.
+/// x of where the row under the toolbar starts its part over the note, and of the list/note
+/// column boundary.
 fn separator_and_boundary(out: &str) -> (f64, f64) {
-    let line = out.lines().find_map(|l| l.strip_prefix("list-separator: ")).unwrap_or_else(|| panic!("{out}"));
+    let line = out.lines().find_map(|l| l.strip_prefix("row-boundary: ")).unwrap_or_else(|| panic!("{out}"));
     let (sep, boundary) = line.split_once(" boundary ").unwrap();
     (sep.parse().unwrap(), boundary.parse().unwrap())
 }
 
 #[test]
-fn the_toolbar_separator_stays_on_the_column_boundary_when_the_sidebar_collapses() {
+fn the_row_under_the_toolbar_keeps_its_parts_over_their_columns_when_the_sidebar_collapses() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::write(vault.path().join("a.md"), "a").unwrap();
     for action in ["none", "toggle-sidebar"] {
         let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", action)]);
         let (sep, boundary) = separator_and_boundary(&out);
-        assert!((sep - boundary).abs() <= 1.5, "{action}: separator at {sep}, boundary at {boundary}");
+        assert!((sep - boundary).abs() <= 1.5, "{action}: the note's part at {sep}, boundary at {boundary}");
     }
 }
 
@@ -739,11 +750,11 @@ fn the_third_segment_searches_by_meaning() {
     assert!(out.contains("search-mode: meaning"), "{out}");
     // The probe never starts the model: nothing is found, and nothing breaks.
     assert!(out.contains("subtitle: 0 нотаток"), "{out}");
-    // The switch sits under the field, which keeps the column's width (beside three segments it
-    // was a few letters wide).
+    // The field stands in the place of the list's name in the row under the toolbar, the switch
+    // under it across the column (beside three segments the field was a few letters wide).
     let layout = out.lines().find_map(|l| l.strip_prefix("search-layout: ")).unwrap_or_default();
     let width = |name: &str| layout.split(", ").find_map(|p| p.strip_prefix(name)).and_then(|w| w.trim().parse::<f64>().ok()).unwrap_or(0.0);
-    assert!(layout.ends_with("switch under the field: true") && width("field ") > 200.0 && width("field ") == width("switch "), "{layout}");
+    assert!(layout.contains("switch under the field: true") && layout.ends_with("field in place of the list's name: true") && width("field ") > 200.0 && width("switch ") > width("field "), "{layout}");
     let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SEARCH", "meaning: де радар")]);
     assert!(out.contains("search-mode: meaning"), "the switch follows the typed operator: {out}");
 }
@@ -1123,7 +1134,14 @@ fn a_folder_is_renamed_from_the_sidebar_with_the_links_into_it() {
 fn the_toolbar_shows_the_open_notes_name_and_renames_it() {
     let (_vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md")]);
     assert!(out.contains("note-title: Old"), "{out}");
-    assert!(out.contains("toolbar: toggle-sidebar, sidebar-mode(3), sidebar-separator, search, list-options, list-separator, new-note, history(2), note-title,"), "{out}");
+    assert!(out.contains(" [forward] Old · "), "in the row under the toolbar: {out}");
+    // Under it, when its file was last changed (in Ukrainian; a day long past in full).
+    let (vault, _) = probe_notes(&RENAME_VAULT, &[]);
+    let changed = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_741_082_700); // 2025-03-04 10:05 UTC
+    std::fs::File::options().write(true).open(vault.path().join("Old.md")).unwrap().set_modified(changed).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Old.md")]);
+    let date = out.lines().find_map(|l| l.strip_prefix("note-date: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(date.contains("березня 2025") && date.contains(":05"), "{date}");
     let (vault, out) = probe_notes(&RENAME_VAULT, &[("KNOTES_PROBE_OPEN", "Old.md"), ("KNOTES_PROBE_ACTION", "toolbar-rename=From toolbar")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("From toolbar.md")).ok().as_deref(), Some("# Old\n\ntext"), "the first line is content, not the name: {out}");
     assert!(out.contains("note-title: From toolbar"), "{out}");

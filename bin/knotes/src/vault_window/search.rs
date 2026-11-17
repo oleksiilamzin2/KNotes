@@ -10,14 +10,17 @@ impl VaultWindow {
         self.search(&text);
     }
 
-    /// Edit → Search Notes (Cmd+Shift+F): the search row shown, its field focused.
+    /// Edit → Search Notes (Cmd+Shift+F): the search shown, its field focused.
     pub fn show_search(&self) {
+        self.toolbar_delegate.set_search_shown(true);
         self.search_bar.show(true);
     }
 
-    /// The magnifying glass: shows the search row, or hides it and drops the search.
+    /// The magnifying glass: shows the search field in the place of the list's name, or hides
+    /// it and drops the search.
     pub fn toggle_search(&self) {
         let shown = !self.search_bar.is_shown();
+        self.toolbar_delegate.set_search_shown(shown);
         self.search_bar.show(shown);
         if !shown {
             self.search("");

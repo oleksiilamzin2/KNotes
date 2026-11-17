@@ -425,21 +425,28 @@ impl VaultWindow {
         self.toolbar_delegate.set_history(state.history.can_back(), state.history.can_forward());
         drop(state);
         // A note's name; a PDF's, without its folder or `.pdf` (owner's choice). Both are renamed
-        // in place.
+        // in place. Under it, when its file was last changed.
+        let vault = self.vault();
+        let changed = |file: Option<PathBuf>| {
+            let modified = file.and_then(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok())?;
+            modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs_f64())
+        };
         match (self.open_path(), self.pdf_path.borrow().as_deref()) {
-            (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true),
+            (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true, changed(vault.map(|v| v.join(&note)))),
             (None, Some(pdf)) => {
                 let name = pdf.rsplit('/').next().unwrap_or(pdf);
                 let stem = if name.to_lowercase().ends_with(".pdf") { &name[..name.len() - 4] } else { name };
-                self.toolbar_delegate.set_note_title(stem, true);
+                self.toolbar_delegate.set_note_title(stem, true, changed(vault.map(|v| v.join(pdf))));
             }
             // A recently deleted entry shown: its name, not to be renamed.
             (None, None) => {
-                let name = self.previewing.borrow().as_ref().map(|e| {
+                let entry = self.previewing.borrow().clone();
+                let name = entry.as_ref().map(|e| {
                     let name = e.path.rsplit('/').next().unwrap_or(&e.path);
                     if e.folder { name.to_owned() } else { knotes_app::title_of(name).to_owned() }
                 });
-                self.toolbar_delegate.set_note_title(name.as_deref().unwrap_or(""), false);
+                let kept = entry.zip(vault).and_then(|(e, v)| FsVault::new(&v).kept_at(&e.id).ok());
+                self.toolbar_delegate.set_note_title(name.as_deref().unwrap_or(""), false, changed(kept));
             }
         }
     }

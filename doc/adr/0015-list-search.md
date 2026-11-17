@@ -63,3 +63,10 @@ by the retrieval benchmark as a third run: by words 37 of 37, by meaning 54 of 6
 5.5 documents listed a query; the thresholds were tuned there (a floor of 0.30 left five
 queries, in other languages mostly, with nothing; 0.25 behind the nearest listed 16 documents a
 query, 0.10 listed 5.5 and lost nothing, 0.07 lost an answer).
+
+## The field in the place of the list's name (2026-11-17)
+
+At the owner's word, once the list's name moved from the toolbar to the row under it: the
+magnifying glass shows the search field in that row, in the place of the list's name and count
+(both hidden while the search shows), not in a row under it. The Files/Content/By meaning
+switch keeps a row of its own at the top of the list column, now 32 pt high instead of 64.

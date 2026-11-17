@@ -84,6 +84,8 @@ pub const KEEP_FROM_AI: &str = "Сховати від ШІ";
 pub const SHOW_TO_AI: &str = "Показати ШІ";
 /// The mark of what the AI never sees, as a tooltip and to VoiceOver.
 pub const KEPT_FROM_AI: &str = "Сховано від ШІ";
+/// The date under a document's name: when its file was last changed.
+pub const NOTE_CHANGED: &str = "Змінено";
 /// Why a note read only cannot be kept from the AI or shown to it (its tag cannot be written).
 pub const READ_ONLY_TAG: &str = "Нотатку відкрито лише для читання, тож тег #no-ai у неї не записати.";
 pub const NEW_SPACE_NAME: &str = "Новий простір";

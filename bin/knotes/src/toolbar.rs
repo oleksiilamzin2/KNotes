@@ -9,27 +9,36 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSImage, NSMenu, NSMenuToolbarItem, NSSearchField, NSSegmentedControl, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
-    NSToolbarItem, NSToolbarItemGroup, NSToolbarItemGroupSelectionMode, NSToolbarSidebarTrackingSeparatorItemIdentifier,
-    NSToolbarToggleSidebarItemIdentifier, NSTrackingSeparatorToolbarItem,
+    NSImage, NSMenu, NSSearchField, NSSegmentedControl, NSSplitView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarInspectorTrackingSeparatorItemIdentifier,
+    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier,
+    NSToolbarToggleSidebarItemIdentifier,
 };
-use objc2_foundation::{NSArray, NSCopying, NSObject, NSObjectProtocol, NSString, ns_string};
-use objc2_app_kit::{NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLineBreakMode, NSResponder, NSTextField, NSTextFieldDelegate, NSTextView, NSView};
+use objc2::AllocAnyThread;
+use objc2_foundation::{NSArray, NSCopying, NSDate, NSDateFormatter, NSDateFormatterStyle, NSLocale, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string};
+use objc2_app_kit::{
+    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLayoutAttribute, NSBox, NSBoxType, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSLayoutConstraint, NSLayoutConstraintOrientation, NSLineBreakMode, NSResponder, NSSplitViewDidResizeSubviewsNotification, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSUserInterfaceItemIdentification, NSView, NSViewFrameDidChangeNotification,
+};
 
 use knotes_app::{PanelMode, SearchMode, SidebarMode};
 
 use crate::strings;
 
-pub const SIDEBAR_MODE: &str = "knotes.sidebar-mode";
-pub const LIST_SEPARATOR: &str = "knotes.list-separator";
 pub const SEARCH: &str = "knotes.search";
+/// The list's search field, in the place of the list's name while the search shows.
+pub const SEARCH_FIELD: &str = "knotes.search-field";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
 pub const NEW_NOTE: &str = "knotes.new-note";
-pub const HISTORY: &str = "knotes.history";
+pub const HISTORY_BACK: &str = "knotes.history-back";
+pub const HISTORY_FORWARD: &str = "knotes.history-forward";
+/// The list's name and its count of notes, in the row under the toolbar.
+pub const LIST_TITLE: &str = "knotes.list-title";
+pub const LIST_COUNT: &str = "knotes.list-count";
+/// When the open document was last changed, after its name.
+pub const NOTE_DATE: &str = "knotes.note-date";
 /// The open note's name, edited in place to rename it (ADR 0019).
 pub const NOTE_TITLE: &str = "knotes.note-title";
 /// The AI/outline switch over the right panel (ADR 0023).
-pub const PANEL_MODE: &str = "knotes.panel-mode";
 /// Shows and hides the right panel.
 pub const PANEL: &str = "knotes.panel";
 
@@ -56,19 +65,26 @@ pub struct Ivars {
     /// The open note's name field, once the toolbar has made it, and the name it shows.
     note_title: RefCell<Option<Retained<TitleField>>>,
     note_title_state: RefCell<String>,
+    /// Under the name, when the document was last changed (as the list's count under its
+    /// title), and what it says.
+    note_date: RefCell<Option<Retained<NSTextField>>>,
+    /// The list's name and its count of notes, as the row shows them.
+    list_title_state: RefCell<(String, String)>,
+    note_date_state: RefCell<String>,
+    /// In Ukrainian, as the rest of the window: the region settings' language may be another.
+    date_format: Retained<NSDateFormatter>,
     /// Whether the name shown can be edited (a note's).
     note_title_renamable: Cell<bool>,
     /// The folders/tags switch, once the toolbar has made it, and the mode it shows.
-    sidebar_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     sidebar_mode_state: Cell<SidebarMode>,
     /// The switch shows only while the sidebar does.
     sidebar_shown: Cell<bool>,
     /// The AI/outline switch, once made, the mode it shows, and whether the panel shows.
-    panel_mode: RefCell<Option<Retained<NSToolbarItemGroup>>>,
     panel_mode_state: Cell<PanelMode>,
     panel_shown: Cell<bool>,
     on_panel_mode: RefCell<Option<OnPanelMode>>,
-    history: RefCell<Option<Retained<NSToolbarItemGroup>>>,
+    /// The row under the toolbar: its parts over the list and over the note, and its controls.
+    row: RefCell<Option<Row>>,
     /// Back/forward availability, applied when the group item is created later.
     history_state: Cell<(bool, bool)>,
 }
@@ -126,26 +142,26 @@ define_class!(
         }
 
         #[unsafe(method(sidebarMode:))]
-        fn sidebar_mode_chosen(&self, sender: &NSToolbarItemGroup) {
-            let mode = match sender.selectedIndex() {
+        fn sidebar_mode_chosen(&self, sender: &NSButton) {
+            let mode = match sender.tag() {
                 0 => SidebarMode::Tabs,
                 2 => SidebarMode::Tags,
                 _ => SidebarMode::Folders,
             };
-            self.ivars().sidebar_mode_state.set(mode);
+            self.set_sidebar_mode(mode);
             if let Some(callback) = self.ivars().on_sidebar_mode.borrow().as_ref() {
                 callback(mode);
             }
         }
 
         #[unsafe(method(panelMode:))]
-        fn panel_mode_chosen(&self, sender: &NSToolbarItemGroup) {
-            let mode = match sender.selectedIndex() {
+        fn panel_mode_chosen(&self, sender: &NSButton) {
+            let mode = match sender.tag() {
                 1 => PanelMode::Outline,
                 2 => PanelMode::Links,
                 _ => PanelMode::Ai,
             };
-            self.ivars().panel_mode_state.set(mode);
+            self.set_panel_mode(mode);
             if let Some(callback) = self.ivars().on_panel_mode.borrow().as_ref() {
                 callback(mode);
             }
@@ -198,12 +214,31 @@ define_class!(
             end_editing(sender);
         }
 
-        #[unsafe(method(navigate:))]
-        fn navigate(&self, sender: &NSToolbarItemGroup) {
-            let forward = sender.selectedIndex() == 1;
+        #[unsafe(method(navigateBack:))]
+        fn navigate_back(&self, _sender: Option<&AnyObject>) {
             if let Some(callback) = self.ivars().on_navigate.borrow().as_ref() {
-                callback(forward);
+                callback(false);
             }
+        }
+
+        #[unsafe(method(navigateForward:))]
+        fn navigate_forward(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_navigate.borrow().as_ref() {
+                callback(true);
+            }
+        }
+
+        /// The row's «…»: the list's menu, under the button.
+        #[unsafe(method(listOptions:))]
+        fn list_options(&self, sender: &NSView) {
+            let below = NSPoint::new(0.0, sender.bounds().size.height + 4.0);
+            self.ivars().list_menu.popUpMenuPositioningItem_atLocation_inView(None, below, Some(sender));
+        }
+
+        /// The split view's columns changed: the row's parts follow them.
+        #[unsafe(method(columnsResized:))]
+        fn columns_resized(&self, _notification: &NSNotification) {
+            self.lay_out_row();
         }
     }
 );
@@ -222,15 +257,17 @@ impl ToolbarDelegate {
             on_note_title: RefCell::new(None),
             note_title: RefCell::new(None),
             note_title_state: RefCell::new(String::new()),
+            note_date: RefCell::new(None),
+            list_title_state: RefCell::new((String::new(), String::new())),
+            note_date_state: RefCell::new(String::new()),
+            date_format: ukrainian_dates(),
             note_title_renamable: Cell::new(false),
-            sidebar_mode: RefCell::new(None),
             sidebar_mode_state: Cell::new(SidebarMode::Folders),
             sidebar_shown: Cell::new(true),
-            panel_mode: RefCell::new(None),
             panel_mode_state: Cell::new(PanelMode::Ai),
             panel_shown: Cell::new(true),
             on_panel_mode: RefCell::new(None),
-            history: RefCell::new(None),
+            row: RefCell::new(None),
             history_state: Cell::new((false, false)),
         });
         unsafe { msg_send![super(this), init] }
@@ -259,16 +296,16 @@ impl ToolbarDelegate {
     /// Shows `mode` in the folders/tags switch (without calling back).
     pub fn set_sidebar_mode(&self, mode: SidebarMode) {
         self.ivars().sidebar_mode_state.set(mode);
-        if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
-            group.setSelectedIndex(mode_index(mode));
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            choose(&row.modes, mode_index(mode));
         }
     }
 
     /// Hides the folders/tags switch while the sidebar is collapsed.
     pub fn set_sidebar_shown(&self, shown: bool) {
         self.ivars().sidebar_shown.set(shown);
-        if let Some(group) = self.ivars().sidebar_mode.borrow().as_ref() {
-            group.setHidden(!shown);
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.over_sidebar.setHidden(!shown);
         }
     }
 
@@ -281,16 +318,16 @@ impl ToolbarDelegate {
     /// Shows `mode` in the AI/outline switch (without calling back).
     pub fn set_panel_mode(&self, mode: PanelMode) {
         self.ivars().panel_mode_state.set(mode);
-        if let Some(group) = self.ivars().panel_mode.borrow().as_ref() {
-            group.setSelectedIndex(panel_index(mode));
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            choose(&row.panels, panel_index(mode));
         }
     }
 
     /// Hides the AI/outline switch while the panel is collapsed.
     pub fn set_panel_shown(&self, shown: bool) {
         self.ivars().panel_shown.set(shown);
-        if let Some(group) = self.ivars().panel_mode.borrow().as_ref() {
-            group.setHidden(!shown);
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.over_panel.setHidden(!shown);
         }
     }
 
@@ -304,8 +341,8 @@ impl ToolbarDelegate {
     }
 
     /// Shows the name of the document open, editable to rename it when `renamable` (a note),
-    /// unless it is being edited.
-    pub fn set_note_title(&self, name: &str, renamable: bool) {
+    /// unless it is being edited; under it, when it was last changed (seconds since 1970).
+    pub fn set_note_title(&self, name: &str, renamable: bool, changed: Option<f64>) {
         *self.ivars().note_title_state.borrow_mut() = name.to_owned();
         self.ivars().note_title_renamable.set(renamable);
         if let Some(field) = self.ivars().note_title.borrow().as_ref() {
@@ -314,141 +351,212 @@ impl ToolbarDelegate {
                 field.setStringValue(&NSString::from_str(name));
             }
         }
+        let date = changed.map(|seconds| self.ivars().date_format.stringFromDate(&NSDate::dateWithTimeIntervalSince1970(seconds)).to_string()).unwrap_or_default();
+        *self.ivars().note_date_state.borrow_mut() = date.clone();
+        if let Some(field) = self.ivars().note_date.borrow().as_ref() {
+            field.setStringValue(&NSString::from_str(&date));
+            field.setHidden(date.is_empty());
+        }
     }
+
 
     pub fn set_history(&self, can_back: bool, can_forward: bool) {
         self.ivars().history_state.set((can_back, can_forward));
-        if let Some(group) = self.ivars().history.borrow().as_ref() {
-            apply_history(group, can_back, can_forward);
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.back.setEnabled(can_back);
+            row.forward.setEnabled(can_forward);
+        }
+    }
+
+    /// The list's name and its count of notes, over the list in the row.
+    pub fn set_list_title(&self, title: &str, count: &str) {
+        *self.ivars().list_title_state.borrow_mut() = (title.to_owned(), count.to_owned());
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.list_title.setStringValue(&NSString::from_str(title));
+            row.list_count.setStringValue(&NSString::from_str(count));
+        }
+    }
+
+    /// The list's search shown or hidden: its field (`search_field`, shown by its owner) stands
+    /// in the place of the list's name and count.
+    pub fn set_search_shown(&self, shown: bool) {
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.list_title.setHidden(shown);
+            row.list_count.setHidden(shown);
+        }
+    }
+
+    /// The row under the toolbar (owner's request, 2026-11-17, after DEVONthink's): what belongs
+    /// to a column over that column, as plain text and small buttons on the bar itself, no glass.
+    /// Over the list: its name, its count, the search and its options; while the search shows,
+    /// `search_field` in the place of the name and the count. Over the note: a new note, back
+    /// and forward, the document's name (renamed in place) and when it was changed.
+    fn second_row(&self, search_field: &NSSearchField) -> Retained<NSView> {
+        let mtm = self.mtm();
+        let target: &AnyObject = self.as_ref();
+        let small = NSFont::smallSystemFontSize() + 1.0;
+        let label = |id: &str, bold: bool| {
+            let field = NSTextField::labelWithString(&NSString::new(), mtm);
+            let font = if bold { NSFont::boldSystemFontOfSize(small) } else { NSFont::systemFontOfSize(small) };
+            let colour = if bold { NSColor::labelColor() } else { NSColor::secondaryLabelColor() };
+            field.setFont(Some(&font));
+            field.setTextColor(Some(&colour));
+            field.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+            field.setIdentifier(Some(&NSString::from_str(id)));
+            field
+        };
+        let button = |id: &str, symbol_name: &str, tip: &str, action: Sel| {
+            let image = symbol(symbol_name, tip).unwrap_or_else(NSImage::new);
+            // SAFETY: the delegate outlives the row (the window keeps both) and takes the action.
+            let button = unsafe { NSButton::buttonWithImage_target_action(&image, Some(target), Some(action), mtm) };
+            button.setBordered(false);
+            button.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+            button.setToolTip(Some(&NSString::from_str(tip)));
+            button.setIdentifier(Some(&NSString::from_str(id)));
+            button
+        };
+        let (list_title, list_count) = (label(LIST_TITLE, true), label(LIST_COUNT, false));
+        search_field.setIdentifier(Some(&NSString::from_str(SEARCH_FIELD)));
+        let search = button(SEARCH, "magnifyingglass", strings::SEARCH, sel!(toggleSearch:));
+        let options = button(LIST_OPTIONS, "ellipsis", strings::LIST_OPTIONS, sel!(listOptions:));
+        let new_note = button(NEW_NOTE, "square.and.pencil", strings::NEW_NOTE, sel!(newNote:));
+        let back = button(HISTORY_BACK, "chevron.left", strings::BACK, sel!(navigateBack:));
+        let forward = button(HISTORY_FORWARD, "chevron.right", strings::FORWARD, sel!(navigateForward:));
+        let title = TitleField::new(mtm, self.ivars().note_title_renamable.get());
+        title.setBezeled(false);
+        title.setDrawsBackground(false);
+        title.setFont(Some(&NSFont::boldSystemFontOfSize(small)));
+        title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        title.setIdentifier(Some(&NSString::from_str(NOTE_TITLE)));
+        if let Some(cell) = title.cell() {
+            cell.setScrollable(true);
+            cell.setUsesSingleLineMode(true);
+            cell.setSendsActionOnEndEditing(true);
+        }
+        title.setToolTip(Some(&NSString::from_str(strings::NOTE_TITLE)));
+        // SAFETY: as the buttons'.
+        unsafe {
+            title.setTarget(Some(target));
+            title.setAction(Some(sel!(noteTitleEdited:)));
+            title.setDelegate(Some(ProtocolObject::from_ref(self)));
+        }
+        let date = label(NOTE_DATE, false);
+        date.setToolTip(Some(&NSString::from_str(strings::NOTE_CHANGED)));
+        let row = NSView::initWithFrame(NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(800.0, ROW_HEIGHT)));
+        let (over_list, over_note) = (NSView::new(mtm), NSView::new(mtm));
+        // The window's own grey (237, 237, 238 in light mode; the owner's choice, from a sample of
+        // it) behind the buttons at both ends of the row, over the sidebar and over the panel: the
+        // sidebar's material was darker than the panel under it.
+        let side = || {
+            let plate = NSBox::new(mtm);
+            plate.setBoxType(NSBoxType::Custom);
+            plate.setBorderWidth(0.0);
+            plate.setCornerRadius(0.0);
+            plate.setFillColor(&NSColor::windowBackgroundColor());
+            plate.setContentViewMargins(NSSize::new(0.0, 0.0));
+            Retained::into_super(plate) as Retained<NSView>
+        };
+        // Three small buttons in the middle of `part`, the one chosen in the accent colour.
+        let switch = |part: &NSView, buttons: &[Retained<NSButton>; 3]| {
+            for (tag, button) in buttons.iter().enumerate() {
+                button.setTag(tag as isize);
+                button.setTranslatesAutoresizingMaskIntoConstraints(false);
+                part.addSubview(button);
+                button.centerYAnchor().constraintEqualToAnchor(&part.centerYAnchor()).setActive(true);
+            }
+            buttons[1].centerXAnchor().constraintEqualToAnchor(&part.centerXAnchor()).setActive(true);
+            buttons[0].trailingAnchor().constraintEqualToAnchor_constant(&buttons[1].leadingAnchor(), -16.0).setActive(true);
+            buttons[2].leadingAnchor().constraintEqualToAnchor_constant(&buttons[1].trailingAnchor(), 16.0).setActive(true);
+        };
+        let (over_sidebar, over_panel) = (side(), side());
+        // Over the panel, what it shows: the AI, the outline or the links.
+        let panels = [
+            button(PANEL_MODE_IDS[0], "brain", strings::AI, sel!(panelMode:)),
+            button(PANEL_MODE_IDS[1], "list.bullet.indent", strings::OUTLINE, sel!(panelMode:)),
+            button(PANEL_MODE_IDS[2], "link", strings::CONNECTIONS, sel!(panelMode:)),
+        ];
+        switch(&over_panel, &panels);
+        choose(&panels, panel_index(self.ivars().panel_mode_state.get()));
+        over_panel.setHidden(!self.ivars().panel_shown.get());
+        row.addSubview(&over_panel);
+        // Over the sidebar, what it lists: tabs, folders or tags (tabs first, owner's order), three
+        // small buttons in its middle, the one chosen in the accent colour.
+        let modes = [
+            button(SIDEBAR_MODE_IDS[0], "square.on.square", strings::TABS, sel!(sidebarMode:)),
+            button(SIDEBAR_MODE_IDS[1], "folder", strings::FOLDERS, sel!(sidebarMode:)),
+            button(SIDEBAR_MODE_IDS[2], "tag", strings::TAGS, sel!(sidebarMode:)),
+        ];
+        switch(&over_sidebar, &modes);
+        choose(&modes, mode_index(self.ivars().sidebar_mode_state.get()));
+        over_sidebar.setHidden(!self.ivars().sidebar_shown.get());
+        row.addSubview(&over_sidebar);
+        row.addSubview(&over_list);
+        row.addSubview(&over_note);
+        for (part, views) in [(&over_list, [&*list_title as &NSView, &list_count, search_field, &search, &options].as_slice()), (&over_note, [&*new_note as &NSView, &back, &forward, &title, &date].as_slice())] {
+            for view in views {
+                view.setTranslatesAutoresizingMaskIntoConstraints(false);
+                part.addSubview(view);
+                view.centerYAnchor().constraintEqualToAnchor(&part.centerYAnchor()).setActive(true);
+            }
+        }
+        // The names give way before the buttons; the count and the date before the names.
+        for (field, priority) in [(&*list_title as &NSView, 300.0), (&list_count, 200.0), (&title, 300.0), (&date, 200.0)] {
+            field.setContentCompressionResistancePriority_forOrientation(priority, NSLayoutConstraintOrientation::Horizontal);
+        }
+        let constraints = [
+            list_title.leadingAnchor().constraintEqualToAnchor_constant(&over_list.leadingAnchor(), 12.0),
+            list_count.leadingAnchor().constraintEqualToAnchor_constant(&list_title.trailingAnchor(), 6.0),
+            list_count.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&search.leadingAnchor(), -6.0),
+            search_field.leadingAnchor().constraintEqualToAnchor_constant(&over_list.leadingAnchor(), 12.0),
+            search_field.trailingAnchor().constraintEqualToAnchor_constant(&search.leadingAnchor(), -8.0),
+            search.trailingAnchor().constraintEqualToAnchor_constant(&options.leadingAnchor(), -10.0),
+            options.trailingAnchor().constraintEqualToAnchor_constant(&over_list.trailingAnchor(), -12.0),
+            new_note.leadingAnchor().constraintEqualToAnchor_constant(&over_note.leadingAnchor(), 12.0),
+            back.leadingAnchor().constraintEqualToAnchor_constant(&new_note.trailingAnchor(), 14.0),
+            forward.leadingAnchor().constraintEqualToAnchor_constant(&back.trailingAnchor(), 12.0),
+            title.leadingAnchor().constraintEqualToAnchor_constant(&forward.trailingAnchor(), 12.0),
+            date.leadingAnchor().constraintEqualToAnchor_constant(&title.trailingAnchor(), 8.0),
+            date.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&over_note.trailingAnchor(), -12.0),
+        ];
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
+        let (can_back, can_forward) = self.ivars().history_state.get();
+        back.setEnabled(can_back);
+        forward.setEnabled(can_forward);
+        let (name, count) = self.ivars().list_title_state.borrow().clone();
+        list_title.setStringValue(&NSString::from_str(&name));
+        list_count.setStringValue(&NSString::from_str(&count));
+        title.setStringValue(&NSString::from_str(&self.ivars().note_title_state.borrow()));
+        date.setStringValue(&NSString::from_str(&self.ivars().note_date_state.borrow()));
+        *self.ivars().note_title.borrow_mut() = Some(title);
+        *self.ivars().note_date.borrow_mut() = Some(date);
+        *self.ivars().row.borrow_mut() = Some(Row { view: row.clone(), over_sidebar, modes, over_panel, panels, over_list, over_note, list_title, list_count, back, forward });
+        // SAFETY: the delegate lives as long as the window; the selector takes a notification.
+        unsafe {
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(target, sel!(columnsResized:), Some(NSSplitViewDidResizeSubviewsNotification), Some(self.ivars().split_view.as_ref()));
+            // And when the row itself is placed or resized (it starts where the sidebar ends, and
+            // is put there after the columns are first laid out).
+            row.setPostsFrameChangedNotifications(true);
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(target, sel!(columnsResized:), Some(NSViewFrameDidChangeNotification), Some(row.as_ref()));
+        }
+        row
+    }
+
+    /// Puts the row's parts over the list's and the note's columns (the split view's second and
+    /// third), wherever the dividers are.
+    fn lay_out_row(&self) {
+        let row = self.ivars().row.borrow();
+        let Some(row) = row.as_ref() else { return };
+        let columns = self.ivars().split_view.arrangedSubviews();
+        for (part, column) in [(&row.over_sidebar, 0), (&row.over_list, 1), (&row.over_note, 2), (&row.over_panel, 3)] {
+            let Some(column) = columns.iter().nth(column) else { continue };
+            let over = row.view.convertRect_fromView(column.convertRect_toView(column.bounds(), None), None);
+            part.setFrame(NSRect::new(NSPoint::new(over.origin.x, 0.0), NSSize::new(over.size.width, row.view.bounds().size.height)));
         }
     }
 
     fn make_item(&self, id: &NSString) -> Option<Retained<NSToolbarItem>> {
         let mtm = self.mtm();
-        let target: &AnyObject = self.as_ref();
         match id.to_string().as_str() {
-            SIDEBAR_MODE => {
-                // Tabs first, then folders and tags (owner's order).
-                let images = NSArray::from_retained_slice(&[symbol("square.on.square", strings::TABS)?, symbol("folder", strings::FOLDERS)?, symbol("tag", strings::TAGS)?]);
-                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::TABS), NSString::from_str(strings::FOLDERS), NSString::from_str(strings::TAGS)]);
-                let group = unsafe {
-                    NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
-                        id,
-                        &images,
-                        NSToolbarItemGroupSelectionMode::SelectOne,
-                        Some(&labels),
-                        Some(target),
-                        Some(sel!(sidebarMode:)),
-                        mtm,
-                    )
-                };
-                for (item, tip) in group.subitems().iter().zip([strings::TABS, strings::FOLDERS, strings::TAGS]) {
-                    item.setToolTip(Some(&NSString::from_str(tip)));
-                }
-                group.setSelectedIndex(mode_index(self.ivars().sidebar_mode_state.get()));
-                group.setHidden(!self.ivars().sidebar_shown.get());
-                *self.ivars().sidebar_mode.borrow_mut() = Some(group.clone());
-                Some(Retained::into_super(group))
-            }
-            LIST_SEPARATOR => Some(Retained::into_super(NSTrackingSeparatorToolbarItem::trackingSeparatorToolbarItemWithIdentifier_splitView_dividerIndex(
-                id,
-                &self.ivars().split_view,
-                1,
-            ))),
-            SEARCH => {
-                let item = button(mtm, id, "magnifyingglass", strings::SEARCH);
-                unsafe {
-                    item.setTarget(Some(target));
-                    item.setAction(Some(sel!(toggleSearch:)));
-                }
-                Some(item)
-            }
-            LIST_OPTIONS => {
-                let item = NSMenuToolbarItem::initWithItemIdentifier(NSMenuToolbarItem::alloc(mtm), id);
-                item.setImage(symbol("ellipsis", strings::LIST_OPTIONS).as_deref());
-                item.setLabel(&NSString::from_str(strings::LIST_OPTIONS));
-                item.setToolTip(Some(&NSString::from_str(strings::LIST_OPTIONS)));
-                item.setShowsIndicator(false);
-                item.setMenu(&self.ivars().list_menu);
-                Some(Retained::into_super(item))
-            }
-            NEW_NOTE => {
-                let item = button(mtm, id, "square.and.pencil", strings::NEW_NOTE);
-                unsafe {
-                    item.setTarget(Some(target));
-                    item.setAction(Some(sel!(newNote:)));
-                }
-                Some(item)
-            }
-            HISTORY => {
-                let images = NSArray::from_retained_slice(&[symbol("chevron.left", strings::BACK)?, symbol("chevron.right", strings::FORWARD)?]);
-                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::BACK), NSString::from_str(strings::FORWARD)]);
-                let group = unsafe {
-                    NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
-                        id,
-                        &images,
-                        NSToolbarItemGroupSelectionMode::Momentary,
-                        Some(&labels),
-                        Some(target),
-                        Some(sel!(navigate:)),
-                        mtm,
-                    )
-                };
-                let (can_back, can_forward) = self.ivars().history_state.get();
-                apply_history(&group, can_back, can_forward);
-                *self.ivars().history.borrow_mut() = Some(group.clone());
-                Some(Retained::into_super(group))
-            }
-            NOTE_TITLE => {
-                let field = TitleField::new(mtm, self.ivars().note_title_renamable.get());
-                field.setBezeled(false);
-                field.setDrawsBackground(false);
-                field.setFont(Some(&NSFont::boldSystemFontOfSize(NSFont::systemFontSize())));
-                field.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-                if let Some(cell) = field.cell() {
-                    cell.setScrollable(true);
-                    cell.setUsesSingleLineMode(true);
-                    cell.setSendsActionOnEndEditing(true);
-                }
-                let name = self.ivars().note_title_state.borrow().clone();
-                field.setStringValue(&NSString::from_str(&name));
-                field.setToolTip(Some(&NSString::from_str(strings::NOTE_TITLE)));
-                field.widthAnchor().constraintGreaterThanOrEqualToConstant(60.0).setActive(true);
-                field.widthAnchor().constraintLessThanOrEqualToConstant(360.0).setActive(true);
-                // SAFETY: the delegate outlives the toolbar (it is its delegate) and takes the action.
-                unsafe {
-                    field.setTarget(Some(target));
-                    field.setAction(Some(sel!(noteTitleEdited:)));
-                    field.setDelegate(Some(ProtocolObject::from_ref(self)));
-                }
-                let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), id);
-                item.setView(Some(&field));
-                item.setLabel(&NSString::from_str(strings::NOTE_TITLE));
-                *self.ivars().note_title.borrow_mut() = Some(field);
-                Some(item)
-            }
-            PANEL_MODE => {
-                let images = NSArray::from_retained_slice(&[symbol("brain", strings::AI)?, symbol("list.bullet.indent", strings::OUTLINE)?, symbol("link", strings::CONNECTIONS)?]);
-                let labels = NSArray::from_retained_slice(&[NSString::from_str(strings::AI), NSString::from_str(strings::OUTLINE), NSString::from_str(strings::CONNECTIONS)]);
-                let group = unsafe {
-                    NSToolbarItemGroup::groupWithItemIdentifier_images_selectionMode_labels_target_action(
-                        id,
-                        &images,
-                        NSToolbarItemGroupSelectionMode::SelectOne,
-                        Some(&labels),
-                        Some(target),
-                        Some(sel!(panelMode:)),
-                        mtm,
-                    )
-                };
-                for (item, tip) in group.subitems().iter().zip([strings::AI, strings::OUTLINE, strings::CONNECTIONS]) {
-                    item.setToolTip(Some(&NSString::from_str(tip)));
-                }
-                group.setSelectedIndex(panel_index(self.ivars().panel_mode_state.get()));
-                group.setHidden(!self.ivars().panel_shown.get());
-                *self.ivars().panel_mode.borrow_mut() = Some(group.clone());
-                Some(Retained::into_super(group))
-            }
             PANEL => {
                 let item = button(mtm, id, "sidebar.right", strings::TOGGLE_PANEL);
                 // Up the responder chain to the split view controller.
@@ -509,6 +617,18 @@ impl TitleField {
     }
 }
 
+/// A date formatter writing Ukrainian ("12 листопада 2026 р. о 14:03", "Сьогодні о 07:17"):
+/// the region settings' language may be another (`en_US@rg=uazzzz` wrote "12 November 2026 at
+/// 14:03" under a Ukrainian name).
+fn ukrainian_dates() -> Retained<NSDateFormatter> {
+    let format = NSDateFormatter::new();
+    format.setLocale(Some(&NSLocale::initWithLocaleIdentifier(NSLocale::alloc(), &NSString::from_str("uk_UA"))));
+    format.setDateStyle(NSDateFormatterStyle::LongStyle);
+    format.setTimeStyle(NSDateFormatterStyle::ShortStyle);
+    format.setDoesRelativeDateFormatting(true);
+    format
+}
+
 /// The name field is a label again once editing ends.
 fn end_editing(field: &NSControl) {
     if let Some(field) = field.downcast_ref::<NSTextField>() {
@@ -530,33 +650,73 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
     let custom = |s: &str| NSString::from_str(s);
     NSArray::from_retained_slice(&[
         system[0].copy(),
-        custom(SIDEBAR_MODE),
-        system[1].copy(),
-        // No flexible space before the list options: the title already takes the free width,
-        // and with the sidebar collapsed every point is needed for the separator to stay on
-        // the list/note boundary.
-        custom(SEARCH),
-        custom(LIST_OPTIONS),
-        custom(LIST_SEPARATOR),
-        custom(NEW_NOTE),
-        custom(HISTORY),
-        custom(NOTE_TITLE),
+        // Empty between the sidebar's switch and the panel's, at the right edge: what belongs
+        // to the list and the note is in the row below (`second_row`).
         system[2].copy(),
-        system[3].copy(),
-        // The panel's switch and button at its right edge.
-        system[2].copy(),
-        custom(PANEL_MODE),
         custom(PANEL),
     ])
 }
 
-pub fn install(window: &objc2_app_kit::NSWindow, delegate: &ToolbarDelegate) {
+/// `search_field`: the list's search field, which the row under the toolbar shows in the place
+/// of the list's name.
+pub fn install(window: &objc2_app_kit::NSWindow, delegate: &ToolbarDelegate, search_field: &NSSearchField) {
     let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(window.mtm()), ns_string!("KnotesMainToolbar"));
     toolbar.setDelegate(Some(ProtocolObject::from_ref(delegate)));
     toolbar.setDisplayMode(objc2_app_kit::NSToolbarDisplayMode::IconOnly);
     window.setToolbar(Some(&toolbar));
     window.setToolbarStyle(objc2_app_kit::NSWindowToolbarStyle::Unified);
+    // The list's name is in the row below, not beside the toolbar's buttons.
+    window.setTitleVisibility(objc2_app_kit::NSWindowTitleVisibility::Hidden);
+    let accessory = objc2_app_kit::NSTitlebarAccessoryViewController::new(window.mtm());
+    accessory.setView(&delegate.second_row(search_field));
+    accessory.setLayoutAttribute(NSLayoutAttribute::Bottom);
+    window.addTitlebarAccessoryViewController(&accessory);
+    delegate.lay_out_row();
 }
+
+/// The control `id` of the row under `window`'s toolbar (probe mode).
+pub fn row_control(window: &objc2_app_kit::NSWindow, id: &str) -> Option<Retained<NSView>> {
+    fn find(view: &NSView, id: &str) -> Option<Retained<NSView>> {
+        view.subviews().iter().find_map(|v| if v.identifier().is_some_and(|i| i.to_string() == id) { Some(v) } else { find(&v, id) })
+    }
+    window.titlebarAccessoryViewControllers().iter().find_map(|accessory| find(&accessory.view(), id))
+}
+
+/// The row under the toolbar.
+struct Row {
+    view: Retained<NSView>,
+    over_sidebar: Retained<NSView>,
+    /// Tabs, folders, tags.
+    modes: [Retained<NSButton>; 3],
+    over_panel: Retained<NSView>,
+    /// The AI, the outline, the links.
+    panels: [Retained<NSButton>; 3],
+    over_list: Retained<NSView>,
+    over_note: Retained<NSView>,
+    list_title: Retained<NSTextField>,
+    list_count: Retained<NSTextField>,
+    back: Retained<NSButton>,
+    forward: Retained<NSButton>,
+}
+
+/// The button `index` on and in the accent colour, the others off and grey.
+fn choose(buttons: &[Retained<NSButton>; 3], index: isize) {
+    for (i, button) in buttons.iter().enumerate() {
+        let chosen = i as isize == index;
+        button.setState(if chosen { NSControlStateValueOn } else { NSControlStateValueOff });
+        let tint = if chosen { NSColor::controlAccentColor() } else { NSColor::secondaryLabelColor() };
+        button.setContentTintColor(Some(&tint));
+    }
+}
+
+/// The row's buttons for what the sidebar lists: tabs, folders, tags.
+pub const SIDEBAR_MODE_IDS: [&str; 3] = ["knotes.sidebar-tabs", "knotes.sidebar-folders", "knotes.sidebar-tags"];
+
+/// The row's buttons for what the panel shows: the AI, the outline, the links.
+pub const PANEL_MODE_IDS: [&str; 3] = ["knotes.panel-ai", "knotes.panel-outline", "knotes.panel-links"];
+
+/// The row's height.
+const ROW_HEIGHT: f64 = 28.0;
 
 fn symbol(name: &str, description: &str) -> Option<Retained<NSImage>> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), Some(&NSString::from_str(description)))
@@ -586,10 +746,3 @@ fn panel_index(mode: PanelMode) -> isize {
     }
 }
 
-fn apply_history(group: &NSToolbarItemGroup, can_back: bool, can_forward: bool) {
-    group.setAutovalidates(false);
-    for (item, on) in group.subitems().iter().zip([can_back, can_forward]) {
-        item.setAutovalidates(false);
-        item.setEnabled(on);
-    }
-}

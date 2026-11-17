@@ -337,7 +337,7 @@ impl VaultWindow {
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
         search_bar.set_target(toolbar.as_ref());
         search_bar.set_meaning_on(crate::meaning::model().is_some());
-        toolbar::install(&window, &toolbar);
+        toolbar::install(&window, &toolbar, &search_bar.field);
         let state = State {
             selection: SidebarItem::AllNotes,
             rows: Arc::new(Vec::new()),
@@ -999,8 +999,13 @@ pub fn split_items(
     note: &NSViewController,
     chat: &NSViewController,
 ) -> [Retained<NSSplitViewItem>; 4] {
+    // The sidebar starts under the toolbar and its row, as the other columns do (owner's request,
+    // after DEVONthink's): at full height it ran up beside the toolbar's buttons, and the row
+    // under the toolbar began only where it ended.
+    let sidebar = NSSplitViewItem::sidebarWithViewController(sidebar);
+    sidebar.setAllowsFullHeightLayout(false);
     [
-        NSSplitViewItem::sidebarWithViewController(sidebar),
+        sidebar,
         NSSplitViewItem::contentListWithViewController(list),
         NSSplitViewItem::splitViewItemWithViewController(note),
         NSSplitViewItem::inspectorWithViewController(chat),

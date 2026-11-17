@@ -460,18 +460,14 @@ pub fn sidebar_mode_requested(window: &NSWindow) {
         Ok("sidebar=tabs") => 0,
         _ => return,
     };
-    let Some(group) = sidebar_switch(window) else { return };
-    group.setSelectedIndex(index);
-    if let Some(action) = group.action() {
-        let target = group.target();
-        // SAFETY: the group's own action and target, with the group as sender.
-        unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&group)) };
-    }
+    let Some(button) = sidebar_switch(window).into_iter().nth(index as usize) else { return };
+    // SAFETY: a click on the row's own button.
+    unsafe { button.performClick(None) };
 }
 
-fn sidebar_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItemGroup>> {
-    let id = NSString::from_str(crate::toolbar::SIDEBAR_MODE);
-    window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?.downcast::<NSToolbarItemGroup>().ok()
+/// The row's buttons for what the sidebar lists (tabs, folders, tags); none when not made.
+fn sidebar_switch(window: &NSWindow) -> Vec<objc2::rc::Retained<objc2_app_kit::NSButton>> {
+    crate::toolbar::SIDEBAR_MODE_IDS.iter().filter_map(|id| crate::toolbar::row_control(window, id)?.downcast::<objc2_app_kit::NSButton>().ok()).collect()
 }
 
 /// `KNOTES_PROBE_ACTION=toggle-sidebar`: the toolbar's sidebar button action, sent to the
@@ -504,14 +500,10 @@ pub fn toggle_sidebar_requested(window: &NSWindow) {
 /// field sends it.
 pub fn search_requested(window: &NSWindow) {
     let Ok(query) = std::env::var("KNOTES_PROBE_SEARCH") else { return };
-    let id = NSString::from_str(crate::toolbar::SEARCH);
-    let Some(item) = window.toolbar().and_then(|t| t.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))) else { return };
+    let Some(button) = crate::toolbar::row_control(window, crate::toolbar::SEARCH).and_then(|v| v.downcast::<objc2_app_kit::NSButton>().ok()) else { return };
     // A click on the magnifying glass, then typing into the field it shows.
-    if let Some(action) = item.action() {
-        let target = item.target();
-        // SAFETY: the item's own action and target.
-        unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, target.as_deref(), Some(&item)) };
-    }
+    // SAFETY: a click on the row's own button, no sender.
+    unsafe { button.performClick(None) };
     let Some(field) = search_field(window) else { return };
     if std::env::var_os("KNOTES_PROBE_SEARCH_TYPE").is_some() {
         // Typed key by key into the field editor, as the keyboard does.
@@ -569,10 +561,14 @@ fn report_search(window: &NSWindow) {
     if let (Some(switch), Some(field)) = (search_switch(window), search_field(window)) {
         println!("search-mode: {}", ["files", "content", "meaning"].get(switch.selectedSegment() as usize).unwrap_or(&"files"));
         println!("search-field: {}", field.stringValue());
-        // The field's and the switch's widths, and whether the switch sits under the field
-        // (frames in the row's coordinates, which grow upwards).
-        let (f, s) = (field.frame(), switch.frame());
-        println!("search-layout: field {:.0}, switch {:.0}, switch under the field: {}", f.size.width, s.size.width, s.origin.y + s.size.height <= f.origin.y);
+        // The field's and the switch's widths, whether the switch sits under the field (frames
+        // in the window's coordinates, which grow upwards), and whether the field stands in the
+        // place of the list's name: in its part of the row, the name hidden.
+        let (f, s) = (field.convertRect_toView(field.bounds(), None), switch.convertRect_toView(switch.bounds(), None));
+        let title = crate::toolbar::row_control(window, crate::toolbar::LIST_TITLE);
+        // SAFETY: the controls' own superviews, on the main thread.
+        let replaces = title.is_some_and(|t| t.isHidden() && !field.isHidden() && unsafe { t.superview() } == unsafe { field.superview() });
+        println!("search-layout: field {:.0}, switch {:.0}, switch under the field: {}, field in place of the list's name: {replaces}", f.size.width, s.size.width, s.origin.y + s.size.height <= f.origin.y);
         // The field editor sits in a clip view as wide as the field's text area; the end of the
         // text is in view when the clip shows the editor's right edge.
         if let Some(editor) = field.currentEditor().and_then(|e| e.downcast::<objc2_app_kit::NSTextView>().ok())
@@ -585,16 +581,9 @@ fn report_search(window: &NSWindow) {
     }
 }
 
-/// The search field of the list column, if the window has one.
+/// The list's search field, in the row under the toolbar.
 fn search_field(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit::NSSearchField>> {
-    fn find(view: &objc2_app_kit::NSView) -> Option<objc2::rc::Retained<objc2_app_kit::NSSearchField>> {
-        if let Some(field) = view.downcast_ref::<objc2_app_kit::NSSearchField>() {
-            return Some(objc2::Message::retain(field));
-        }
-        view.subviews().iter().find_map(|sub| find(&sub))
-    }
-    let content = window.contentView()?;
-    find(&content)
+    crate::toolbar::row_control(window, crate::toolbar::SEARCH_FIELD)?.downcast::<objc2_app_kit::NSSearchField>().ok()
 }
 
 /// `KNOTES_PROBE_ACTION=new`: File → New Note through the responder chain, like the menu.
@@ -983,13 +972,30 @@ fn report_toolbar(window: &NSWindow) {
     if let Some(field) = note_title_field(window) {
         println!("note-title: {}", field.stringValue());
     }
+    if let Some(date) = note_title_line(window, 1) {
+        println!("note-date: {}", date.stringValue());
+    }
+    // The row under the toolbar: what it holds over the list and over the note, and where
+    // those parts are (their left edge and width).
+    let text = |id: &str| crate::toolbar::row_control(window, id).and_then(|v| v.downcast::<objc2_app_kit::NSTextField>().ok()).map(|f| f.stringValue().to_string()).unwrap_or_default();
+    let part = |id: &str| {
+        // SAFETY: the control's own superview, on the main thread.
+        let frame = crate::toolbar::row_control(window, id).and_then(|v| unsafe { v.superview() }).map(|p| p.frame());
+        frame.map_or(String::new(), |f| format!("{:.0}+{:.0}", f.origin.x, f.size.width))
+    };
+    println!("second-row: {} · {} [search] [list-options] | [new-note] [back] [forward] {} · {}", text(crate::toolbar::LIST_TITLE), text(crate::toolbar::LIST_COUNT), text(crate::toolbar::NOTE_TITLE), text(crate::toolbar::NOTE_DATE));
+    println!("second-row-parts: list {} note {}", part(crate::toolbar::LIST_TITLE), part(crate::toolbar::NOTE_TITLE));
+}
+
+/// The open document's name in the row under the toolbar (0), or the date after it (1).
+fn note_title_line(window: &NSWindow, line: usize) -> Option<objc2::rc::Retained<objc2_app_kit::NSTextField>> {
+    let id = if line == 0 { crate::toolbar::NOTE_TITLE } else { crate::toolbar::NOTE_DATE };
+    crate::toolbar::row_control(window, id)?.downcast::<objc2_app_kit::NSTextField>().ok()
 }
 
 /// The open note's name field in the toolbar.
 fn note_title_field(window: &NSWindow) -> Option<objc2::rc::Retained<objc2_app_kit::NSTextField>> {
-    let id = NSString::from_str(crate::toolbar::NOTE_TITLE);
-    let item = window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?;
-    item.view()?.downcast::<objc2_app_kit::NSTextField>().ok()
+    note_title_line(window, 0)
 }
 
 /// `KNOTES_PROBE_TITLE_CLICKS=2`: a double click (or `1`, a click) on the name in the toolbar;
@@ -1295,32 +1301,22 @@ fn report(window: &NSWindow) {
 /// Visible sidebar rows as `name (count)`, read back from the outline view's cells.
 /// x of the toolbar separator line over the list/note boundary, and of that boundary.
 fn report_list_separator(window: &NSWindow) {
-    fn separators(view: &objc2_app_kit::NSView, out: &mut Vec<f64>) {
-        if view.class().name().to_str().unwrap_or("").contains("SeparatorToolbarItemView") {
-            let f = view.convertRect_toView(view.bounds(), None);
-            out.push(f.origin.x + f.size.width / 2.0);
-        }
-        for sub in view.subviews().iter() {
-            separators(&sub, out);
-        }
-    }
     let Some(split) = window.contentViewController().and_then(|c| c.downcast::<NSSplitViewController>().ok()) else { return };
     let item = split.splitViewItems().objectAtIndex(1);
     let list = item.viewController(window.mtm()).view();
     let boundary = list.convertRect_toView(list.bounds(), None);
     let boundary = boundary.origin.x + boundary.size.width;
-    let mut lines = Vec::new();
-    if let Some(frame) = window.contentView().and_then(|c| unsafe { c.superview() }) {
-        separators(&frame, &mut lines);
-    }
-    let nearest = lines.iter().copied().min_by(|a, b| (a - boundary).abs().total_cmp(&(b - boundary).abs())).unwrap_or(f64::NAN);
-    println!("list-separator: {nearest:.1} boundary {boundary:.1}");
+    // Where the row under the toolbar starts its part over the note.
+    // SAFETY: the control's own superview, on the main thread.
+    let part = crate::toolbar::row_control(window, crate::toolbar::NOTE_TITLE).and_then(|v| unsafe { v.superview() });
+    let edge = part.map_or(f64::NAN, |p| p.convertRect_toView(p.bounds(), None).origin.x);
+    println!("row-boundary: {edge:.1} boundary {boundary:.1}");
 }
 
 /// `panel: outline, shows outline`: the AI/outline switch (or `hidden` with the panel) and
 /// the view the panel shows.
 fn report_panel(window: &VaultWindow) {
-    let hidden = panel_switch(&window.window).is_some_and(|g| g.isHidden());
+    let hidden = panel_switch(&window.window).first().is_some_and(|b| b.isHiddenOrHasHiddenAncestor());
     println!("panel: {}", if hidden { "hidden".to_owned() } else { window.describe_panel() });
     println!("connections: {}", window.connections_panel.describe());
     let (rows, empty) = window.outline_panel.describe();
@@ -1331,9 +1327,9 @@ fn report_panel(window: &VaultWindow) {
     }
 }
 
-fn panel_switch(window: &NSWindow) -> Option<objc2::rc::Retained<NSToolbarItemGroup>> {
-    let id = NSString::from_str(crate::toolbar::PANEL_MODE);
-    window.toolbar()?.items().iter().find(|i| i.itemIdentifier().isEqualToString(&id))?.downcast::<NSToolbarItemGroup>().ok()
+/// The row's buttons for what the panel shows (the AI, the outline, the links).
+fn panel_switch(window: &NSWindow) -> Vec<objc2::rc::Retained<objc2_app_kit::NSButton>> {
+    crate::toolbar::PANEL_MODE_IDS.iter().filter_map(|id| crate::toolbar::row_control(window, id)?.downcast::<objc2_app_kit::NSButton>().ok()).collect()
 }
 
 /// `KNOTES_PROBE_ACTION=panel=ai` or `panel=outline`: a click on that segment of the toolbar's
@@ -1355,25 +1351,23 @@ pub fn panel_requested(window: &NSWindow) {
         Ok("panel=links") => 2,
         _ => return,
     };
-    let Some(group) = panel_switch(window) else { return };
-    group.setSelectedIndex(index);
-    if let Some(action) = group.action() {
-        let target = group.target();
-        // SAFETY: the group's own action and target, with the group as sender.
-        unsafe { app.sendAction_to_from(action, target.as_deref(), Some(&group)) };
-    }
+    let Some(button) = panel_switch(window).into_iter().nth(index as usize) else { return };
+    // SAFETY: a click on the row's own button.
+    unsafe { button.performClick(None) };
 }
 
 fn report_sidebar_mode(window: &NSWindow) {
-    if let Some(group) = sidebar_switch(window) {
-        let labels: Vec<String> = group.subitems().iter().map(|i| i.label().to_string()).collect();
+    let buttons = sidebar_switch(window);
+    if !buttons.is_empty() {
+        let labels: Vec<String> = buttons.iter().map(|b| b.toolTip().map(|t| t.to_string()).unwrap_or_default()).collect();
         println!("sidebar-segments: {}", labels.join(", "));
     }
-    let mode = match sidebar_switch(window).map(|g| (g.isHidden(), g.selectedIndex())) {
-        Some((true, _)) => "hidden",
-        Some((false, 0)) => "tabs",
-        Some((false, 1)) => "folders",
-        Some((false, 2)) => "tags",
+    let chosen = buttons.iter().position(|b| b.state() == objc2_app_kit::NSControlStateValueOn);
+    let mode = match (buttons.first().map(|b| b.isHiddenOrHasHiddenAncestor()), chosen) {
+        (Some(true), _) => "hidden",
+        (Some(false), Some(0)) => "tabs",
+        (Some(false), Some(1)) => "folders",
+        (Some(false), Some(2)) => "tags",
         _ => "none",
     };
     let collapsed = window
@@ -1569,13 +1563,12 @@ fn report_note(window: &VaultWindow) {
     if let Some(disk) = window.disk_text() {
         println!("disk: {disk:?}");
     }
-    let history = NSString::from_str(crate::toolbar::HISTORY);
-    if let Some(group) = window.window.toolbar().and_then(|t| {
-        t.items().iter().find(|i| i.itemIdentifier().isEqualToString(&history)).and_then(|i| i.downcast::<NSToolbarItemGroup>().ok())
-    }) {
-        let state: Vec<&str> = group.subitems().iter().map(|i| if i.isEnabled() { "on" } else { "off" }).collect();
-        println!("nav: back={} forward={}", state.first().unwrap_or(&"?"), state.get(1).unwrap_or(&"?"));
-    }
+    let enabled = |id: &str| match crate::toolbar::row_control(&window.window, id).and_then(|v| v.downcast::<objc2_app_kit::NSButton>().ok()) {
+        Some(button) if button.isEnabled() => "on",
+        Some(_) => "off",
+        None => "?",
+    };
+    println!("nav: back={} forward={}", enabled(crate::toolbar::HISTORY_BACK), enabled(crate::toolbar::HISTORY_FORWARD));
     // What a look at the window decodes: the images drawn in view.
     window.window.displayIfNeeded();
     // `KNOTES_PROBE_RESIZE_LATER=line:width`: an image's edge dragged to that width once it is
