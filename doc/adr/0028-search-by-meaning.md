@@ -207,6 +207,14 @@ paths.
   request's outcome is now noted (`meaning::Watched`, around the helper all share); the
   settings say «Пошук за змістом не працює: …» with the last failure until a request works or
   another model is chosen.
+- **The settings say when the files it needs are not there**: the helper beside the app, or
+  the model's file (git does not keep the models; `scripts/setup.sh` fetches them). Without
+  them no helper was made, search by meaning searched by words, and the settings said
+  «Вектори актуальні» (so on the owner's Mac, whose checkout had never fetched the models):
+  now «Пошук за змістом не працює: немає файлу моделі «…» (його завантажує
+  scripts/setup.sh)». Measured once fetched (M5 Pro, release helper, through the deadline):
+  e5-large-instruct's first query 3.8 s with its loading, a batch of 32 blocks 56 ms;
+  EmbeddingGemma 2's 0.22 s and 53 ms.
 - **A failed pass waits before the next.** Each change of the index (each save, once settled)
   started a pass again, the helper twice each time: with a helper that loads its model and dies,
   two loads of 3 s on the GPU a save. After a failed pass the next comes after a minute,

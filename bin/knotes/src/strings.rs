@@ -180,6 +180,11 @@ pub const SETTINGS_CLEAR: &str = "Очистити";
 pub const SETTINGS_REGENERATE: &str = "Перегенерувати";
 pub const SETTINGS_VECTORS_READY: &str = "Вектори актуальні";
 pub const SETTINGS_MEANING_IS_OFF: &str = "Пошук за змістом вимкнено";
+/// The files search by meaning needs, not there.
+pub const MEANING_HELPER_MISSING: &str = "поруч із застосунком немає knotes-embed";
+pub fn meaning_model_missing(file: &str) -> String {
+    format!("немає файлу моделі «{file}» (його завантажує scripts/setup.sh)")
+}
 /// Search by meaning's model failing (it does not start, will not load, or dies): why.
 pub fn settings_meaning_failing(why: &str) -> String {
     format!("Пошук за змістом не працює: {why}")

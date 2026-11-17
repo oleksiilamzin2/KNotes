@@ -12,6 +12,8 @@ use knotes_vectors::MeaningModel;
 struct Chosen {
     model: Option<MeaningModel>,
     embedder: Option<Arc<Watched>>,
+    /// Why there is no helper for the model chosen: its file, or the helper, is not there.
+    missing: Option<String>,
 }
 
 /// The helper, each request's outcome noted for the settings: one that does not start, a model
@@ -45,9 +47,23 @@ fn note_outcome<T>(result: &Result<T, EmbedError>) {
     };
 }
 
-/// Why search by meaning fails now, if it does.
+/// Why search by meaning fails now, if it does: its last request's failure, or the files it
+/// needs not there.
 pub fn failing() -> Option<String> {
-    FAILING.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    let failed = FAILING.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    failed.or_else(|| with(|chosen| chosen.missing.clone()))
+}
+
+/// Why the helper for `model` cannot be made, the app being in `exe_dir`: the helper is not
+/// beside it, or the model's file is not there (git does not keep it: `scripts/setup.sh`
+/// fetches it); none when both are.
+fn missing(exe_dir: Option<&std::path::Path>, model: MeaningModel) -> Option<String> {
+    let helper = exe_dir.map(|dir| dir.join("knotes-embed"));
+    if !helper.as_ref().is_some_and(|h| h.is_file()) {
+        return Some(crate::strings::MEANING_HELPER_MISSING.to_owned());
+    }
+    let exe = exe_dir?.join("knotes");
+    knotes_session::embedder_files(&exe, model.file()).is_none().then(|| crate::strings::meaning_model_missing(model.file()))
 }
 
 /// Probe: search by meaning failing for `why` (`KNOTES_PROBE_MEANING_FAILING`), the probe
@@ -94,14 +110,15 @@ pub fn choose(model: Option<MeaningModel>) {
 }
 
 fn chosen(model: Option<MeaningModel>) -> Chosen {
-    let embedder = if crate::probe::enabled() {
-        None
-    } else {
-        model
-            .and_then(|m| std::env::current_exe().ok().and_then(|exe| knotes_session::embedder_files(&exe, m.file())))
-            .map(|(helper, file)| Arc::new(Watched(ProcessEmbedder::new(helper, file))))
-    };
-    Chosen { model, embedder }
+    if crate::probe::enabled() {
+        return Chosen { model, embedder: None, missing: None };
+    }
+    let exe = std::env::current_exe().ok();
+    let embedder = model.and_then(|m| exe.as_deref().and_then(|exe| knotes_session::embedder_files(exe, m.file()))).map(|(helper, file)| Arc::new(Watched(ProcessEmbedder::new(helper, file))));
+    // Without them search by meaning searched by words, the settings saying the vectors were up
+    // to date.
+    let missing = model.filter(|_| embedder.is_none()).and_then(|m| missing(exe.as_deref().and_then(std::path::Path::parent), m));
+    Chosen { model, embedder, missing }
 }
 
 fn with<T>(look: impl FnOnce(&Chosen) -> T) -> T {
@@ -194,11 +211,26 @@ mod tests {
     use knotes_vectors::{MeaningModel, Progress};
 
     #[test]
+    fn a_missing_helper_is_said_and_nothing_once_the_helper_and_the_model_are_there() {
+        // As in the app's bundle: the app and its helper in MacOS, the model in Resources.
+        let contents = tempfile::tempdir().unwrap();
+        let (app, resources) = (contents.path().join("MacOS"), contents.path().join("Resources"));
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&resources).unwrap();
+        let model = MeaningModel::E5Large;
+        assert_eq!(super::missing(Some(&app), model).as_deref(), Some(crate::strings::MEANING_HELPER_MISSING), "no helper beside the app");
+        std::fs::write(app.join("knotes-embed"), "").unwrap();
+        std::fs::write(resources.join(model.file()), "").unwrap();
+        assert_eq!(super::missing(Some(&app), model), None);
+    }
+
+    #[test]
     fn a_failing_request_is_kept_for_the_settings_until_one_works() {
+        let failed = || super::FAILING.lock().unwrap().clone();
         super::note_outcome::<()>(&Err(knotes_embed::EmbedError::Unavailable("no model".into())));
-        assert_eq!(super::failing().as_deref(), Some("no model"));
+        assert_eq!(failed().as_deref(), Some("no model"));
         super::note_outcome(&Ok(()));
-        assert_eq!(super::failing(), None);
+        assert_eq!(failed(), None);
     }
 
     #[test]
