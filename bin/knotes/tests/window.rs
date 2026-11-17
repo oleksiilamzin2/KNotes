@@ -4208,7 +4208,7 @@ fn a_card_shows_its_deck_on_a_plate_its_question_strong_and_its_marks_muted() {
     let note = "#@мови cat::кіт ^c-1\n\n#@історія{\nКоли?\n?\nТоді.\n} ^c-2\n\n#@біо Кіт — ==тварина==.\n\nне картка :: просто текст\n\nкінець";
     let (_vault, out) = probe_notes(&[("n.md", note)], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     let runs = editor_runs(&out);
-    for shown in ["[card-deck]#@мови|", "[card-question]cat|", "[card-mark]::|", "[card-deck]#@історія{|", "[card-question]Коли?|", "[card-mark]?|", "[card-mark]}|", "[card-deck]#@біо|"] {
+    for shown in ["[card-deck]#@мови|", "[card-question]cat|", "[card-mark]::|", "[card-deck]#@історія|", "[card-mark]{|", "[card-question]Коли?|", "[card-mark]?|", "[card-mark]}|", "[card-deck]#@біо|"] {
         assert!(runs.contains(shown), "{shown}: {runs}");
     }
     assert_eq!(runs.matches("[card-question]").count(), 2, "a cloze has no question apart: {runs}");

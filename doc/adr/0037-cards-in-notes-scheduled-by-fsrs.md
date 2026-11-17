@@ -270,9 +270,9 @@ It is the first new feature since the owner's goal became to polish what exists.
 
 - A card was plain text in the live preview, but for its id. Its parts are styled now
   (`card_parts` finds them, `Style::CardDeck`, `CardQuestion`, `CardMark`): the deck's mark
-  `#@deck/sub` (with a card in braces' `{`) in the accent colour on a plate, as inline code's;
-  the question strong, so it stands apart from the answer; what parts them (`::`, the `?` of
-  its line, the closing brace) muted. A cloze's `==words==` were highlighted already, as any.
+  `#@deck/sub` in the accent colour on a plate, as inline code's; the question strong, so it
+  stands apart from the answer; what parts them (`::`, the `?` of its line, both braces of a
+  card in braces: the owner asked for the opening one grey too) muted. A cloze's `==words==` were highlighted already, as any.
 - Nothing is hidden or replaced: the text is as typed, so a card is edited as any line. No
   frame around a card, no button in it.
 

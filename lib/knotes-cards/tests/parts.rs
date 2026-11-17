@@ -14,9 +14,9 @@ fn a_card_s_parts_are_found_where_it_is_written() {
     assert_eq!(parts("Вступ.\n\n#@мови/англійська cat  ::  кіт ^c-1\n"), ("#@мови/англійська".into(), q("cat"), vec!["::".to_owned()]));
     assert_eq!(parts("- #@мови Що це?\n  ?\n  Відповідь. ^c-2\n"), ("#@мови".into(), q("Що це?"), vec!["?".to_owned()]), "a list item's, the answer under a `?` line");
     assert_eq!(parts("#@історія Коли була\nбитва?\n?\n1659 року: взимку."), ("#@історія".into(), q("Коли була\nбитва?"), vec!["?".to_owned()]), "the `?` line parts it, not a colon after");
-    assert_eq!(parts("#@мови{\nПерший абзац.\n\nДругий.\n?\nВідповідь.\n} ^c-3\n"), ("#@мови{".into(), q("Перший абзац.\n\nДругий."), vec!["?".to_owned(), "}".to_owned()]));
+    assert_eq!(parts("#@мови{\nПерший абзац.\n\nДругий.\n?\nВідповідь.\n} ^c-3\n"), ("#@мови".into(), q("Перший абзац.\n\nДругий."), vec!["{".to_owned(), "?".to_owned(), "}".to_owned()]));
     assert_eq!(parts("#@мови Кіт — це ==тварина==. ^c-4"), ("#@мови".into(), None, vec![]), "a cloze has no question apart");
-    assert_eq!(parts("#@мови{\nКіт — це ==тварина==.\n}"), ("#@мови{".into(), None, vec!["}".to_owned()]));
+    assert_eq!(parts("#@мови{\nКіт — це ==тварина==.\n}"), ("#@мови".into(), None, vec!["{".to_owned(), "}".to_owned()]));
 }
 
 #[test]

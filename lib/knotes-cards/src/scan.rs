@@ -90,11 +90,12 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
 pub struct CardParts {
     /// The whole card, its deck's mark (or a list item's marker before it) to its id.
     pub span: Range<usize>,
-    /// Its deck's mark, `#@deck/sub` (with the brace that opens a card in braces).
+    /// Its deck's mark, `#@deck/sub`.
     pub deck: Range<usize>,
     /// Its question; none for a cloze.
     pub question: Option<Range<usize>>,
-    /// What parts it: the `::`, the `?` of its line, the closing brace.
+    /// What parts it, in order: the brace that opens a card in braces, the `::`, the `?` of its
+    /// line, the closing brace.
     pub marks: Vec<Range<usize>>,
 }
 
@@ -109,11 +110,8 @@ fn parts_of(text: &str, card: &Card) -> Option<CardParts> {
     let path = &body[mark + DECK_MARK.len()..];
     let path_len = path.char_indices().find(|&(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))).map_or(path.len(), |(i, _)| i);
     let first_line = body.find('\n').unwrap_or(body.len());
-    let mut deck_end = mark + DECK_MARK.len() + path_len;
+    let deck_end = mark + DECK_MARK.len() + path_len;
     let block = body[deck_end..first_line].trim() == "{";
-    if block {
-        deck_end += body[deck_end..first_line].find('{')? + 1;
-    }
     let within = |range: Range<usize>| card.span.start + range.start..card.span.start + range.end;
     // A range of the body without the blanks at its ends; none when nothing is left.
     let trimmed = |range: Range<usize>| {
@@ -124,6 +122,13 @@ fn parts_of(text: &str, card: &Card) -> Option<CardParts> {
     };
     let mut marks = Vec::new();
     let mut question = None;
+    // The question starts after the deck, in braces after the brace.
+    let mut asked_from = deck_end;
+    if block {
+        let brace = deck_end + body[deck_end..first_line].find('{')?;
+        marks.push(within(brace..brace + 1));
+        asked_from = brace + 1;
+    }
     if card.kind == CardKind::Basic {
         // The `?` line (not the first: that one holds the deck), else the first line's `::`.
         let mut at = 0;
@@ -137,12 +142,12 @@ fn parts_of(text: &str, card: &Card) -> Option<CardParts> {
         match asks {
             Some((line, sign)) => {
                 marks.push(within(sign..sign + 1));
-                question = trimmed(deck_end..line);
+                question = trimmed(asked_from..line);
             }
             None => {
-                let sep = deck_end + body[deck_end..first_line].find("::")?;
+                let sep = asked_from + body[asked_from..first_line].find("::")?;
                 marks.push(within(sep..sep + 2));
-                question = trimmed(deck_end..sep);
+                question = trimmed(asked_from..sep);
             }
         }
     }
