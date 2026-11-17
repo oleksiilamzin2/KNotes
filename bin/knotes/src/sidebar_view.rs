@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSOutlineViewDelegate, NSPasteboard, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification,
     NSView,
 };
-use objc2_foundation::{NSArray, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, NSZeroRect, ns_string};
+use objc2_foundation::{NSArray, NSEdgeInsets, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, NSZeroRect, ns_string};
 
 use crate::note_list_view::NOTE_PATH_TYPE;
 use crate::strings;
@@ -627,9 +627,14 @@ pub fn outline(mtm: MainThreadMarker, source: &SidebarSource) -> (Retained<NSScr
     scroll.setDocumentView(Some(&outline));
     scroll.setHasVerticalScroller(true);
     scroll.setDrawsBackground(false);
+    // A little room above the first row (owner's request): under the row of the toolbar it
+    // started right at the edge.
+    scroll.setAdditionalSafeAreaInsets(NSEdgeInsets { top: TOP_ROOM, left: 0.0, bottom: 0.0, right: 0.0 });
     (scroll, outline)
 }
 
+/// Room above the first row.
+const TOP_ROOM: f64 = 8.0;
 const CELL_ID: &str = "SidebarCell";
 /// Height of the empty row between the fixed rows and the tree.
 const GAP_HEIGHT: f64 = 10.0;

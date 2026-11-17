@@ -197,6 +197,8 @@ impl OutlinePanel {
         scroll.setHasVerticalScroller(true);
         scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
+        // A little room above the first row, as the sidebar has (owner's request).
+        scroll.setAdditionalSafeAreaInsets(objc2_foundation::NSEdgeInsets { top: 8.0, left: 0.0, bottom: 0.0, right: 0.0 });
         let empty = NSTextField::labelWithString(&NSString::new(), mtm);
         empty.setTextColor(Some(&NSColor::secondaryLabelColor()));
         empty.setAlignment(NSTextAlignment::Center);
