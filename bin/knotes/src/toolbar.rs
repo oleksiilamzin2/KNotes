@@ -444,15 +444,17 @@ impl ToolbarDelegate {
         date.setToolTip(Some(&NSString::from_str(strings::NOTE_CHANGED)));
         let row = NSView::initWithFrame(NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(800.0, ROW_HEIGHT)));
         let (over_list, over_note) = (NSView::new(mtm), NSView::new(mtm));
-        // The window's own grey (237, 237, 238 in light mode; the owner's choice, from a sample of
-        // it) behind the buttons at both ends of the row, over the sidebar and over the panel: the
-        // sidebar's material was darker than the panel under it.
+        // The grey of the columns at the ends (the owner's sample: 237, 237, 238), behind the
+        // buttons over the sidebar and over the panel: the sidebar's material was darker than the
+        // panel under it. In the dark the panel's (37, 37, 39): the window's background there is
+        // darker than the columns, and showed as dark plates over them.
+        let grey = crate::live_preview::appearance_color(0xEDEDEE, 0x252527);
         let side = || {
             let plate = NSBox::new(mtm);
             plate.setBoxType(NSBoxType::Custom);
             plate.setBorderWidth(0.0);
             plate.setCornerRadius(0.0);
-            plate.setFillColor(&NSColor::windowBackgroundColor());
+            plate.setFillColor(&grey);
             plate.setContentViewMargins(NSSize::new(0.0, 0.0));
             Retained::into_super(plate) as Retained<NSView>
         };

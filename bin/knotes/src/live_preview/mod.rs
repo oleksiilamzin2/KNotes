@@ -648,7 +648,7 @@ impl LivePreview {
 
 /// A colour that is `light` (0xRRGGBB, sRGB) in the light appearance and `dark` in the dark
 /// one, following the view's appearance as system colours do.
-fn appearance_color(light: u32, dark: u32) -> Retained<NSColor> {
+pub fn appearance_color(light: u32, dark: u32) -> Retained<NSColor> {
     let srgb = |rgb: u32| NSColor::colorWithSRGBRed_green_blue_alpha(f64::from((rgb >> 16) & 0xFF) / 255.0, f64::from((rgb >> 8) & 0xFF) / 255.0, f64::from(rgb & 0xFF) / 255.0, 1.0);
     let (light, dark) = (srgb(light), srgb(dark));
     let provider = block2::RcBlock::new(move |appearance: std::ptr::NonNull<objc2_app_kit::NSAppearance>| -> std::ptr::NonNull<NSColor> {
