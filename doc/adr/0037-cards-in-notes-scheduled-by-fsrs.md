@@ -265,3 +265,13 @@ It is the first new feature since the owner's goal became to polish what exists.
 - Left as they are: the counts of every deck at each snapshot (46 ms off the main thread), a
   space's counts when they do change (44 ms on it: every card's row is read), a deck chosen
   in a space (40 ms once).
+
+## Built (2026-11-17): a card's look in its note
+
+- A card was plain text in the live preview, but for its id. Its parts are styled now
+  (`card_parts` finds them, `Style::CardDeck`, `CardQuestion`, `CardMark`): the deck's mark
+  `#@deck/sub` (with a card in braces' `{`) in the accent colour on a plate, as inline code's;
+  the question strong, so it stands apart from the answer; what parts them (`::`, the `?` of
+  its line, the closing brace) muted. A cloze's `==words==` were highlighted already, as any.
+- Nothing is hidden or replaced: the text is as typed, so a card is edited as any line. No
+  frame around a card, no button in it.

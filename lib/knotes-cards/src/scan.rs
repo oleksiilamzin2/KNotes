@@ -85,6 +85,73 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
     cards
 }
 
+/// Where a card's parts are in its note's text, for showing it (bytes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardParts {
+    /// Its deck's mark, `#@deck/sub` (with the brace that opens a card in braces).
+    pub deck: Range<usize>,
+    /// Its question; none for a cloze.
+    pub question: Option<Range<usize>>,
+    /// What parts it: the `::`, the `?` of its line, the closing brace.
+    pub marks: Vec<Range<usize>>,
+}
+
+/// The parts of each card of `text`, in order.
+pub fn card_parts(text: &str) -> Vec<CardParts> {
+    scan_cards(text).iter().filter_map(|card| parts_of(text, card)).collect()
+}
+
+fn parts_of(text: &str, card: &Card) -> Option<CardParts> {
+    let body = &text[card.span.clone()];
+    let mark = body.find(DECK_MARK)?;
+    let path = &body[mark + DECK_MARK.len()..];
+    let path_len = path.char_indices().find(|&(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))).map_or(path.len(), |(i, _)| i);
+    let first_line = body.find('\n').unwrap_or(body.len());
+    let mut deck_end = mark + DECK_MARK.len() + path_len;
+    let block = body[deck_end..first_line].trim() == "{";
+    if block {
+        deck_end += body[deck_end..first_line].find('{')? + 1;
+    }
+    let within = |range: Range<usize>| card.span.start + range.start..card.span.start + range.end;
+    // A range of the body without the blanks at its ends; none when nothing is left.
+    let trimmed = |range: Range<usize>| {
+        let part = &body[range.clone()];
+        let start = range.start + (part.len() - part.trim_start().len());
+        let end = range.end - (part.len() - part.trim_end().len());
+        (start < end).then_some(start..end)
+    };
+    let mut marks = Vec::new();
+    let mut question = None;
+    if card.kind == CardKind::Basic {
+        // The `?` line (not the first: that one holds the deck), else the first line's `::`.
+        let mut at = 0;
+        let mut asks = None;
+        for line in body.split_inclusive('\n') {
+            if at > 0 && asks.is_none() && line.trim() == "?" {
+                asks = Some((at, at + line.find('?')?));
+            }
+            at += line.len();
+        }
+        match asks {
+            Some((line, sign)) => {
+                marks.push(within(sign..sign + 1));
+                question = trimmed(deck_end..line);
+            }
+            None => {
+                let sep = deck_end + body[deck_end..first_line].find("::")?;
+                marks.push(within(sep..sep + 2));
+                question = trimmed(deck_end..sep);
+            }
+        }
+    }
+    if block {
+        let last = body.rfind('\n').map_or(0, |i| i + 1);
+        let brace = last + body[last..].find('}')?;
+        marks.push(within(brace..brace + 1));
+    }
+    Some(CardParts { deck: within(mark..deck_end), question: question.map(within), marks })
+}
+
 /// Where the frontmatter ends (0 without one): the `---` lines the text starts with.
 fn frontmatter_end(text: &str) -> usize {
     if !text.starts_with("---\n") && !text.starts_with("---\r\n") {

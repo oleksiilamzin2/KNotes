@@ -40,6 +40,12 @@ pub enum Style {
     /// A card's id at its end, `^c-a1b2c3` (ADR 0037): the app's mark, not the user's text,
     /// shown small and muted.
     CardId,
+    /// A card's deck, `#@deck/sub`: shown as a tag on a plate.
+    CardDeck,
+    /// A card's question: shown strong, apart from its answer.
+    CardQuestion,
+    /// What parts a card: the `::`, the `?` of its line, its closing brace; shown muted.
+    CardMark,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -430,6 +436,14 @@ pub fn highlight(source: &str) -> Highlight {
     let parsed = MarkdownParser::new().parse(source);
     for tag in parsed.tags {
         h.runs.push(Run { range: tag.span.start as usize..tag.span.end as usize, style: Style::Tag });
+    }
+    // A card's parts (ADR 0037): its deck, its question, what parts them.
+    if source.contains(knotes_cards::DECK_MARK) {
+        for card in knotes_cards::card_parts(source) {
+            h.runs.push(Run { range: card.deck, style: Style::CardDeck });
+            h.runs.extend(card.question.map(|range| Run { range, style: Style::CardQuestion }));
+            h.runs.extend(card.marks.into_iter().map(|range| Run { range, style: Style::CardMark }));
+        }
     }
     // A card's id: its last characters, after the `^`.
     if source.contains(knotes_cards::ID_MARK) {

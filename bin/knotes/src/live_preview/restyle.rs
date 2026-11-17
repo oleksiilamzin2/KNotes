@@ -77,7 +77,7 @@ impl LivePreview {
         for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Strike | Style::Done) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= STRUCK);
         }
-        for run in styled.runs.iter().filter(|r| r.style == Style::Code && meets(&r.range)) {
+        for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Code | Style::CardDeck) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= SHADED);
         }
         for run in styled.runs.iter().filter(|r| r.style == Style::Mark && meets(&r.range)) {
@@ -302,6 +302,9 @@ pub(super) fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'stati
         Style::FootnoteRef => (&look.footnote, &look.accent, "footnote"),
         Style::FootnoteLabel => (&look.body, &look.muted, "footnote-label"),
         Style::CardId => (&look.footnote, &look.muted, "card-id"),
+        Style::CardDeck => (&look.body, &look.accent, "card-deck"),
+        Style::CardQuestion => (&look.bold, &look.text, "card-question"),
+        Style::CardMark => (&look.body, &look.muted, "card-mark"),
     }
 }
 
