@@ -73,6 +73,7 @@ impl VaultWindow {
             self.close_find();
         }
         *self.editing.borrow_mut() = None;
+        self.hide_review();
         self.show_pdf(None);
         self.live_preview.show(&self.note_text, "", "");
         self.embeds.clear();
@@ -94,6 +95,11 @@ impl VaultWindow {
     pub fn open_note(&self, path: &str, record: bool) -> bool {
         if FileKind::from_path(path) == FileKind::Pdf {
             return self.open_pdf(path, None, record);
+        }
+        // A deck's review, a tab as a document is.
+        if let Some(deck) = super::cards::deck_of_tab(path) {
+            self.show_deck(deck);
+            return true;
         }
         // A document opened takes the note column from a deck's review.
         self.hide_review();
@@ -457,6 +463,8 @@ impl VaultWindow {
                     let name = e.path.rsplit('/').next().unwrap_or(&e.path);
                     if e.folder { name.to_owned() } else { knotes_app::title_of(name).to_owned() }
                 });
+                // A deck's review: the deck's name.
+                let name = name.or_else(|| self.review_deck.borrow().as_ref().map(|deck| deck.rsplit('/').next().unwrap_or(deck).to_owned()));
                 let kept = entry.zip(vault).and_then(|(e, v)| FsVault::new(&v).kept_at(&e.id).ok());
                 self.toolbar_delegate.set_note_title(name.as_deref().unwrap_or(""), false, changed(kept));
             }

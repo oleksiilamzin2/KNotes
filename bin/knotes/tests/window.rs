@@ -4045,3 +4045,24 @@ fn what_is_selected_in_a_note_becomes_a_card() {
     let (vault, _) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_ACTION", "make-card=9,7")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("n.md")).unwrap(), notes[0].1);
 }
+
+#[test]
+fn a_deck_s_review_is_a_tab_of_its_own_beside_the_documents() {
+    let home = tempfile::tempdir().unwrap();
+    let vault = tempfile::tempdir().unwrap();
+    for (path, text) in CARD_NOTES {
+        std::fs::write(vault.path().join(path), text).unwrap();
+    }
+    // A note open, then a deck chosen: the note keeps its tab, the review gets one beside it.
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Мови.md")]);
+    assert!(out.contains("note: Мови.md"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "d:історія")]);
+    assert!(out.contains("sidebar: Мови | історія\n"), "two tabs: {out}");
+    assert_eq!(review_line_of(&out), "waiting історія 1", "{out}");
+    assert!(out.contains("note-title: історія\n"), "the deck's name where a document's is: {out}");
+    // The note's tab clicked: the note again, the review's tab kept; and back to the review.
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "tab:Мови.md")]);
+    assert!(out.contains("sidebar: Мови | історія\n") && review_line_of(&out) == "hidden" && out.contains("note: Мови.md"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SIDEBAR", "tabs"), ("KNOTES_PROBE_SELECT", "tab:deck://історія"), ("KNOTES_PROBE_REVIEW", "start")]);
+    assert_eq!(review_line_of(&out), "question історія 0/1 | Коли була битва? (list hidden)", "{out}");
+}

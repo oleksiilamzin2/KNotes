@@ -154,6 +154,8 @@ pub struct VaultWindow {
     /// A deck's review, over the note column (ADR 0037), and the review under way.
     review_view: crate::review_view::ReviewView,
     review: RefCell<Option<cards::Review>>,
+    /// The deck whose review the note column shows (its tab is the one shown).
+    review_deck: RefCell<Option<String>>,
     /// The deck the last card was made in, offered for the next.
     last_deck: RefCell<String>,
     /// The search row over the note list.
@@ -418,6 +420,7 @@ impl VaultWindow {
             path_bar,
             review_view,
             review: RefCell::new(None),
+            review_deck: RefCell::new(None),
             last_deck: RefCell::new(String::new()),
             search_bar,
             find_bar,
@@ -1032,7 +1035,12 @@ impl VaultWindow {
         }
         // Deleted documents lose their tabs.
         if let Some(vault) = self.vault() {
-            self.tabs.borrow_mut().retain(|p| vault.join(p).is_file());
+            // A deck's review stays a tab while the deck has cards.
+            let decks = Arc::clone(&self.state.borrow().decks);
+            self.tabs.borrow_mut().retain(|p| match cards::deck_of_tab(p) {
+                Some(deck) => list::tag_exists(&decks, deck),
+                None => vault.join(p).is_file(),
+            });
         }
         self.rebuild_sidebar();
         if !self.tabs_restored.replace(true) {
@@ -1073,7 +1081,9 @@ impl VaultWindow {
 /// folder.
 pub(crate) fn document_name(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
-    [".md", ".pdf"].iter().find_map(|ext| name.len().checked_sub(ext.len()).filter(|&at| name[at..].eq_ignore_ascii_case(ext)).map(|at| &name[..at])).unwrap_or(name)
+    // `get`, not an index: a name with no extension may end in a letter of two bytes («історія»),
+    // and cutting three bytes off it lands inside one (a panic).
+    [".md", ".pdf"].iter().find_map(|ext| name.len().checked_sub(ext.len()).filter(|&at| name.get(at..).is_some_and(|end| end.eq_ignore_ascii_case(ext))).map(|at| &name[..at])).unwrap_or(name)
 }
 
 pub fn split_items(

@@ -9,6 +9,15 @@ use knotes_core::{CardIndex, CardState, DueCard};
 use super::*;
 use crate::review_view::{Asked, Shown};
 
+/// What a tab's path starts with when the tab is a deck's review, not a document (no vault
+/// path holds `//`): `deck://мови/англійська`.
+pub(crate) const DECK_TAB: &str = "deck://";
+
+/// The deck a tab reviews, if its path is a deck's.
+pub(crate) fn deck_of_tab(path: &str) -> Option<&str> {
+    path.strip_prefix(DECK_TAB)
+}
+
 /// Cards a review takes at once from the index; more wait for the next.
 const REVIEW_CARDS: usize = 200;
 const DAY: f64 = 86_400.0;
@@ -82,16 +91,32 @@ impl VaultWindow {
     /// A deck chosen in the sidebar: the note column shows how many of its cards wait, and a
     /// button to start.
     pub(super) fn show_deck(&self, deck: &str) {
+        // A tab of its own beside the one shown (owner's request): the document open keeps its
+        // tab, and the review is come back to as one.
+        self.remember_place();
+        if !self.show_nothing() {
+            self.stay();
+            return;
+        }
+        self.tabs.borrow_mut().open_beside(&format!("{DECK_TAB}{deck}"));
+        self.save_tabs();
+        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
+            self.rebuild_sidebar();
+            self.highlight(&SidebarItem::Gap);
+        }
+        *self.review_deck.borrow_mut() = Some(deck.to_owned());
         let cards = self.due_cards(deck);
         self.show_list_column(true);
         *self.review.borrow_mut() = None;
         self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS }));
+        self.update_navigation();
     }
 
     /// The review goes: another list is chosen, or a document opened.
     pub(super) fn hide_review(&self) {
         self.show_list_column(true);
         *self.review.borrow_mut() = None;
+        *self.review_deck.borrow_mut() = None;
         self.review_view.show(None);
     }
 
@@ -105,12 +130,7 @@ impl VaultWindow {
     pub(super) fn review_asked(&self, asked: Asked) {
         match asked {
             Asked::Start => {
-                let Some(deck) = (match &self.state.borrow().selection {
-                    SidebarItem::Deck(deck) => Some(deck.clone()),
-                    _ => None,
-                }) else {
-                    return;
-                };
+                let Some(deck) = self.review_deck.borrow().clone() else { return };
                 let queue = self.due_cards(&deck).into();
                 *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0 });
                 self.next_card();

@@ -301,6 +301,8 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             SidebarItem::Folder(_) => (model.name(&item).to_owned(), Some("folder")),
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
             SidebarItem::Deck(_) => (model.name(&item).to_owned(), Some("rectangle.stack")),
+            // A deck's review is a tab too (ADR 0037).
+            SidebarItem::Tab(path) if path.starts_with("deck://") => (model.name(&item).to_owned(), Some("rectangle.stack")),
             SidebarItem::Tab(path) => (model.name(&item).to_owned(), Some(if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" })),
             SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), Some("rectangle.stack")),
             SidebarItem::Deleted => (strings::RECENTLY_DELETED.to_owned(), Some("trash")),

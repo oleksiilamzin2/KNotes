@@ -66,7 +66,9 @@ impl VaultWindow {
     pub(super) fn show_tab(&self, path: &str) -> Option<TabPlace> {
         // A note opens in the tab shown; a PDF, or a note asked to, in a new tab beside it
         // (owner's choice).
-        let beside = self.new_tab_next.replace(false) || FileKind::from_path(path) == FileKind::Pdf;
+        // Beside a deck's review too: a note opened from the list does not take the review's tab.
+        let on_review = self.tabs.borrow().current_path().is_some_and(|shown| super::cards::deck_of_tab(shown).is_some());
+        let beside = self.new_tab_next.replace(false) || FileKind::from_path(path) == FileKind::Pdf || on_review;
         let place = if beside { self.tabs.borrow_mut().open_beside(path) } else { self.tabs.borrow_mut().navigate(path) };
         if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
             self.rebuild_sidebar();
@@ -116,7 +118,7 @@ impl VaultWindow {
         let (Some(file), Some(vault)) = (self.tabs_file(), self.vault()) else { return };
         let Ok(text) = std::fs::read_to_string(file) else { return };
         let mut tabs = Tabs::from_text(&text);
-        tabs.retain(|p| vault.join(p).is_file());
+        tabs.retain(|p| super::cards::deck_of_tab(p).is_some() || vault.join(p).is_file());
         let current = tabs.current_path().map(str::to_owned);
         *self.tabs.borrow_mut() = tabs;
         if let Some(path) = current {

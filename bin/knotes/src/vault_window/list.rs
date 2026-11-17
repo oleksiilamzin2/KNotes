@@ -110,10 +110,9 @@ impl VaultWindow {
             self.open_note(path, true);
             return;
         }
-        // A deck: its review in the note column; any other list: the review goes.
-        match &item {
-            SidebarItem::Deck(deck) => self.show_deck(deck),
-            _ => self.hide_review(),
+        // A deck: its review, in a tab of its own (ADR 0037); the list shows its notes.
+        if let SidebarItem::Deck(deck) = &item {
+            self.show_deck(deck);
         }
         self.state.borrow_mut().selection = item;
         *self.search_results.borrow_mut() = None;
