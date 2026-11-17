@@ -135,8 +135,8 @@ impl SpaceSwitcher {
             unsafe { item.setRepresentedObject(Some(NSString::from_str(spec).as_ref())) };
             item
         };
-        // Monochrome (owner's choice): the whole vault a book, a space braces, not the tabs'
-        // stacked squares and the spaces' coloured dots.
+        // The whole vault a book (not the tabs' stacked squares); a space its coloured dot (the
+        // owner tried braces and took the dots back).
         let symbol = |name: &str, description: &str| NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), Some(&NSString::from_str(description)));
         let whole = entry(strings::WHOLE_VAULT, "");
         whole.setImage(symbol(crate::path_bar::VAULT_SYMBOL, strings::WHOLE_VAULT).as_deref());
@@ -145,7 +145,7 @@ impl SpaceSwitcher {
         let mut selected = 0;
         for space in &spaces {
             let item = entry(&space.name, &format!("s:{}", space.id));
-            item.setImage(symbol("curlybraces", &space.name).as_deref());
+            item.setImage(crate::space_ui::dot(space.color, 11.0, &space.name).as_deref());
             if current.as_deref() == Some(space.id.as_str()) {
                 selected = menu.numberOfItems();
             }
