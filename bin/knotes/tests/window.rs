@@ -3806,3 +3806,26 @@ fn a_file_kept_from_the_ai_restored_under_another_name_stays_kept() {
     assert!(vault.path().join("Docs/a 2.pdf").exists(), "back under another name");
     assert_eq!(rules(), Some(serde_json::json!({"files": {"a.pdf": {"ai": false}, "a 2.pdf": {"ai": false}}})));
 }
+
+#[test]
+fn a_pdf_written_again_outside_while_open_is_shown_anew_where_it_was() {
+    let shorter = tempfile::tempdir().unwrap();
+    let new = shorter.path().join("new.pdf");
+    std::fs::write(&new, pdf_of(3)).unwrap();
+    let rewrite = format!("long.pdf={}", new.display());
+    let env = [("KNOTES_PROBE_OPEN", "long.pdf"), ("KNOTES_PROBE_PDF_GO", "2"), ("KNOTES_PROBE_REWRITE_IMAGE", &rewrite), ("KNOTES_PROBE_DELAY_MS", "2500")];
+    let (_vault, out) = probe_images(&[], &[("long.pdf", &pdf_of(30))], &env);
+    assert!(out.contains("pdf-view: long.pdf 2/3"), "its 3 pages now, at the page it was at: {out}");
+    // Fewer pages than the one it was at: the last.
+    std::fs::write(&new, pdf_of(1)).unwrap();
+    let (_vault, out) = probe_images(&[], &[("long.pdf", &pdf_of(30))], &env);
+    assert!(out.contains("pdf-view: long.pdf 1/1"), "{out}");
+}
+
+#[test]
+fn a_pdf_deleted_outside_while_open_closes() {
+    let env = [("KNOTES_PROBE_OPEN", "long.pdf"), ("KNOTES_PROBE_DELETE", "1"), ("KNOTES_PROBE_DELAY_MS", "2500")];
+    let (_vault, out) = probe_images(&[("n.md", "n")], &[("long.pdf", &pdf_of(30))], &env);
+    assert!(out.contains("pdf-view: hidden") && out.contains("note-column: empty"), "{out}");
+}
+

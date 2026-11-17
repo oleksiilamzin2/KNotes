@@ -186,6 +186,44 @@ impl VaultWindow {
         true
     }
 
+    /// The PDF open changed on the disk. Written again (exported anew, annotated in Preview), it
+    /// is shown anew, at the place it was, Cmd+F finding in the new text; the viewer made for
+    /// the old file drew the new pages into the old ones' frames. Not opening (still being
+    /// written), the old view stays until the next change. Gone, it closes, as a note does
+    /// (ADR 0035).
+    pub(super) fn pdf_changed_on_disk(&self, path: &str) {
+        let Some(vault) = self.vault() else { return };
+        let file = vault.join(path);
+        if !file.is_file() {
+            self.show_nothing();
+            return;
+        }
+        if crate::image_loader::pdf_page_sizes(&file).is_none_or(|sizes| sizes.is_empty()) {
+            return;
+        }
+        let (place, focused) = match self.pdf_view.borrow().as_ref() {
+            Some(viewer) => (Some(viewer.place()), self.window.firstResponder().is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, viewer.pages_view() as *const _ as *const u8))),
+            None => (None, false),
+        };
+        self.show_pdf(Some(path));
+        if let Some(viewer) = self.pdf_view.borrow().as_ref() {
+            self.window.layoutIfNeeded();
+            if let Some((page, at)) = place {
+                // Fewer pages now: the last.
+                let last = viewer.page().1.saturating_sub(1);
+                viewer.show_place(if page > last { (last, 0.0) } else { (page, at) });
+            }
+            if focused {
+                self.window.makeFirstResponder(Some(viewer.pages_view()));
+            }
+        }
+        let query = self.find_bar.text();
+        if self.find_bar.is_shown() && !query.is_empty() {
+            self.find_in_pdf(&query, false);
+        }
+        self.refresh_panel();
+    }
+
     /// Shows the PDF at `path` in the note column, or the note again (`None`). The last PDF's
     /// viewer goes, with every page it drew.
     pub(super) fn show_pdf(&self, path: Option<&str>) {
@@ -313,6 +351,11 @@ impl VaultWindow {
     /// Path of the note in the editor.
     pub fn open_path(&self) -> Option<String> {
         self.editing.borrow().as_ref().map(|e| e.path.clone())
+    }
+
+    /// The PDF open, if one is (probe mode).
+    pub fn pdf_open(&self) -> Option<String> {
+        self.pdf_path.borrow().clone()
     }
 
     pub fn vault(&self) -> Option<PathBuf> {

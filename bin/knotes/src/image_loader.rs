@@ -231,6 +231,9 @@ impl DeferredImage {
                 }
                 let image = match decoded {
                     Some(image) => Some(NSImage::initWithCGImage_size(NSImage::alloc(), &image, size)),
+                    // A PDF's page that does not draw stays blank: read whole, the file would
+                    // show its first page in its place.
+                    None if is_pdf(&file) => None,
                     // What ImageIO does not read (SVG).
                     None => NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&file.to_string_lossy())),
                 };

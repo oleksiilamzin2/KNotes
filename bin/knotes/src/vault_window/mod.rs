@@ -967,6 +967,10 @@ impl VaultWindow {
         if let Some(path) = changed {
             self.changed_on_disk(&path);
         }
+        let pdf = self.pdf_path.borrow().clone();
+        if let Some(pdf) = pdf.filter(|pdf| rescan || snapshot.changed.iter().any(|p| p == pdf)) {
+            self.pdf_changed_on_disk(&pdf);
+        }
         // The note open is gone from the disk (deleted or moved outside Knotes): it closes, its
         // unwritten edits beside where it was. Asked of the disk, not of the snapshot, which may
         // predate a file just made or renamed.

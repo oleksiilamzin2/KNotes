@@ -430,9 +430,9 @@ pub fn connection_link_requested(window: &std::rc::Rc<VaultWindow>) {
 }
 
 /// `KNOTES_PROBE_WRITE=text`: another program rewrites the open note's file;
-/// `KNOTES_PROBE_DELETE=1`: another program deletes it.
+/// `KNOTES_PROBE_DELETE=1`: another program deletes it, or the PDF open.
 pub fn write_requested(window: &VaultWindow) {
-    let (Some(path), Some(vault)) = (window.open_path(), window.vault()) else { return };
+    let (Some(path), Some(vault)) = (window.open_path().or_else(|| window.pdf_open()), window.vault()) else { return };
     if let Ok(text) = std::env::var("KNOTES_PROBE_WRITE") {
         std::fs::write(vault.join(&path), text).expect("outside write");
     }
