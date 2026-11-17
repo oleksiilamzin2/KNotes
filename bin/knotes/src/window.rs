@@ -23,8 +23,9 @@ pub fn build(
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
-        | NSWindowStyleMask::Resizable
-        | NSWindowStyleMask::FullSizeContentView;
+        | NSWindowStyleMask::Resizable;
+    // Not a full-size content view (owner's choice, 2026-11-17): the columns start under the
+    // toolbar and its row, and what scrolls is cut at that edge, not faded under the glass.
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1400.0, 860.0));
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(NSWindow::alloc(mtm), frame, style, NSBackingStoreType::Buffered, false)
