@@ -8,6 +8,10 @@ impl VaultWindow {
     pub(super) fn act_as_probe_asks(&self) {
         probe::sidebar_mode_requested(&self.window);
         probe::search_requested(&self.window);
+        // `KNOTES_PROBE_SEARCH_CASE=1`: a click on the search row's «Aa» (the case kept).
+        if std::env::var_os("KNOTES_PROBE_SEARCH_CASE").is_some() {
+            self.search_bar.click_case();
+        }
         probe::toggle_sidebar_requested(&self.window);
         probe::panel_requested(&self.window);
         if let Some(space) = probe::requested_space() {
@@ -137,6 +141,10 @@ impl VaultWindow {
             self.open_find();
             self.find_bar.set_text(&word);
             self.find_text(&word, true);
+            // `KNOTES_PROBE_FIND_CASE=1`: a click on the bar's «Aa» (the case kept from then on).
+            if std::env::var_os("KNOTES_PROBE_FIND_CASE").is_some() {
+                self.find_bar.click_case();
+            }
             let steps: usize = std::env::var("KNOTES_PROBE_FIND_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
             for _ in 0..steps {
                 self.find_step(true);

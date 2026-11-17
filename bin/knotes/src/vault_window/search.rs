@@ -81,7 +81,7 @@ impl VaultWindow {
         if let Some(worker) = self.search_worker.borrow().as_ref() {
             let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
             let (scope, space) = scope;
-            worker.request(SearchRequest { generation, mode, query, scope, titles, closeness, space });
+            worker.request(SearchRequest { generation, mode, query, scope, titles, closeness, space, ignore_case: self.search_bar.ignore_case() });
         }
     }
 

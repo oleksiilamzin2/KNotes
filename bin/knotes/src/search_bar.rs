@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, sel};
 use knotes_app::SearchMode;
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSControlSize, NSLayoutConstraint, NSScrollView, NSSearchField, NSSegmentDistribution, NSSegmentSwitchTracking, NSSegmentedControl, NSView};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSButtonType, NSControlStateValueOn, NSControlSize, NSLayoutConstraint, NSScrollView, NSSearchField, NSSegmentDistribution, NSSegmentSwitchTracking, NSSegmentedControl, NSView};
 use objc2_foundation::{NSArray, NSEdgeInsets, NSString};
 
 use crate::strings;
@@ -26,6 +26,8 @@ pub struct SearchBar {
     /// Files, content or meaning: rewrites the query's operator (`content:`, `meaning:`), which
     /// stays the truth.
     pub mode: Retained<NSSegmentedControl>,
+    /// «Aa» beside the switch: on while the query's case is ignored (as it starts).
+    case: Retained<NSButton>,
     bar: Retained<NSView>,
     scroll: Retained<NSScrollView>,
 }
@@ -57,6 +59,17 @@ impl SearchBar {
         mode.setSegmentDistribution(NSSegmentDistribution::FillEqually);
         mode.setTranslatesAutoresizingMaskIntoConstraints(false);
         bar.addSubview(&mode);
+        // SAFETY: no target yet (`set_target` sets it).
+        let case = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str("Aa"), None, None, mtm) };
+        case.setButtonType(NSButtonType::PushOnPushOff);
+        case.setState(NSControlStateValueOn);
+        case.setControlSize(NSControlSize::Small);
+        case.setToolTip(Some(&NSString::from_str(strings::FIND_IGNORE_CASE)));
+        case.setTranslatesAutoresizingMaskIntoConstraints(false);
+        bar.addSubview(&case);
+        // The switch gives way before the column does: with «Aa» beside it the row was wider than
+        // the list at its narrowest, and widened the window.
+        mode.setContentCompressionResistancePriority_forOrientation(200.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         let safe = column.safeAreaLayoutGuide();
         let constraints = [
             bar.topAnchor().constraintEqualToAnchor(&safe.topAnchor()),
@@ -64,11 +77,13 @@ impl SearchBar {
             bar.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
             bar.heightAnchor().constraintEqualToConstant(BAR_HEIGHT),
             mode.leadingAnchor().constraintEqualToAnchor_constant(&bar.leadingAnchor(), SIDE_PADDING),
-            mode.trailingAnchor().constraintEqualToAnchor_constant(&bar.trailingAnchor(), -SIDE_PADDING),
+            mode.trailingAnchor().constraintEqualToAnchor_constant(&case.leadingAnchor(), -8.0),
+            case.trailingAnchor().constraintEqualToAnchor_constant(&bar.trailingAnchor(), -SIDE_PADDING),
+            case.centerYAnchor().constraintEqualToAnchor(&mode.centerYAnchor()),
             mode.topAnchor().constraintEqualToAnchor_constant(&bar.topAnchor(), GAP),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
-        Self { column, field, mode, bar, scroll }
+        Self { column, field, mode, case, bar, scroll }
     }
 
     /// `target` receives `searchChanged:` with the field as sender; it must outlive the window.
@@ -79,7 +94,20 @@ impl SearchBar {
             self.field.setAction(Some(sel!(searchChanged:)));
             self.mode.setTarget(Some(target));
             self.mode.setAction(Some(sel!(searchModeChanged:)));
+            self.case.setTarget(Some(target));
+            self.case.setAction(Some(sel!(searchCaseChanged:)));
         }
+    }
+
+    /// Whether the query's case is ignored («Aa» on).
+    pub fn ignore_case(&self) -> bool {
+        self.case.state() == NSControlStateValueOn
+    }
+
+    /// A click on «Aa» (probe mode).
+    pub fn click_case(&self) {
+        // SAFETY: a click on the row's own button.
+        unsafe { self.case.performClick(None) };
     }
 
     /// Shows the mode of the current query in the switch.

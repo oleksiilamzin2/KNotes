@@ -64,6 +64,8 @@ pub struct Ivars {
     on_note_title: RefCell<Option<OnSearch>>,
     /// Called when editing the name ends by a key (Return or Escape): the note takes the keys.
     on_title_done: RefCell<Option<OnNewNote>>,
+    /// Called when the search row's «Aa» is clicked.
+    on_search_case: RefCell<Option<OnNewNote>>,
     /// The open note's name field, once the toolbar has made it, and the name it shows.
     note_title: RefCell<Option<Retained<TitleField>>>,
     note_title_state: RefCell<String>,
@@ -201,6 +203,14 @@ define_class!(
             }
         }
 
+        /// The search row's «Aa»: the query searched again, its case ignored or kept.
+        #[unsafe(method(searchCaseChanged:))]
+        fn search_case_changed(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_search_case.borrow().as_ref() {
+                callback();
+            }
+        }
+
         /// Return (or leaving the field) renames the open note when its name changed.
         #[unsafe(method(noteTitleEdited:))]
         fn note_title_edited(&self, sender: &NSTextField) {
@@ -264,6 +274,7 @@ impl ToolbarDelegate {
             on_search_mode: RefCell::new(None),
             on_note_title: RefCell::new(None),
             on_title_done: RefCell::new(None),
+            on_search_case: RefCell::new(None),
             note_title: RefCell::new(None),
             note_title_state: RefCell::new(String::new()),
             note_date: RefCell::new(None),
@@ -372,6 +383,11 @@ impl ToolbarDelegate {
         }
     }
 
+
+    /// Called when the search row's «Aa» is clicked.
+    pub fn on_search_case(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_search_case.borrow_mut() = Some(Box::new(callback));
+    }
 
     /// Called when editing the name ends by Return or Escape.
     pub fn on_title_done(&self, callback: impl Fn() + 'static) {

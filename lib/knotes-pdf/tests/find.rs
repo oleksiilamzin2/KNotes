@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-use knotes_pdf::find_in_pdf;
+use knotes_pdf::{find_in_pdf, find_in_pdf_cased};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../bin/knotes/tests/fixtures/three-pages.pdf");
 
@@ -18,4 +18,11 @@ fn words_are_found_on_every_page_ignoring_case_as_character_ranges() {
 fn a_search_called_off_stops_and_an_empty_one_finds_nothing() {
     assert_eq!(find_in_pdf(Path::new(FIXTURE), "page", &AtomicBool::new(true)), None);
     assert_eq!(find_in_pdf(Path::new(FIXTURE), "", &AtomicBool::new(false)), Some(Vec::new()));
+}
+
+#[test]
+fn with_case_kept_only_the_query_s_own_case_is_found() {
+    let found = |query: &str| find_in_pdf_cased(Path::new(FIXTURE), query, false, &AtomicBool::new(false)).unwrap();
+    assert!(found("PAGE").is_empty(), "the pages say Page");
+    assert_eq!(found("Page"), [(0, 0..4), (1, 0..4), (2, 0..4)]);
 }

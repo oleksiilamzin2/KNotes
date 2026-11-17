@@ -56,6 +56,12 @@ pub fn page_text(file: &Path, index: usize) -> Option<PageText> {
 /// `None` when the PDF does not open or `cancelled` is set while it searches (a page at a
 /// time, its text let go after it).
 pub fn find_in_pdf(file: &Path, query: &str, cancelled: &std::sync::atomic::AtomicBool) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+    find_in_pdf_cased(file, query, true, cancelled)
+}
+
+/// `find_in_pdf`, in any case (`ignore_case`) or in the query's own.
+pub fn find_in_pdf_cased(file: &Path, query: &str, ignore_case: bool, cancelled: &std::sync::atomic::AtomicBool) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+    let lower = |c: char| if ignore_case { lower(c) } else { c };
     let needle: Vec<char> = query.chars().map(lower).collect();
     let document = open(file)?;
     let mut found = Vec::new();

@@ -4,6 +4,22 @@ use std::ops::Range;
 
 /// Byte ranges of the occurrences of `query` in `text`, case-insensitive, not overlapping.
 pub fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
+    find_all_cased(text, query, true)
+}
+
+/// `find_all`, in any case (`ignore_case`) or in the query's own.
+pub fn find_all_cased(text: &str, query: &str, ignore_case: bool) -> Vec<Range<usize>> {
+    if !ignore_case {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let (mut found, mut from) = (Vec::new(), 0);
+        while let Some(at) = text[from..].find(query) {
+            found.push(from + at..from + at + query.len());
+            from += at + query.len();
+        }
+        return found;
+    }
     let wanted: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
     if wanted.is_empty() {
         return Vec::new();

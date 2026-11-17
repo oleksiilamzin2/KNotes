@@ -761,6 +761,14 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_search_case(move || {
+            if let Some(window) = weak.upgrade()
+                && !window.state.borrow().search.trim().is_empty()
+            {
+                window.request_search();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
         this.toolbar_delegate.on_search_mode(move |mode| {
             if let Some(window) = weak.upgrade() {
                 window.set_search_mode(mode);

@@ -414,6 +414,8 @@ pub const ASK_AI: &str = "Запитати ШІ";
 /// The find bar over the note.
 pub const FIND_PLACEHOLDER: &str = "Знайти в нотатці";
 pub const FIND_DONE: &str = "Готово";
+/// The find bar's «Aa».
+pub const FIND_IGNORE_CASE: &str = "Ігнорувати регістр";
 pub const FIND_NONE: &str = "Немає";
 
 /// "3 з 12"

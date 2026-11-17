@@ -10,7 +10,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControl, NSControlSize, NSControlTextEditingDelegate, NSEventModifierFlags,
+    NSApplication, NSAutoresizingMaskOptions, NSButton, NSButtonType, NSColor, NSControl, NSControlSize, NSControlStateValueOn, NSControlTextEditingDelegate, NSEventModifierFlags,
     NSFont, NSImage, NSLayoutConstraint, NSScrollView, NSSearchField, NSSearchFieldDelegate, NSSegmentSwitchTracking, NSSegmentedControl, NSTextField,
     NSTextFieldDelegate, NSTextView, NSView,
 };
@@ -31,6 +31,8 @@ pub struct ControlsIvars {
     on_text: RefCell<Option<OnText>>,
     on_step: RefCell<Option<OnStep>>,
     on_close: RefCell<Option<OnClose>>,
+    /// The bar's field, whose text is found again when the case switch changes.
+    field: RefCell<Option<Retained<NSSearchField>>>,
 }
 
 define_class!(
@@ -81,6 +83,16 @@ define_class!(
             self.step(sender.selectedSegment() == 1);
         }
 
+        /// «Aa»: the case ignored or kept; found again as it is now.
+        #[unsafe(method(findCase:))]
+        fn find_case(&self, sender: &NSButton) {
+            let Some(field) = self.ivars().field.borrow().clone() else { return };
+            let _ = sender;
+            if let Some(callback) = self.ivars().on_text.borrow().as_ref() {
+                callback(field.stringValue().to_string());
+            }
+        }
+
         #[unsafe(method(findDone:))]
         fn find_done(&self, _sender: Option<&AnyObject>) {
             self.close();
@@ -106,6 +118,8 @@ pub struct FindBar {
     /// The note column: the bar over the note's scroll view.
     pub column: Retained<NSView>,
     pub field: Retained<NSSearchField>,
+    /// «Aa»: on while the case is ignored.
+    case: Retained<NSButton>,
     count: Retained<NSTextField>,
     bar: Retained<NSView>,
     scroll: Retained<NSScrollView>,
@@ -145,6 +159,15 @@ impl FindBar {
         count.setFont(Some(&NSFont::systemFontOfSize(NSFont::smallSystemFontSize())));
         count.setTextColor(Some(&NSColor::secondaryLabelColor()));
         count.setTranslatesAutoresizingMaskIntoConstraints(false);
+        *controls.ivars().field.borrow_mut() = Some(field.clone());
+        // «Aa», on: the case ignored (as it always was); off: only the text's own case is found.
+        // SAFETY: the controls are the target and live as long as the bar.
+        let case = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str("Aa"), Some(&controls), Some(sel!(findCase:)), mtm) };
+        case.setButtonType(NSButtonType::PushOnPushOff);
+        case.setState(NSControlStateValueOn);
+        case.setControlSize(NSControlSize::Small);
+        case.setToolTip(Some(&NSString::from_str(strings::FIND_IGNORE_CASE)));
+        case.setTranslatesAutoresizingMaskIntoConstraints(false);
         let images = [symbol("chevron.left", strings::FIND_PREVIOUS), symbol("chevron.right", strings::FIND_NEXT)];
         let images = NSArray::from_retained_slice(&images.into_iter().flatten().collect::<Vec<_>>());
         // SAFETY: the controls are the target and live as long as the bar.
@@ -163,7 +186,7 @@ impl FindBar {
         let done = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(strings::FIND_DONE), Some(&controls), Some(sel!(findDone:)), mtm) };
         done.setControlSize(NSControlSize::Small);
         done.setTranslatesAutoresizingMaskIntoConstraints(false);
-        for view in [field.as_ref() as &NSView, &count, &arrows, &done] {
+        for view in [field.as_ref() as &NSView, &case, &count, &arrows, &done] {
             bar.addSubview(view);
         }
         let safe = column.safeAreaLayoutGuide();
@@ -174,7 +197,9 @@ impl FindBar {
             bar.heightAnchor().constraintEqualToConstant(BAR_HEIGHT),
             field.leadingAnchor().constraintEqualToAnchor_constant(&bar.leadingAnchor(), SIDE_PADDING),
             field.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
-            count.leadingAnchor().constraintEqualToAnchor_constant(&field.trailingAnchor(), 8.0),
+            case.leadingAnchor().constraintEqualToAnchor_constant(&field.trailingAnchor(), 8.0),
+            case.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
+            count.leadingAnchor().constraintEqualToAnchor_constant(&case.trailingAnchor(), 8.0),
             count.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
             arrows.leadingAnchor().constraintEqualToAnchor_constant(&count.trailingAnchor(), 8.0),
             arrows.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
@@ -183,10 +208,13 @@ impl FindBar {
             done.centerYAnchor().constraintEqualToAnchor(&bar.centerYAnchor()),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
+        // The field gives way first: with «Aa» beside it the bar's controls were 2 points wider than
+        // the note column at its narrowest, and widened the window.
+        field.setContentCompressionResistancePriority_forOrientation(200.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         // The count keeps its width; the field takes the rest.
         count.setContentCompressionResistancePriority_forOrientation(800.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         count.setContentHuggingPriority_forOrientation(750.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
-        Self { column, field, count, bar, scroll, other: std::cell::RefCell::new(None), controls, bottom: std::cell::Cell::new(0.0) }
+        Self { column, field, case, count, bar, scroll, other: std::cell::RefCell::new(None), controls, bottom: std::cell::Cell::new(0.0) }
     }
 
     /// `on_text` gets the text to find as it is typed, `on_step` `true` for the next occurrence
@@ -196,6 +224,17 @@ impl FindBar {
         *ivars.on_text.borrow_mut() = Some(Box::new(on_text));
         *ivars.on_step.borrow_mut() = Some(Box::new(on_step));
         *ivars.on_close.borrow_mut() = Some(Box::new(on_close));
+    }
+
+    /// Whether the case is ignored («Aa» on, as it starts).
+    pub fn ignore_case(&self) -> bool {
+        self.case.state() == NSControlStateValueOn
+    }
+
+    /// A click on «Aa» (probe mode).
+    pub fn click_case(&self) {
+        // SAFETY: a click on the bar's own button.
+        unsafe { self.case.performClick(None) };
     }
 
     pub fn is_shown(&self) -> bool {

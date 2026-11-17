@@ -86,9 +86,10 @@ impl VaultWindow {
             self.find_in_pdf(query, jump);
             return;
         }
+        let ignore_case = self.find_bar.ignore_case();
         let found_in = |view: &NSTextView| {
             let text = view.string().to_string();
-            let bounds: Vec<usize> = knotes_app::find_all(&text, query).iter().flat_map(|r| [r.start, r.end]).collect();
+            let bounds: Vec<usize> = knotes_app::find_all_cased(&text, query, ignore_case).iter().flat_map(|r| [r.start, r.end]).collect();
             utf16_offsets(&text, &bounds).chunks(2).map(|p| (p[0], p[1])).collect::<Vec<(usize, usize)>>()
         };
         let own = found_in(&self.note_text);
@@ -152,10 +153,11 @@ impl VaultWindow {
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         *self.pdf_find.borrow_mut() = std::sync::Arc::clone(&cancelled);
         let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
+        let ignore_case = self.find_bar.ignore_case();
         std::thread::spawn(move || {
             let file = vault.join(&path);
             let found = words.iter().try_fold(Vec::new(), |mut all, word| {
-                all.extend(knotes_pdf::find_in_pdf(&file, word, &cancelled)?);
+                all.extend(knotes_pdf::find_in_pdf_cased(&file, word, ignore_case, &cancelled)?);
                 Some(all)
             });
             let found = found.map(|mut all| {

@@ -3922,3 +3922,32 @@ fn a_new_note_starts_with_its_name_to_type_and_keeps_the_name_typed() {
     assert!(notes.iter().any(|(path, text)| path.ends_with("Мій план.md") && text == "Перший рядок\nдалі"), "{notes:?} {out}");
     assert!(!notes.iter().any(|(path, _)| path.contains("Перший рядок")), "{notes:?}");
 }
+
+#[test]
+fn the_find_bar_s_aa_keeps_the_case_when_switched_off() {
+    let note = "Пункт один.\n\nДругий пункт і ще ПУНКТ.\n\nкінець";
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_FIND", "пункт")];
+    let (_vault, out) = probe_notes(&[("a.md", note)], &open);
+    assert!(out.contains("found-in-note: 3"), "any case, as it starts: {out}");
+    let (_vault, out) = probe_notes(&[("a.md", note)], &[open[0], open[1], ("KNOTES_PROBE_FIND_CASE", "1")]);
+    assert!(out.contains("find: 1 з 1") && out.contains("found-in-note: 1"), "only «пункт» as typed: {out}");
+}
+
+#[test]
+fn the_list_search_s_aa_keeps_the_case_when_switched_off() {
+    let notes = [("Radar.md", "Про РАДАР і ще щось."), ("radar plan.md", "Тут радар малими."), ("other.md", "нічого")];
+    let titles = |out: &str| -> Vec<String> {
+        let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
+        let mut titles: Vec<String> = list.split(" | ").filter(|r| !r.starts_with('[')).map(|r| r.split(" ~ ").next().unwrap_or_default().to_owned()).filter(|t| !t.is_empty()).collect();
+        titles.sort();
+        titles
+    };
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "radar")]);
+    assert_eq!(titles(&out), ["Radar", "radar plan"], "any case, as it starts");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "radar"), ("KNOTES_PROBE_SEARCH_CASE", "1")]);
+    assert_eq!(titles(&out), ["radar plan"], "the name as typed");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "content: радар")]);
+    assert_eq!(titles(&out), ["Radar", "radar plan"]);
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "content: радар"), ("KNOTES_PROBE_SEARCH_CASE", "1")]);
+    assert_eq!(titles(&out), ["radar plan"], "the text as typed");
+}
