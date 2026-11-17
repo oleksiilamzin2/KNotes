@@ -187,3 +187,21 @@ paths.
   EmbeddingGemma's 0.83 (MRR 0.72) at 256; the start token `<s>` made it worse (0.51). Whether
   the conversion or llama.cpp's running of the architecture costs it something was not checked
   against NVIDIA's own code. The owner chose to do without it (2026-11-15).
+
+## Later (2026-11-17): the helper failing
+
+- **An answer has a deadline.** The helper's answer was waited for without one: a helper that
+  hung (a GPU or Metal stall) kept everything asking waiting for good: all of the list's
+  searches (by name and by text too, on one thread with those by meaning), the chat's turn
+  (which embeds what was just written first, and searches through the same helper; Cancel did
+  not reach it) and the vectors kept. A stand-in helper that read the request and said nothing
+  was still waited for 5 s on. Answers are now read on a thread of their own and waited for 60
+  s at most (`DEADLINE`: loading the model takes 3.1 s the first time, a batch 80 ms); a helper
+  silent longer is stopped (a late answer would be taken for the next request's) and the
+  request fails, not asked again (which would make it wait as long once more). A helper that
+  dies says how it ended ("exit status: 3").
+- Found sound: a helper dying in a request is started again and asked once more (an answer or
+  an error in 0.1 to 0.4 s); one that exits idle is started at the next request; one whose app
+  goes (quits or crashes) exits at once, its input closed; a missing model is said in each
+  answer; a passage longer than the model's window is cut; warming never waits.
+- Left: a helper that has exited idle stays a zombie (no memory) until the next request.

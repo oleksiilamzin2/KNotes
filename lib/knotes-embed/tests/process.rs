@@ -58,3 +58,31 @@ fn a_missing_helper_or_a_wrong_answer_says_so() {
     let (script, answer) = helper(dir.path(), &Err(EmbedError::Failed("no memory".into())));
     assert_eq!(ProcessEmbedder::new(&script, &answer).embed(&two[..1]), Err(EmbedError::Failed("no memory".into())));
 }
+
+#[test]
+fn a_helper_that_hangs_is_stopped_at_the_deadline_and_the_next_request_starts_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let (script, answer) = helper(dir.path(), &Ok(vec![[3; DIMS]]));
+    // The first one started reads the request and says nothing (its pid kept); those after it
+    // answer.
+    let pid = dir.path().join("hung.pid");
+    std::fs::write(&script, format!("#!/bin/sh\nif [ -e '{0}' ]; then read line; cat \"$1\"; else echo $$ > '{0}'; read line; sleep 30; fi\n", pid.display())).unwrap();
+    let embedder = ProcessEmbedder::with_deadline(&script, &answer, std::time::Duration::from_millis(300));
+    let start = std::time::Instant::now();
+    let hung = embedder.embed(&[Passage::Query("бойлер".into())]);
+    assert!(matches!(&hung, Err(EmbedError::Failed(why)) if why.contains("did not answer")), "{hung:?}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "not asked again: {:?}", start.elapsed());
+    let pid = std::fs::read_to_string(&pid).unwrap();
+    let alive = std::process::Command::new("kill").args(["-0", pid.trim()]).status().unwrap().success();
+    assert!(!alive, "the hung helper was stopped");
+    assert_eq!(embedder.embed(&[Passage::Query("анод".into())]), Ok(vec![[3; DIMS]]), "another started");
+}
+
+#[test]
+fn a_helper_that_dies_says_how_it_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let (script, answer) = helper(dir.path(), &Ok(vec![[3; DIMS]]));
+    std::fs::write(&script, "#!/bin/sh\nexit 3\n").unwrap();
+    let ended = ProcessEmbedder::new(&script, &answer).embed(&[Passage::Query("x".into())]);
+    assert!(matches!(&ended, Err(EmbedError::Failed(why)) if why.contains("stopped answering") && why.contains('3')), "{ended:?}");
+}
