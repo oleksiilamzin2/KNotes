@@ -130,6 +130,7 @@ impl ChatWorker {
                                 Some(tools) => {
                                     // The window's space: its finds first, and the model told (ADR 0030).
                                     tools.set_space(turn.space.as_ref().map(|(id, _)| id.clone()));
+                                    tools.set_utc_offset(i64::try_from(objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT()).unwrap_or(0));
                                     let space = turn.space.as_ref().map(|(_, name)| name.clone());
                                     let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today(), effort: turn.effort.clone(), space };
                                     chat.send(&mut items, &mut memory, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)

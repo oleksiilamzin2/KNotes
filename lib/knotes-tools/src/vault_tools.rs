@@ -16,6 +16,8 @@ use crate::{Closeness, ToolError, ToolIndex, ToolSpec, day_start, specs, utc_min
 const FRAGMENT: usize = 400;
 /// A read stops past this many characters, at a block's or page's end.
 const READ_BUDGET: usize = 24_000;
+/// The decks' settings, in the vault (ADR 0037).
+const DECK_SETTINGS: &str = ".knotes/decks.json";
 /// The tag that keeps a note from the AI (ADR 0004).
 pub use knotes_spaces::NO_AI_TAG;
 
@@ -69,12 +71,15 @@ pub struct VaultTools<I, F, D> {
     meaning: Option<(Box<dyn MeaningSearch>, Closeness)>,
     /// The space the app's window works in (ADR 0030).
     space: RefCell<Option<String>>,
+    /// How far the user's clock is ahead of UTC, in seconds: a day's new cards count from
+    /// their midnight.
+    utc_offset: std::cell::Cell<i64>,
 }
 
 impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultTools<I, F, D> {
     pub fn new(index: I, files: F, documents: D) -> Self {
         let titles = RefCell::new((Instant::now(), titles_of(&index)));
-        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None), meaning: None, space: RefCell::new(None) }
+        Self { index, files, documents, titles, overview: RefCell::new(None), kept: RefCell::new(None), meaning: None, space: RefCell::new(None), utc_offset: std::cell::Cell::new(0) }
     }
 
     /// Search finds blocks by meaning too, merged with those by words (ADR 0028), the ones not
@@ -82,6 +87,11 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     pub fn with_meaning(mut self, meaning: Box<dyn MeaningSearch>, closeness: Closeness) -> Self {
         self.meaning = Some((meaning, closeness));
         self
+    }
+
+    /// The user's clock is `seconds` ahead of UTC (their days begin at their midnight).
+    pub fn set_utc_offset(&self, seconds: i64) {
+        self.utc_offset.set(seconds);
     }
 
     /// The tools' descriptions.
@@ -235,7 +245,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             "list_tasks" => self.list_tasks(args),
             "list_tags" => self.list_tags(),
             "list_spaces" => Ok(self.list_spaces()),
-            "list_decks" => self.list_decks(),
+            "list_decks" => self.list_decks(args),
             "list_cards" => self.list_cards(args),
             _ => Err(ToolError::Unknown(name.to_owned())),
         }
@@ -630,22 +640,76 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     /// The decks of the notes' cards (ADR 0037), each with the cards in it and under it, as the
-    /// sidebar counts them; without the cards of notes kept from the AI.
-    fn list_decks(&self) -> Result<Value, ToolError> {
+    /// sidebar counts them, and its settings; without the cards of notes kept from the AI. With
+    /// `deck`, that deck's statistics too.
+    fn list_decks(&self, args: &Value) -> Result<Value, ToolError> {
+        const DAY: i64 = 86_400;
         let (kept, now) = (self.kept(), now());
-        let mut decks: BTreeMap<String, [usize; 3]> = BTreeMap::new();
-        let mut all = [0; 3];
-        for row in self.index.card_rows(None, None).map_err(failed)?.into_iter().filter(|r| !kept.holds(&r.path)) {
-            let counted = [1, usize::from(standing(&row, now) == "due"), usize::from(row.reviewed.is_none())];
+        let offset = self.utc_offset.get();
+        let today = (now + offset).div_euclid(DAY) * DAY - offset;
+        // As the app reads them; none set, or a file that cannot be read: the defaults.
+        let settings = knotes_cards::DeckSettings::parse(&self.files.read_text(DECK_SETTINGS).unwrap_or_default());
+        // Of a deck with those under it: its cards, the due, the new, the young, the mature,
+        // and the new cards today has taken.
+        let mut decks: BTreeMap<String, [usize; 6]> = BTreeMap::new();
+        let mut all = [0; 6];
+        let rows = self.index.card_rows(None, None).map_err(failed)?;
+        for row in rows.iter().filter(|r| !kept.holds(&r.path)) {
+            let mature = row.reviewed.is_some_and(|s| s.due - s.state.last >= knotes_core::MATURE_DAYS * DAY);
+            let counted = [
+                1,
+                usize::from(standing(row, now) == "due"),
+                usize::from(row.reviewed.is_none()),
+                usize::from(row.reviewed.is_some() && !mature),
+                usize::from(mature),
+                usize::from(row.reviewed.is_some_and(|s| s.first >= today)),
+            ];
             let parents = row.deck.match_indices('/').map(|(i, _)| &row.deck[..i]);
             for deck in parents.chain([row.deck.as_str()]) {
                 let counts = decks.entry(deck.to_owned()).or_default();
-                (0..3).for_each(|i| counts[i] += counted[i]);
+                (0..6).for_each(|i| counts[i] += counted[i]);
             }
-            (0..3).for_each(|i| all[i] += counted[i]);
+            (0..6).for_each(|i| all[i] += counted[i]);
         }
-        let decks: Vec<Value> = decks.into_iter().map(|(deck, [cards, due, new])| json!({"deck": deck, "cards": cards, "due": due, "new": new})).collect();
-        Ok(json!({"decks": decks, "cards": all[0], "due": all[1], "new": all[2]}))
+        // What the app asks now: the due, and of the new what the deck's day still takes.
+        let asks = |deck: &str, counts: &[usize; 6]| counts[1] + counts[2].min((settings.new_a_day(deck) as usize).saturating_sub(counts[5]));
+        let to_review: usize = decks.iter().filter(|(deck, _)| !deck.contains('/')).map(|(deck, counts)| asks(deck, counts)).sum();
+        let listed: Vec<Value> = decks
+            .iter()
+            .map(|(deck, counts)| {
+                let [cards, due, new, young, mature, new_today] = *counts;
+                json!({
+                    "deck": deck, "cards": cards, "new": new, "young": young, "mature": mature, "due": due, "to_review": asks(deck, counts),
+                    "new_a_day": settings.new_a_day(deck), "new_today": new_today, "retention": settings.retention(deck),
+                })
+            })
+            .collect();
+        let mut result = json!({"decks": listed, "cards": all[0], "due": all[1], "new": all[2], "to_review": to_review});
+        if let Some(deck) = args.get("deck").and_then(Value::as_str).map(|d| d.trim().trim_start_matches(knotes_cards::DECK_MARK).trim_matches('/')).filter(|d| !d.is_empty()) {
+            if !decks.contains_key(deck) {
+                return Err(ToolError::BadArguments(format!("no deck {deck:?}; the decks: {}", decks.keys().map(String::as_str).collect::<Vec<_>>().join(", "))));
+            }
+            let under = format!("{deck}/");
+            let of_deck = |row: &&knotes_core::CardRow| row.deck == deck || row.deck.starts_with(&under);
+            // What comes due, from the cards shown; the reviews, from the index, which counts
+            // every card of the deck: left out when a note kept from the AI holds one.
+            let coming = |days: i64| rows.iter().filter(of_deck).filter(|r| !kept.holds(&r.path)).filter(|r| r.reviewed.is_some_and(|s| s.due >= today + DAY && s.due < today + (days + 1) * DAY)).count();
+            let mut statistics = json!({"due_tomorrow": coming(1), "due_in_7_days": coming(7), "due_in_30_days": coming(30)});
+            if rows.iter().filter(of_deck).any(|r| kept.holds(&r.path)) {
+                statistics["reviews"] = json!("left out: a note kept from the AI holds cards of this deck");
+            } else {
+                let stats = self.index.deck_stats(deck, today).map_err(failed)?;
+                let (reviews, forgotten) = stats.reviews_by_day.iter().fold((0, 0), |(all, again), day| (all + day.0, again + day.1));
+                let [again, hard, good, easy] = stats.grades;
+                statistics["reviews_today"] = json!(stats.reviews_by_day.last().map_or(0, |day| day.0));
+                statistics["reviews_in_30_days"] = json!(reviews);
+                statistics["recalled_percent"] = json!(((reviews - forgotten) * 100 + reviews / 2).checked_div(reviews));
+                statistics["grades_in_30_days"] = json!({"again": again, "hard": hard, "good": good, "easy": easy});
+            }
+            result["deck"] = json!(deck);
+            result["statistics"] = statistics;
+        }
+        Ok(result)
     }
 
     /// The cards of a deck or a note, each with its question, its answer and where it stands.

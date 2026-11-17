@@ -635,14 +635,42 @@ fn card_vault() -> Vault {
 }
 
 #[test]
-fn list_decks_counts_each_deck_with_those_under_it() {
+fn list_decks_counts_each_deck_with_those_under_it_as_the_app_does() {
     let v = card_vault();
+    let deck = |deck: &str, cards: usize, new: usize, due: usize, to_review: usize| {
+        json!({"deck": deck, "cards": cards, "new": new, "young": cards - new, "mature": 0, "due": due, "to_review": to_review, "new_a_day": 20, "new_today": 1, "retention": 0.9})
+    };
     assert_eq!(
         call(&v, "list_decks", json!({})),
-        json!({"decks": [{"deck": "мови", "cards": 4, "due": 2, "new": 1}, {"deck": "мови/англійська", "cards": 3, "due": 2, "new": 0}], "cards": 4, "due": 2, "new": 1}),
-        "the kept note's deck is not there"
+        json!({"decks": [deck("мови", 4, 1, 2, 3), deck("мови/англійська", 3, 0, 2, 2)], "cards": 4, "due": 2, "new": 1, "to_review": 3}),
+        "the kept note's deck is not there; one card was new today"
     );
-    assert_eq!(call(&vault(), "list_decks", json!({})), json!({"decks": [], "cards": 0, "due": 0, "new": 0}));
+    assert_eq!(call(&vault(), "list_decks", json!({})), json!({"decks": [], "cards": 0, "due": 0, "new": 0, "to_review": 0}));
+    // The deck's settings, as the app keeps them in the vault: one new card a day, taken already.
+    write(v._dirs.0.path(), ".knotes/decks.json", r#"{"мови": {"new_a_day": 1, "retention": 0.85}}"#);
+    let set = call(&v, "list_decks", json!({}));
+    assert_eq!((&set["decks"][0]["to_review"], &set["decks"][0]["new_a_day"], &set["decks"][1]["retention"], &set["to_review"]), (&json!(2), &json!(1), &json!(0.85), &json!(2)), "a deck takes the one's above: {set}");
+}
+
+#[test]
+fn list_decks_gives_a_deck_s_statistics_when_asked() {
+    let v = card_vault();
+    let asked = call(&v, "list_decks", json!({"deck": "#@мови/"}));
+    assert_eq!(asked["deck"], "мови");
+    assert_eq!(
+        asked["statistics"],
+        json!({"due_tomorrow": 0, "due_in_7_days": 1, "due_in_30_days": 1, "reviews_today": 1, "reviews_in_30_days": 1, "recalled_percent": 100, "grades_in_30_days": {"again": 0, "hard": 0, "good": 1, "easy": 0}}),
+        "the card reviewed a minute ago comes back in three days; older reviews are past the 30 days"
+    );
+    assert!(matches!(v.tools.call("list_decks", &json!({"deck": "таємне"})), Err(ToolError::BadArguments(why)) if why.ends_with("the decks: мови, мови/англійська")), "a kept note's deck is no deck");
+    // A note kept from the AI with a card of the deck: its reviews are not told apart, so none are given.
+    write(v._dirs.0.path(), "Hidden.md", "#no-ai\n\n#@мови/англійська secret::таємниця ^c-8\n");
+    let mut index = SqliteIndex::open(v._dirs.1.path()).unwrap();
+    Indexer::with_documents(FsVault::new(v._dirs.0.path()), MarkdownParser::new(), Pdfs).sync(&mut index).unwrap();
+    let tools = VaultTools::new(SqliteIndex::open_reader(v._dirs.1.path()).unwrap(), FsVault::new(v._dirs.0.path()), Pdfs);
+    let asked = tools.call("list_decks", &json!({"deck": "мови"})).unwrap();
+    assert_eq!(asked["decks"][0]["cards"], 4, "its card is not counted");
+    assert_eq!(asked["statistics"], json!({"due_tomorrow": 0, "due_in_7_days": 1, "due_in_30_days": 1, "reviews": "left out: a note kept from the AI holds cards of this deck"}));
 }
 
 #[test]

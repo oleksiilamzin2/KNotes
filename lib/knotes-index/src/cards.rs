@@ -168,14 +168,14 @@ impl CardIndex for SqliteIndex {
         // As `due_cards` takes a deck and those under it.
         let (from, to) = (deck.map(|d| format!("{d}/")), deck.map(|d| format!("{d}0")));
         let mut st = self.conn.prepare_cached(
-            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses
+            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses, s.first
              FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
              WHERE (?1 IS NULL OR c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND (?4 IS NULL OR f.path = ?4)
              ORDER BY f.path, c.ord",
         )?;
         let rows = st.query_map(params![deck, from, to, path], |r| {
             let reviewed = match r.get::<_, Option<f64>>(5)? {
-                Some(stability) => Some(Reviewed { state: CardState { stability, difficulty: r.get(6)?, last: r.get(7)? }, due: r.get(8)?, reviews: r.get(9)?, lapses: r.get(10)? }),
+                Some(stability) => Some(Reviewed { state: CardState { stability, difficulty: r.get(6)?, last: r.get(7)? }, first: r.get(11)?, due: r.get(8)?, reviews: r.get(9)?, lapses: r.get(10)? }),
                 None => None,
             };
             Ok(CardRow { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, reviewed })

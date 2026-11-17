@@ -208,3 +208,16 @@ It is the first new feature since the owner's goal became to polish what exists.
 - Index schema 16: the cards are scheduled again from the logs by the corrected formulas.
 - Still different on purpose: no learning steps (a new card graded Good comes back in days,
   not in ten minutes), Again comes back in ten minutes whatever the stability, no fuzz.
+
+## Built (2026-11-17): the agent sees the settings and the statistics
+
+- `list_decks` counted every new card as waiting, the sidebar only what the deck's day still
+  takes: the agent's number was not the app's. It gives now, a deck: its cards new, young and
+  mature, the due, what the app asks now (`to_review`), its new cards a day with how many today
+  has taken, and its chance of recall (read from `.knotes/decks.json`, as the app reads it).
+  With `deck`, that deck's statistics: what comes due tomorrow, in 7 and in 30 days, and the
+  reviews of today and of 30 days with the share recalled and the grades.
+- The reviews are counted by the index over every card of the deck: when a note kept from the
+  AI holds one, they are left out and said so, the counts made without that note's cards.
+- A day begins at the user's midnight: the app tells the tools its clock's offset, the MCP
+  server asks `date +%z` (UTC's midnight if that fails).

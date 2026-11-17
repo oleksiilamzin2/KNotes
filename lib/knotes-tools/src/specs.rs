@@ -101,8 +101,10 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "list_decks",
-            description: "The decks of the user's flashcards (spaced repetition, FSRS; they may call them картки, колоди, повтори). A card is written in a note's text: `#@deck/sub question::answer`, the question and the answer apart on a `?` line, words to recall as `==words==`, or several paragraphs as `#@deck{ question ? answer }`; `^c-a1b2c3` at its end is its id. Decks nest by `/`. Each deck comes with its cards and those of the decks under it: how many (`cards`), how many reviewed before and due again now (`due`), how many never reviewed (`new`); then the same for the whole vault. The app asks the `due` ones, and of the `new` only as many a day as the deck is set to (20 unless the user set another).",
-            parameters: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            description: "The decks of the user's flashcards (spaced repetition, FSRS; they may call them картки, колоди, повтори). A card is written in a note's text: `#@deck/sub question::answer`, the question and the answer apart on a `?` line, words to recall as `==words==`, or several paragraphs as `#@deck{ question ? answer }`; `^c-a1b2c3` at its end is its id. Decks nest by `/`. Each deck comes with its cards and those of the decks under it: how many (`cards`), never reviewed (`new`), reviewed and still young (`young`) or mature (`mature`: due three weeks or more after the last review), due again now (`due`), and what the app asks now (`to_review`: the due, and of the new only what is left of the deck's day), as the app's sidebar shows. Its settings, its own or the deck's above: new cards a day (`new_a_day`, with how many today has taken, `new_today`) and the chance of recall its cards come back at (`retention`). Then the same counts for the whole vault. With `deck`, that deck's statistics too: what comes due tomorrow, in 7 and in 30 days, today's reviews and the last 30 days' with the share recalled (`recalled_percent`: not graded Again) and their grades.",
+            parameters: json!({"type": "object", "properties": {
+                "deck": {"type": "string", "description": "A deck's path, e.g. \"мови/англійська\": its statistics too."}
+            }, "additionalProperties": false}),
         },
         ToolSpec {
             name: "list_cards",

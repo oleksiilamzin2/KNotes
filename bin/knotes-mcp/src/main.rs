@@ -39,6 +39,7 @@ fn main() -> ExitCode {
     {
         tools = tools.with_meaning(Box::new(MeaningIndex::over_store(Arc::new(ProcessEmbedder::new(helper, file)), store)), model.closeness());
     }
+    tools.set_utc_offset(utc_offset());
     let server = McpServer::new(tools);
     let mut out = std::io::stdout().lock();
     for line in std::io::stdin().lock().lines() {
@@ -53,4 +54,27 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// How far this Mac's clock is ahead of UTC, in seconds, as `date +%z` says it (`+0200`); 0
+/// when it does not: a deck's day then begins at UTC's midnight.
+fn utc_offset() -> i64 {
+    let Ok(out) = std::process::Command::new("/bin/date").arg("+%z").output() else { return 0 };
+    parse_offset(String::from_utf8_lossy(&out.stdout).trim()).unwrap_or(0)
+}
+
+fn parse_offset(zone: &str) -> Option<i64> {
+    let (sign, digits) = (if zone.starts_with('-') { -1 } else { 1 }, zone.trim_start_matches(['+', '-']));
+    (digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit())).then(|| sign * (digits[..2].parse::<i64>().unwrap_or(0) * 3600 + digits[2..].parse::<i64>().unwrap_or(0) * 60))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_offset;
+
+    #[test]
+    fn the_clock_s_offset_is_read_as_date_prints_it() {
+        assert_eq!((parse_offset("+0200"), parse_offset("-0330"), parse_offset("+0000")), (Some(7200), Some(-12_600), Some(0)));
+        assert_eq!((parse_offset(""), parse_offset("EET"), parse_offset("+02")), (None, None, None));
+    }
 }

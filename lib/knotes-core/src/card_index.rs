@@ -54,6 +54,8 @@ pub struct CardRow {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Reviewed {
     pub state: CardState,
+    /// Its first review: the day it was new.
+    pub first: i64,
     pub due: i64,
     pub reviews: u32,
     pub lapses: u32,
