@@ -112,6 +112,8 @@ pub struct FindBar {
     /// Another scroll view in the column (a PDF's), kept clear of the bar as the note's is.
     other: std::cell::RefCell<Option<Retained<NSScrollView>>>,
     controls: Retained<FindControls>,
+    /// Room kept below the scroll views' content (the path bar's).
+    bottom: std::cell::Cell<f64>,
 }
 
 impl FindBar {
@@ -184,7 +186,7 @@ impl FindBar {
         // The count keeps its width; the field takes the rest.
         count.setContentCompressionResistancePriority_forOrientation(800.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
         count.setContentHuggingPriority_forOrientation(750.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
-        Self { column, field, count, bar, scroll, other: std::cell::RefCell::new(None), controls }
+        Self { column, field, count, bar, scroll, other: std::cell::RefCell::new(None), controls, bottom: std::cell::Cell::new(0.0) }
     }
 
     /// `on_text` gets the text to find as it is typed, `on_step` `true` for the next occurrence
@@ -222,10 +224,17 @@ impl FindBar {
         }
     }
 
-    /// The scroll views in the column get the bar's height as extra top inset while it shows.
+    /// The scroll views in the column keep `height` clear at their bottom (the path bar's).
+    pub fn set_bottom(&self, height: f64) {
+        self.bottom.set(height);
+        self.inset();
+    }
+
+    /// The scroll views in the column get the bar's height as extra top inset while it shows,
+    /// and the room kept at the bottom.
     fn inset(&self) {
         let top = if self.is_shown() { BAR_HEIGHT } else { 0.0 };
-        let insets = NSEdgeInsets { top, left: 0.0, bottom: 0.0, right: 0.0 };
+        let insets = NSEdgeInsets { top, left: 0.0, bottom: self.bottom.get(), right: 0.0 };
         self.scroll.setAdditionalSafeAreaInsets(insets);
         if let Some(other) = self.other.borrow().as_ref() {
             other.setAdditionalSafeAreaInsets(insets);

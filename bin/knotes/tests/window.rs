@@ -1265,7 +1265,9 @@ fn typing_an_embed_key_by_key_shows_it_without_a_crash() {
 fn an_embed_s_button_at_its_top_right_opens_its_note_at_its_part() {
     // Long enough that its section can come to the top.
     let long = "A paragraph.\n\n".repeat(80);
-    let notes = [("a.md", "Top\n\n![[b#Part]]\n\nend".to_owned()), ("b.md", format!("# B\n\n{long}## Part\n\nPart text.\n"))];
+    // A section with more after it: one at a note's end cannot come to the top (the view is as
+    // tall as its text, the path bar's room below it).
+    let notes = [("a.md", "Top\n\n![[b#Part]]\n\nend".to_owned()), ("b.md", format!("# B\n\n{long}## Part\n\nPart text.\n\n## After\n\n{long}"))];
     let notes: Vec<(&str, &str)> = notes.iter().map(|(p, t)| (*p, t.as_str())).collect();
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     let (shown, boxes) = embeds(&out);
@@ -3877,4 +3879,17 @@ fn the_settings_say_why_search_by_meaning_fails_instead_of_the_vectors_being_up_
     assert!(out.contains("settings-progress: Пошук за змістом не працює: no model at /x/model.gguf\n"), "{out}");
     let (_vault, out) = probe_notes(&SEARCH_NOTES, &[("KNOTES_PROBE_SETTINGS", "1")]);
     assert!(out.contains("settings-progress: Вектори актуальні\n"), "{out}");
+}
+
+#[test]
+fn the_path_bar_shows_where_the_note_is_and_opens_its_folders() {
+    let notes = [("Дім/Техніка/Бойлер.md", "Бойлер"), ("top.md", "top")];
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Дім/Техніка/Бойлер.md")]);
+    assert!(out.contains("path-bar: 📕 › Дім › Техніка › Бойлер\n"), "the vault (its symbol alone), its folders, the note: {out}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Дім/Техніка/Бойлер.md"), ("KNOTES_PROBE_ACTION", "path-bar=2")]);
+    assert!(out.contains("title: Техніка\n") && out.contains("sidebar-selected: Техніка\n"), "a folder clicked shows it, its row opened to: {out}");
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "Дім/Техніка/Бойлер.md"), ("KNOTES_PROBE_ACTION", "path-bar=0")]);
+    assert!(out.contains("title: Усі нотатки\n"), "the vault: all notes: {out}");
+    let (_vault, out) = probe_notes(&notes, &[]);
+    assert!(out.contains("path-bar: hidden\n"), "no document open: {out}");
 }

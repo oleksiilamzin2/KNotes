@@ -1486,6 +1486,7 @@ fn report_note(window: &VaultWindow) {
     let view = &window.note_text;
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);
+    println!("path-bar: {}", window.path_bar.describe());
     let (path, _, _) = window.describe_note();
     if let Some(path) = path {
         let text: String = window.note_text.string().to_string().replace('\n', "⏎").chars().take(60).collect();

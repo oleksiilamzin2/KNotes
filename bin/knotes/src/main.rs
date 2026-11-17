@@ -21,6 +21,7 @@ mod note_embeds;
 mod note_list_view;
 mod note_view;
 mod outline_panel;
+mod path_bar;
 mod pdf_viewer;
 mod probe;
 mod quick_look;

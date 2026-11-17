@@ -146,6 +146,8 @@ pub struct VaultWindow {
     pub table: Retained<NSTableView>,
     pub list_menu: ListMenu,
     pub note_text: Retained<NoteTextView>,
+    /// Where the open document is in the vault, at the bottom of the note column.
+    pub path_bar: crate::path_bar::PathBar,
     /// The search row over the note list.
     pub search_bar: SearchBar,
     /// Find in the open note (Cmd+F), over the note.
@@ -310,6 +312,16 @@ impl VaultWindow {
         no_document.setTextColor(Some(&objc2_app_kit::NSColor::tertiaryLabelColor()));
         no_document.setTranslatesAutoresizingMaskIntoConstraints(false);
         find_bar.column.addSubview(&no_document);
+        let path_bar = crate::path_bar::PathBar::new(mtm);
+        find_bar.column.addSubview(&path_bar.view);
+        for c in [
+            path_bar.view.leadingAnchor().constraintEqualToAnchor(&find_bar.column.leadingAnchor()),
+            path_bar.view.trailingAnchor().constraintEqualToAnchor(&find_bar.column.trailingAnchor()),
+            path_bar.view.bottomAnchor().constraintEqualToAnchor(&find_bar.column.bottomAnchor()),
+        ] {
+            c.setActive(true);
+        }
+        find_bar.set_bottom(crate::path_bar::HEIGHT);
         no_document.centerXAnchor().constraintEqualToAnchor(&find_bar.column.centerXAnchor()).setActive(true);
         no_document.centerYAnchor().constraintEqualToAnchor(&find_bar.column.centerYAnchor()).setActive(true);
         let chat = ChatPanel::new(mtm, knotes_session::app_data_dir());
@@ -373,6 +385,7 @@ impl VaultWindow {
             table,
             list_menu,
             note_text,
+            path_bar,
             search_bar,
             find_bar,
             pdf_view: RefCell::new(None),
@@ -760,6 +773,12 @@ impl VaultWindow {
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
+        let weak_path: Weak<Self> = Rc::downgrade(&this);
+        this.path_bar.on_folder(move |folder| {
+            if let Some(window) = weak_path.upgrade() {
+                window.show_folder(&folder);
+            }
+        });
         let weak_title: Weak<Self> = Rc::downgrade(&this);
         this.toolbar_delegate.on_note_title(move |name| {
             let Some(window) = weak_title.upgrade() else { return };

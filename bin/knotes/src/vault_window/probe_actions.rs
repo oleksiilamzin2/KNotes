@@ -60,6 +60,10 @@ impl VaultWindow {
             if let Some((path, folder)) = action.strip_prefix("drop-path=").and_then(|s| s.split_once('=')) {
                 self.move_note_to(path, folder);
             }
+            // `path-bar=1`: a click on that item of the path bar (0: the vault).
+            if let Some(index) = action.strip_prefix("path-bar=").and_then(|i| i.parse().ok()) {
+                self.path_bar.click(index);
+            }
             // `ai-path=Docs/a.pdf`: what the row's «Сховати від ШІ» calls (ADR 0036);
             // `delete-path=Docs/a.pdf`: what its «Видалити» calls.
             if let Some(path) = action.strip_prefix("ai-path=") {

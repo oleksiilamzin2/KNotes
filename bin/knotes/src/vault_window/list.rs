@@ -236,6 +236,24 @@ impl VaultWindow {
         }
     }
 
+    /// The path bar's click: the vault's notes (`""`) or a folder's, in the list, its row
+    /// selected in the sidebar (its parents opened to show it).
+    pub(super) fn show_folder(&self, folder: &str) {
+        let item = if folder.is_empty() { SidebarItem::AllNotes } else { SidebarItem::Folder(folder.to_owned()) };
+        let mut parent = folder.rsplit_once('/').map(|(p, _)| p);
+        let mut parents = Vec::new();
+        while let Some(at) = parent {
+            parents.push(at.to_owned());
+            parent = at.rsplit_once('/').map(|(p, _)| p);
+        }
+        for at in parents.iter().rev() {
+            // SAFETY: an item object of this outline view.
+            unsafe { self.outline.expandItem(Some(&self.sidebar.object_for(&SidebarItem::Folder(at.clone())))) };
+        }
+        self.highlight(&item);
+        self.select(item);
+    }
+
     /// Selects the row of `item` in the sidebar without notifying (the list follows `state`).
     pub(super) fn highlight(&self, item: &SidebarItem) {
         // The tabs show the document shown, whatever the list shows.

@@ -431,6 +431,15 @@ impl VaultWindow {
             let modified = file.and_then(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok())?;
             modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs_f64())
         };
+        // Where it is, at the bottom of the column (not a recently deleted entry's).
+        let document = match (self.open_path(), self.pdf_path.borrow().clone()) {
+            (Some(note), _) => Some((note.clone(), knotes_app::title_of(&note).to_owned())),
+            (None, Some(pdf)) => Some((pdf.clone(), document_name(&pdf).to_owned())),
+            (None, None) => None,
+        };
+        if let Some(vault) = &vault {
+            self.path_bar.show(vault, document.as_ref().map(|(path, name)| (path.as_str(), name.as_str())));
+        }
         match (self.open_path(), self.pdf_path.borrow().as_deref()) {
             (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true, changed(vault.map(|v| v.join(&note)))),
             (None, Some(pdf)) => {
