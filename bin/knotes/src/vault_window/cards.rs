@@ -83,12 +83,14 @@ impl VaultWindow {
     /// button to start.
     pub(super) fn show_deck(&self, deck: &str) {
         let cards = self.due_cards(deck);
+        self.show_list_column(true);
         *self.review.borrow_mut() = None;
         self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS }));
     }
 
     /// The review goes: another list is chosen, or a document opened.
     pub(super) fn hide_review(&self) {
+        self.show_list_column(true);
         *self.review.borrow_mut() = None;
         self.review_view.show(None);
     }
@@ -162,6 +164,14 @@ impl VaultWindow {
         self.show_review();
     }
 
+    /// The list's column hidden while a card is shown (owner's request: a card alone beside the
+    /// decks), and back with the review's end.
+    fn show_list_column(&self, shown: bool) {
+        if self.list_item.isCollapsed() == shown {
+            self.list_item.setCollapsed(!shown);
+        }
+    }
+
     fn show_review(&self) {
         let shown = {
             let review = self.review.borrow();
@@ -178,6 +188,7 @@ impl VaultWindow {
                 }
             }
         };
+        self.show_list_column(!matches!(shown, Shown::Card { .. }));
         self.review_view.show(Some(shown));
     }
 
@@ -224,9 +235,9 @@ impl VaultWindow {
         self.next_card();
     }
 
-    /// The review, for the probe.
+    /// The review, for the probe, and whether the list's column shows beside it.
     pub fn describe_review(&self) -> String {
-        self.review_view.describe()
+        format!("{}{}", self.review_view.describe(), if self.list_item.isCollapsed() { " (list hidden)" } else { "" })
     }
 
     /// Clicks in the review, for the probe: `start`, `show`, `1` to `4`, `open`, commas between.

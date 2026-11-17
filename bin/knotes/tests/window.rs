@@ -3993,11 +3993,12 @@ fn a_deck_chosen_shows_its_cards_to_review_and_the_review_asks_then_answers() {
     let (_vault, out) = probe_notes(&CARD_NOTES, &open);
     assert_eq!(review_line_of(&out), "waiting мови 2", "{out}");
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start")]);
-    assert_eq!(review_line_of(&out), "question мови 0/2 | cat", "the first card's question, its answer not shown: {out}");
+    assert_eq!(review_line_of(&out), "question мови 0/2 | cat (list hidden)", "the first card's question, its answer not shown: {out}");
+
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
-    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д", "{out}");
+    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д (list hidden)", "the list's column hidden while a card shows: {out}");
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show")]);
-    assert_eq!(review_line_of(&out), "answer історія 0/1 | Коли була битва? | 1659 року. | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д", "{out}");
+    assert_eq!(review_line_of(&out), "answer історія 0/1 | Коли була битва? | 1659 року. | Знову · 10 хв, Важко · 1 д, Добре · 3 д, Легко · 16 д (list hidden)", "{out}");
     // Another list chosen: the review goes.
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start"), ("KNOTES_PROBE_OPEN", "Мови.md")]);
     assert_eq!(review_line_of(&out), "hidden", "a note opened takes the column: {out}");
@@ -4008,7 +4009,7 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
     // cat graded Good, dog (no id yet) graded Again: it comes back at the end.
     let (vault, out) = probe_notes(&CARD_NOTES, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show,1")]);
-    assert_eq!(review_line_of(&out), "question мови 2/1 | dog", "graded Again, it is asked again: {out}");
+    assert_eq!(review_line_of(&out), "question мови 2/1 | dog (list hidden)", "graded Again, it is asked again: {out}");
     let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
     assert_eq!(logs.len(), 1, "this Mac's log");
     let log = std::fs::read_to_string(logs[0].path()).unwrap();
@@ -4024,7 +4025,8 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     assert!(out.contains("sidebar: історія (1) | мови (0)\n"), "{out}");
     // The last card graded: the review is done.
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
-    assert_eq!(review_line_of(&out), "done історія 1", "{out}");
+    assert_eq!(review_line_of(&out), "done історія 1", "the list's column back with the review's end: {out}");
+
 }
 
 #[test]

@@ -245,6 +245,8 @@ pub struct VaultWindow {
     search_space: RefCell<Option<Vec<String>>>,
     /// The sidebar's split view item, watched to hide the folders/tags switch with it.
     sidebar_item: Retained<NSSplitViewItem>,
+    /// The list's column, hidden while a card is reviewed (ADR 0037).
+    list_item: Retained<NSSplitViewItem>,
     collapse_observer: RefCell<Option<Retained<CollapseObserver>>>,
     /// The right panel's split view item, watched to hide the AI/outline switch with it.
     panel_item: Retained<NSSplitViewItem>,
@@ -466,6 +468,7 @@ impl VaultWindow {
             search_scope: RefCell::new(None),
             search_space: RefCell::new(None),
             sidebar_item: split.splitViewItems().objectAtIndex(0),
+            list_item: split.splitViewItems().objectAtIndex(1),
             collapse_observer: RefCell::new(None),
             panel_item: split.splitViewItems().objectAtIndex(3),
             panel_observer: RefCell::new(None),

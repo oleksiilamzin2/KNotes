@@ -618,6 +618,10 @@ impl ToolbarDelegate {
             let over = row.view.convertRect_fromView(column.convertRect_toView(column.bounds(), None), None);
             part.setFrame(NSRect::new(NSPoint::new(over.origin.x, 0.0), NSSize::new(over.size.width, row.view.bounds().size.height)));
         }
+        // The list's part goes with its column (hidden during a review, ADR 0037): its name and
+        // buttons do not fit in no width.
+        let list_shown = columns.iter().nth(1).is_some_and(|column| !column.isHidden() && column.frame().size.width >= 1.0);
+        row.over_list.setHidden(!list_shown);
     }
 
     fn make_item(&self, id: &NSString) -> Option<Retained<NSToolbarItem>> {
