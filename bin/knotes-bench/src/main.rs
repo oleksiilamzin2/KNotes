@@ -127,6 +127,7 @@ fn run(vault: PathBuf, factor: f64) -> Result<String, Box<dyn std::error::Error 
     let notes: Vec<String> = corpus_paths(&*corpus).into_iter().step_by((corpus.len() / 30).max(1)).collect();
     rows.push(measure("Backlinks of a note", MS(16), &notes, |p| index.backlinks(p).map_or(0, |b| b.len())));
     rows.push(reindex(&mut index, &notes)?);
+    cards(&mut index, &fs_vault, &mut rows)?;
 
     let header = format!(
         "Vault: `{}`, {} files, {} notes. M1 estimate = measured × {factor}. Query times are p95 of {RUNS} runs over sampled queries.\n\n",
@@ -135,6 +136,70 @@ fn run(vault: PathBuf, factor: f64) -> Result<String, Box<dyn std::error::Error 
         corpus.len()
     );
     Ok(header + &render(&rows, factor))
+}
+
+/// The notes' cards (ADR 0037), when the vault has any: taking the review logs in, what the
+/// sidebar counts at each snapshot, what a deck chosen asks of the index, and a space's part.
+fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use knotes_app::deck_rows;
+    use knotes_cards::{DeckSettings, Fsrs};
+    use knotes_core::CardIndex;
+
+    let all = index.card_rows(None, None)?;
+    if all.is_empty() {
+        return Ok(());
+    }
+    let (fsrs, settings) = (Fsrs::default(), DeckSettings::default());
+    let t = Instant::now();
+    let mut reviews = 0;
+    for (name, _) in files.review_logs()? {
+        reviews += index.take_reviews(&name, 0, &files.read_review_log(&name, 0)?, &fsrs, &settings)?;
+    }
+    rows.push(Row { operation: format!("Take the review logs in ({reviews} reviews of {} cards)", all.len()), measured: t.elapsed(), budget: None });
+    let t = Instant::now();
+    index.take_deck_settings("{\"x\": {\"retention\": 0.8}}", &fsrs)?;
+    rows.push(Row { operation: "Schedule every reviewed card again (settings changed)".into(), measured: t.elapsed(), budget: None });
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
+    let today = now / 86_400 * 86_400;
+    let counts = index.deck_counts(now)?;
+    // The top deck with the most cards under it, and a deck under it.
+    let top = |deck: &str| deck.split('/').next().unwrap_or(deck).to_owned();
+    let mut tops: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for count in &counts {
+        *tops.entry(top(&count.deck)).or_default() += count.cards;
+    }
+    let (largest, cards_in) = tops.iter().max_by_key(|(_, cards)| **cards).map(|(deck, cards)| (deck.clone(), *cards)).unwrap_or_default();
+    let decks = [largest.clone()];
+    let name = |what: &str| format!("{what} ({} decks)", counts.len());
+    rows.push(measure(&name("Sidebar: every deck's counts"), MS(50), &decks, |_| index.deck_counts(now).map_or(0, |c| c.len())));
+    rows.push(measure(&name("Sidebar: today's new cards by deck"), MS(50), &decks, |_| index.introduced(today).map_or(0, |c| c.len())));
+    let of = |what: &str| format!("{what}, the largest deck ({cards_in} cards)");
+    rows.push(measure(&of("Review: the cards due"), MS(50), &decks, |deck| index.due_cards(Some(deck), now, 200, 20).map_or(0, |c| c.len())));
+    rows.push(measure(&of("Review: the cards ahead"), MS(50), &decks, |deck| index.cards_ahead(deck, now, 200).map_or(0, |c| c.len())));
+    rows.push(measure(&of("Statistics"), MS(100), &decks, |deck| index.deck_stats(deck, today, &|_| true).map_or(0, |s| s.cards)));
+    rows.push(measure(&of("The deck's notes"), MS(50), &decks, |deck| index.deck_notes(deck).map_or(0, |n| n.len())));
+
+    // A space's part: the cards of the notes in the first half of the top folders.
+    let mut folders: Vec<&str> = all.iter().filter_map(|row| row.path.split_once('/').map(|(folder, _)| folder)).collect();
+    folders.sort_unstable();
+    folders.dedup();
+    let space: std::collections::HashSet<&str> = folders.iter().take(folders.len().div_ceil(2)).copied().collect();
+    let holds = |path: &str| path.split_once('/').is_some_and(|(folder, _)| space.contains(folder));
+    let part = all.iter().filter(|row| holds(&row.path)).count();
+    let within = |what: &str| format!("In a space ({part} of {} cards): {what}", all.len());
+    rows.push(measure(&within("its decks' counts"), MS(50), &decks, |_| {
+        let mut rows = index.card_rows(None, None).unwrap_or_default();
+        rows.retain(|row| holds(&row.path));
+        deck_rows::deck_counts(&rows, now).len() + deck_rows::introduced(&rows, today).len()
+    }));
+    rows.push(measure(&within("the largest deck's cards due"), MS(50), &decks, |deck| {
+        let mut rows = index.card_rows(None, None).unwrap_or_default();
+        rows.retain(|row| holds(&row.path));
+        deck_rows::due_cards(&rows, deck, now, 200, 20).len()
+    }));
+    rows.push(measure(&within("the largest deck's statistics"), MS(100), &decks, |deck| index.deck_stats(deck, today, &holds).map_or(0, |s| s.cards)));
+    Ok(())
 }
 
 /// p95 over every query repeated `RUNS` times.

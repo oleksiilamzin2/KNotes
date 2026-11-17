@@ -237,3 +237,31 @@ It is the first new feature since the owner's goal became to polish what exists.
   in the space reviewed (two spaces' parts of one deck each take the deck's number).
 - With `deck_stats` taking the notes that count, `list_decks` gives a deck's reviews without
   those of notes kept from the AI, where it gave none.
+
+## Measured (2026-11-17): 100 000 cards
+
+- The goal is 10 000 to 100 000 cards; nothing had been measured. `knotes-bench` measures the
+  cards now when the vault has any. On a generated vault (10 000 notes, 100 000 cards in 296
+  nested decks, 444 000 reviews in two logs; this Mac, release build):
+
+  | Operation | Time |
+  |---|---:|
+  | Take the review logs in (all, as after an index rebuild) | 0.66 s |
+  | Schedule every reviewed card again (settings changed) | 0.44 s |
+  | Every deck's counts (each snapshot, off the main thread) | 46 ms |
+  | Today's new cards by deck | 40 µs (was 51 ms) |
+  | The largest deck (12 600 cards): cards due / ahead / its notes | 8 to 9 ms |
+  | The largest deck's statistics | 23 ms |
+  | In a space (56 000 cards): its decks' counts | 44 ms |
+  | In a space: the largest deck's cards due / its statistics | 40 ms / 23 ms |
+
+- Two were felt, both on the main thread at every snapshot (a snapshot follows every note
+  saved). **Today's new cards** read every card: the first reviews are indexed now
+  (`card_states_by_first`, schema 17) and the query starts from them. **The decks are counted
+  again only when they may have changed** (`DecksCounted`: the vault's own counts, its files,
+  the spaces' folders, the window's space, the settings' text, the day): a note without cards
+  saved costs nothing, in a space too. Left: a card moved between two spaces' notes with every
+  deck's count the same shows at the next change.
+- Left as they are: the counts of every deck at each snapshot (46 ms off the main thread), a
+  space's counts when they do change (44 ms on it: every card's row is read), a deck chosen
+  in a space (40 ms once).

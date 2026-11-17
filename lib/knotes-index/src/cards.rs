@@ -158,7 +158,9 @@ impl CardIndex for SqliteIndex {
 
     fn introduced(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError> {
         let mut st = self.conn.prepare_cached(
-            "SELECT c.deck, COUNT(*) FROM card_states s JOIN cards c ON c.card_id = s.card_id WHERE s.first >= ?1 GROUP BY c.deck ORDER BY c.deck",
+            // The day's few first reviews, then their cards (CROSS JOIN keeps that order: SQLite
+            // read every card to have them by deck).
+            "SELECT c.deck, COUNT(*) FROM card_states s CROSS JOIN cards c ON c.card_id = s.card_id WHERE s.first >= ?1 GROUP BY c.deck ORDER BY c.deck",
         )?;
         let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?;
         Ok(rows.collect::<Result<_, _>>()?)

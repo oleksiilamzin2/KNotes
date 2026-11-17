@@ -23,6 +23,43 @@ pub(crate) fn deck_of_tab(path: &str) -> Option<&str> {
 const REVIEW_CARDS: usize = 200;
 const DAY: f64 = 86_400.0;
 
+/// What a snapshot's decks were counted from: while all of it is the same, the count is too.
+/// The vault's own counts change with a card written, removed or reviewed; its files with a
+/// note moved between spaces; the spaces' tags are counted anew when a space's folders change.
+pub(super) struct DecksCounted {
+    decks: Arc<Vec<knotes_core::DeckCount>>,
+    catalog: Arc<Vec<knotes_core::CatalogEntry>>,
+    space_tags: Arc<Vec<SpaceTags>>,
+    space: Option<String>,
+    /// The decks' settings as their file has them, and the day (its new cards count from it).
+    settings: String,
+    day: i64,
+}
+
+impl DecksCounted {
+    pub(super) fn of(snapshot: &Snapshot, state: &State) -> Self {
+        Self {
+            decks: Arc::clone(&snapshot.decks),
+            catalog: Arc::clone(&snapshot.catalog),
+            space_tags: Arc::clone(&snapshot.space_tags),
+            space: state.space.clone(),
+            settings: state.vault.as_ref().and_then(|vault| FsVault::new(vault).read_deck_settings().ok()).unwrap_or_default(),
+            day: day_start(),
+        }
+    }
+}
+
+impl PartialEq for DecksCounted {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.decks, &other.decks)
+            && Arc::ptr_eq(&self.catalog, &other.catalog)
+            && Arc::ptr_eq(&self.space_tags, &other.space_tags)
+            && self.space == other.space
+            && self.settings == other.settings
+            && self.day == other.day
+    }
+}
+
 /// A deck's review under way.
 pub(super) struct Review {
     deck: String,

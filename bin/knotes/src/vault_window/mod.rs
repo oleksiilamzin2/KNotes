@@ -162,6 +162,8 @@ pub struct VaultWindow {
     deck_settings: RefCell<knotes_cards::DeckSettings>,
     /// The decks' own counts of the last snapshot (for counting again when settings change).
     deck_counts: RefCell<Arc<Vec<knotes_core::DeckCount>>>,
+    /// What the decks were last counted from, at a snapshot.
+    decks_counted: RefCell<Option<cards::DecksCounted>>,
     /// The search row over the note list.
     pub search_bar: SearchBar,
     /// Find in the open note (Cmd+F), over the note.
@@ -428,6 +430,7 @@ impl VaultWindow {
             last_deck: RefCell::new(String::new()),
             deck_settings: RefCell::default(),
             deck_counts: RefCell::default(),
+            decks_counted: RefCell::default(),
             search_bar,
             find_bar,
             pdf_view: RefCell::new(None),
@@ -1010,8 +1013,14 @@ impl VaultWindow {
             state.folders = Arc::clone(&snapshot.folders);
             state.folder_paths = Arc::clone(&snapshot.folder_paths);
             state.tags = Arc::clone(&snapshot.tags);
-            *self.deck_counts.borrow_mut() = Arc::clone(&snapshot.decks);
-            state.decks = Arc::new(self.count_decks(&mut state));
+            // Counted again only when they may have changed: with many cards the count is felt,
+            // and a snapshot follows every note saved.
+            let counted = cards::DecksCounted::of(snapshot, &state);
+            if self.decks_counted.borrow().as_ref() != Some(&counted) {
+                *self.deck_counts.borrow_mut() = Arc::clone(&snapshot.decks);
+                state.decks = Arc::new(self.count_decks(&mut state));
+                *self.decks_counted.borrow_mut() = Some(counted);
+            }
             state.untagged = Arc::clone(&snapshot.untagged);
             state.tagged = Arc::clone(&snapshot.tagged);
             state.space_tags = Arc::clone(&snapshot.space_tags);

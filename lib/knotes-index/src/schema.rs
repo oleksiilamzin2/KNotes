@@ -6,7 +6,8 @@
 /// 14: the notes' cards, their reviews and schedules (ADR 0037).
 /// 15: a card's first review and the decks' settings the schedule was worked out with.
 /// 16: FSRS as the reference counts (whole days, a forgotten card's bound): scheduled again.
-pub(crate) const VERSION: i64 = 16;
+/// 17: the cards' first reviews are indexed (a day's new cards were found by reading them all).
+pub(crate) const VERSION: i64 = 17;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
@@ -102,6 +103,7 @@ CREATE TABLE card_states(
     lapses INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX card_states_by_due ON card_states(due);
+CREATE INDEX card_states_by_first ON card_states(first);
 -- The decks' settings the schedule was worked out with (the text of `.knotes/decks.json`).
 CREATE TABLE deck_settings(id INTEGER PRIMARY KEY CHECK (id = 0), text TEXT NOT NULL);
 -- Search blocks; `id` is the rowid of the block in blocks_fts.

@@ -614,6 +614,8 @@ name = "knotes-bench"
 version = "0.1.0"
 dependencies = [
  "knotes-alloc",
+ "knotes-app",
+ "knotes-cards",
  "knotes-core",
  "knotes-index",
  "knotes-indexer",
