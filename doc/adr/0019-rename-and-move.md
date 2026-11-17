@@ -65,3 +65,6 @@ answered a question round (2026-11-13).
   rewritten and counted in the question). A rename whose links cannot be found (the index not
   readable) is called off with a word; moves and link updates that fail are said, with the
   files. Probe actions `list-rename-path=` and `drop-path=` reach a PDF's row by its path.
+- Later (2026-11-17): the note's name is in the row under the toolbar, over the note, with the
+  day it was last changed after it (ADR 0038); it is renamed there as it was in the toolbar. A
+  new note made from that row's button starts with its name being typed.

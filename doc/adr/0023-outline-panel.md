@@ -51,3 +51,8 @@ the outline of the document open, a note or a PDF alike, and answered a question
   under.
 - Probe mode clicks a row by selecting it and sending the outline view's own action to its
   target: in the probe's window, which is not key, the outline view tracks no click.
+
+## Later (2026-11-17)
+
+What the panel shows is chosen by three small buttons (the AI, the outline, the links) in the
+row under the toolbar, over the panel, not by a toolbar group (ADR 0038).

@@ -1,7 +1,7 @@
-//! Window toolbar as in Knotes v1: sidebar toggle and the folders/tags switch, list title (window title and subtitle),
-//! new note and back/forward over the note, the AI/outline switch and the panel's toggle over
-//! the inspector (ADR 0023). Separators track
-//! the split view columns, so each group sits above its column; macOS draws the glass.
+//! The window's toolbar, in two rows (ADR 0038). The toolbar itself: the sidebar's toggle at
+//! the left, the panel's at the right; macOS draws their glass. Under it a plain row
+//! (`second_row`), each part over its split view column: what the sidebar lists, the list's
+//! name, count and search, the note's buttons, name and date, what the panel shows.
 
 use std::cell::{Cell, RefCell};
 

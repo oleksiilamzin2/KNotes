@@ -29,3 +29,10 @@ owner asked to remove.
   the search row open, plain window, collapsed sidebar).
 - A private selector: if a future macOS drops it, the line comes back; nothing breaks. The
   probe reports the pockets' separators and a window test checks them.
+
+## Later (2026-11-17)
+
+The window has no full-size content view now and the columns start under the toolbar and the
+row under it (ADR 0038): what scrolls is cut at that edge, nothing fades under the toolbar.
+`QuietScrollView` stays on the columns' scroll views, and the window test of the pockets'
+separators with it: where macOS still adds a pocket, it draws no line.

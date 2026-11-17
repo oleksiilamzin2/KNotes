@@ -81,3 +81,11 @@ and in the lists alike.
   space; marks on links in the editor and in the links panel.
 - The settings' «Простори» tab edits the front window's vault, writing its root's rules file
   (rename keeps the id; a space removed leaves its folders' keys, which then count as none).
+
+## Later (2026-11-17)
+
+- In the switcher the whole vault has a book for its mark (the same book starts the path bar,
+  ADR 0038); the spaces keep their coloured dots. Braces for the spaces were tried at the
+  owner's word and taken back for the dots.
+- The decks of the notes' cards follow the spaces by their files (ADR 0037): in a space, a
+  deck is the part of it written in the space's notes.
