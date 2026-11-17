@@ -300,6 +300,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             SidebarItem::Folder(_) if model.inbox() == Some(&item) => (model.name(&item).to_owned(), Some("tray.and.arrow.down")),
             SidebarItem::Folder(_) => (model.name(&item).to_owned(), Some("folder")),
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
+            SidebarItem::Deck(_) => (model.name(&item).to_owned(), Some("rectangle.stack")),
             SidebarItem::Tab(path) => (model.name(&item).to_owned(), Some(if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" })),
             SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), Some("rectangle.stack")),
             SidebarItem::Deleted => (strings::RECENTLY_DELETED.to_owned(), Some("trash")),

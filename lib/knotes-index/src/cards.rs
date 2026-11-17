@@ -102,4 +102,13 @@ impl CardIndex for SqliteIndex {
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+
+    fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT DISTINCT f.path FROM cards c JOIN files f ON f.id = c.file_id
+             WHERE c.deck = ?1 OR (c.deck >= ?1 || '/' AND c.deck < ?1 || '0') ORDER BY f.path",
+        )?;
+        let rows = st.query_map([deck], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
 }

@@ -2486,7 +2486,7 @@ fn a_note_opens_in_the_tab_shown_and_a_pdf_in_a_new_tab_beside_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
     assert!(out.contains("sidebar-mode: tabs"), "{out}");
-    assert!(out.contains("sidebar-segments: Вкладки, Теки, Теги\n"), "tabs first (owner's order): {out}");
+    assert!(out.contains("sidebar-segments: Вкладки, Теки, Теги, Картки\n"), "tabs first (owner's order): {out}");
     assert_eq!(sidebar_tabs(&out), ("b".to_owned(), "b".to_owned()), "b.md in a.md's tab");
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "end"), ("KNOTES_PROBE_CLICK", "8")]);
@@ -3951,4 +3951,28 @@ fn the_list_search_s_aa_keeps_the_case_when_switched_off() {
     assert_eq!(titles(&out), ["Radar", "radar plan"]);
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SEARCH", "content: радар"), ("KNOTES_PROBE_SEARCH_CASE", "1")]);
     assert_eq!(titles(&out), ["radar plan"], "the text as typed");
+}
+
+#[test]
+fn the_sidebar_s_cards_mode_lists_the_decks_with_their_cards_to_review_and_a_deck_s_notes() {
+    let notes = [
+        ("Мови/Англійська.md", "Слова.\n\n#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^c-2\n"),
+        ("Мови/Німецька.md", "#@мови/німецька Hund::пес ^c-3\n"),
+        ("Історія.md", "#@історія Коли?\n?\nТоді. ^c-4\n"),
+        ("Без карток.md", "звичайна нотатка"),
+    ];
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
+    assert!(out.contains("sidebar-mode: cards\n"), "{out}");
+    assert!(out.contains("sidebar: історія (1) | мови (3)\n"), "the decks, each with its cards and its sub-decks' to review: {out}");
+    let (_, out) = (0, probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")]));
+    assert!(out.contains("title: мови\n"), "{out}");
+    let mut listed = list_titles(&out);
+    listed.sort();
+    assert_eq!(listed, ["Англійська", "Німецька"], "the notes its cards are written in: {out}");
+    // Reviewed a moment ago and graded Good: due in three days, no longer waiting.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{now}\tc-1\t3\n{now}\tc-4\t3\n")).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
+    assert!(out.contains("sidebar: історія (0) | мови (2)\n"), "{out}");
 }

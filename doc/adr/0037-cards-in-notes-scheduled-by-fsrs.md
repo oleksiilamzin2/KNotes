@@ -66,3 +66,19 @@ It is the first new feature since the owner's goal became to polish what exists.
   in 42 ms.
 - To come before the window: the logs' files in the vault's `.knotes` folder (a log a Mac), read
   by the indexer as they grow.
+
+## Built (2026-11-17): the logs' files and the sidebar's decks
+
+- The review logs are files in the vault, `.knotes/reviews/<name>.tsv`, a file a Mac, only ever
+  appended to (`FsVault::append_review`, `review_logs`, `read_review_log`): two Macs syncing
+  the vault never write one file. The session takes in what each holds past where it was read
+  to at every sync (`take_reviews`); a log shorter than what was read (replaced) is read again
+  whole.
+- A snapshot carries the decks (`Snapshot::decks`, each deck's own cards counted, those due at
+  the snapshot's time and those never reviewed). The count a deck shows is its cards to review,
+  its sub-decks' with them (`deck_tree`, the tags' tree reused).
+- The sidebar has a fourth mode, «Картки», a fourth small button over it (after tabs, folders
+  and tags): the decks as a tree. A deck chosen lists the notes its cards are written in.
+- Left: what is due is counted at the snapshot's time, so a card that falls due while nothing
+  changes is counted with the next change; the review itself and making a card from a note are
+  to come.

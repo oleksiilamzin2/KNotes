@@ -147,7 +147,9 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
     // A sync and, when it changed something or `always`, its snapshot.
     let sync = |index: &mut SqliteIndex, changed: Vec<String>, always: bool| -> Result<bool, BoxError> {
         let report = indexer.sync(index)?;
-        let touched = report.added + report.modified + report.removed;
+        // The reviews logged since (ADR 0037): this Mac's, and another's come with the vault.
+        let reviewed = take_reviews(index, &files);
+        let touched = report.added + report.modified + report.removed + reviewed;
         if touched >= LARGE_SYNC {
             memory::give_back(index);
         }
@@ -202,6 +204,26 @@ fn run(vault: &Path, dir: &Path, tx: &Sender<Event>, changes: Sender<Control>, c
             },
         }
     }
+}
+
+/// Takes into the index what the vault's review logs hold past where each was read to; how many
+/// reviews were new. A log that cannot be read is left for the next time, and said.
+fn take_reviews(index: &mut SqliteIndex, files: &FsVault) -> usize {
+    let fsrs = knotes_cards::Fsrs::default();
+    let mut new = 0;
+    for (name, size) in files.review_logs().unwrap_or_default() {
+        let read = index.reviews_read(&name).unwrap_or(0);
+        // Shorter than what was read: replaced (restored from a backup); read again whole.
+        let from = if size < read { 0 } else { read };
+        if size == from {
+            continue;
+        }
+        match files.read_review_log(&name, from).map_err(BoxError::from).and_then(|text| index.take_reviews(&name, from, &text, &fsrs)) {
+            Ok(taken) => new += taken,
+            Err(e) => eprintln!("knotes: cannot read the review log {name}: {e}"),
+        }
+    }
+    new
 }
 
 /// Deletes for good what has been in the trash longer than the vault's days (ADR 0032).

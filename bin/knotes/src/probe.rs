@@ -458,6 +458,7 @@ pub fn sidebar_mode_requested(window: &NSWindow) {
         Ok("sidebar=folders") => 1,
         Ok("sidebar=tags") => 2,
         Ok("sidebar=tabs") => 0,
+        Ok("sidebar=cards") => 3,
         _ => return,
     };
     let Some(button) = sidebar_switch(window).into_iter().nth(index as usize) else { return };
@@ -1372,6 +1373,7 @@ fn report_sidebar_mode(window: &NSWindow) {
         (Some(false), Some(0)) => "tabs",
         (Some(false), Some(1)) => "folders",
         (Some(false), Some(2)) => "tags",
+        (Some(false), Some(3)) => "cards",
         _ => "none",
     };
     let collapsed = window

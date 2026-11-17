@@ -16,7 +16,7 @@ use objc2_app_kit::{
 use objc2::AllocAnyThread;
 use objc2_foundation::{NSArray, NSCopying, NSDate, NSDateFormatter, NSDateFormatterStyle, NSLocale, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string};
 use objc2_app_kit::{
-    NSApplication, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventType, NSFocusRingType, NSFont, NSLayoutAttribute, NSBox, NSBoxType, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSLayoutConstraint, NSLayoutConstraintOrientation, NSLineBreakMode, NSResponder, NSSplitViewDidResizeSubviewsNotification, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSApplication, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventType, NSFocusRingType, NSFont, NSLayoutAttribute, NSBox, NSBoxType, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSLayoutConstraint, NSLayoutGuide, NSLayoutConstraintOrientation, NSLineBreakMode, NSResponder, NSSplitViewDidResizeSubviewsNotification, NSTextField, NSTextFieldDelegate, NSTextView,
     NSUserInterfaceItemIdentification, NSView, NSViewFrameDidChangeNotification,
 };
 
@@ -151,6 +151,7 @@ define_class!(
             let mode = match sender.tag() {
                 0 => SidebarMode::Tabs,
                 2 => SidebarMode::Tags,
+                3 => SidebarMode::Cards,
                 _ => SidebarMode::Folders,
             };
             self.set_sidebar_mode(mode);
@@ -512,17 +513,25 @@ impl ToolbarDelegate {
             plate.setContentViewMargins(NSSize::new(0.0, 0.0));
             Retained::into_super(plate) as Retained<NSView>
         };
-        // Three small buttons in the middle of `part`, the one chosen in the accent colour.
-        let switch = |part: &NSView, buttons: &[Retained<NSButton>; 3]| {
+        // Small buttons in a row in the middle of `part`, the one chosen in the accent colour.
+        let switch = |part: &NSView, buttons: &[Retained<NSButton>]| {
+            // A guide as wide as the buttons with their gaps, centred: any number of them.
+            let group = NSLayoutGuide::new();
+            part.addLayoutGuide(&group);
+            group.centerXAnchor().constraintEqualToAnchor(&part.centerXAnchor()).setActive(true);
             for (tag, button) in buttons.iter().enumerate() {
                 button.setTag(tag as isize);
                 button.setTranslatesAutoresizingMaskIntoConstraints(false);
                 part.addSubview(button);
                 button.centerYAnchor().constraintEqualToAnchor(&part.centerYAnchor()).setActive(true);
+                match tag.checked_sub(1).and_then(|before| buttons.get(before)) {
+                    Some(before) => button.leadingAnchor().constraintEqualToAnchor_constant(&before.trailingAnchor(), 16.0).setActive(true),
+                    None => button.leadingAnchor().constraintEqualToAnchor(&group.leadingAnchor()).setActive(true),
+                }
             }
-            buttons[1].centerXAnchor().constraintEqualToAnchor(&part.centerXAnchor()).setActive(true);
-            buttons[0].trailingAnchor().constraintEqualToAnchor_constant(&buttons[1].leadingAnchor(), -16.0).setActive(true);
-            buttons[2].leadingAnchor().constraintEqualToAnchor_constant(&buttons[1].trailingAnchor(), 16.0).setActive(true);
+            if let Some(last) = buttons.last() {
+                last.trailingAnchor().constraintEqualToAnchor(&group.trailingAnchor()).setActive(true);
+            }
         };
         let (over_sidebar, over_panel) = (side(), side());
         // Over the panel, what it shows: the AI, the outline or the links.
@@ -541,6 +550,7 @@ impl ToolbarDelegate {
             button(SIDEBAR_MODE_IDS[0], "square.on.square", strings::TABS, sel!(sidebarMode:)),
             button(SIDEBAR_MODE_IDS[1], "folder", strings::FOLDERS, sel!(sidebarMode:)),
             button(SIDEBAR_MODE_IDS[2], "tag", strings::TAGS, sel!(sidebarMode:)),
+            button(SIDEBAR_MODE_IDS[3], "rectangle.stack", strings::CARDS, sel!(sidebarMode:)),
         ];
         switch(&over_sidebar, &modes);
         choose(&modes, mode_index(self.ivars().sidebar_mode_state.get()));
@@ -743,7 +753,7 @@ struct Row {
     view: Retained<NSView>,
     over_sidebar: Retained<NSView>,
     /// Tabs, folders, tags.
-    modes: [Retained<NSButton>; 3],
+    modes: [Retained<NSButton>; 4],
     over_panel: Retained<NSView>,
     /// The AI, the outline, the links.
     panels: [Retained<NSButton>; 3],
@@ -756,7 +766,7 @@ struct Row {
 }
 
 /// The button `index` on and in the accent colour, the others off and grey.
-fn choose(buttons: &[Retained<NSButton>; 3], index: isize) {
+fn choose(buttons: &[Retained<NSButton>], index: isize) {
     for (i, button) in buttons.iter().enumerate() {
         let chosen = i as isize == index;
         button.setState(if chosen { NSControlStateValueOn } else { NSControlStateValueOff });
@@ -765,8 +775,8 @@ fn choose(buttons: &[Retained<NSButton>; 3], index: isize) {
     }
 }
 
-/// The row's buttons for what the sidebar lists: tabs, folders, tags.
-pub const SIDEBAR_MODE_IDS: [&str; 3] = ["knotes.sidebar-tabs", "knotes.sidebar-folders", "knotes.sidebar-tags"];
+/// The row's buttons for what the sidebar lists: tabs, folders, tags, the cards' decks.
+pub const SIDEBAR_MODE_IDS: [&str; 4] = ["knotes.sidebar-tabs", "knotes.sidebar-folders", "knotes.sidebar-tags", "knotes.sidebar-cards"];
 
 /// The row's buttons for what the panel shows: the AI, the outline, the links.
 pub const PANEL_MODE_IDS: [&str; 3] = ["knotes.panel-ai", "knotes.panel-outline", "knotes.panel-links"];
@@ -791,6 +801,7 @@ fn mode_index(mode: SidebarMode) -> isize {
         SidebarMode::Tabs => 0,
         SidebarMode::Folders => 1,
         SidebarMode::Tags => 2,
+        SidebarMode::Cards => 3,
     }
 }
 

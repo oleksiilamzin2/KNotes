@@ -14,7 +14,7 @@ pub(super) fn counted_space_tags<'a>(state: &'a State, space: &SpaceFolders) -> 
 
 /// Tags and "Untagged" have no folder and no `.knotes.json`: their list options last the session.
 pub(super) fn session_settings_key(item: &SidebarItem) -> Option<String> {
-    matches!(item, SidebarItem::Tag(_) | SidebarItem::Untagged).then(|| item.key())
+    matches!(item, SidebarItem::Tag(_) | SidebarItem::Untagged | SidebarItem::Deck(_)).then(|| item.key())
 }
 
 pub(super) fn folder_exists(node: &FolderNode, path: &str) -> bool {
@@ -63,6 +63,13 @@ impl VaultWindow {
         self.sidebar_waiting.set(false);
         let (model, rest_tags) = {
             let state = self.state.borrow();
+            if state.sidebar_mode == SidebarMode::Cards {
+                let model = Sidebar::decks(&state.decks);
+                drop(state);
+                self.sidebar.set_model(model);
+                self.outline.reloadData();
+                return;
+            }
             if state.sidebar_mode == SidebarMode::Tabs {
                 let tabs: Vec<(String, String)> = self.tabs.borrow().paths().map(|p| (p.to_owned(), document_name(p).to_owned())).collect();
                 drop(state);
@@ -140,6 +147,8 @@ impl VaultWindow {
         let (title, listed) = match &selection {
             SidebarItem::Folder(path) => (path.rsplit('/').next().unwrap_or(path).to_owned(), None),
             SidebarItem::Tag(tag) => (format!("#{tag}"), Some(Arc::new(self.notes_with_tag(&mut state, tag)))),
+            // A deck: the notes its cards are written in, its sub-decks' too (ADR 0037).
+            SidebarItem::Deck(deck) => (deck.rsplit('/').next().unwrap_or(deck).to_owned(), Some(Arc::new(self.notes_with_deck(&mut state, deck)))),
             SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some(Arc::clone(&state.untagged))),
             SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), None),
             _ => (strings::ALL_NOTES.to_owned(), None),
@@ -219,6 +228,12 @@ impl VaultWindow {
         state.reader.as_ref().and_then(|r| r.notes_with_tag(tag).ok()).unwrap_or_default().into_iter().collect()
     }
 
+    pub(super) fn notes_with_deck(&self, state: &mut State, deck: &str) -> HashSet<String> {
+        use knotes_core::CardIndex;
+        self.ensure_reader(state);
+        state.reader.as_ref().and_then(|r| r.deck_notes(deck).ok()).unwrap_or_default().into_iter().collect()
+    }
+
     pub(super) fn exists(&self, item: &SidebarItem) -> bool {
         let state = self.state.borrow();
         match item {
@@ -232,6 +247,7 @@ impl VaultWindow {
             SidebarItem::Rest => state.space.is_some(),
             SidebarItem::Deleted => !state.trash.is_empty(),
             SidebarItem::Tag(tag) => tag_exists(&state.tags, tag),
+            SidebarItem::Deck(deck) => tag_exists(&state.decks, deck),
             _ => true,
         }
     }

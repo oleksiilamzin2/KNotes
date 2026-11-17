@@ -770,6 +770,7 @@ name = "knotes-session"
 version = "0.1.0"
 dependencies = [
  "knotes-app",
+ "knotes-cards",
  "knotes-core",
  "knotes-index",
  "knotes-indexer",

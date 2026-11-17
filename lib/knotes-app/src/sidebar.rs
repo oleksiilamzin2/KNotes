@@ -17,6 +17,8 @@ pub enum SidebarItem {
     Tag(String),
     /// A document open as a tab (ADR 0024), by its vault path.
     Tab(String),
+    /// A deck of cards (ADR 0037), by its path.
+    Deck(String),
     /// The rest of the vault, in a space (ADR 0030): its notes, and its folders or tags below.
     Rest,
     /// The recently deleted (ADR 0032), and the empty space before them.
@@ -36,6 +38,7 @@ impl SidebarItem {
             Self::Folder(path) => format!("f:{path}"),
             Self::Tag(tag) => format!("t:{tag}"),
             Self::Tab(path) => format!("tab:{path}"),
+            Self::Deck(deck) => format!("d:{deck}"),
             Self::Rest => "rest".into(),
             Self::Deleted => "deleted".into(),
             Self::DeletedGap => "deletedgap".into(),
@@ -55,6 +58,7 @@ impl SidebarItem {
                 ("f", path) => Some(Self::Folder(path.into())),
                 ("t", tag) => Some(Self::Tag(tag.into())),
                 ("tab", path) => Some(Self::Tab(path.into())),
+                ("d", deck) => Some(Self::Deck(deck.into())),
                 _ => None,
             },
         }
@@ -68,6 +72,8 @@ pub enum SidebarMode {
     Folders,
     Tags,
     Tabs,
+    /// The decks of the notes' cards (ADR 0037).
+    Cards,
 }
 
 impl SidebarMode {
@@ -76,6 +82,7 @@ impl SidebarMode {
             Self::Folders => "folders",
             Self::Tags => "tags",
             Self::Tabs => "tabs",
+            Self::Cards => "cards",
         }
     }
 
@@ -84,6 +91,7 @@ impl SidebarMode {
             "folders" => Some(Self::Folders),
             "tags" => Some(Self::Tags),
             "tabs" => Some(Self::Tabs),
+            "cards" => Some(Self::Cards),
             _ => None,
         }
     }
@@ -146,6 +154,7 @@ impl Sidebar {
             }
             SidebarMode::Tags => top.extend(tags.iter().map(|t| add_tag(t, &mut entries))),
             SidebarMode::Tabs => return Self::tabs(&[]),
+            SidebarMode::Cards => return Self::decks(&[]),
         }
         if let Some(rest) = rest {
             let children = match mode {
@@ -175,6 +184,19 @@ impl Sidebar {
                 item
             })
             .collect();
+        Self { top, entries, inbox: None }
+    }
+
+    /// The decks (ADR 0037): a tree as `deck_tree` gives it, each with its cards to review.
+    pub fn decks(decks: &[TagNode]) -> Self {
+        fn add(node: &TagNode, entries: &mut HashMap<SidebarItem, Entry>) -> SidebarItem {
+            let children = node.children.iter().map(|c| add(c, entries)).collect();
+            let item = SidebarItem::Deck(node.tag.clone());
+            entries.insert(item.clone(), Entry { name: node.name.clone(), count: Some(node.notes), children });
+            item
+        }
+        let mut entries = HashMap::new();
+        let top = decks.iter().map(|deck| add(deck, &mut entries)).collect();
         Self { top, entries, inbox: None }
     }
 

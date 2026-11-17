@@ -77,6 +77,8 @@ struct State {
     /// Every folder of the vault, empty ones too (the snapshot's list).
     folder_paths: Arc<Vec<String>>,
     tags: Arc<Vec<TagNode>>,
+    /// The decks of the notes' cards as a tree (ADR 0037), each with its cards to review.
+    decks: Arc<Vec<TagNode>>,
     /// Notes without any tag (the "Untagged" row), and every tag with its note, a note's
     /// together (a space's tags count from them, ADR 0030): the last snapshot's.
     untagged: Arc<HashSet<String>>,
@@ -357,6 +359,7 @@ impl VaultWindow {
             folders: Arc::new(FolderNode::default()),
             folder_paths: Arc::new(Vec::new()),
             tags: Arc::new(Vec::new()),
+            decks: Arc::default(),
             untagged: Arc::default(),
             tagged: Arc::default(),
             space_tags: Arc::default(),
@@ -955,6 +958,7 @@ impl VaultWindow {
             state.folders = Arc::clone(&snapshot.folders);
             state.folder_paths = Arc::clone(&snapshot.folder_paths);
             state.tags = Arc::clone(&snapshot.tags);
+            state.decks = Arc::new(knotes_app::deck_tree(&snapshot.decks));
             state.untagged = Arc::clone(&snapshot.untagged);
             state.tagged = Arc::clone(&snapshot.tagged);
             state.space_tags = Arc::clone(&snapshot.space_tags);

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use knotes_app::{FolderNode, FolderRules, SpaceFolders, SpaceTags, TagNode, count_tags, folder_tree_with, tag_tree};
-use knotes_core::{BoxError, CatalogEntry, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex, TrashEntry, TrashStore};
+use knotes_core::{BoxError, CardIndex, CatalogEntry, DeckCount, FolderLister, FolderRulesStore, NoteCatalog, NoteRow, NoteRows, TagIndex, TrashEntry, TrashStore};
 use knotes_index::LinkTargets;
 use knotes_search::TitleIndex;
 use knotes_spaces::{KeptFromAi, NO_AI_TAG, Spaces};
@@ -35,6 +35,9 @@ pub struct Snapshot {
     /// The recently deleted, the newest first (ADR 0032); only new entries read, the list kept
     /// from the previous snapshot while the same.
     pub trash: Arc<Vec<TrashEntry>>,
+    /// The decks of the notes' cards (ADR 0037), each with its own cards counted: those due at
+    /// the snapshot's time and those never reviewed.
+    pub decks: Arc<Vec<DeckCount>>,
     /// Link resolution for the editor (ADR 0013).
     pub links: Arc<LinkTargets>,
     /// Fuzzy title search, for link completion.
@@ -46,7 +49,7 @@ pub struct Snapshot {
 impl Snapshot {
     /// `previous`: its lookups are reused when the files (paths and aliases) are the same.
     pub fn read(
-        index: &(impl NoteRows + NoteCatalog + TagIndex),
+        index: &(impl NoteRows + NoteCatalog + TagIndex + CardIndex),
         rules_store: &(impl FolderRulesStore + FolderLister + TrashStore),
         changed: Vec<String>,
         previous: Option<&Snapshot>,
@@ -139,8 +142,15 @@ impl Snapshot {
             Some(p) => Arc::clone(&p.trash),
             None => Arc::new(trash),
         };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let decks = index.deck_counts(now)?;
+        let decks = match previous.filter(|p| *p.decks == decks) {
+            Some(p) => Arc::clone(&p.decks),
+            None => Arc::new(decks),
+        };
         Ok(Self {
             rows: Arc::new(rows),
+            decks,
             catalog,
             links,
             titles,

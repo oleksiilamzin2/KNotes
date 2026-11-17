@@ -35,4 +35,6 @@ pub trait CardIndex {
     /// those due, the longest due first, then those never reviewed in their notes' order;
     /// `limit` at most.
     fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize) -> Result<Vec<DueCard>, BoxError>;
+    /// The notes holding a card of `deck` or of a deck under it, sorted by path.
+    fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError>;
 }

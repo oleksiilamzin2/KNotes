@@ -36,6 +36,23 @@ pub fn tag_tree(counts: &[(String, usize)]) -> Vec<TagNode> {
     roots
 }
 
+/// The decks of the vault's cards as a tree (ADR 0037), as tags nest: each deck, and each
+/// parent a path names, with the cards to review in it and under it (those due and those never
+/// reviewed). `decks`: each deck's own (`DeckCount`), in any order.
+pub fn deck_tree(decks: &[knotes_core::DeckCount]) -> Vec<TagNode> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for deck in decks {
+        let waiting = deck.due + deck.fresh;
+        *counts.entry(deck.deck.as_str()).or_default() += waiting;
+        for (i, _) in deck.deck.match_indices('/') {
+            *counts.entry(&deck.deck[..i]).or_default() += waiting;
+        }
+    }
+    // Every parent before its children, as `tag_tree` takes them.
+    let counts: Vec<(String, usize)> = counts.into_iter().map(|(deck, n)| (deck.to_owned(), n)).collect();
+    tag_tree(&counts)
+}
+
 fn sort(nodes: &mut [TagNode]) {
     nodes.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     for n in nodes {

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 knotes-app.workspace = true
 knotes-core.workspace = true
+knotes-cards.workspace = true
 knotes-spaces.workspace = true
 knotes-index.workspace = true
 knotes-indexer.workspace = true

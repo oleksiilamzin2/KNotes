@@ -3,6 +3,8 @@
 pub const ALL_NOTES: &str = "Усі нотатки";
 pub const FOLDERS: &str = "Теки";
 pub const TAGS: &str = "Теги";
+/// The sidebar's fourth mode: the decks of the notes' cards (ADR 0037).
+pub const CARDS: &str = "Картки";
 /// The space switcher at the sidebar's foot (ADR 0030).
 pub const SPACE: &str = "Простір";
 pub const WHOLE_VAULT: &str = "Уся база";
