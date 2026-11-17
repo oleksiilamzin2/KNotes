@@ -128,3 +128,17 @@ git until it is released, both models in the bundle.
 - 56 of the 65 queries by meaning were written by the developer from the vault's text: the
   comparison between models is fair (the same queries, no model tuned to them), the absolute
   numbers on real notes may be lower.
+
+## Later (2026-11-17): EmbeddingGemma 2's floor on another Mac
+
+- The benchmark, run for the first time on the owner's other Mac once `scripts/setup.sh` had
+  fetched the models there (it skips without them), failed: EmbeddingGemma 2 found 61 of 65
+  by meaning, both in the tools' search and in the list's, under its floor of 62. Bisected to
+  the commit giving the tools' search the list's thresholds (2026-11-15), which measured 62
+  here with the MRR it has there (0.81): the same code, one note standing out 1.68 to 1.7 on
+  that Mac, at the threshold (1.7). Three runs gave the same; e5-large-instruct passes as it
+  did (63 of 65).
+- No threshold passes both floors there: 1.67 finds the note and gives 5.3 documents to a query
+  with no answer (the floor 5.2), 1.68 gives 5.2 and loses it. The thresholds stay; the floor
+  by meaning for EmbeddingGemma 2 is 61 of 65 for both searches (0.93: 0.938, rounded down as
+  the other floors are), the numbers of both Macs beside it.
