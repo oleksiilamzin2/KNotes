@@ -1,3 +1,6 @@
+//! Compared with the reference implementation (py-fsrs 4.1.2) formula by formula, and tested on
+//! its own tests' numbers (2026-11-17).
+//!
 //! FSRS-5, the scheduler (Ye, 2024): a card's memory is its stability (the days until it is
 //! recalled with a chance of 90%) and its difficulty (1 to 10); a review grades the recall,
 //! and the memory after it follows from the memory before, the days since, and the grade.
@@ -32,6 +35,8 @@ pub struct Fsrs {
 const DECAY: f64 = -0.5;
 const FACTOR: f64 = 19.0 / 81.0;
 const STABILITY_MIN: f64 = 0.001;
+/// A first review's stability is at least this (the reference's).
+const FIRST_STABILITY_MIN: f64 = 0.1;
 /// The longest interval, in days (a century).
 const INTERVAL_MAX: f64 = 36_500.0;
 
@@ -63,15 +68,18 @@ impl Fsrs {
         let w = &self.weights;
         let g = grade as i32 as f64;
         let Some(Memory { stability, difficulty }) = before else {
-            return Memory { stability: w[grade as usize - 1].max(STABILITY_MIN), difficulty: self.first_difficulty(g) };
+            return Memory { stability: w[grade as usize - 1].max(FIRST_STABILITY_MIN), difficulty: self.first_difficulty(g) };
         };
-        let recall = self.recall(stability, days);
+        // Whole days, as the reference counts them (and as the weights were fitted): a day
+        // and a half since the last review is a day.
+        let recall = self.recall(stability, days.floor());
         let after = if days < 1.0 {
             // The same day again: a short step, no forgetting to measure.
             stability * (w[17] * (g - 3.0 + w[18])).exp()
         } else if grade == Grade::Again {
             let forgotten = w[11] * difficulty.powf(-w[12]) * ((stability + 1.0).powf(w[13]) - 1.0) * (w[14] * (1.0 - recall)).exp();
-            forgotten.min(stability)
+            // No more than a card recalled the same day would have lost (the reference's bound).
+            forgotten.min(stability / (w[17] * w[18]).exp())
         } else {
             let hard = if grade == Grade::Hard { w[15] } else { 1.0 };
             let easy = if grade == Grade::Easy { w[16] } else { 1.0 };

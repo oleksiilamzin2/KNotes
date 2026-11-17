@@ -190,3 +190,21 @@ It is the first new feature since the owner's goal became to polish what exists.
   the review's 200. Their grades are logged and schedule them as any review's (FSRS counts
   the days since the last one, so an early Good lengthens the interval little). Shown while
   the deck has such cards; new cards past the day's number are not asked.
+
+## Checked (2026-11-17): FSRS against the reference
+
+- The formulas were written from memory. Compared now, one by one, with the reference
+  implementation's source (py-fsrs 4.1.2, FSRS-5; read, not run: installing it was not
+  allowed here): the weights, the curve, the interval, the first memory, the difficulty (its
+  linear damping and its pull to an easy card's), the stability after a recall and the same
+  day were the same. Two were not, and are now: **the days since the last review are whole**
+  (a day and a half is a day: the weights were fitted so; Knotes counted the part), and **a
+  forgotten card's stability is bounded** by its stability over e^(w17·w18), not by its
+  stability alone. A first review's stability is at least 0.1, as the reference's.
+- The reference's own tests' numbers are Knotes' tests now (`tests/fsrs.rs`): Good six times,
+  Again twice, Good five times give 4, 14, 44, 125, 328 and 7, 16, 34, 71, 142 days; Again and
+  Good six times give a stability of 49 days and a difficulty of 7.0866. Both passed before
+  the two changes too (neither bites there); each change has a test of its own.
+- Index schema 16: the cards are scheduled again from the logs by the corrected formulas.
+- Still different on purpose: no learning steps (a new card graded Good comes back in days,
+  not in ten minutes), Again comes back in ten minutes whatever the stability, no fuzz.

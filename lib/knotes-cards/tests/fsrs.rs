@@ -60,3 +60,62 @@ fn the_same_day_again_is_a_short_step_and_the_memory_stays_in_its_bounds() {
     }
     assert!((1.0..=10.0).contains(&memory.difficulty) && memory.stability.is_finite() && fsrs.interval(memory.stability) <= 36_500.0, "{memory:?}");
 }
+
+/// The memory and the intervals after `reviews` (the days since the last one, the grade).
+fn follow(reviews: &[(f64, Grade)]) -> (Memory, Vec<f64>) {
+    let fsrs = Fsrs::default();
+    let mut memory = None;
+    let mut intervals = Vec::new();
+    for &(days, grade) in reviews {
+        let after = fsrs.review(memory, days, grade);
+        intervals.push(fsrs.interval(after.stability));
+        memory = Some(after);
+    }
+    (memory.unwrap(), intervals)
+}
+
+/// The reference implementation's own test (py-fsrs 4.1.2, FSRS-5, `test_review_card`): Good six
+/// times, Again twice, Good five times, each review when the card is due; its intervals are
+/// 0, 4, 14, 44, 125, 328, 0, 0, 7, 16, 34, 71, 142 days. Its zeros are its learning steps (ten
+/// minutes), which Knotes has not: the memory is the same, and the intervals where it has one.
+#[test]
+fn the_reference_s_intervals_are_ours() {
+    use Grade::{Again, Good};
+    let days = [0.0, 0.0, 4.0, 14.0, 44.0, 125.0, 328.0, 0.0, 0.0, 7.0, 16.0, 34.0, 71.0];
+    let grades = [Good, Good, Good, Good, Good, Good, Again, Again, Good, Good, Good, Good, Good];
+    let reviews: Vec<(f64, Grade)> = days.into_iter().zip(grades).collect();
+    let (_, intervals) = follow(&reviews);
+    assert_eq!(intervals[1..6], [4.0, 14.0, 44.0, 125.0, 328.0]);
+    assert_eq!(intervals[8..], [7.0, 16.0, 34.0, 71.0, 142.0]);
+}
+
+/// The reference's `test_memo_state`: Again, then Good six times, 0, 0, 1, 3, 8 and 21 days
+/// apart: a stability of 49 days (rounded) and a difficulty of 7.0866.
+#[test]
+fn the_reference_s_memory_is_ours() {
+    use Grade::{Again, Good};
+    let (memory, _) = follow(&[(0.0, Again), (0.0, Good), (0.0, Good), (1.0, Good), (3.0, Good), (8.0, Good), (21.0, Good)]);
+    assert_eq!(memory.stability.round(), 49.0, "{memory:?}");
+    assert_eq!((memory.difficulty * 10_000.0).round() / 10_000.0, 7.0866, "{memory:?}");
+}
+
+/// The reference counts whole days since the last review: a day and a half is a day.
+#[test]
+fn part_of_a_day_since_the_last_review_does_not_count() {
+    let fsrs = Fsrs::default();
+    let before = Some(fsrs.review(None, 0.0, Grade::Good));
+    assert_eq!(fsrs.review(before, 1.9, Grade::Good), fsrs.review(before, 1.0, Grade::Good));
+    assert_ne!(fsrs.review(before, 2.0, Grade::Good), fsrs.review(before, 1.0, Grade::Good));
+}
+
+/// A card forgotten keeps no more than a card recalled the same day would lose (the
+/// reference's bound: its stability over e^(w17·w18)), not merely no more than it had.
+#[test]
+fn a_forgotten_card_s_stability_is_bounded_as_the_reference_bounds_it() {
+    let fsrs = Fsrs::default();
+    // Easy at once, then forgotten after a day: the long formula alone would give more.
+    let weak = Memory { stability: 0.2, difficulty: 1.0 };
+    let after = fsrs.review(Some(weak), 1.0, Grade::Again);
+    let bound = 0.2 / (0.51655f64 * 0.6621).exp();
+    assert!((after.stability - bound).abs() < 1e-9, "{after:?} {bound}");
+}
