@@ -2505,17 +2505,44 @@ fn a_note_opens_in_a_new_tab_from_the_list_s_menu_and_a_document_with_a_tab_brin
 }
 
 #[test]
-fn the_buttons_after_the_tabs_search_the_list_and_make_a_new_note() {
+fn the_buttons_after_the_tabs_search_the_vault_and_make_a_new_note() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let before = std::fs::read_dir(vault.path()).unwrap().count();
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TOOLBAR_BUTTON", "new-note")]);
     let made = std::fs::read_dir(vault.path()).unwrap().count() > before || vault.path().join("Вхідні").is_dir();
     assert!(made && !out.contains("note: a.md"), "a new note is made and shown, as the row's button does: {out}");
-    // The search's button shows the list's search field, as the magnifying glass over the list.
+    // The magnifying glass opens the vault's search in a window of its own.
     let (vault, home) = (tabs_vault(), tabs_home());
-    let plain = probe_tabs(&vault, &home, &[]);
+    assert!(!probe_tabs(&vault, &home, &[]).contains("vault-search-window: open"));
     let searching = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TOOLBAR_BUTTON", "search")]);
-    assert!(!plain.contains("search-row: shown") && searching.contains("search-row: shown\n"), "{searching}");
+    assert!(searching.contains("vault-search-window: open\n") && !searching.contains("search-row: shown"), "not the list's search: {searching}");
+}
+
+#[test]
+fn the_vault_s_search_lists_documents_by_name_then_by_text_and_shows_the_one_chosen() {
+    let notes = [
+        ("Projects/Radar.md", "# Radar\n\nThe radar project starts in May.\n\n## Budget\n\nThe budget of the radar grows next year.\n"),
+        ("Сад.md", "Нотатка про сад і город.\n\nRadar is mentioned here once.\n"),
+        ("Budget.md", "Budget notes only.\n"),
+    ];
+    let found = |out: &str| out.lines().find_map(|l| l.strip_prefix("vault-search: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    // By its name first, then by its text; the first is chosen and shown below, its words marked.
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_VAULT_SEARCH", "radar")]);
+    assert_eq!(found(&out), "[Projects/Radar.md] | Сад.md ~ 3 marks, first «Radar», 95 letters shown", "{out}");
+    assert!(!out.contains("note: Projects/Radar.md"), "nothing opens until asked: {out}");
+    // Down chooses the next: its text below.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "radar"), ("KNOTES_PROBE_VAULT_SEARCH_DOWN", "1")]);
+    assert_eq!(found(&out), "Projects/Radar.md | [Сад.md] ~ 1 marks, first «Radar», 56 letters shown", "{out}");
+    // Every word, anywhere in the text; Return opens the document in the vault's window and
+    // closes the search.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "budget grows"), ("KNOTES_PROBE_VAULT_SEARCH_OPEN", "1")]);
+    assert!(found(&out).starts_with("[Projects/Radar.md] ~ 3 marks, first «Budget»"), "{out}");
+    assert!(out.contains("note: Projects/Radar.md") && !out.contains("vault-search-window: open"), "{out}");
+    // Nothing typed, nothing listed; words no document holds, none.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "")]);
+    assert_eq!(found(&out), " ~ 0 marks, first «», 0 letters shown", "{out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "zzqq")]);
+    assert!(found(&out).starts_with(" ~ 0 marks"), "{out}");
 }
 
 #[test]

@@ -27,6 +27,51 @@ impl VaultWindow {
         }
     }
 
+    /// The toolbar's magnifying glass: the vault's search in a window of its own (as
+    /// DEVONthink's, the owner's request). A document opened there shows here.
+    pub fn search_vault(&self) {
+        let (Some(vault), Some(index_dir), titles, links) = ({
+            let state = self.state.borrow();
+            (state.vault.clone(), state.index_dir.clone(), state.titles.clone(), state.links.clone())
+        }) else {
+            return;
+        };
+        if self.search_window.borrow().is_none() {
+            let Some(mtm) = MainThreadMarker::new() else { return };
+            let search = crate::search_window::SearchWindow::new(mtm);
+            let weak = self.this.borrow().clone();
+            search.on_open(move |path| {
+                if let Some(window) = weak.upgrade() {
+                    window.open_note(&path, true);
+                    window.window.makeKeyAndOrderFront(None);
+                }
+            });
+            *self.search_window.borrow_mut() = Some(search);
+        }
+        if let Some(search) = self.search_window.borrow().as_ref() {
+            search.show(&vault, &index_dir, titles, links.map(|links| links as Arc<dyn knotes_core::LinkResolver>));
+        }
+    }
+
+    /// The vault's search window, while it shows (probe mode).
+    pub fn search_window_shown(&self) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+        self.search_window.borrow().as_ref().and_then(crate::search_window::SearchWindow::window)
+    }
+
+    /// The vault's search driven as typed (probe mode): `query`, `down` rows down, and Return
+    /// when `open`; says what it lists and shows.
+    pub fn probe_search_vault(&self, query: &str, down: isize, open: bool) {
+        self.search_vault();
+        let search = self.search_window.borrow();
+        let Some(search) = search.as_ref() else { return };
+        search.type_query(query);
+        search.step(down);
+        println!("vault-search: {}", search.describe());
+        if open {
+            search.open_chosen();
+        }
+    }
+
     /// The search field changed: the list shows the results within the selected list.
     pub fn search(&self, query: &str) {
         let (mode, text) = parse_search(query);

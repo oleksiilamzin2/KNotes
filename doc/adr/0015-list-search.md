@@ -70,3 +70,25 @@ At the owner's word, once the list's name moved from the toolbar to the row unde
 magnifying glass shows the search field in that row, in the place of the list's name and count
 (both hidden while the search shows), not in a row under it. The Files/Content/By meaning
 switch keeps a row of its own at the top of the list column, now 32 pt high instead of 64.
+
+## The vault's search in a window of its own (2026-11-18)
+
+- Owner: the toolbar's magnifying glass (beside the new note's button, after the tabs) «нехай
+  відкриває окреме вікно пошуку: зверху перелік файлів пошуку по всій базі, а знизу на половину
+  екрану превью», «як у DEVONthink». The list's search stays as it is, from the glass over the
+  list; this one is the vault's, whatever list or space the window shows.
+- **The window** (`SearchWindow`): a field on top; under it the documents found, a row each
+  (the name, its folder at the right, the text around the find under it), those found by name
+  first (as the title search ranks them), then those whose text holds every word (full-text,
+  word starts), each document once; in the lower half the document chosen, shown as the vault's
+  window shows a note (a note's own text view with the live preview, read only: headings,
+  lists, quotes, code, cards; plain text at first, which the owner asked to be as the notes
+  are), the query's words marked and the first scrolled into view (a PDF's as its indexed
+  text). Its links lead nowhere from there. Down
+  and up choose, a click too; Return or a double click opens the document in the vault's
+  window and closes the search; Escape closes it. Opened again, it searches what was typed
+  before in the vault as it is now.
+- Searched on the main thread as the field's text changes, with a reader of its own: a name
+  search and a full-text search take a few milliseconds at 10 000 notes (ADR 0006's
+  measurements), and no answers arrive out of order. No search by meaning there yet, no
+  options (case, scope), no columns or sorting as DEVONthink's have.

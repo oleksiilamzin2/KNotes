@@ -868,6 +868,13 @@ pub fn schedule(with_sidebar: bool) {
                 if let Some(path) = std::env::var_os("KNOTES_PROBE_PNG") {
                     render_png(&window.window, &path.to_string_lossy());
                 }
+                // The vault's search window: whether it is open, and its picture when asked.
+                if let Some(search) = window.search_window_shown() {
+                    println!("vault-search-window: open");
+                    if let Some(path) = std::env::var_os("KNOTES_PROBE_SEARCH_PNG") {
+                        render_png(&search, &path.to_string_lossy());
+                    }
+                }
                 if let (Some(path), Some(settings)) = (std::env::var_os("KNOTES_PROBE_SETTINGS_PNG"), crate::settings_window::probe_window()) {
                     render_png(&settings, &path.to_string_lossy());
                 }

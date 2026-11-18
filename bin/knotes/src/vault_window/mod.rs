@@ -247,6 +247,8 @@ pub struct VaultWindow {
     accepting: Cell<bool>,
     /// List search: the background thread, the latest request and the results shown.
     search_worker: RefCell<Option<SearchWorker>>,
+    /// The vault's search window, made when first asked for.
+    search_window: RefCell<Option<crate::search_window::SearchWindow>>,
     search_generation: Cell<u64>,
     search_results: RefCell<Option<SearchResponse>>,
     /// The paths a search of the shown list covers (`None`: all notes).
@@ -479,6 +481,7 @@ impl VaultWindow {
             completion_view: RefCell::new(None),
             accepting: Cell::new(false),
             search_worker: RefCell::new(None),
+            search_window: RefCell::new(None),
             search_generation: Cell::new(0),
             search_results: RefCell::new(None),
             search_scope: RefCell::new(None),
@@ -815,6 +818,12 @@ impl VaultWindow {
         this.toolbar_delegate.on_new_note(move || {
             if let Some(window) = weak.upgrade() {
                 window.new_note();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_search_vault(move || {
+            if let Some(window) = weak.upgrade() {
+                window.search_vault();
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);

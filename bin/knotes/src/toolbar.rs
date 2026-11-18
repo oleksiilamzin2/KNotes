@@ -26,7 +26,7 @@ use crate::strings;
 
 /// The tabs, along the toolbar between the sidebar's toggle and the panel's (ADR 0024).
 pub const TABS: &str = "knotes.tabs";
-/// After the tabs, side by side: the list's search, and a new note (the owner's choice over a
+/// After the tabs, side by side: the vault's search (a window of its own), and a new note (the owner's choice over a
 /// «+» for a new tab, which was there first).
 pub const TOOLBAR_SEARCH: &str = "knotes.toolbar-search";
 pub const TOOLBAR_NEW_NOTE: &str = "knotes.toolbar-new-note";
@@ -65,6 +65,7 @@ pub struct Ivars {
     on_sidebar_mode: RefCell<Option<OnSidebarMode>>,
     on_search: RefCell<Option<OnSearch>>,
     on_toggle_search: RefCell<Option<OnToggleSearch>>,
+    on_search_vault: RefCell<Option<OnToggleSearch>>,
     on_search_mode: RefCell<Option<OnSearchMode>>,
     /// Called with the name typed over the open note's.
     on_note_title: RefCell<Option<OnSearch>>,
@@ -181,6 +182,14 @@ define_class!(
         }
 
         /// The magnifying glass: shows or hides the search row over the list.
+        /// The toolbar's magnifying glass: the vault's search, in a window of its own.
+        #[unsafe(method(searchVault:))]
+        fn search_vault(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_search_vault.borrow().as_ref() {
+                callback();
+            }
+        }
+
         #[unsafe(method(toggleSearch:))]
         fn toggle_search(&self, _sender: Option<&AnyObject>) {
             if let Some(callback) = self.ivars().on_toggle_search.borrow().as_ref() {
@@ -280,6 +289,7 @@ impl ToolbarDelegate {
             on_sidebar_mode: RefCell::new(None),
             on_search: RefCell::new(None),
             on_toggle_search: RefCell::new(None),
+            on_search_vault: RefCell::new(None),
             on_search_mode: RefCell::new(None),
             on_note_title: RefCell::new(None),
             on_title_done: RefCell::new(None),
@@ -304,6 +314,10 @@ impl ToolbarDelegate {
 
     pub fn on_new_note(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_new_note.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_search_vault(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_search_vault.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn on_toggle_search(&self, callback: impl Fn() + 'static) {
@@ -657,7 +671,7 @@ impl ToolbarDelegate {
             }
             TOOLBAR_SEARCH | TOOLBAR_NEW_NOTE => {
                 // The same as the buttons of the row below do, over the list and over the note.
-                let (symbol, label, action) = if id.to_string() == TOOLBAR_SEARCH { ("magnifyingglass", strings::SEARCH, sel!(toggleSearch:)) } else { ("square.and.pencil", strings::NEW_NOTE, sel!(newNote:)) };
+                let (symbol, label, action) = if id.to_string() == TOOLBAR_SEARCH { ("magnifyingglass", strings::SEARCH_VAULT, sel!(searchVault:)) } else { ("square.and.pencil", strings::NEW_NOTE, sel!(newNote:)) };
                 let item = button(mtm, id, symbol, label);
                 // SAFETY: the delegate outlives its toolbar's items and takes the action.
                 unsafe {

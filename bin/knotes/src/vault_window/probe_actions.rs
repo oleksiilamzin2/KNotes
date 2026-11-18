@@ -184,6 +184,12 @@ impl VaultWindow {
             self.open_in_new_tab(&path);
         }
         probe::toolbar_button_requested(&self.window);
+        // `KNOTES_PROBE_VAULT_SEARCH=radar budget` (with `KNOTES_PROBE_VAULT_SEARCH_DOWN=1`, and
+        // `KNOTES_PROBE_VAULT_SEARCH_OPEN=1` for Return): the vault's search window.
+        if let Ok(query) = std::env::var("KNOTES_PROBE_VAULT_SEARCH") {
+            let down = std::env::var("KNOTES_PROBE_VAULT_SEARCH_DOWN").ok().and_then(|n| n.parse().ok()).unwrap_or(0);
+            self.probe_search_vault(&query, down, std::env::var_os("KNOTES_PROBE_VAULT_SEARCH_OPEN").is_some());
+        }
         // `KNOTES_PROBE_TAB_CLICK=a.md`: a click on that document's tab, after the opening.
         if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLICK") {
             if let Some(tab) = self.tab_strip.tab_of(&path) {
