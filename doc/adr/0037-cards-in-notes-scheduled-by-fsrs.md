@@ -305,3 +305,28 @@ It is the first new feature since the owner's goal became to polish what exists.
 - Index schema 18 (`step`, `relearning`): every card is scheduled again from the logs with the
   steps. A card reviewed once and graded Good before this stands at its second step: it is due
   at once, and its next Good begins its days.
+
+## Fixed (2026-11-18): grades did not reach a running app, nor a review its own
+
+An audit of the whole repository read the cards' code and found two faults that every window
+test missed, each of them relaunching the app after a grade:
+
+- **The watcher dropped the cards' files.** It keeps hidden paths out, the attachments apart;
+  the review logs (`.knotes/reviews/*.tsv`) and the decks' settings (`.knotes/decks.json`) went
+  with the rest, so a running app took neither into its index until some note changed: the
+  cards just graded stayed due (the deck chosen again asked and logged them again), the
+  sidebar's counts and the statistics stood still, and a deck's new settings scheduled
+  nothing. It was said here that the watcher told of them; it had not been checked. (A vault's
+  first review hid it: the logs' folder being made tells of `.knotes`, the old rules file's
+  name.) The watcher tells of those two now; what changes under `.knotes` lists no folders
+  again in the snapshot.
+- **A review asked the index where a card stood**, and the index had not heard of the grade
+  given a moment before. A new card graded Good looked new again when it came back: its
+  labels a new card's, its grade sending it to its first steps again, for ever but for Easy,
+  each grade logged and, once folded, lengthening its interval. The review keeps now where
+  each card it graded stands (`Review::graded`), and asks the index only of cards it has not
+  graded. A grade is logged a second after the card's last at least: the index tells a card's
+  reviews apart by their second, and one asked again at once was graded twice in one.
+- Tests that do not relaunch: a card graded twice in one review (its second labels, the
+  review done, two lines a second apart), and a grade reaching the sidebar's count in the
+  same launch, in a vault whose logs' folder is there already (without the fix it fails).

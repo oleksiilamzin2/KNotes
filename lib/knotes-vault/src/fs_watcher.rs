@@ -97,13 +97,22 @@ fn debounce_loop(root: &Path, raw: &Receiver<PathBuf>, on_batch: &impl Fn(Vec<St
     }
 }
 
-/// Keeps visible paths, the attachments folder's files and per-folder rules files
-/// (`.knotes.json` and the old `.knotes`, ADR 0010, 0020); drops anything else hidden. The
-/// root itself is `RESCAN`.
+/// Keeps visible paths, the attachments folder's files, per-folder rules files (`.knotes.json`
+/// and the old `.knotes`, ADR 0010, 0020), and the cards' files in `.knotes` (ADR 0037: the
+/// review logs and the decks' settings, which the index takes in at a sync); drops anything
+/// else hidden. The root itself is `RESCAN`.
 fn add_visible(root: &Path, path: &Path, paths: &mut BTreeSet<String>) {
     let Some(rel) = path.strip_prefix(root).ok().and_then(Path::to_str) else { return };
     if rel.is_empty() {
         paths.insert(RESCAN.to_owned());
+        return;
+    }
+    // A review logged, or a deck's settings changed: without them told, a running app took
+    // neither into its index until some note changed (a card graded stayed due, and was asked
+    // and logged again).
+    let review_log = rel.strip_prefix(".knotes/reviews/").is_some_and(|name| !name.contains('/') && name.ends_with(".tsv") && !name.starts_with('.'));
+    if review_log || rel == ".knotes/decks.json" {
+        paths.insert(rel.to_owned());
         return;
     }
     let (folders, name) = rel.rsplit_once('/').unwrap_or(("", rel));
@@ -131,6 +140,11 @@ mod tests {
         assert_eq!(kept("a.md"), ["a.md"]);
         assert_eq!(kept("Work/.knotes.json"), ["Work/.knotes.json"]);
         assert_eq!(kept(".knotes/attachments/p.png"), [".knotes/attachments/p.png"]);
+        // The cards' files are told of: the index takes them in at the sync that follows.
+        assert_eq!(kept(".knotes/reviews/mac-a1b2c3.tsv"), [".knotes/reviews/mac-a1b2c3.tsv"]);
+        assert_eq!(kept(".knotes/decks.json"), [".knotes/decks.json"]);
+        assert!(kept(".knotes/reviews/.mac.tsv.tmp").is_empty() && kept(".knotes/reviews/old/mac.tsv").is_empty());
+        assert!(kept(".knotes/trash/1/entry.json").is_empty() && kept(".knotes/.decks.json.knotes-tmp").is_empty());
         assert!(kept(".git/HEAD").is_empty());
         assert!(kept(".DS_Store").is_empty());
     }

@@ -64,7 +64,8 @@ impl Snapshot {
                 (Arc::new(catalog), Arc::new(links), Arc::new(titles))
             }
         };
-        let known = |path: &str| catalog.binary_search_by(|e| e.path.as_str().cmp(path)).is_ok() || previous.is_some_and(|p| p.catalog.binary_search_by(|e| e.path.as_str().cmp(path)).is_ok());
+        // What changes under `.knotes` (an attachment, a review's log) is no folder come or gone.
+        let known = |path: &str| path.starts_with(".knotes/") || catalog.binary_search_by(|e| e.path.as_str().cmp(path)).is_ok() || previous.is_some_and(|p| p.catalog.binary_search_by(|e| e.path.as_str().cmp(path)).is_ok());
         let folder_paths = match previous.filter(|_| changed.iter().all(|path| known(path))) {
             Some(previous) => Arc::clone(&previous.folder_paths),
             None => Arc::new(rules_store.folders()?),

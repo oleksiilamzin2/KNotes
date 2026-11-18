@@ -4257,6 +4257,45 @@ fn a_space_s_decks_are_those_of_its_notes_cards() {
 }
 
 #[test]
+fn a_card_graded_twice_in_one_review_goes_on_from_its_first_grade() {
+    // One card, already with its id: graded Good it is still learned and comes back at once.
+    let notes = [("n.md", "#@мови cat::кіт ^c-1\n")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show")]);
+    // Asked again, it stands at its second step, not as a new card (the index has not heard
+    // of the first grade yet: the review remembers it).
+    assert_eq!(review_line_of(&out), "answer мови 1/1 | cat | кіт | Знову · 1 хв, Важко · 10 хв, Добре · 4 д, Легко · 7 д (list hidden)", "{out}");
+    // Good again: its days begin, and the review is done. (It came back for ever: each Good
+    // looked like a new card's first.)
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show,3")]);
+    assert_eq!(review_line_of(&out), "done мови 2", "{out}");
+    // Both grades are in the log, a second apart at least, though given in one.
+    let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
+    let log = std::fs::read_to_string(logs[0].path()).unwrap();
+    let times: Vec<i64> = log.lines().map(|l| l.split('\t').next().unwrap().parse().unwrap()).collect();
+    assert!(times.len() == 2 && times[1] > times[0], "{log}");
+}
+
+#[test]
+fn a_grade_reaches_the_index_while_the_app_runs() {
+    // A vault reviewed before: its logs' folder is there (a folder made tells the watcher of
+    // itself; a line added to a log in it must do as much).
+    let vault = tempfile::tempdir().unwrap();
+    for (path, text) in CARD_NOTES {
+        std::fs::write(vault.path().join(path), text).unwrap();
+    }
+    std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/other-mac.tsv"), "").unwrap();
+    // Graded Easy, the deck's only card is no longer waiting: the sidebar says so in the same
+    // launch (the watcher did not tell of the review's log, and the card stayed due until some
+    // note changed).
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:історія")];
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
+    assert_eq!(review_line_of(&out), "done історія 1", "{out}");
+    assert!(out.contains("sidebar: історія (0) | мови (2)\n"), "{out}");
+}
+
+#[test]
 fn what_is_selected_in_a_note_becomes_a_card() {
     let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
     // «тварина» (9..16) the answer to a question asked.

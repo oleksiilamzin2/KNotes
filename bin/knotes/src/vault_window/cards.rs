@@ -66,6 +66,11 @@ pub(super) struct Review {
     queue: VecDeque<DueCard>,
     current: Option<Current>,
     reviewed: usize,
+    /// Where each card graded in this review stands after its grades, by its id. The index
+    /// learns of a grade only at the sync after it is logged: asked of the index, a card that
+    /// came back at once looked new again, was sent to its first step again, and so on at
+    /// every Good, each one logged.
+    graded: std::collections::HashMap<String, knotes_cards::Schedule>,
 }
 
 /// The card shown.
@@ -87,12 +92,11 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// Where the card would stand graded `grade` at `at`: from what the index knows of it (none:
-/// a new card), by its deck's chance of recall and steps.
-fn graded(settings: &DeckSettings, deck: &str, state: Option<CardState>, at: i64, grade: Grade) -> knotes_cards::Schedule {
+/// Where the card would stand graded `grade` at `at`, from where it stands now (`before`;
+/// none: a new card), by its deck's chance of recall and steps.
+fn graded(settings: &DeckSettings, deck: &str, before: Option<&knotes_cards::Schedule>, at: i64, grade: Grade) -> knotes_cards::Schedule {
     let fsrs = Fsrs { retention: settings.retention(deck), ..Fsrs::default() };
-    let before = state.map(|s| knotes_cards::Schedule::standing(Memory { stability: s.stability, difficulty: s.difficulty }, s.last, s.step, s.relearning));
-    knotes_cards::review(&fsrs, &settings.steps(deck), before.as_ref(), at, grade)
+    knotes_cards::review(&fsrs, &settings.steps(deck), before, at, grade)
 }
 
 /// When a card would come back, said short: «10 хв» while it is learned, then «3 д», «2 міс»,
@@ -289,7 +293,7 @@ impl VaultWindow {
                 if asked == Asked::StartAhead {
                     queue.extend(self.cards_ahead(&deck, REVIEW_CARDS.saturating_sub(queue.len())));
                 }
-                *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0 });
+                *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0, graded: std::collections::HashMap::new() });
                 self.next_card();
             }
             Asked::ShowAnswer => {
@@ -361,10 +365,10 @@ impl VaultWindow {
                 None => Shown::Done { deck: review.deck.clone(), reviewed: review.reviewed },
                 Some(current) => {
                     let answer = current.answered.then(|| {
-                        let state = current.card.id.as_deref().and_then(|id| self.card_state(id));
+                        let before = current.card.id.as_deref().and_then(|id| self.standing(review, id));
                         let at = now();
                         let settings = self.deck_settings.borrow();
-                        (current.back.clone(), [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| comes_back(&graded(&settings, &current.card.deck, state, at, grade))))
+                        (current.back.clone(), [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| comes_back(&graded(&settings, &current.card.deck, before.as_ref(), at, grade))))
                     });
                     Shown::Card { deck: review.deck.clone(), done: review.reviewed, left: review.queue.len() + 1, front: current.front.clone(), answer }
                 }
@@ -378,6 +382,14 @@ impl VaultWindow {
         let mut state = self.state.borrow_mut();
         self.ensure_reader(&mut state);
         state.reader.as_ref().and_then(|r| r.card_state(id).ok()).flatten()
+    }
+
+    /// Where the card `id` stands now: as this review left it when it graded it, else as the
+    /// index has it; none for a card never reviewed.
+    fn standing(&self, review: &Review, id: &str) -> Option<knotes_cards::Schedule> {
+        review.graded.get(id).copied().or_else(|| {
+            self.card_state(id).map(|s| knotes_cards::Schedule::standing(Memory { stability: s.stability, difficulty: s.difficulty }, s.last, s.step, s.relearning))
+        })
     }
 
     /// The card shown graded: given an id in its note if it has none, its review logged in the
@@ -403,18 +415,22 @@ impl VaultWindow {
             card.id = Some(id);
         }
         let id = card.id.clone().unwrap_or_default();
-        // Where it stood before this review (the index has not taken it yet): whether it is
-        // still learned after it, and so asked again in this review.
-        let state = self.card_state(&id);
-        let learned = graded(&self.deck_settings.borrow(), &card.deck, state, now(), grade).step.is_some();
+        // Where it stood before this grade, and stands after it: still learned, it is asked
+        // again in this review.
+        let before = self.review.borrow().as_ref().and_then(|review| self.standing(review, &id));
+        // A second later than its last grade at least: the index tells a card's reviews apart
+        // by their second, and one asked again at once was graded twice in one.
+        let at = before.map_or(now(), |before| now().max(before.last + 1));
+        let after = graded(&self.deck_settings.borrow(), &card.deck, before.as_ref(), at, grade);
         let device = knotes_session::AppSettings::device_name(&knotes_session::app_data_dir());
-        if let Err(e) = files.append_review(&device, &review_line(now(), &id, grade)) {
+        if let Err(e) = files.append_review(&device, &review_line(at, &id, grade)) {
             self.tell_failed(&strings::review_failed(document_name(&card.path)), &e);
             return;
         }
         if let Some(review) = self.review.borrow_mut().as_mut() {
             review.reviewed += 1;
-            if learned {
+            review.graded.insert(id, after);
+            if after.step.is_some() {
                 review.queue.push_back(card);
             }
         }
