@@ -96,10 +96,12 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   (`row_marks`): the dot of its space when that is not the window's, and the AI's mark when
   it is kept from the AI. The owner missed them in the first version.
 - **What is searched, and the case** (the owner asked for both), under the field: «Усе» (the
-  names, then the text; as it opens), «Файли» (the names), «Вміст» (the text), «За змістом»
-  (by meaning, ADR 0028); and «Aa», on while the letters' case is ignored, as the list's
+  names, then the text; as it opens), «Файли» (the names), «Вміст» (the text); apart from
+  them, after a gap (the owner's wish: it is another kind of search), «За змістом» (by
+  meaning, ADR 0028), chosen in their place; and «Aa», on while the letters' case is ignored, as the list's
   search has it: off, only a name or a text holding each word as typed. The case has no part
-  in a search by meaning, and «Aa» is greyed then.
+  in a search by meaning, and «Aa» is not shown then (greyed while on, its letters could not
+  be read).
 - Names and text are searched on the main thread as the field's text changes, with a reader
   of its own: they take a few milliseconds at 10 000 notes (ADR 0006's measurements), and no
   answers arrive out of order. By meaning is asked of the list's search thread

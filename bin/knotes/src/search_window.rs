@@ -224,9 +224,14 @@ pub struct ControllerIvars {
     field: Retained<NSSearchField>,
     list: Retained<ResultList>,
     list_scroll: Retained<NSScrollView>,
-    /// What is searched (all, names, text, by meaning), and «Aa»: on while the case is ignored.
+    /// What is searched: all, names or text; apart from them (the owner's wish: it is another
+    /// kind of search), by meaning, which is chosen in their place; and «Aa», on while the
+    /// case is ignored.
     kind: Retained<objc2_app_kit::NSSegmentedControl>,
-    case: Retained<objc2_app_kit::NSButton>,
+    meaning: Retained<objc2_app_kit::NSSegmentedControl>,
+    /// A switch of one segment, drawn as the kinds' beside it: as a push button, on, it was a
+    /// pale blue plate whose letters could not be read (the owner's picture).
+    case: Retained<objc2_app_kit::NSSegmentedControl>,
     /// Search by meaning, on its own thread: made at the first such search; only the answer to
     /// the latest question is shown.
     index_dir: RefCell<Option<std::path::PathBuf>>,
@@ -280,6 +285,20 @@ define_class!(
         fn query_changed(&self, _sender: Option<&AnyObject>) {
             self.search();
         }
+
+        /// All, names or text clicked: no longer by meaning.
+        #[unsafe(method(kindChosen:))]
+        fn kind_chosen(&self, _sender: Option<&AnyObject>) {
+            self.ivars().meaning.setSelected_forSegment(false, 0);
+            self.search();
+        }
+
+        /// «За змістом» clicked: in the place of the three (a second click leaves it chosen).
+        #[unsafe(method(meaningChosen:))]
+        fn meaning_chosen(&self, _sender: Option<&AnyObject>) {
+            self.choose(Kind::Meaning);
+            self.search();
+        }
     }
 );
 
@@ -301,11 +320,22 @@ impl Controller {
     }
 
     fn kind(&self) -> Kind {
-        [Kind::All, Kind::Names, Kind::Text, Kind::Meaning].get(self.ivars().kind.selectedSegment() as usize).copied().unwrap_or(Kind::All)
+        if self.ivars().meaning.isSelectedForSegment(0) {
+            return Kind::Meaning;
+        }
+        [Kind::All, Kind::Names, Kind::Text].get(self.ivars().kind.selectedSegment() as usize).copied().unwrap_or(Kind::All)
+    }
+
+    /// `kind` chosen: by meaning in the place of the three, or one of them in its place.
+    fn choose(&self, kind: Kind) {
+        let by_meaning = kind == Kind::Meaning;
+        self.ivars().meaning.setSelected_forSegment(by_meaning, 0);
+        let segment = [Kind::All, Kind::Names, Kind::Text].iter().position(|k| *k == kind).map_or(-1, |i| i as isize);
+        self.ivars().kind.setSelectedSegment(segment);
     }
 
     fn ignore_case(&self) -> bool {
-        self.ivars().case.state() == objc2_app_kit::NSControlStateValueOn
+        self.ivars().case.isSelectedForSegment(0)
     }
 
     /// The documents the field's text finds, listed; the first shown below. By meaning they
@@ -314,8 +344,9 @@ impl Controller {
         let query = self.ivars().field.stringValue().to_string();
         // A question asked since: an answer by meaning still on its way is for an older one.
         self.ivars().asked.set(self.ivars().asked.get() + 1);
-        // The case has no part in a search by meaning.
-        self.ivars().case.setEnabled(self.kind() != Kind::Meaning);
+        // The case has no part in a search by meaning: «Aa» goes (greyed while on, it was a pale
+        // blue plate with letters that could not be read).
+        self.ivars().case.setHidden(self.kind() == Kind::Meaning);
         if self.kind() == Kind::Meaning {
             self.list(Vec::new());
             self.ask_by_meaning(query.trim());
@@ -487,21 +518,27 @@ impl SearchWindow {
             }
         });
         // What is searched, and «Aa», under the field.
-        let labels = NSArray::from_retained_slice(&[strings::SEARCH_ALL, strings::SEARCH_FILES, strings::SEARCH_CONTENT, strings::SEARCH_MEANING].map(NSString::from_str));
+        let labels = NSArray::from_retained_slice(&[strings::SEARCH_ALL, strings::SEARCH_FILES, strings::SEARCH_CONTENT].map(NSString::from_str));
+        // SAFETY: a label and no target yet.
+        let meaning = unsafe {
+            objc2_app_kit::NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&NSArray::from_retained_slice(&[NSString::from_str(strings::SEARCH_MEANING)]), objc2_app_kit::NSSegmentSwitchTracking::SelectAny, None, None, mtm)
+        };
+        meaning.setControlSize(objc2_app_kit::NSControlSize::Small);
         // SAFETY: labels and no target yet (set below, once the controller is made).
         let kind = unsafe { objc2_app_kit::NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&labels, objc2_app_kit::NSSegmentSwitchTracking::SelectOne, None, None, mtm) };
         kind.setSelectedSegment(0);
         kind.setControlSize(objc2_app_kit::NSControlSize::Small);
         // SAFETY: as above.
-        let case = unsafe { objc2_app_kit::NSButton::buttonWithTitle_target_action(&NSString::from_str("Aa"), None, None, mtm) };
-        case.setButtonType(objc2_app_kit::NSButtonType::PushOnPushOff);
-        case.setState(objc2_app_kit::NSControlStateValueOn);
+        let case = unsafe {
+            objc2_app_kit::NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&NSArray::from_retained_slice(&[NSString::from_str("Aa")]), objc2_app_kit::NSSegmentSwitchTracking::SelectAny, None, None, mtm)
+        };
+        case.setSelected_forSegment(true, 0);
         case.setControlSize(objc2_app_kit::NSControlSize::Small);
         case.setToolTip(Some(&NSString::from_str(strings::FIND_IGNORE_CASE)));
         let line = NSBox::new(mtm);
         line.setBoxType(NSBoxType::Separator);
         let content = NSView::new(mtm);
-        for part in [&*field as &NSView, &kind, &case, &list_scroll, &line, &preview_scroll] {
+        for part in [&*field as &NSView, &kind, &meaning, &case, &list_scroll, &line, &preview_scroll] {
             part.setTranslatesAutoresizingMaskIntoConstraints(false);
             content.addSubview(part);
         }
@@ -511,8 +548,11 @@ impl SearchWindow {
             field.trailingAnchor().constraintEqualToAnchor_constant(&content.trailingAnchor(), -12.0),
             kind.topAnchor().constraintEqualToAnchor_constant(&field.bottomAnchor(), 8.0),
             kind.leadingAnchor().constraintEqualToAnchor_constant(&content.leadingAnchor(), 12.0),
+            // By meaning apart from the three, a gap between.
+            meaning.centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
+            meaning.leadingAnchor().constraintEqualToAnchor_constant(&kind.trailingAnchor(), 20.0),
             case.centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
-            case.leadingAnchor().constraintEqualToAnchor_constant(&kind.trailingAnchor(), 10.0),
+            case.leadingAnchor().constraintEqualToAnchor_constant(&meaning.trailingAnchor(), 20.0),
             list_scroll.topAnchor().constraintEqualToAnchor_constant(&kind.bottomAnchor(), 8.0),
             list_scroll.leadingAnchor().constraintEqualToAnchor(&content.leadingAnchor()),
             list_scroll.trailingAnchor().constraintEqualToAnchor(&content.trailingAnchor()),
@@ -529,7 +569,7 @@ impl SearchWindow {
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
         window.setContentView(Some(&content));
         window.setContentSize(NSSize::new(860.0, 640.0));
-        let ivars = ControllerIvars { window, field, list, list_scroll, kind, case, index_dir: RefCell::new(None), worker: RefCell::new(None), asked: Cell::new(0), preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
+        let ivars = ControllerIvars { window, field, list, list_scroll, kind, meaning, case, index_dir: RefCell::new(None), worker: RefCell::new(None), asked: Cell::new(0), preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
         // SAFETY: a plain object's init.
         let controller: Retained<Controller> = unsafe { msg_send![super(Controller::alloc(mtm).set_ivars(ivars)), init] };
         let field = &controller.ivars().field;
@@ -540,7 +580,9 @@ impl SearchWindow {
             field.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
             // Another kind, or the case: searched again.
             controller.ivars().kind.setTarget(Some(&controller));
-            controller.ivars().kind.setAction(Some(sel!(queryChanged:)));
+            controller.ivars().kind.setAction(Some(sel!(kindChosen:)));
+            controller.ivars().meaning.setTarget(Some(&controller));
+            controller.ivars().meaning.setAction(Some(sel!(meaningChosen:)));
             controller.ivars().case.setTarget(Some(&controller));
             controller.ivars().case.setAction(Some(sel!(queryChanged:)));
         }
@@ -615,11 +657,9 @@ impl SearchWindow {
 
     /// The kind of search chosen, and «Aa» clicked when `keep_case` (probe mode).
     pub fn choose(&self, kind: Kind, keep_case: bool) {
-        let segment = [Kind::All, Kind::Names, Kind::Text, Kind::Meaning].iter().position(|k| *k == kind).unwrap_or(0);
-        self.controller.ivars().kind.setSelectedSegment(segment as isize);
+        self.controller.choose(kind);
         if keep_case {
-            // SAFETY: a click on the window's own button.
-            unsafe { self.controller.ivars().case.performClick(None) };
+            self.controller.ivars().case.setSelected_forSegment(false, 0);
         }
         self.controller.search();
     }
