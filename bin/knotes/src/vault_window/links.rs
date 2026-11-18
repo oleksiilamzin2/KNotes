@@ -65,6 +65,31 @@ impl VaultWindow {
         }
     }
 
+    /// A link clicked in a document the vault's search shows, written in the note at `from`:
+    /// the note or PDF it resolves to from there, at its heading or page, or the web's address
+    /// in the browser. A link to nothing opens nothing (in a note open here it would make the
+    /// note; from a search, that would surprise).
+    pub(super) fn follow_found_link(&self, link: &Link, from: &str) {
+        if link.kind == LinkKind::External {
+            open_url(&link.target);
+            return;
+        }
+        let Some(links) = self.state.borrow().links.clone() else { return };
+        let Some(path) = links.resolve(link.kind, &link.target, from) else { return };
+        if FileKind::from_path(&path) == FileKind::Pdf {
+            let page = link.subpath.as_deref().and_then(|s| s.strip_prefix("page=")).and_then(|p| p.parse().ok());
+            self.open_pdf(&path, page, true);
+            return;
+        }
+        if !self.open_note(&path, true) {
+            return;
+        }
+        self.highlight_open_note();
+        if let Some(subpath) = &link.subpath {
+            self.show_subpath(subpath);
+        }
+    }
+
     /// A link in a chat answer (`Projects/Radar`, `budget.pdf#page=3`): the note or PDF it
     /// resolves to opened, at its heading or page. A link to nothing opens nothing (unlike a
     /// note's links, which make the note).

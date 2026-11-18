@@ -467,13 +467,19 @@ impl SearchWindow {
         list_scroll.setAutohidesScrollers(true);
         list_scroll.setDrawsBackground(false);
         list_scroll.setDocumentView(Some(&list));
-        // A note's own view and its live preview, as the vault's window has them; read only,
-        // and its links lead nowhere from here.
+        // A note's own view and its live preview, as the vault's window has them; read only.
+        // Its links are clicked as a note's (`on_link` says where they lead).
         let (preview_scroll, preview) = crate::note_view::note_view(mtm);
         let live = crate::live_preview::LivePreview::new(mtm);
         preview.setDelegate(Some(ProtocolObject::from_ref(&*live)));
         live.attach(&preview);
         preview.setEditable(false);
+        let clicks = live.clone();
+        // Every click as with Cmd: a link is followed in the paragraph the cursor stands in too
+        // (nothing is typed here for a plain click to be for), and no task is ticked.
+        preview.on_click(move |view, index, _| clicks.click(view, index, true));
+        let hovers = live.clone();
+        preview.on_hover(move |index| hovers.clickable(index));
         let (look, shown) = (live.clone(), objc2::rc::Weak::from_retained(&preview));
         preview.on_appearance(move || {
             if let Some(shown) = shown.load() {
@@ -552,6 +558,24 @@ impl SearchWindow {
             }
         }));
         Self { controller }
+    }
+
+    /// Called with a link clicked in the document shown below, and that document's path (the
+    /// link is written there); the search closes first.
+    pub fn on_link(&self, callback: impl Fn(&knotes_core::Link, &str) + 'static) {
+        let weak = objc2::rc::Weak::from_retained(&self.controller);
+        self.controller.ivars().live.on_link(move |link| {
+            let Some(controller) = weak.load() else { return };
+            let from = controller.chosen().map(|found| found.path).unwrap_or_default();
+            controller.ivars().window.orderOut(None);
+            callback(link, &from);
+        });
+    }
+
+    /// A click in the document shown below, at UTF-16 `index` of its text (probe mode).
+    pub fn click_at(&self, index: usize) {
+        let ivars = self.controller.ivars();
+        ivars.live.click(&ivars.preview, index, true);
     }
 
     /// Called with the document opened from the search.

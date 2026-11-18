@@ -2561,6 +2561,21 @@ fn the_vault_s_search_lists_documents_by_name_then_by_text_and_shows_the_one_cho
 }
 
 #[test]
+fn a_link_clicked_in_the_document_the_search_shows_opens_what_it_leads_to() {
+    let notes = [("a.md", "See [[b]] here and [[nowhere]].\n"), ("b.md", "the target\n")];
+    // A click inside `[[b]]`: b opens in the vault's window, the search closes.
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_VAULT_SEARCH", "here"), ("KNOTES_PROBE_VAULT_SEARCH_CLICK", "6")]);
+    assert!(out.contains("vault-search: [a.md]") && out.contains("note: b.md") && !out.contains("vault-search-window: open"), "{out}");
+    // A link to no note makes none from a search.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "here"), ("KNOTES_PROBE_VAULT_SEARCH_CLICK", "22")]);
+    assert!(!out.contains("note: ") || !out.contains("note: nowhere.md"), "{out}");
+    assert!(!vault.path().join("nowhere.md").exists(), "{out}");
+    // A click on plain text follows nothing: the search stays.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "here"), ("KNOTES_PROBE_VAULT_SEARCH_CLICK", "1")]);
+    assert!(out.contains("vault-search-window: open"), "{out}");
+}
+
+#[test]
 fn a_click_on_a_tab_shows_its_document() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);

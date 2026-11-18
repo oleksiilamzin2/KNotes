@@ -47,6 +47,14 @@ impl VaultWindow {
                     window.window.makeKeyAndOrderFront(None);
                 }
             });
+            // A link clicked in the document shown there leads here.
+            let weak = self.this.borrow().clone();
+            search.on_link(move |link, from| {
+                if let Some(window) = weak.upgrade() {
+                    window.follow_found_link(link, from);
+                    window.window.makeKeyAndOrderFront(None);
+                }
+            });
             *self.search_window.borrow_mut() = Some(search);
         }
         if let Some(search) = self.search_window.borrow().as_ref() {
@@ -77,6 +85,10 @@ impl VaultWindow {
         search.type_query(query);
         search.step(down);
         println!("vault-search: {}", search.describe());
+        // `KNOTES_PROBE_VAULT_SEARCH_CLICK=6`: a click at that place of the document shown.
+        if let Some(index) = std::env::var("KNOTES_PROBE_VAULT_SEARCH_CLICK").ok().and_then(|i| i.parse().ok()) {
+            search.click_at(index);
+        }
         if open {
             search.open_chosen();
         }

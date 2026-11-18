@@ -84,7 +84,10 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   window shows a note (a note's own text view with the live preview, read only: headings,
   lists, quotes, code, cards; plain text at first, which the owner asked to be as the notes
   are), the query's words marked and the first scrolled into view (a PDF's as its indexed
-  text). Its links lead nowhere from there. Down
+  text). A link clicked there is followed from that document: the note or PDF it leads to
+  opens in the vault's window (the web's in the browser) and the search closes; a link to no
+  note makes none, as it would in a note open in the window. Every click there is as with
+  Cmd: a link is followed in the cursor's paragraph too, and no task is ticked. Down
   and up choose, a click too; Return or a double click opens the document in the vault's
   window and closes the search; Escape closes it. Opened by the toolbar's glass or by Edit's
   «Пошук у базі…», ⌥⌘F (⇧⌘F stays the list's search). Opened again, it searches what was typed
