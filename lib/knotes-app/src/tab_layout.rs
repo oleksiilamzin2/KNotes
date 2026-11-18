@@ -6,9 +6,10 @@
 pub const TAB_GAP: f64 = 4.0;
 /// A tab shows its name while it is at least this wide; narrower, its symbol alone.
 pub const TAB_NAMED: f64 = 56.0;
-/// A tab is never narrower than this: room for its symbol, or its cross, and to be pressed.
-/// More tabs than fit so are longer than the strip, which shows a part of them (`tab_scroll`).
-pub const TAB_MIN: f64 = 44.0;
+/// A tab is never narrower than this (the owner's measure, from a tab as he wants the
+/// narrowest): room for its symbol and a short name. More tabs than fit so are longer than the
+/// strip, which shows a part of them (`tab_scroll`).
+pub const TAB_MIN: f64 = 150.0;
 /// The cross's size, and how near a point must be to count as on it.
 const CROSS: f64 = 15.0;
 const NEAR: f64 = 5.0;

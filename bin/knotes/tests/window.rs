@@ -2508,18 +2508,18 @@ fn more_tabs_than_fit_keep_their_width_and_the_one_shown_is_in_view() {
     std::fs::write(vault.path().join("a.md"), "a").unwrap();
     let home = tabs_home();
     let places = |out: &str| out.lines().find_map(|l| l.strip_prefix("tab-places: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
-    // "40 tabs 44 wide, shown at 556..600 of 600": no tab squeezed to nothing, the last one
+    // "40 tabs 150 wide, shown at 450..600 of 600": no tab squeezed to nothing, the last one
     // (shown) wholly inside the strip, at its right.
     let numbers = |line: &str| line.split(|c: char| !c.is_ascii_digit()).filter(|n| !n.is_empty()).map(|n| n.parse::<f64>().unwrap()).collect::<Vec<_>>();
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", &names.join(","))]);
     let line = places(&out);
     let n = numbers(&line);
-    assert_eq!((n[0], n[1]), (40.0, 44.0), "{line}");
+    assert_eq!((n[0], n[1]), (40.0, 150.0), "{line}");
     assert!(n[2] >= 0.0 && n[3] <= n[4] && n[3] > n[4] - 2.0, "the one shown at the strip's right end: {line}");
     // The next launch shows the same tab; the first one clicked comes into view at the left.
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TAB_CLICK", "doc00.pdf")]);
     let n = numbers(&places(&out));
-    assert_eq!((n[0], n[2], n[3]), (40.0, 0.0, 44.0), "{}", places(&out));
+    assert_eq!((n[0], n[2], n[3]), (40.0, 0.0, 150.0), "{}", places(&out));
     // A few tabs fill the strip as before, none scrolled.
     let (vault, home) = (tabs_vault(), tabs_home());
     let n = numbers(&places(&probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md,doc.pdf")])));

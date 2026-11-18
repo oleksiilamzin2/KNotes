@@ -144,6 +144,15 @@ define_class!(
             self.scroll_by(-by);
         }
 
+        /// A secondary click (two fingers on a trackpad, the right button): the tab's menu, shown
+        /// here and not left to the toolbar the strip sits in.
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            if let Some(menu) = self.tab_menu(event) {
+                NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
+            }
+        }
+
         /// A tab's menu: it closes, or every other does.
         #[unsafe(method_id(menuForEvent:))]
         fn menu_for_event(&self, event: &NSEvent) -> Option<Retained<NSMenu>> {
