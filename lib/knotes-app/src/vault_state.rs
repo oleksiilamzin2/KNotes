@@ -7,12 +7,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use knotes_core::{CardIndex, CatalogEntry, NoteRow, TagIndex, TrashEntry};
+use knotes_cards::DeckSettings;
+use knotes_core::{CardIndex, CardRow, CatalogEntry, DeckCount, DeckStats, DueCard, NoteRow, TagIndex, TrashEntry};
 use knotes_search::TitleIndex;
 use knotes_spaces::{KeptFromAi, Spaces};
 
 use crate::{
-    Clock, ContentMatch, FolderNode, FolderRules, History, ListFilter, ListItem, ListSettings, RestPart, Sidebar, SidebarItem, SidebarMode, SpaceFolders, SpaceList, SpaceTags, TagNode, build_note_list, list_scope, list_space_scope,
+    Clock, ContentMatch, deck_rows, deck_tree, FolderNode, FolderRules, History, ListFilter, ListItem, ListSettings, RestPart, Sidebar, SidebarItem, SidebarMode, SpaceFolders, SpaceList, SpaceTags, TagNode, build_note_list, list_scope, list_space_scope,
     new_notes_folder, resolve_list_settings, search_list,
 };
 
@@ -273,5 +274,65 @@ impl<R: TagIndex + CardIndex, L> VaultState<R, L> {
             SidebarItem::Untagged => Some(Arc::clone(&self.untagged)),
             _ => None,
         }
+    }
+}
+
+/// The decks and their cards (ADR 0037). In a space (ADR 0030) the decks are those of its
+/// notes' cards, counted and reviewed from them (owner's request: decks follow the spaces by
+/// their files); for the whole vault the index counts itself. Times are seconds since 1970:
+/// `now`, and `day_start`, when today began (a day's new cards count from it).
+impl<R: CardIndex, L> VaultState<R, L> {
+    /// In a space, the cards written in its notes; none for the whole vault.
+    fn space_rows(&self) -> Option<Vec<CardRow>> {
+        let id = self.space.as_ref()?;
+        let mut rows = self.reader.as_ref().and_then(|r| r.card_rows(None, None).ok()).unwrap_or_default();
+        rows.retain(|row| self.spaces.holds(&row.path, id));
+        Some(rows)
+    }
+
+    /// The cards `deck` asks now, `limit` at most: those due, and of the new as many as it
+    /// still asks today by its settings. Asked of the index, not as the last snapshot had it:
+    /// a review just done counts.
+    pub fn due_cards(&self, deck: &str, settings: &DeckSettings, now: i64, day_start: i64, limit: usize) -> Vec<DueCard> {
+        let Some(reader) = self.reader.as_ref() else { return Vec::new() };
+        let rows = self.space_rows();
+        let under = format!("{deck}/");
+        let introduced = match &rows {
+            Some(rows) => deck_rows::introduced(rows, day_start),
+            None => reader.introduced(day_start).unwrap_or_default(),
+        };
+        let today: usize = introduced.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
+        let new = (settings.new_a_day(deck) as usize).saturating_sub(today);
+        match &rows {
+            Some(rows) => deck_rows::due_cards(rows, deck, now, limit, new),
+            None => reader.due_cards(Some(deck), now, limit, new).unwrap_or_default(),
+        }
+    }
+
+    /// `deck`'s reviewed cards not due yet, the soonest due first, `limit` at most: what a
+    /// review ahead of the schedule asks.
+    pub fn cards_ahead(&self, deck: &str, now: i64, limit: usize) -> Vec<DueCard> {
+        match self.space_rows() {
+            Some(rows) => deck_rows::cards_ahead(&rows, deck, now, limit),
+            None => self.reader.as_ref().and_then(|r| r.cards_ahead(deck, now, limit).ok()).unwrap_or_default(),
+        }
+    }
+
+    /// The decks' tree with what each asks now: those due, and of the new as many as it still
+    /// asks today. `counts`: the vault's decks as the last snapshot counted them (in a space,
+    /// its notes' cards are counted here instead).
+    pub fn deck_tree(&self, counts: &[DeckCount], settings: &DeckSettings, now: i64, day_start: i64) -> Vec<TagNode> {
+        let new_a_day = |deck: &str| settings.new_a_day(deck) as usize;
+        match self.space_rows() {
+            Some(rows) => deck_tree(&deck_rows::deck_counts(&rows, now), &deck_rows::introduced(&rows, day_start), &new_a_day),
+            None => deck_tree(counts, &self.reader.as_ref().and_then(|r| r.introduced(day_start).ok()).unwrap_or_default(), &new_a_day),
+        }
+    }
+
+    /// How `deck` stands, with those under it; in a space, of its notes' cards. None for a deck
+    /// with no card there.
+    pub fn deck_stats(&self, deck: &str, day_start: i64) -> Option<DeckStats> {
+        let holds = |path: &str| self.space.as_ref().is_none_or(|id| self.spaces.holds(path, id));
+        self.reader.as_ref().and_then(|r| r.deck_stats(deck, day_start, &holds).ok()).filter(|stats| stats.cards > 0)
     }
 }

@@ -1,9 +1,9 @@
 //! The notes' cards in the window (ADR 0037): a card made from what is selected in the note,
 //! and a deck's review in the note column.
 
-use knotes_app::{ReviewSession, deck_rows};
+use knotes_app::ReviewSession;
 use knotes_cards::{DeckSettings, Grade, asks, card_id, give_id, make_card, review_line, taken_back_line};
-use knotes_core::{CardIndex, CardRow, CardState, DueCard};
+use knotes_core::{CardIndex, CardState, DueCard};
 
 use super::*;
 use crate::review_view::{Asked, Shown};
@@ -140,35 +140,12 @@ impl VaultWindow {
         self.review_view.show(None);
     }
 
-    /// In a space (ADR 0030), the cards written in its notes: its decks are those, counted and
-    /// reviewed from them (owner's request: decks follow the spaces by their files). None for
-    /// the whole vault, which the index counts itself.
-    fn space_rows(&self, state: &mut State) -> Option<Vec<CardRow>> {
-        let id = state.space.clone()?;
-        self.ensure_reader(state);
-        let mut rows = state.reader.as_ref().and_then(|r| r.card_rows(None, None).ok()).unwrap_or_default();
-        rows.retain(|row| state.spaces.holds(&row.path, &id));
-        Some(rows)
-    }
-
-    /// The cards `deck` asks now: those due, and of the new as many as it still asks today.
+    /// The cards `deck` asks now: those due, and of the new as many as it still asks today (in a
+    /// space, of its notes' cards: knotes-app's `VaultState::due_cards`).
     fn due_cards(&self, deck: &str) -> Vec<DueCard> {
         let mut state = self.state.borrow_mut();
-        let rows = self.space_rows(&mut state);
         self.ensure_reader(&mut state);
-        let Some(reader) = state.reader.as_ref() else { return Vec::new() };
-        // Asked of the index, not as the last snapshot had it: a review just done counts.
-        let under = format!("{deck}/");
-        let introduced = match &rows {
-            Some(rows) => deck_rows::introduced(rows, day_start()),
-            None => reader.introduced(day_start()).unwrap_or_default(),
-        };
-        let today: usize = introduced.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
-        let new = (self.deck_settings.borrow().new_a_day(deck) as usize).saturating_sub(today);
-        match &rows {
-            Some(rows) => deck_rows::due_cards(rows, deck, now(), REVIEW_CARDS, new),
-            None => reader.due_cards(Some(deck), now(), REVIEW_CARDS, new).unwrap_or_default(),
-        }
+        state.due_cards(deck, &self.deck_settings.borrow(), now(), day_start(), REVIEW_CARDS)
     }
 
     /// The decks' tree with what each asks now, from the last snapshot's counts (in a space,
@@ -176,15 +153,8 @@ impl VaultWindow {
     /// has taken.
     pub(super) fn count_decks(&self, state: &mut State) -> Vec<TagNode> {
         let settings = state.vault.clone().and_then(|vault| FsVault::new(&vault).read_deck_settings().ok()).map(|text| DeckSettings::parse(&text)).unwrap_or_default();
-        let new_a_day = |deck: &str| settings.new_a_day(deck) as usize;
-        let tree = match self.space_rows(state) {
-            Some(rows) => knotes_app::deck_tree(&deck_rows::deck_counts(&rows, now()), &deck_rows::introduced(&rows, day_start()), &new_a_day),
-            None => {
-                self.ensure_reader(state);
-                let introduced = state.reader.as_ref().and_then(|r| r.introduced(day_start()).ok()).unwrap_or_default();
-                knotes_app::deck_tree(&self.deck_counts.borrow(), &introduced, &new_a_day)
-            }
-        };
+        self.ensure_reader(state);
+        let tree = state.deck_tree(&self.deck_counts.borrow(), &settings, now(), day_start());
         *self.deck_settings.borrow_mut() = settings;
         tree
     }
@@ -234,11 +204,8 @@ impl VaultWindow {
     /// `deck`'s reviewed cards not due yet, the soonest due first; in a space, of its notes'.
     fn cards_ahead(&self, deck: &str, limit: usize) -> Vec<DueCard> {
         let mut state = self.state.borrow_mut();
-        if let Some(rows) = self.space_rows(&mut state) {
-            return deck_rows::cards_ahead(&rows, deck, now(), limit);
-        }
         self.ensure_reader(&mut state);
-        state.reader.as_ref().and_then(|r| r.cards_ahead(deck, now(), limit).ok()).unwrap_or_default()
+        state.cards_ahead(deck, now(), limit)
     }
 
     /// A deck not started: how many of its cards wait, and its statistics.
@@ -246,10 +213,7 @@ impl VaultWindow {
         let stats = {
             let mut state = self.state.borrow_mut();
             self.ensure_reader(&mut state);
-            // In a space, of its notes' cards.
-            let (spaces, space) = (Arc::clone(&state.spaces), state.space.clone());
-            let holds = |path: &str| space.as_ref().is_none_or(|id| spaces.holds(path, id));
-            state.reader.as_ref().and_then(|r| r.deck_stats(deck, day_start(), &holds).ok()).filter(|stats| stats.cards > 0)
+            state.deck_stats(deck, day_start())
         };
         let said = stats.as_ref().map(strings::deck_stats).unwrap_or_default();
         let ahead = self.cards_ahead(deck, REVIEW_CARDS);

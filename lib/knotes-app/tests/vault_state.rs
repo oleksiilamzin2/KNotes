@@ -17,29 +17,39 @@ const NOTES: [(&str, &str); 5] = [
     ("Top2.md", "Nor here.\n"),
 ];
 
-/// The state after a snapshot of `NOTES`, the index read from `dir`; the vault has two spaces,
-/// «Дім» with the folder Home and «Робота» with Work.
-fn state(dir: &std::path::Path) -> State {
+fn index_of(dir: &std::path::Path, notes: &[(&str, &str)]) -> SqliteIndex {
     let mut index = SqliteIndex::open(dir).unwrap();
-    let parsed: Vec<_> = NOTES.iter().map(|(_, t)| knotes_md::MarkdownParser::new().parse(t)).collect();
-    let files: Vec<_> = NOTES.iter().map(|(p, _)| VaultFile { path: (*p).into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 }).collect();
-    let changes: Vec<_> = files.iter().zip(NOTES).zip(&parsed).map(|((file, (_, text)), parsed)| IndexChange::Upsert { file, note: Some((text, parsed)) }).collect();
+    let parsed: Vec<_> = notes.iter().map(|(_, t)| knotes_md::MarkdownParser::new().parse(t)).collect();
+    let files: Vec<_> = notes.iter().map(|(p, _)| VaultFile { path: (*p).into(), kind: FileKind::Markdown, size: 1, mtime_ns: 1 }).collect();
+    let changes: Vec<_> = files.iter().zip(notes).zip(&parsed).map(|((file, (_, text)), parsed)| IndexChange::Upsert { file, note: Some((text, parsed)) }).collect();
     index.apply(&changes).unwrap();
+    index
+}
+
+/// Two spaces: «Дім» with the folder Home and «Робота» with Work.
+fn spaces() -> Arc<knotes_spaces::Spaces> {
     let rules = [
         (String::new(), r#"{"spaces": [{"id": "home", "name": "Дім", "color": "green"}, {"id": "work", "name": "Робота", "color": "blue"}]}"#.to_owned()),
         ("Home".to_owned(), r#"{"space": "home"}"#.to_owned()),
         ("Work".to_owned(), r#"{"space": "work"}"#.to_owned()),
     ];
+    Arc::new(knotes_spaces::Spaces::from_texts(&rules))
+}
+
+/// The state after a snapshot of `NOTES`, the index read from `dir`; the vault has two spaces,
+/// «Дім» with the folder Home and «Робота» with Work.
+fn state(dir: &std::path::Path) -> State {
+    let index = index_of(dir, &NOTES);
     let mut rows: Vec<NoteRow> = NOTES.iter().map(|(path, _)| NoteRow { path: (*path).into(), mtime_ns: 1, snippet: String::new() }).collect();
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     State {
+        spaces: spaces(),
         rows: Arc::new(rows),
         folders: Arc::new(folder_tree(NOTES.iter().map(|(path, _)| *path))),
         tags: Arc::new(tag_tree(&[("garden".into(), 1), ("work".into(), 2), ("work/radar".into(), 1)])),
         decks: Arc::new(tag_tree(&[("plants".into(), 2)])),
         untagged: Arc::new(["Top.md".to_owned(), "Top2.md".to_owned()].into()),
         tagged: Arc::new(vec![("garden".into(), "Home/Сад.md".into()), ("work".into(), "Work/Plan.md".into()), ("work/radar".into(), "Work/2026/Radar.md".into())]),
-        spaces: Arc::new(knotes_spaces::Spaces::from_texts(&rules)),
         reader: Some(index),
         ..State::default()
     }
@@ -165,4 +175,48 @@ fn the_sidebar_has_a_row_only_for_what_is_there() {
     assert!(!exists(&state, SidebarItem::Deleted));
     state.trash = Arc::new(vec![TrashEntry { id: "1".into(), path: "Old.md".into(), folder: false, deleted_ms: 1, notes: 1 }]);
     assert!(exists(&state, SidebarItem::Deleted));
+}
+
+#[test]
+fn a_deck_asks_its_due_cards_and_the_day_s_new_ones_and_in_a_space_those_of_its_notes() {
+    use knotes_cards::{DeckSettings, Fsrs, Grade, review_line};
+    use knotes_core::CardIndex;
+    const NOW: i64 = 1_800_000_000;
+    const DAY_START: i64 = NOW - 3_600;
+    let notes = [("Home/a.md", "#@en cat::кіт ^c-1\n#@en dog::пес ^c-2\n#@en/verbs go::йти ^c-3\n"), ("Work/b.md", "#@en cow::корова ^c-4\n#@de eins::один ^c-5\n")];
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = index_of(dir.path(), &notes);
+    let all = DeckSettings::default();
+    let two = DeckSettings::parse(r#"{"en": {"new_a_day": 2}}"#);
+    // cat was graded Easy half an hour ago: no more new today, and not due for days.
+    index.take_reviews("mac", 0, &review_line(NOW - 1_800, "c-1", Grade::Easy), &Fsrs::default(), &all).unwrap();
+    let counts = index.deck_counts(NOW).unwrap();
+    let mut state = State { spaces: spaces(), reader: Some(index), ..State::default() };
+    let ids = |cards: Vec<knotes_core::DueCard>| cards.into_iter().map(|c| c.id.unwrap_or_default()).collect::<Vec<_>>().join(" ");
+    // The whole vault: the deck with those under it, the new ones in their notes' order.
+    assert_eq!(ids(state.due_cards("en", &all, NOW, DAY_START, 200)), "c-2 c-3 c-4");
+    assert_eq!(ids(state.due_cards("en", &all, NOW, DAY_START, 2)), "c-2 c-3", "no more than asked for at once");
+    assert_eq!(ids(state.due_cards("en", &two, NOW, DAY_START, 200)), "c-2", "two new a day, and cat was one of today's");
+    assert_eq!(ids(state.due_cards("en", &two, NOW, NOW, 200)), "c-2 c-3", "a new day: both again");
+    assert_eq!(ids(state.cards_ahead("en", NOW, 200)), "c-1", "ahead of the schedule: the one reviewed and not due");
+    let tree = |state: &State, settings: &DeckSettings| state.deck_tree(&counts, settings, NOW, DAY_START).iter().map(|deck| format!("{} {}", deck.tag, deck.notes)).collect::<Vec<_>>().join(", ");
+    assert_eq!(tree(&state, &all), "de 1, en 3");
+    assert_eq!(tree(&state, &two), "de 1, en 1", "what each still asks today");
+    assert_eq!(state.deck_stats("en", DAY_START).map(|s| (s.cards, s.fresh)), Some((4, 3)));
+    assert!(state.deck_stats("none", DAY_START).is_none());
+    // In «Дім»: the cards of its notes; cow and the German deck are the other space's.
+    state.space = Some("home".into());
+    assert_eq!(ids(state.due_cards("en", &all, NOW, DAY_START, 200)), "c-2 c-3");
+    assert_eq!(ids(state.due_cards("en", &two, NOW, DAY_START, 200)), "c-2");
+    assert_eq!(ids(state.cards_ahead("en", NOW, 200)), "c-1");
+    assert_eq!(tree(&state, &all), "en 2", "no German deck here");
+    assert_eq!(state.deck_stats("en", DAY_START).map(|s| s.cards), Some(3));
+    state.space = Some("work".into());
+    assert_eq!(ids(state.due_cards("en", &two, NOW, DAY_START, 200)), "c-4", "none of its new cards was asked today");
+    assert_eq!(ids(state.cards_ahead("en", NOW, 200)), "");
+    assert_eq!(tree(&state, &all), "de 1, en 1");
+    assert!(state.deck_stats("en/verbs", DAY_START).is_none(), "no card of that deck in this space");
+    // Before the index is open: nothing, and nothing broken.
+    let empty = State::default();
+    assert!(empty.due_cards("en", &all, NOW, DAY_START, 200).is_empty() && empty.cards_ahead("en", NOW, 200).is_empty() && empty.deck_stats("en", DAY_START).is_none());
 }
