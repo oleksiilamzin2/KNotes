@@ -21,11 +21,7 @@ impl VaultWindow {
         // The tabs' dots: of the spaces that are not the window's now.
         self.show_tabs();
         self.rebuild_sidebar();
-        let mut selection = self.state.borrow().selection.clone();
-        if !self.exists(&selection) {
-            selection = SidebarItem::AllNotes;
-            self.state.borrow_mut().selection = selection.clone();
-        }
+        let selection = self.state.borrow_mut().fit_selection(strings::NEW_NOTES_FOLDER);
         self.highlight(&selection);
         self.refresh_list();
     }

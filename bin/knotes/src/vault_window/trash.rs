@@ -25,8 +25,7 @@ impl VaultWindow {
         };
         // Edits typed in an embed of it go with it, not beside it after it went.
         self.save_embeds();
-        let inside = format!("{path}/");
-        let open: Vec<String> = self.tabs.borrow().paths().filter(|p| *p == path || p.starts_with(&inside)).map(str::to_owned).collect();
+        let open = self.tabs.borrow().under(path);
         for tab in open {
             // Its edits could not be written and the user stayed with them: nothing is deleted.
             if !self.close_tab(&tab) {
@@ -156,11 +155,7 @@ impl VaultWindow {
         let trash = FsVault::new(&vault).trashed().unwrap_or_default();
         self.state.borrow_mut().trash = Arc::new(trash);
         self.rebuild_sidebar();
-        let mut selection = self.state.borrow().selection.clone();
-        if !self.exists(&selection) {
-            selection = SidebarItem::AllNotes;
-            self.state.borrow_mut().selection = selection.clone();
-        }
+        let selection = self.state.borrow_mut().fit_selection(strings::NEW_NOTES_FOLDER);
         self.highlight(&selection);
         self.refresh_list();
     }

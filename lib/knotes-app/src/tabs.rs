@@ -142,6 +142,28 @@ impl Tabs {
         self.tabs.iter().map(String::as_str)
     }
 
+    /// The tab `by` after the one shown (before, when negative), round the tabs' ends; none
+    /// with fewer than two tabs.
+    pub fn stepped(&self, by: isize) -> Option<&str> {
+        let paths: Vec<&str> = self.paths().collect();
+        let current = self.current()?;
+        (paths.len() > 1).then(|| paths[(current as isize + by).rem_euclid(paths.len() as isize) as usize])
+    }
+
+    /// The tab of `number` (from 1); 9 is the last, however many there are (as Safari's ⌘9).
+    pub fn numbered(&self, number: usize) -> Option<&str> {
+        let count = self.paths().count();
+        let at = if number >= 9 { count.checked_sub(1) } else { number.checked_sub(1) };
+        at.and_then(|at| self.paths().nth(at))
+    }
+
+    /// The tabs of `path` and, when it is a folder, of what is in it: those that go with it
+    /// when it is deleted.
+    pub fn under(&self, path: &str) -> Vec<String> {
+        let inside = format!("{path}/");
+        self.paths().filter(|p| *p == path || p.starts_with(&inside)).map(str::to_owned).collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }

@@ -175,6 +175,11 @@ fn the_sidebar_has_a_row_only_for_what_is_there() {
     assert!(!exists(&state, SidebarItem::Deleted));
     state.trash = Arc::new(vec![TrashEntry { id: "1".into(), path: "Old.md".into(), folder: false, deleted_ms: 1, notes: 1 }]);
     assert!(exists(&state, SidebarItem::Deleted));
+    // The row selected stays while it is there; gone, all notes are selected.
+    state.selection = SidebarItem::Deleted;
+    assert_eq!(state.fit_selection(INBOX), SidebarItem::Deleted);
+    state.trash = Arc::default();
+    assert_eq!((state.fit_selection(INBOX), state.selection.clone()), (SidebarItem::AllNotes, SidebarItem::AllNotes));
 }
 
 #[test]

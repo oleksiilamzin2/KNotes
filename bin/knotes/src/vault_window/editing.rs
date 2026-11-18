@@ -2,21 +2,6 @@
 
 use super::*;
 
-/// `path` with `.` and `..` segments applied; `None` if it leaves the vault.
-pub(super) fn normalize(path: &str) -> Option<String> {
-    let mut parts = Vec::new();
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            s => parts.push(s),
-        }
-    }
-    (!parts.is_empty()).then(|| parts.join("/"))
-}
-
 pub(super) fn write(vault: &FsVault, editing: &mut Editing, text: &str) -> std::io::Result<()> {
     vault.write_note(&editing.path, text)?;
     editing.document.saved(text);

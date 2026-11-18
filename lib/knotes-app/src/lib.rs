@@ -1,6 +1,7 @@
 //! View models of the Knotes window: plain Rust, no AppKit.
 
 pub mod deck_rows;
+mod follow_link;
 mod refine;
 mod review_session;
 mod vault_search;
@@ -49,6 +50,7 @@ pub use space_folders::SpaceFolders;
 pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
 pub use space_tags::SpaceTags;
+pub use follow_link::{Followed, follow_link, linked_note_path, named_link, normalize_path};
 pub use refine::{Place, Refine};
 pub use review_session::{CardAsked, Graded, ReviewSession, card_written, would_stand};
 pub use vault_search::{SearchRequest, SearchResponse, search};

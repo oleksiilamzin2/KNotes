@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{find_folder_node, session_settings_key, tag_exists, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
+use knotes_app::{Followed, follow_link, linked_note_path, named_link, find_folder_node, session_settings_key, tag_exists, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
     FolderRules, ListOption, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
     with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder,     note_file_stem, resolve_list_settings, unique_file_path, unique_note_path,
 };
@@ -1013,11 +1013,7 @@ impl VaultWindow {
         }
         // Other notes changed: links to the document open may have come or gone.
         self.refresh_connections();
-        let mut selection = self.state.borrow().selection.clone();
-        if !self.exists(&selection) {
-            selection = SidebarItem::AllNotes;
-            self.state.borrow_mut().selection = selection.clone();
-        }
+        let selection = self.state.borrow_mut().fit_selection(strings::NEW_NOTES_FOLDER);
         self.highlight(&selection);
         self.refresh_list();
         if let Some(path) = changed {

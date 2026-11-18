@@ -118,3 +118,20 @@ fn a_tab_moved_takes_its_new_place_and_the_one_shown_stays_shown() {
     tabs.move_tab(7, 0);
     assert_eq!(paths(&tabs), ["c.md", "b.md", "a.md"], "no such place: nothing moves");
 }
+
+#[test]
+fn tabs_are_gone_through_by_step_and_by_number_and_found_under_a_folder() {
+    let mut tabs = tabs_of(&["a.md", "Work/b.md", "Work/Sub/c.md", "Works.md"]);
+    tabs.navigate("Works.md");
+    // ⌃Tab and ⌃⇧Tab, round the ends.
+    assert_eq!((tabs.stepped(1), tabs.stepped(-1), tabs.stepped(-5)), (Some("a.md"), Some("Work/Sub/c.md"), Some("Work/Sub/c.md")));
+    // ⌘1 to ⌘8 by their place, ⌘9 the last; a number past the tabs, none.
+    assert_eq!((tabs.numbered(1), tabs.numbered(4), tabs.numbered(5), tabs.numbered(9), tabs.numbered(0)), (Some("a.md"), Some("Works.md"), None, Some("Works.md"), None));
+    // A folder deleted takes the tabs of what is in it, not those whose names begin as its.
+    assert_eq!(tabs.under("Work"), ["Work/b.md", "Work/Sub/c.md"]);
+    assert_eq!(tabs.under("a.md"), ["a.md"]);
+    assert!(tabs.under("Gone").is_empty());
+    // One tab, or none: nowhere to step.
+    assert_eq!((tabs_of(&["a.md"]).stepped(1), Tabs::default().stepped(1), Tabs::default().numbered(9)), (None, None, None));
+}
+

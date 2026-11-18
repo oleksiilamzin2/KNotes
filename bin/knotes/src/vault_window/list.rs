@@ -120,10 +120,6 @@ impl VaultWindow {
         self.highlighting.set(false);
     }
 
-    pub(super) fn exists(&self, item: &SidebarItem) -> bool {
-        self.state.borrow().exists(item, strings::NEW_NOTES_FOLDER)
-    }
-
     /// The path bar's click: the vault's notes (`""`) or a folder's, in the list, its row
     /// selected in the sidebar (its parents opened to show it).
     pub(super) fn show_folder(&self, folder: &str) {

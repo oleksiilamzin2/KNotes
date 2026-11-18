@@ -208,6 +208,15 @@ impl<R, L> VaultState<R, L> {
         }
     }
 
+    /// The row selected, all notes instead when the sidebar has it no more (its folder, tag or
+    /// deck gone, the space left, the last deleted entry restored).
+    pub fn fit_selection(&mut self, inbox_name: &str) -> SidebarItem {
+        if !self.exists(&self.selection, inbox_name) {
+            self.selection = SidebarItem::AllNotes;
+        }
+        self.selection.clone()
+    }
+
     /// The note list of the row selected (not of the recently deleted, which are no notes).
     /// `among`: the notes a tag, a deck or «Без тегів» lists (`notes_listed`); `found`: a
     /// search's answer (the names, the text), which replaces the list while a search is typed.
