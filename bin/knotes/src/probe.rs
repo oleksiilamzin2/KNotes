@@ -1510,6 +1510,7 @@ fn report_note(window: &VaultWindow) {
     println!("tab-shown: {}", window.tab_strip.shown().unwrap_or_else(|| "none".to_owned()));
     println!("tab-crosses: {}", window.tab_strip.crosses());
     println!("tab-marks: {}", window.tab_strip.marks());
+    println!("tab-places: {}", window.tab_strip.describe_places());
     let strip = window.tab_strip.convertRect_toView(window.tab_strip.bounds(), None);
     println!("tab-strip: width={:.0} of {:.0} (x {:.0} to {:.0})", strip.size.width, window.window.frame().size.width, strip.origin.x, strip.origin.x + strip.size.width);
     println!("review: {}", window.describe_review().replace('\n', "⏎"));

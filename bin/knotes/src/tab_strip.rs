@@ -61,8 +61,11 @@ pub struct StripIvars {
     on_move: RefCell<Option<Box<dyn Fn(String, usize)>>>,
     /// The tab pressed, and how far into it (x): it is dragged once the pointer moves on.
     pressed: Cell<Option<(usize, f64)>>,
-    /// The tab being dragged: which, where its left edge is now, and the place it would take.
+    /// The tab being dragged: which, where its left edge is now (among the tabs, scrolled or
+    /// not), and the place it would take.
     dragged: Cell<Option<(usize, f64, usize)>>,
+    /// How far the tabs are scrolled, when there are more than fit (`tab_scroll`).
+    scroll: Cell<f64>,
 }
 
 define_class!(
@@ -132,6 +135,13 @@ define_class!(
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, _event: &NSEvent) {
             self.let_go();
+        }
+
+        /// More tabs than fit: a scroll, sideways or of a wheel, moves along them.
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            let by = if event.scrollingDeltaX() != 0.0 { event.scrollingDeltaX() } else { event.scrollingDeltaY() };
+            self.scroll_by(-by);
         }
 
         /// A tab's menu: it closes, or every other does.
@@ -286,6 +296,8 @@ impl TabStrip {
         *self.ivars().tabs.borrow_mut() = tabs;
         self.ivars().current.set(current);
         self.ivars().hover.set(None);
+        // More tabs than fit: the one shown comes into view.
+        self.ivars().scroll.set(knotes_app::tab_scroll(&self.slots(), self.bounds().size.width, self.ivars().scroll.get(), current));
         self.setNeedsDisplay(true);
     }
 
@@ -299,7 +311,9 @@ impl TabStrip {
     fn drag_to(&self, x: f64) {
         let Some((tab, grab)) = self.ivars().pressed.get() else { return };
         let slots = self.slots();
-        let Some((left, over)) = knotes_app::drag_tab(&slots, tab, grab, x, self.bounds().size.width, self.ivars().dragged.get().is_some()) else { return };
+        // Among the tabs, which may be longer than the strip and scrolled.
+        let long = slots.last().map_or(0.0, |last| last.x + last.width).max(self.bounds().size.width);
+        let Some((left, over)) = knotes_app::drag_tab(&slots, tab, grab, x + self.scroll(), long, self.ivars().dragged.get().is_some()) else { return };
         self.ivars().dragged.set(Some((tab, left, over)));
         self.ivars().hover.set(None);
         self.setNeedsDisplay(true);
@@ -397,19 +411,50 @@ impl TabStrip {
         }
     }
 
-    /// Each tab's place along the strip (knotes-app's `tab_slots`).
+    /// Each tab's place among the tabs (knotes-app's `tab_slots`): from their own start, which
+    /// is the strip's unless they are scrolled.
     fn slots(&self) -> Vec<knotes_app::Slot> {
         knotes_app::tab_slots(self.ivars().tabs.borrow().len(), self.bounds().size.width)
     }
 
+    /// How far the tabs are scrolled now: never past their ends, whatever the strip's width
+    /// has become since.
+    fn scroll(&self) -> f64 {
+        knotes_app::tab_scroll(&self.slots(), self.bounds().size.width, self.ivars().scroll.get(), None)
+    }
+
+    /// The tabs scrolled `by` points further (back, when negative).
+    pub fn scroll_by(&self, by: f64) {
+        let before = self.scroll();
+        self.ivars().scroll.set(before + by);
+        if self.scroll() != before {
+            self.ivars().hover.set(None);
+            self.setNeedsDisplay(true);
+        }
+    }
+
+    /// Where the strip shows `slots`, scrolled as it is.
+    fn shown_at(&self, slots: Vec<knotes_app::Slot>) -> Vec<NSRect> {
+        let (height, scroll) = (self.bounds().size.height, self.scroll());
+        slots.into_iter().map(|slot| rect(slot.x - scroll, 0.0, slot.width, height)).collect()
+    }
+
+    /// Each tab's place in the strip.
     fn places(&self) -> Vec<NSRect> {
-        let height = self.bounds().size.height;
-        self.slots().into_iter().map(|slot| rect(slot.x, 0.0, slot.width, height)).collect()
+        self.shown_at(self.slots())
     }
 
     /// The tab at `at`, and whether `at` is on its cross (or within a few points of it).
     fn tab_at(&self, at: NSPoint) -> Option<(usize, bool)> {
-        knotes_app::tab_at(&self.slots(), self.bounds().size.height, at.x, at.y)
+        knotes_app::tab_at(&self.slots(), self.bounds().size.height, at.x + self.scroll(), at.y)
+    }
+
+    /// How the tabs lie, for the probe: how many, how wide each, and where the one shown is in
+    /// a strip how wide: `40 tabs 44 wide, shown at 556..600 of 600`.
+    pub fn describe_places(&self) -> String {
+        let places = self.places();
+        let shown = self.ivars().current.get().and_then(|tab| places.get(tab)).map_or("nowhere".to_owned(), |place| format!("{:.0}..{:.0}", place.origin.x, place.origin.x + place.size.width));
+        format!("{} tabs {:.0} wide, shown at {shown} of {:.0}", places.len(), places.first().map_or(0.0, |place| place.size.width), self.bounds().size.width)
     }
 
     /// A press at `at`: on a tab's cross it closes the tab, elsewhere on a tab it shows it.
@@ -439,14 +484,17 @@ impl TabStrip {
         // and it is drawn last, where the pointer has it.
         let dragged = self.ivars().dragged.get().filter(|(tab, _, _)| *tab < places.len());
         if let Some((tab, left, over)) = dragged {
-            let height = self.bounds().size.height;
-            places = knotes_app::slots_dragged(&self.slots(), tab, left, over).into_iter().map(|slot| rect(slot.x, 0.0, slot.width, height)).collect();
+            places = self.shown_at(knotes_app::slots_dragged(&self.slots(), tab, left, over));
         }
         // The strip itself: a grey capsule the tabs lie in (the owner's reference), whatever
         // the toolbar draws under it.
         let bounds = self.bounds();
         NSColor::labelColor().colorWithAlphaComponent(if dark { 0.16 } else { 0.09 }).setFill();
-        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, bounds.size.height / 2.0, bounds.size.height / 2.0).fill();
+        let strip = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, bounds.size.height / 2.0, bounds.size.height / 2.0);
+        strip.fill();
+        // Tabs scrolled past the strip's ends stay inside it (a view draws past its bounds).
+        objc2_app_kit::NSGraphicsContext::saveGraphicsState_class();
+        strip.addClip();
         let last = dragged.map(|(tab, _, _)| tab);
         let order = (0..tabs.len()).filter(|i| Some(*i) != last).chain(last);
         for (i, tab, place) in order.filter_map(|i| Some((i, tabs.get(i)?, *places.get(i)?))) {
@@ -507,5 +555,6 @@ impl TabStrip {
             // SAFETY: a font and a colour are those attributes' values.
             unsafe { NSString::from_str(&name).drawAtPoint_withAttributes(NSPoint::new(left + SYMBOL + 5.0, middle - (font.ascender() - font.descender()) / 2.0), Some(&attributes(&font, &ink))) };
         }
+        objc2_app_kit::NSGraphicsContext::restoreGraphicsState_class();
     }
 }

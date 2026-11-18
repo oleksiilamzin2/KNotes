@@ -6,6 +6,9 @@
 pub const TAB_GAP: f64 = 4.0;
 /// A tab shows its name while it is at least this wide; narrower, its symbol alone.
 pub const TAB_NAMED: f64 = 56.0;
+/// A tab is never narrower than this: room for its symbol, or its cross, and to be pressed.
+/// More tabs than fit so are longer than the strip, which shows a part of them (`tab_scroll`).
+pub const TAB_MIN: f64 = 44.0;
 /// The cross's size, and how near a point must be to count as on it.
 const CROSS: f64 = 15.0;
 const NEAR: f64 = 5.0;
@@ -20,12 +23,13 @@ pub struct Slot {
 }
 
 /// The slots of `count` tabs on a strip `strip` wide: all as wide, together filling it (as
-/// Safari's do).
+/// Safari's do), none narrower than `TAB_MIN`: too many to fit so, they run on past the
+/// strip's end.
 pub fn tab_slots(count: usize, strip: f64) -> Vec<Slot> {
     if count == 0 {
         return Vec::new();
     }
-    let width = ((strip - TAB_GAP * (count - 1) as f64) / count as f64).max(1.0);
+    let width = ((strip - TAB_GAP * (count - 1) as f64) / count as f64).max(TAB_MIN);
     (0..count).map(|i| Slot { x: i as f64 * (width + TAB_GAP), width }).collect()
 }
 
@@ -82,3 +86,20 @@ pub fn slots_dragged(slots: &[Slot], tab: usize, left: f64, over: usize) -> Vec<
     placed[tab].x = left;
     placed
 }
+
+/// How far the tabs can be scrolled along a strip `strip` wide: how much longer they are.
+fn scroll_end(slots: &[Slot], strip: f64) -> f64 {
+    (slots.last().map_or(0.0, |last| last.x + last.width) - strip).max(0.0)
+}
+
+/// How far the tabs are scrolled (the point of them at the strip's left), from `scroll` where
+/// they were: never past either end, and with the tab `shown` wholly in view, moved no
+/// further than that takes.
+pub fn tab_scroll(slots: &[Slot], strip: f64, scroll: f64, shown: Option<usize>) -> f64 {
+    let mut scroll = scroll;
+    if let Some(slot) = shown.and_then(|shown| slots.get(shown)) {
+        scroll = scroll.min(slot.x).max(slot.x + slot.width - strip);
+    }
+    scroll.clamp(0.0, scroll_end(slots, strip))
+}
+

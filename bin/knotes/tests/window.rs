@@ -2480,6 +2480,35 @@ fn sidebar_tabs(out: &str) -> (String, String) {
 }
 
 #[test]
+fn more_tabs_than_fit_keep_their_width_and_the_one_shown_is_in_view() {
+    // Each PDF opens in a tab of its own: forty of them, far more than the strip holds.
+    let vault = tempfile::tempdir().unwrap();
+    let names: Vec<String> = (0..40).map(|i| format!("doc{i:02}.pdf")).collect();
+    for name in &names {
+        std::fs::write(vault.path().join(name), PDF).unwrap();
+    }
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let home = tabs_home();
+    let places = |out: &str| out.lines().find_map(|l| l.strip_prefix("tab-places: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    // "40 tabs 44 wide, shown at 556..600 of 600": no tab squeezed to nothing, the last one
+    // (shown) wholly inside the strip, at its right.
+    let numbers = |line: &str| line.split(|c: char| !c.is_ascii_digit()).filter(|n| !n.is_empty()).map(|n| n.parse::<f64>().unwrap()).collect::<Vec<_>>();
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", &names.join(","))]);
+    let line = places(&out);
+    let n = numbers(&line);
+    assert_eq!((n[0], n[1]), (40.0, 44.0), "{line}");
+    assert!(n[2] >= 0.0 && n[3] <= n[4] && n[3] > n[4] - 2.0, "the one shown at the strip's right end: {line}");
+    // The next launch shows the same tab; the first one clicked comes into view at the left.
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TAB_CLICK", "doc00.pdf")]);
+    let n = numbers(&places(&out));
+    assert_eq!((n[0], n[2], n[3]), (40.0, 0.0, 44.0), "{}", places(&out));
+    // A few tabs fill the strip as before, none scrolled.
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let n = numbers(&places(&probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md,doc.pdf")])));
+    assert!(n[0] == 2.0 && n[1] > 200.0 && n[2] >= 0.0 && n[3] <= n[4], "{n:?}");
+}
+
+#[test]
 fn a_note_opens_in_the_tab_shown_and_a_pdf_in_a_new_tab_beside_it() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md,b.md")]);
