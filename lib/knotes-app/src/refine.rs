@@ -19,6 +19,9 @@ pub struct Refine {
     /// The words to search by, as typed, the phrases' words among them (a phrase's words must
     /// be found before the phrase can be looked for).
     pub words: String,
+    /// The same words as they are asked for: one of each list (`radar OR budget` is a list of
+    /// two, `radar budget` two lists of one; a phrase is one word of its own list).
+    pub any: Vec<Vec<String>>,
     /// What must stand in the text word for word.
     pub phrases: Vec<String>,
     /// Words the name and the text must not hold.
@@ -32,20 +35,25 @@ impl Refine {
     /// `query` taken apart. Keys are `tag:`, `folder:` and `space:` (`тег:`, `тека:`, `простір:`
     /// too); a value with spaces goes in quotes (`folder:"Мої проєкти"`). Places narrow
     /// together, with `AND` between them or nothing; `OR` between two makes them one or the
-    /// other, of any kinds (`tag:work OR folder:Авто`). `AND` elsewhere is left out, as the
-    /// words are all asked for anyway; `OR` not between two places, a `-` alone and a key with
-    /// no value are words as any other.
+    /// other, of any kinds (`tag:work OR folder:Авто`), and so between two plain words
+    /// (`radar OR budget план`: the plan, with either). `AND` elsewhere is left out, as the
+    /// words are all asked for anyway; `OR` between anything else (a phrase, a word left out,
+    /// a word and a place), a `-` alone and a key with no value are words as any other.
     pub fn parse(query: &str) -> Self {
         let mut refine = Self::default();
-        let mut words: Vec<String> = Vec::new();
         let tokens = tokens(query);
+        // A plain word: not a phrase, a place, a word left out, nor `AND` or `OR`.
+        let plain = |(token, quoted): &(String, bool)| !quoted && place(token).is_none() && token != "AND" && token != "OR" && !(token.starts_with('-') && token.len() > 1);
         // Whether the piece before was a place, and whether an `OR` joins the next to it.
         let (mut after_place, mut joins) = (false, false);
+        // The same of a plain word.
+        let (mut after_word, mut joins_word) = (false, false);
         for (i, (token, quoted)) in tokens.iter().enumerate() {
             let named = if *quoted { None } else { place(token) };
             let was_after_place = std::mem::replace(&mut after_place, named.is_some());
+            let was_after_word = std::mem::replace(&mut after_word, plain(&tokens[i]));
             if *quoted {
-                words.push(token.clone());
+                refine.any.push(vec![token.clone()]);
                 refine.phrases.push(token.clone());
             } else if let Some(place) = named {
                 match refine.places.last_mut().filter(|_| std::mem::take(&mut joins)) {
@@ -53,17 +61,35 @@ impl Refine {
                     None => refine.places.push(vec![place]),
                 }
             } else if token == "AND" {
-                after_place = was_after_place;
+                (after_place, after_word) = (was_after_place, was_after_word);
+            } else if token == "OR" && was_after_word && tokens.get(i + 1).is_some_and(plain) {
+                joins_word = true;
             } else if token == "OR" && was_after_place && tokens.get(i + 1).is_some_and(|(next, quoted)| !quoted && place(next).is_some()) {
                 joins = true;
             } else if let Some(word) = token.strip_prefix('-').filter(|word| !word.is_empty()) {
                 refine.without.push(word.trim_matches('"').to_owned());
             } else {
-                words.push(token.clone());
+                match refine.any.last_mut().filter(|_| std::mem::take(&mut joins_word)) {
+                    Some(any) => any.push(token.clone()),
+                    None => refine.any.push(vec![token.clone()]),
+                }
             }
         }
-        refine.words = words.join(" ");
+        refine.words = refine.any.iter().flatten().cloned().collect::<Vec<_>>().join(" ");
         refine
+    }
+
+    /// The searches that together find what is asked: each with one word of every list
+    /// (`a OR b c`: «a c» and «b c»); one, empty, when no words are typed.
+    pub fn queries(&self) -> Vec<String> {
+        // shortcut: 16 searches at most, the rest of the alternatives unsearched; ask the
+        // index for `OR` itself if queries with five `OR`s are ever typed.
+        const MOST: usize = 16;
+        let mut queries = vec![String::new()];
+        for any in &self.any {
+            queries = queries.iter().flat_map(|query| any.iter().map(move |word| if query.is_empty() { word.clone() } else { format!("{query} {word}") })).take(MOST).collect();
+        }
+        queries
     }
 
     /// Whether anything narrows the search besides its words.

@@ -2601,6 +2601,11 @@ fn the_vault_s_search_is_narrowed_by_a_phrase_a_word_left_out_a_tag_a_folder_and
     assert_eq!(found("radar tag:garden OR folder:projects AND -draft"), "Home/Сад.md, Projects/Radar.md", "of different kinds");
     assert_eq!(found("folder:home OR folder:projects -draft"), "Home/Сад.md, Projects/Radar.md");
     assert_eq!(found("radar AND budget"), "Projects/Draft.md, Projects/Radar.md", "`AND` between words is as if not written");
+    // `OR` between two words: the documents with either, each once, both words marked.
+    assert_eq!(found("grows OR mentioned"), "Home/Сад.md, Projects/Radar.md");
+    assert_eq!(found("grows OR mentioned radar space:Дім"), "Home/Сад.md");
+    assert_eq!(found("radar OR budget"), "Home/Сад.md, Projects/Draft.md, Projects/Radar.md", "a document with both is listed once");
+    assert!(search("budget OR grows").contains("~ 2 marks, first «budget»"), "{}", search("budget OR grows"));
     // Where to look and no words: every document there.
     assert_eq!(found("space:Робота"), "Projects/Draft.md, Projects/Radar.md");
     assert_eq!(found("tag:garden"), "Home/Сад.md");

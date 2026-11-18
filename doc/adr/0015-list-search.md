@@ -136,7 +136,11 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   `AND` between them or nothing (`tag:a AND tag:b`: both tags); `OR` between two makes them
   one or the other, of any kinds (`space:Дім OR space:Робота`, `tag:work OR folder:Авто`).
   The two are written in capitals. `AND` between words is left out (the words are all asked
-  for anyway); `OR` between words is not an operator: it is searched as a word. With a
+  for anyway); `OR` between two plain words finds the documents with either (`radar OR budget план`: the
+  plan, with either): the search's thread searches once for each way to take one word of
+  every such list, sixteen at most, and lists what is found together, each document once;
+  by meaning all the words are asked at once. `OR` beside a phrase or a word left out is
+  searched as a word. With a
   tag, a folder or a space and no words, every document there is listed by its name. The
   phrases' words are searched by and marked as the others; what narrows is not marked.
   `Refine` (knotes-app) takes the query apart; the search's thread applies it after the names

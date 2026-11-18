@@ -110,7 +110,24 @@ pub fn search_now(request: &SearchRequest, reader: Option<&SqliteIndex>) -> Sear
 }
 
 fn search(request: &SearchRequest, reader: Option<&SqliteIndex>, meaning: Option<&dyn MeaningSearch>) -> SearchResponse {
-    let query = request.query.trim();
+    // `OR` between words (the vault's search window): a search for each way to take one of
+    // them, what they find listed together, each document once. By meaning, all the words at
+    // once: nearness has no «or».
+    let queries = request.refine.queries();
+    if queries.len() < 2 || request.mode == SearchMode::Meaning {
+        return search_words(request, request.query.trim(), reader, meaning);
+    }
+    let mut all = SearchResponse { generation: request.generation, titles: Vec::new(), content: Vec::new() };
+    for query in &queries {
+        let found = search_words(request, query, reader, meaning);
+        all.titles.extend(found.titles.into_iter().filter(|path| !all.titles.contains(path)).collect::<Vec<_>>());
+        all.content.extend(found.content.into_iter().filter(|found| !all.content.iter().any(|c| c.path == found.path)).collect::<Vec<_>>());
+    }
+    all
+}
+
+/// What `query`'s words find, all of them asked for, narrowed as the request says.
+fn search_words(request: &SearchRequest, query: &str, reader: Option<&SqliteIndex>, meaning: Option<&dyn MeaningSearch>) -> SearchResponse {
     let mut titles = Vec::new();
     let mut content = Vec::new();
     let within = match request.mode {

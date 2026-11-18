@@ -41,9 +41,21 @@ fn places_are_joined_by_and_and_or() {
     // `AND` between words is left out; `OR` that joins no two places is a word, as are the
     // two in small letters and in quotes.
     assert_eq!(Refine::parse("radar AND budget").words, "radar budget");
-    assert_eq!(Refine::parse("radar OR budget").words, "radar OR budget");
     let r = Refine::parse("tag:a OR budget and or");
     assert_eq!((r.places, r.words.as_str()), (vec![vec![tag("a")]], "OR budget and or"));
+    // `OR` between two plain words: either; the searches that find them, one word of each list.
+    let r = Refine::parse("radar OR budget OR план grows AND next");
+    assert_eq!(r.words, "radar budget план grows next", "all of them are marked");
+    assert_eq!(r.queries(), ["radar grows next", "budget grows next", "план grows next"]);
+    assert_eq!(Refine::parse("a OR b c OR d").queries(), ["a c", "a d", "b c", "b d"]);
+    assert_eq!(Refine::parse("radar budget").queries(), ["radar budget"]);
+    assert_eq!(Refine::parse("tag:a").queries(), [""], "no words: one search, of the place");
+    // Not between a phrase, a word left out or a place and a word: a word there.
+    assert_eq!(Refine::parse(r#""a b" OR c"#).queries(), ["a b OR c"]);
+    assert_eq!(Refine::parse("a OR -b").queries(), ["a OR"]);
+    assert_eq!(Refine::parse("a OR").queries(), ["a OR"]);
+    assert_eq!(Refine::parse("a OR OR b").queries(), ["a OR OR b"]);
+    assert_eq!(Refine::parse(&(0..6).map(|i| format!("a{i} OR b{i}")).collect::<Vec<_>>().join(" ")).queries().len(), 16, "no more searches than that");
     assert_eq!(Refine::parse(r#"tag:a "OR" tag:b"#).places, [[tag("a")], [tag("b")]]);
     assert_eq!(Refine::parse("OR tag:a").words, "OR");
     assert_eq!(Refine::parse("tag:a AND OR tag:b").places, [[tag("a"), tag("b")]], "`AND` is as if not written");
