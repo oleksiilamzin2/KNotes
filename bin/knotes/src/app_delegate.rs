@@ -198,6 +198,29 @@ define_class!(
             }
         }
 
+        /// Window → Next Tab (⌃Tab, ⇧⌘]) and Previous Tab (⌃⇧Tab, ⇧⌘[): round the tabs.
+        #[unsafe(method(nextTab:))]
+        fn next_tab(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.step_tab(1);
+            }
+        }
+
+        #[unsafe(method(previousTab:))]
+        fn previous_tab(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.step_tab(-1);
+            }
+        }
+
+        /// ⌘1 to ⌘9: the tab of that number (the sender's tag), ⌘9 the last.
+        #[unsafe(method(showTabNumber:))]
+        fn show_tab_number(&self, sender: &objc2_app_kit::NSMenuItem) {
+            if let Some(window) = self.front_window() {
+                window.show_tab_number(sender.tag().max(1) as usize);
+            }
+        }
+
         /// Edit → Search the Vault (⌥⌘F): the vault's search, in a window of its own.
         #[unsafe(method(searchVault:))]
         fn search_vault(&self, _sender: Option<&AnyObject>) {

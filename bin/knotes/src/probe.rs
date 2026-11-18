@@ -1170,10 +1170,17 @@ fn tabs_requested(window: &VaultWindow) {
             .mainMenu()
             .map(|bar| bar.itemArray().iter().filter_map(|i| i.submenu()).flat_map(|m| m.itemArray().iter().collect::<Vec<_>>()).collect())
             .unwrap_or_default();
-        // `alt-f`: with Option too.
-        let (key, wanted) = match key.strip_prefix("alt-") {
-            Some(key) => (key.to_owned(), objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Option),
-            None => (key, objc2_app_kit::NSEventModifierFlags::Command),
+        // `alt-f`: with Option too; `shift-]`: with Shift; `ctrl-tab`, `ctrl-shift-tab`: Control
+        // (and Shift) and Tab, without Command.
+        use objc2_app_kit::NSEventModifierFlags as Flags;
+        let (key, wanted) = match key.as_str() {
+            "ctrl-tab" => ("\t".to_owned(), Flags::Control),
+            "ctrl-shift-tab" => ("\u{19}".to_owned(), Flags::Control | Flags::Shift),
+            other => match (other.strip_prefix("alt-"), other.strip_prefix("shift-")) {
+                (Some(key), _) => (key.to_owned(), Flags::Command | Flags::Option),
+                (_, Some(key)) => (key.to_owned(), Flags::Command | Flags::Shift),
+                _ => (other.to_owned(), Flags::Command),
+            },
         };
         let only_cmd = |i: &objc2_app_kit::NSMenuItem| i.keyEquivalentModifierMask() == wanted;
         if let Some(item) = items.iter().find(|i| i.keyEquivalent().to_string() == key && only_cmd(i)) {

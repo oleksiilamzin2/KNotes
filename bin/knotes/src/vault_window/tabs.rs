@@ -52,6 +52,33 @@ impl VaultWindow {
         true
     }
 
+    /// The tab `by` after the one shown (before, when negative), round the tabs' ends.
+    pub fn step_tab(&self, by: isize) {
+        let next = {
+            let tabs = self.tabs.borrow();
+            let paths: Vec<&str> = tabs.paths().collect();
+            let Some(current) = tabs.current() else { return };
+            if paths.len() < 2 {
+                return;
+            }
+            paths[(current as isize + by).rem_euclid(paths.len() as isize) as usize].to_owned()
+        };
+        self.open_note(&next, true);
+    }
+
+    /// The tab of `number` (from 1); 9 is the last, however many there are (as Safari's ⌘9).
+    pub fn show_tab_number(&self, number: usize) {
+        let tab = {
+            let tabs = self.tabs.borrow();
+            let paths: Vec<&str> = tabs.paths().collect();
+            let at = if number >= 9 { paths.len().checked_sub(1) } else { Some(number - 1) };
+            at.and_then(|at| paths.get(at)).map(|path| (*path).to_owned())
+        };
+        if let Some(path) = tab {
+            self.open_note(&path, true);
+        }
+    }
+
     /// Closes the tab shown (Cmd+W); false when there is none.
     pub fn close_current_tab(&self) -> bool {
         let Some(path) = self.tabs.borrow().current_path().map(str::to_owned) else { return false };

@@ -99,7 +99,25 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     let window_menu = submenu(mtm, &bar, s::MENU_WINDOW, &[
         Some(item(mtm, s::MINIMIZE, sel!(performMiniaturize:), "m", cmd(none))),
         Some(item(mtm, s::ZOOM, sel!(performZoom:), "", none)),
+        None,
+        // The tabs along the toolbar by the keys, as Safari's: ⌃Tab and ⌃⇧Tab to the next and
+        // the one before (round), ⇧⌘] and ⇧⌘[ the same, ⌘1 to ⌘8 by number, ⌘9 the last.
+        Some(item(mtm, s::NEXT_TAB, sel!(nextTab:), "\t", NSEventModifierFlags::Control)),
+        Some(item(mtm, s::PREVIOUS_TAB, sel!(previousTab:), "\u{19}", NSEventModifierFlags::Control | NSEventModifierFlags::Shift)),
     ]);
+    // The other keys for the same: no rows of their own in the menu.
+    let quiet = |title: &str, action: Sel, key: &str, mods: NSEventModifierFlags, tag: isize| {
+        let entry = item(mtm, title, action, key, mods);
+        entry.setTag(tag);
+        entry.setHidden(true);
+        entry.setAllowsKeyEquivalentWhenHidden(true);
+        window_menu.addItem(&entry);
+    };
+    quiet(s::NEXT_TAB, sel!(nextTab:), "]", cmd(NSEventModifierFlags::Shift), 0);
+    quiet(s::PREVIOUS_TAB, sel!(previousTab:), "[", cmd(NSEventModifierFlags::Shift), 0);
+    for number in 1..=9 {
+        quiet(&s::tab_number(number), sel!(showTabNumber:), &number.to_string(), cmd(none), number as isize);
+    }
     app.setMainMenu(Some(&bar));
     app.setWindowsMenu(Some(&window_menu));
 }

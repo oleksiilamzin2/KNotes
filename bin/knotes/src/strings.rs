@@ -322,6 +322,12 @@ pub const CHAT: &str = "Чат";
 pub const AI: &str = "ШІ";
 pub const TABS: &str = "Вкладки";
 pub const CLOSE_TAB: &str = "Закрити вкладку";
+pub const NEXT_TAB: &str = "Наступна вкладка";
+pub const PREVIOUS_TAB: &str = "Попередня вкладка";
+/// "Вкладка 3".
+pub fn tab_number(number: usize) -> String {
+    format!("Вкладка {number}")
+}
 pub const CLOSE_OTHER_TABS: &str = "Закрити інші вкладки";
 pub const OPEN_IN_NEW_TAB: &str = "Відкрити в новій вкладці";
 pub const OUTLINE: &str = "Зміст";

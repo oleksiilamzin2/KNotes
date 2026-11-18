@@ -2576,6 +2576,27 @@ fn a_link_clicked_in_the_document_the_search_shows_opens_what_it_leads_to() {
 }
 
 #[test]
+fn the_keys_go_round_the_tabs_and_to_a_tab_by_its_number() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    std::fs::write(vault.path().join("c.md"), "c").unwrap();
+    // Three tabs, the last shown.
+    probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_NEW_TAB", "c.md")]);
+    assert_eq!(sidebar_tabs(&out), ("a | b | c".to_owned(), "c".to_owned()));
+    let shown = |key: &str| sidebar_tabs(&probe_tabs(&vault, &home, &[("KNOTES_PROBE_MENU_KEY", key)])).1;
+    // ⌃Tab from the last goes round to the first; ⌃⇧Tab back to the last; ⇧⌘[ the one before.
+    assert_eq!(shown("ctrl-tab"), "a");
+    assert_eq!(shown("ctrl-shift-tab"), "c");
+    assert_eq!(shown("shift-["), "b");
+    assert_eq!(shown("shift-]"), "c");
+    // ⌘1 the first, ⌘2 the second, ⌘9 the last however many; a number with no tab, nothing.
+    assert_eq!(shown("1"), "a");
+    assert_eq!(shown("2"), "b");
+    assert_eq!(shown("9"), "c");
+    assert_eq!(shown("5"), "c");
+}
+
+#[test]
 fn a_click_on_a_tab_shows_its_document() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);
