@@ -2,7 +2,7 @@
 //! and a deck's review in the note column.
 
 use knotes_app::ReviewSession;
-use knotes_cards::{DeckSettings, Grade, asks, card_id, give_id, make_card, review_line, taken_back_line};
+use knotes_cards::{DeckSettings, Grade, asks, card_id, give_id, make_card, paused_line, review_line, taken_back_line};
 use knotes_core::{CardIndex, CardRow, CardState, DueCard};
 
 use super::*;
@@ -287,18 +287,40 @@ impl VaultWindow {
         let _ = self.write_all();
         if self.card_table.borrow().is_none() {
             let table = crate::card_table_window::CardTableWindow::new(mtm);
-            let (reads, saves, opens, finds) = (self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone());
-            table.on(
-                move |path| reads.upgrade().and_then(|window| window.vault()).and_then(|vault| FsVault::new(&vault).read_utf8(path).ok()),
-                move |row, was, typed| saves.upgrade().map_or(Err(String::new()), |window| window.save_card(row, was, typed)),
-                move |row| {
+            let this = || self.this.borrow().clone();
+            let (reads, saves, opens, finds, pauses, decks, deletes) = (this(), this(), this(), this(), this(), this(), this());
+            table.on(crate::card_table_window::Asks {
+                read: Box::new(move |path| reads.upgrade().and_then(|window| window.vault()).and_then(|vault| FsVault::new(&vault).read_utf8(path).ok())),
+                save: Box::new(move |row, was, typed| saves.upgrade().map_or(Err(String::new()), |window| window.save_card(row, was, typed))),
+                open: Box::new(move |row| {
                     if let Some(window) = opens.upgrade() {
                         window.open_card(&row.path, row.start as usize);
                         window.window.makeKeyAndOrderFront(None);
                     }
-                },
-                move |query| finds.upgrade().map(|window| window.notes_holding(query)).unwrap_or_default(),
-            );
+                }),
+                find: Box::new(move |query| finds.upgrade().map(|window| window.notes_holding(query)).unwrap_or_default()),
+                pause: Box::new(move |row, paused| pauses.upgrade().map_or(Err(String::new()), |window| window.pause_card(row, paused))),
+                // The deck to put a card in: asked as a new card's is, its own offered.
+                deck: Box::new(move |row| {
+                    let window = decks.upgrade()?;
+                    let known = deck_paths(&window.state.borrow().decks);
+                    rename_dialog::ask_card(mtm, &known, &row.deck, false).map(|(deck, _)| deck)
+                }),
+                delete: Box::new(move |row| {
+                    if probe::enabled() {
+                        return true;
+                    }
+                    let Some(window) = deletes.upgrade() else { return false };
+                    let question = window.vault().and_then(|vault| FsVault::new(&vault).read_utf8(&row.path).ok()).and_then(|text| knotes_app::card_of(&knotes_cards::scan_cards(&text), row).map(|card| card.front.lines().next().unwrap_or_default().trim().to_owned())).unwrap_or_default();
+                    let alert = NSAlert::new(mtm);
+                    alert.setMessageText(&NSString::from_str(&strings::card_delete_question(&question)));
+                    alert.setInformativeText(&NSString::from_str(strings::CARD_DELETE_DETAILS));
+                    for title in [strings::DELETE, strings::CANCEL] {
+                        alert.addButtonWithTitle(&NSString::from_str(title));
+                    }
+                    alert.runModal() == objc2_app_kit::NSAlertFirstButtonReturn
+                }),
+            });
             *self.card_table.borrow_mut() = Some(table);
         }
         let rows = {
@@ -408,6 +430,41 @@ impl VaultWindow {
         state.reader.as_ref().and_then(|r| r.card_state(id).ok()).flatten()
     }
 
+    /// Gives the card written at `start..end` of the note `path` an id of its own, written at
+    /// its end in the note: the id, where its mark was written and how long the mark is. Why
+    /// not, when the card is no longer there or the note cannot be written.
+    fn give_card_id(&self, path: &str, start: usize, end: usize) -> Result<(String, usize, usize), String> {
+        let files = FsVault::new(&self.vault().ok_or_else(String::new)?);
+        // What is typed and not written yet is written first, not written over.
+        let _ = self.write_all();
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+        let id = card_id(seed);
+        let text = files.read_utf8(path).map_err(|e| e.to_string())?;
+        let (at, mark) = give_id(&text, start..end, &id).ok_or_else(|| strings::CARD_MOVED.to_owned())?;
+        files.write_note(path, &format!("{}{mark}{}", &text[..at], &text[at..])).map_err(|e| e.to_string())?;
+        Ok((id, at, mark.len()))
+    }
+
+    /// A card paused in the table, or resumed (ADR 0037): a line in this Mac's review log says
+    /// so, by the card's id, which it is given in its note if it has none. Gives the id and how
+    /// many bytes the card's text grew by for it. Says a failure, and gives it.
+    fn pause_card(&self, row: &CardRow, paused: bool) -> Result<(String, usize), String> {
+        let done = (|| {
+            let files = FsVault::new(&self.vault().ok_or_else(String::new)?);
+            let (id, grew) = match &row.id {
+                Some(id) => (id.clone(), 0),
+                None => self.give_card_id(&row.path, row.start as usize, row.end as usize).map(|(id, _, grew)| (id, grew))?,
+            };
+            let device = knotes_session::AppSettings::device_name(&knotes_session::app_data_dir());
+            files.append_review(&device, &paused_line(now(), &id, paused)).map_err(|e| e.to_string())?;
+            Ok((id, grew))
+        })();
+        if let Err(e) = &done {
+            self.tell_failed(strings::CARD_NOT_PAUSED, e);
+        }
+        done
+    }
+
     /// The card shown graded: given an id in its note if it has none, its review logged in the
     /// vault (this Mac's log), the next card shown. Graded Again, it comes back at the review's
     /// end.
@@ -416,17 +473,8 @@ impl VaultWindow {
         let files = FsVault::new(&vault);
         let Some(card) = self.review.borrow().as_ref().and_then(|r| r.current()).filter(|c| c.answered).map(|c| c.card.clone()) else { return };
         if card.id.is_none() {
-            // What is typed and not written yet is written first, not written over.
-            let _ = self.write_all();
-            let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
-            let id = card_id(seed);
-            let given = files.read_utf8(&card.path).map_err(|e| e.to_string()).and_then(|text| {
-                let (at, mark) = give_id(&text, card.start as usize..card.end as usize, &id).ok_or_else(|| strings::CARD_MOVED.to_owned())?;
-                files.write_note(&card.path, &format!("{}{mark}{}", &text[..at], &text[at..])).map_err(|e| e.to_string())?;
-                Ok((at, mark.len()))
-            });
-            match given {
-                Ok((at, added)) => {
+            match self.give_card_id(&card.path, card.start as usize, card.end as usize) {
+                Ok((id, at, added)) => {
                     if let Some(review) = self.review.borrow_mut().as_mut() {
                         review.id_given(id, at, added);
                     }

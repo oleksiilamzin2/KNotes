@@ -8,7 +8,7 @@
 /// 16: FSRS as the reference counts (whole days, a forgotten card's bound): scheduled again.
 /// 17: the cards' first reviews are indexed (a day's new cards were found by reading them all).
 /// 18: a card's learning step; the cards are scheduled again with the steps.
-pub(crate) const VERSION: i64 = 18;
+pub(crate) const VERSION: i64 = 19;
 
 pub(crate) const CREATE: &str = "
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
@@ -89,6 +89,8 @@ CREATE TABLE reviews(
     grade INTEGER NOT NULL,
     PRIMARY KEY(card_id, at)
 ) WITHOUT ROWID;
+-- The cards paused or resumed (ADR 0037): for each, the latest of its logs' lines that say so.
+CREATE TABLE card_pauses(card_id TEXT PRIMARY KEY, at INTEGER NOT NULL, paused INTEGER NOT NULL) WITHOUT ROWID;
 -- How much of each log has been read (bytes).
 CREATE TABLE review_logs(name TEXT PRIMARY KEY, read INTEGER NOT NULL) WITHOUT ROWID;
 -- Where each reviewed card stands, worked out from its reviews.

@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, standing};
+use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, in_deck, standing};
 use knotes_cards::{Card, scan_cards};
 use knotes_core::CardRow;
 use objc2::rc::Retained;
@@ -90,6 +90,7 @@ impl Model {
         // When it comes: now, or in so long; a card never reviewed says so and no more.
         let when = |due: i64, wait: String| if due <= now { strings::CARD_NOW.to_owned() } else { strings::card_in(&wait) };
         let (due, interval) = match standing(row) {
+            Standing::Paused => (strings::CARD_PAUSED.to_owned(), String::new()),
             Standing::New => (strings::CARD_NEW.to_owned(), String::new()),
             Standing::Learning(due) => (when(due, strings::review_wait(due - now)), strings::CARD_LEARNING.to_owned()),
             Standing::Review { due, days } => (when(due, strings::review_interval(((due - now) as f64 / 86_400.0).ceil())), strings::review_interval(days.round())),
@@ -115,6 +116,8 @@ pub struct ListIvars {
     model: Rc<Model>,
     on_choose: RefCell<Option<OnRow>>,
     on_open: RefCell<Option<OnRow>>,
+    /// Called with the row a secondary click was on, and the click: its menu.
+    on_menu: RefCell<Option<Box<dyn Fn(usize, &NSEvent)>>>,
 }
 
 define_class!(
@@ -157,6 +160,20 @@ define_class!(
             }
         }
 
+        /// A secondary click on a row (two fingers, the right button): the row is chosen and
+        /// its menu shows.
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            let row = (at.y / ROW) as usize;
+            if at.y < 0.0 || row >= self.ivars().model.table.borrow().rows().len() {
+                return;
+            }
+            if let Some(callback) = self.ivars().on_menu.borrow().as_ref() {
+                callback(row, event);
+            }
+        }
+
         /// Up and Down choose the row before and the next; Return opens the card's note.
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
@@ -182,7 +199,7 @@ define_class!(
 
 impl CardList {
     fn new(mtm: MainThreadMarker, model: Rc<Model>) -> Retained<Self> {
-        let ivars = ListIvars { model, on_choose: RefCell::new(None), on_open: RefCell::new(None) };
+        let ivars = ListIvars { model, on_choose: RefCell::new(None), on_open: RefCell::new(None), on_menu: RefCell::new(None) };
         // SAFETY: a plain view's init.
         unsafe { msg_send![super(Self::alloc(mtm).set_ivars(ivars)), init] }
     }
@@ -289,6 +306,25 @@ type OnOpen = Box<dyn Fn(&CardRow)>;
 /// Called with what is typed in the search: the notes the vault's index finds it in.
 type OnFind = Box<dyn Fn(&str) -> Vec<String>>;
 
+/// What the table asks of the vault's window.
+pub struct Asks {
+    /// A note's text.
+    pub read: Box<dyn Fn(&str) -> Option<String>>,
+    /// A card's text changed (as the table showed it, as it is now): written in its note.
+    pub save: OnSave,
+    /// A card's note shown, at the card.
+    pub open: OnOpen,
+    /// The notes holding what is searched.
+    pub find: OnFind,
+    /// A card paused (true) or resumed: its id (given now if it had none) and how many bytes
+    /// its text grew by for it.
+    pub pause: Box<dyn Fn(&CardRow, bool) -> Result<(String, usize), String>>,
+    /// The deck to put a card in, asked of the user; none when called off.
+    pub deck: Box<dyn Fn(&CardRow) -> Option<String>>,
+    /// Whether the user means to delete a card.
+    pub delete: Box<dyn Fn(&CardRow) -> bool>,
+}
+
 pub struct ControllerIvars {
     window: Retained<NSWindow>,
     /// Over the table: what is typed there keeps the cards holding it, or of a deck named so.
@@ -310,6 +346,8 @@ pub struct ControllerIvars {
     deck: RefCell<String>,
     on_save: RefCell<Option<OnSave>>,
     on_open: RefCell<Option<OnOpen>>,
+    /// A card paused or resumed, the deck asked for, a delete meant (`Asks`).
+    asks: RefCell<Option<(Box<dyn Fn(&CardRow, bool) -> Result<(String, usize), String>>, Box<dyn Fn(&CardRow) -> Option<String>>, Box<dyn Fn(&CardRow) -> bool>)>>,
 }
 
 define_class!(
@@ -344,6 +382,22 @@ define_class!(
         #[unsafe(method(searchCards:))]
         fn search_cards(&self, _sender: Option<&AnyObject>) {
             self.search();
+        }
+
+        /// The row's menu: the card chosen paused or resumed, put in another deck, deleted.
+        #[unsafe(method(pauseCard:))]
+        fn pause_card(&self, _sender: Option<&AnyObject>) {
+            self.pause_chosen();
+        }
+
+        #[unsafe(method(moveCard:))]
+        fn move_card(&self, _sender: Option<&AnyObject>) {
+            self.move_chosen();
+        }
+
+        #[unsafe(method(deleteCard:))]
+        fn delete_card(&self, _sender: Option<&AnyObject>) {
+            self.delete_chosen();
         }
     }
 );
@@ -429,6 +483,100 @@ impl Controller {
             *ivars.editing.borrow_mut() = None;
             if ivars.model.table.borrow().rows().is_empty() { self.show_chosen() } else { self.choose(0) }
         }
+    }
+
+    /// The card chosen and its text as its note has it, what was typed in it written first.
+    /// None when nothing is chosen, or what was typed could not be written.
+    fn chosen_card(&self) -> Option<(CardRow, String)> {
+        if !self.save() {
+            return None;
+        }
+        let ivars = self.ivars();
+        let (_, block) = ivars.editing.borrow().clone()?;
+        // The row as the table has it now (its id, its deck, whether paused), not as it was
+        // when it was chosen.
+        let row = ivars.model.chosen.get().and_then(|at| ivars.model.table.borrow().rows().get(at).cloned())?;
+        Some((row, block))
+    }
+
+    /// A secondary click on `row`: it is chosen, and its menu shows.
+    fn show_menu(&self, row: usize, event: &NSEvent) {
+        self.choose(row);
+        let Some((card, _)) = self.chosen_card() else { return };
+        let mtm = self.mtm();
+        let menu = objc2_app_kit::NSMenu::new(mtm);
+        let pause = if card.paused { strings::CARD_RESUME } else { strings::CARD_PAUSE };
+        for (title, action) in [(pause, sel!(pauseCard:)), (strings::CARD_MOVE, sel!(moveCard:)), (strings::CARD_DELETE, sel!(deleteCard:))] {
+            // SAFETY: the controller outlives its menu and takes the action.
+            let item = unsafe { objc2_app_kit::NSMenuItem::initWithTitle_action_keyEquivalent(objc2_app_kit::NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), &NSString::new()) };
+            // SAFETY: as above.
+            unsafe { item.setTarget(Some(self)) };
+            menu.addItem(&item);
+        }
+        objc2_app_kit::NSMenu::popUpContextMenu_withEvent_forView(&menu, event, &self.ivars().list);
+    }
+
+    /// The card chosen paused, or resumed if it is paused: said in the review log (and the card
+    /// given an id in its note, if it had none), and in its row at once.
+    fn pause_chosen(&self) {
+        let Some((row, block)) = self.chosen_card() else { return };
+        let ivars = self.ivars();
+        let paused = !row.paused;
+        let done = ivars.asks.borrow().as_ref().map(|(pause, _, _)| pause(&row, paused));
+        let Some(Ok((id, grew))) = done else { return };
+        {
+            let mut table = ivars.model.table.borrow_mut();
+            table.block_changed(&row.path, row.start, block.len(), block.len() + grew);
+            table.set_paused(&row, &id, paused);
+        }
+        ivars.model.notes.borrow_mut().remove(&row.path);
+        *ivars.editing.borrow_mut() = None;
+        self.show_chosen();
+        ivars.list.setNeedsDisplay(true);
+    }
+
+    /// The card chosen put in the deck the user names: its mark in its note says the deck.
+    fn move_chosen(&self) {
+        let Some((row, block)) = self.chosen_card() else { return };
+        let ivars = self.ivars();
+        let Some(deck) = ivars.asks.borrow().as_ref().and_then(|(_, deck, _)| deck(&row)) else { return };
+        let Some(moved) = in_deck(&block, &deck).filter(|moved| *moved != block) else { return };
+        if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&row, &block, &moved).is_err()) {
+            return;
+        }
+        {
+            let mut table = ivars.model.table.borrow_mut();
+            table.block_changed(&row.path, row.start, block.len(), moved.len());
+            table.set_deck(&row, deck.trim().trim_matches('/'));
+        }
+        ivars.model.notes.borrow_mut().remove(&row.path);
+        *ivars.editing.borrow_mut() = None;
+        self.show_chosen();
+        ivars.list.setNeedsDisplay(true);
+    }
+
+    /// The card chosen deleted from its note, once the user says so: its text goes, the rest of
+    /// the note stays; the row after it is chosen.
+    fn delete_chosen(&self) {
+        let Some((row, block)) = self.chosen_card() else { return };
+        let ivars = self.ivars();
+        if !ivars.asks.borrow().as_ref().is_some_and(|(_, _, delete)| delete(&row)) {
+            return;
+        }
+        if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&row, &block, "").is_err()) {
+            return;
+        }
+        let at = ivars.model.chosen.get().unwrap_or(0);
+        {
+            let mut table = ivars.model.table.borrow_mut();
+            table.block_changed(&row.path, row.start, block.len(), 0);
+            table.remove(&row);
+        }
+        ivars.model.notes.borrow_mut().remove(&row.path);
+        *ivars.editing.borrow_mut() = None;
+        self.keep_chosen(None);
+        let rows = ivars.model.table.borrow().rows().len();
+        if rows == 0 { self.show_chosen() } else { self.choose(at.min(rows - 1)) }
     }
 
     fn open_chosen(&self) {
@@ -577,6 +725,7 @@ impl CardTableWindow {
             deck: RefCell::new(String::new()),
             on_save: RefCell::new(None),
             on_open: RefCell::new(None),
+            asks: RefCell::new(None),
         };
         // SAFETY: a plain object's init.
         let controller: Retained<Controller> = unsafe { msg_send![super(Controller::alloc(mtm).set_ivars(ivars)), init] };
@@ -604,6 +753,12 @@ impl CardTableWindow {
             }
         }));
         let weak = objc2::rc::Weak::from_retained(&controller);
+        *controller.ivars().list.ivars().on_menu.borrow_mut() = Some(Box::new(move |row, event| {
+            if let Some(controller) = weak.load() {
+                controller.show_menu(row, event);
+            }
+        }));
+        let weak = objc2::rc::Weak::from_retained(&controller);
         *controller.ivars().header.ivars().on_sort.borrow_mut() = Some(Box::new(move |column| {
             if let Some(controller) = weak.load() {
                 controller.sort_by(column);
@@ -612,20 +767,14 @@ impl CardTableWindow {
         Self { controller }
     }
 
-    /// Called to read a note's text; with a card whose text was changed, to write it; and with
-    /// a card whose note is asked for.
-    pub fn on(
-        &self,
-        read: impl Fn(&str) -> Option<String> + 'static,
-        save: impl Fn(&CardRow, &str, &str) -> Result<(), String> + 'static,
-        open: impl Fn(&CardRow) + 'static,
-        find: impl Fn(&str) -> Vec<String> + 'static,
-    ) {
+    /// What the table asks of the vault's window (`Asks`).
+    pub fn on(&self, asks: Asks) {
         let ivars = self.controller.ivars();
-        *ivars.on_find.borrow_mut() = Some(Box::new(find));
-        *ivars.model.read.borrow_mut() = Some(Box::new(read));
-        *ivars.on_save.borrow_mut() = Some(Box::new(save));
-        *ivars.on_open.borrow_mut() = Some(Box::new(open));
+        *ivars.on_find.borrow_mut() = Some(asks.find);
+        *ivars.model.read.borrow_mut() = Some(asks.read);
+        *ivars.on_save.borrow_mut() = Some(asks.save);
+        *ivars.on_open.borrow_mut() = Some(asks.open);
+        *ivars.asks.borrow_mut() = Some((asks.pause, asks.deck, asks.delete));
     }
 
     /// Shows the window with the cards `rows` of the deck named `deck`, the first chosen.
@@ -706,6 +855,18 @@ impl CardTableWindow {
     pub fn probe_find(&self, query: &str) {
         self.controller.ivars().field.setStringValue(&NSString::from_str(query));
         self.controller.search();
+    }
+
+    /// The row at `row` chosen and an item of its menu: `pause` (or resume, when paused),
+    /// `deck` (the deck asked for), `delete` (probe mode).
+    pub fn probe_act(&self, row: usize, act: &str) {
+        self.controller.choose(row);
+        match act {
+            "pause" => self.controller.pause_chosen(),
+            "deck" => self.controller.move_chosen(),
+            "delete" => self.controller.delete_chosen(),
+            _ => {}
+        }
     }
 
     /// A click on a column's name (probe mode).

@@ -78,6 +78,11 @@ fn a_review_is_taken_back_by_a_line_after_it() {
     assert_eq!(parse_logged(&line), Some(Logged::TakenBack(1_763_370_000, "c-a1b2c3")));
     assert_eq!(parse_review(&line), None, "no review itself: an older Knotes passes it over");
     assert_eq!(parse_logged(&review_line(5, "c-1", Grade::Good)), Some(Logged::Review(5, "c-1", Grade::Good)));
+    // A card paused, and resumed.
+    assert_eq!(knotes_cards::paused_line(7, "c-1", true), "7\tc-1\tP\n");
+    assert_eq!(parse_logged(&knotes_cards::paused_line(7, "c-1", true)), Some(Logged::Paused(7, "c-1", true)));
+    assert_eq!(parse_logged(&knotes_cards::paused_line(9, "c-1", false)), Some(Logged::Paused(9, "c-1", false)));
+    assert_eq!((parse_logged("7\tc-1\tp"), parse_logged("7\t\tP"), parse_logged("7\tc-1\tP\tx")), (None, None, None));
     for damaged in ["", "1\tc-1", "x\tc-1\t0", "1\t\t0", "1\tc-1\t0\textra", "1\tc-1\t5"] {
         assert_eq!(parse_logged(damaged), None, "{damaged:?}");
     }

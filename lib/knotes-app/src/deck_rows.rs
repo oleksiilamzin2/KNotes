@@ -24,6 +24,8 @@ pub fn deck_counts(rows: &[CardRow], until: i64) -> Vec<DeckCount> {
         let count = decks.entry(&row.deck).or_insert_with(|| DeckCount { deck: row.deck.clone(), cards: 0, due: 0, fresh: 0 });
         count.cards += 1;
         match row.reviewed {
+            // A card paused is the deck's, but neither due nor new: it does not wait.
+            _ if row.paused => {}
             None => count.fresh += 1,
             Some(s) if s.due <= until => count.due += 1,
             Some(_) => {}
@@ -46,19 +48,19 @@ pub fn introduced(rows: &[CardRow], since: i64) -> Vec<(String, usize)> {
 /// longest due first, then those never reviewed in their notes' order, `new` of them at most;
 /// `limit` at most in all (as `CardIndex::due_cards`).
 pub fn due_cards(rows: &[CardRow], deck: &str, until: i64, limit: usize, new: usize) -> Vec<DueCard> {
-    let mut due: Vec<&CardRow> = rows.iter().filter(|row| under(row, deck) && row.reviewed.is_some_and(|s| s.due <= until)).collect();
+    let mut due: Vec<&CardRow> = rows.iter().filter(|row| under(row, deck) && !row.paused && row.reviewed.is_some_and(|s| s.due <= until)).collect();
     // Stable: the rows come by note, in the note's order.
     due.sort_by_key(|row| row.reviewed.map(|s| s.due));
     due.truncate(limit);
     let room = new.min(limit - due.len());
-    let fresh = rows.iter().filter(|row| under(row, deck) && row.reviewed.is_none()).take(room);
+    let fresh = rows.iter().filter(|row| under(row, deck) && !row.paused && row.reviewed.is_none()).take(room);
     due.into_iter().chain(fresh).map(due_card).collect()
 }
 
 /// The reviewed cards of `rows` in `deck` and the decks under it not due by `after` yet, the
 /// soonest due first, `limit` at most (as `CardIndex::cards_ahead`).
 pub fn cards_ahead(rows: &[CardRow], deck: &str, after: i64, limit: usize) -> Vec<DueCard> {
-    let mut ahead: Vec<&CardRow> = rows.iter().filter(|row| under(row, deck) && row.reviewed.is_some_and(|s| s.due > after)).collect();
+    let mut ahead: Vec<&CardRow> = rows.iter().filter(|row| under(row, deck) && !row.paused && row.reviewed.is_some_and(|s| s.due > after)).collect();
     ahead.sort_by_key(|row| row.reviewed.map(|s| s.due));
     ahead.into_iter().take(limit).map(due_card).collect()
 }

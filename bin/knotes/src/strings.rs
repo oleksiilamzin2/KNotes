@@ -336,6 +336,17 @@ pub const CARD_NEW: &str = "нова";
 pub const CARD_NOW: &str = "зараз";
 pub const CARD_LEARNING: &str = "вивчається";
 pub const CARD_SAVE: &str = "Зберегти";
+pub const CARD_PAUSED: &str = "призупинено";
+/// A row's menu in the table.
+pub const CARD_PAUSE: &str = "Призупинити";
+pub const CARD_RESUME: &str = "Повернути до повторення";
+pub const CARD_MOVE: &str = "Перенести в колоду…";
+pub const CARD_DELETE: &str = "Видалити картку…";
+pub fn card_delete_question(question: &str) -> String {
+    format!("Видалити картку «{question}»?")
+}
+pub const CARD_DELETE_DETAILS: &str = "Її текст буде прибрано з нотатки; решта нотатки залишиться. Історія її повторень залишиться в журналі.";
+pub const CARD_NOT_PAUSED: &str = "Не вдалося призупинити картку";
 /// When a card comes: "через 3 д".
 pub fn card_in(wait: &str) -> String {
     format!("через {wait}")

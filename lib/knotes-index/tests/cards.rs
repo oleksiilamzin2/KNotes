@@ -226,3 +226,54 @@ fn a_review_taken_back_is_gone_and_its_card_stands_as_before_it() {
     index.take_reviews("mac.tsv", log.len() as u64, &more, &fsrs, &no_steps()).unwrap();
     assert_eq!(index.card_state("c-1").unwrap().map(|s| s.last), Some(now + 5));
 }
+
+#[test]
+fn a_card_paused_is_asked_no_more_until_it_is_resumed() {
+    use knotes_cards::paused_line;
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-2\n\n#@мови fox::лис ^c-3\n");
+    let fsrs = Fsrs::default();
+    let now = 1_000_000;
+    // cat reviewed and due again, dog reviewed and not due yet, fox new.
+    let log = review_line(now - 10 * DAY, "c-1", Grade::Good) + &review_line(now, "c-2", Grade::Good);
+    index.take_reviews("mac.tsv", 0, &log, &fsrs, &no_steps()).unwrap();
+    assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 3, 1, 1));
+    let ids = |cards: Vec<knotes_core::DueCard>| cards.into_iter().map(|c| c.id.unwrap_or_default()).collect::<Vec<_>>().join(" ");
+    assert_eq!((ids(index.due_cards(Some("мови"), now, 10, 10).unwrap()), ids(index.cards_ahead("мови", now, 10).unwrap())), ("c-1 c-3".to_owned(), "c-2".to_owned()));
+    // All three paused: they are the deck's still, but none waits, is asked or comes ahead.
+    let paused: String = ["c-1", "c-2", "c-3"].iter().map(|id| paused_line(now + 1, id, true)).collect();
+    assert_eq!(index.take_reviews("mac.tsv", log.len() as u64, &paused, &fsrs, &no_steps()).unwrap(), 3);
+    assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 3, 0, 0));
+    assert_eq!((ids(index.due_cards(Some("мови"), now, 10, 10).unwrap()), ids(index.due_cards(None, now, 10, 10).unwrap()), ids(index.cards_ahead("мови", now, 10).unwrap())), (String::new(), String::new(), String::new()));
+    let rows = index.card_rows(None, None).unwrap();
+    assert!(rows.iter().all(|row| row.paused) && rows[0].reviewed.is_some(), "its schedule is kept while it is paused");
+    // Resumed, it stands as it stood.
+    let resumed = paused_line(now + 2, "c-1", false) + &paused_line(now + 2, "c-3", false);
+    index.take_reviews("mac.tsv", (log.len() + paused.len()) as u64, &resumed, &fsrs, &no_steps()).unwrap();
+    assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 3, 1, 1));
+    assert_eq!(ids(index.due_cards(Some("мови"), now, 10, 10).unwrap()), "c-1 c-3");
+    assert_eq!(index.card_rows(None, None).unwrap().iter().map(|row| row.paused).collect::<Vec<_>>(), [false, true, false]);
+    // Another Mac's log arrives late with an older pause of cat: the newer line stands. Its
+    // newer pause of fox takes.
+    let late = paused_line(now, "c-1", true) + &paused_line(now + 9, "c-3", true);
+    assert_eq!(index.take_reviews("other.tsv", 0, &late, &fsrs, &no_steps()).unwrap(), 1, "the older line changes nothing");
+    assert_eq!(index.card_rows(None, None).unwrap().iter().map(|row| row.paused).collect::<Vec<_>>(), [false, true, true]);
+    // The logs read again from their start, in another order (the index built anew): the same.
+    index.take_reviews("other.tsv", 0, &late, &fsrs, &no_steps()).unwrap();
+    index.take_reviews("mac.tsv", 0, &(log + &paused + &resumed), &fsrs, &no_steps()).unwrap();
+    assert_eq!(index.card_rows(None, None).unwrap().iter().map(|row| row.paused).collect::<Vec<_>>(), [false, true, true]);
+    // Paused and resumed in one second, in two logs: resumed, whichever log is read first.
+    for order in [["one.tsv", "two.tsv"], ["two.tsv", "one.tsv"]] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = SqliteIndex::open(dir.path()).unwrap();
+        put(&mut index, "a.md", "#@мови cat::кіт ^c-1\n");
+        for name in order {
+            index.take_reviews(name, 0, &paused_line(now, "c-1", name == "one.tsv"), &fsrs, &no_steps()).unwrap();
+        }
+        assert!(!index.card_rows(None, None).unwrap()[0].paused, "{order:?}");
+    }
+    // A card with no review at all can be paused: it is not new to ask.
+    assert_eq!(index.card_state("c-3").unwrap(), None);
+}
+

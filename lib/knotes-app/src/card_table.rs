@@ -23,6 +23,8 @@ pub enum CardColumn {
 /// How a card stands, said short in its row.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Standing {
+    /// Paused: asked no more until it is resumed, however it stood.
+    Paused,
     /// Never reviewed.
     New,
     /// At one of its steps, due at this time.
@@ -35,6 +37,7 @@ const DAY: f64 = 86_400.0;
 
 pub fn standing(row: &CardRow) -> Standing {
     match row.reviewed {
+        _ if row.paused => Standing::Paused,
         None => Standing::New,
         Some(reviewed) if reviewed.state.step.is_some() => Standing::Learning(reviewed.due),
         Some(reviewed) => Standing::Review { due: reviewed.due, days: (reviewed.due - reviewed.state.last) as f64 / DAY },
@@ -176,6 +179,31 @@ impl CardTable {
         }
     }
 
+    /// The card `like` paused or resumed, and given `id` if it had none (a card is paused by
+    /// its id): said in its row at once, before the index hears of it.
+    pub fn set_paused(&mut self, like: &CardRow, id: &str, paused: bool) {
+        for row in self.rows.iter_mut().chain(self.all.iter_mut().flatten()).filter(|row| row.path == like.path && row.start == like.start) {
+            row.paused = paused;
+            row.id = Some(id.to_owned());
+        }
+    }
+
+    /// The card `like` was put in the deck `deck`: its row says so.
+    pub fn set_deck(&mut self, like: &CardRow, deck: &str) {
+        for row in self.rows.iter_mut().chain(self.all.iter_mut().flatten()).filter(|row| row.path == like.path && row.start == like.start) {
+            row.deck = deck.to_owned();
+        }
+    }
+
+    /// The card `like` is gone from its note: its row goes.
+    pub fn remove(&mut self, like: &CardRow) {
+        let gone = |row: &CardRow| row.path == like.path && row.start == like.start;
+        self.rows.retain(|row| !gone(row));
+        if let Some(all) = self.all.as_mut() {
+            all.retain(|row| !gone(row));
+        }
+    }
+
     /// Where the card `like` is in the table now: by its id, or (with none) by its note and
     /// its place there. To keep the row chosen across a sort or a reload.
     pub fn position(&self, like: &CardRow) -> Option<usize> {
@@ -197,6 +225,17 @@ pub fn card_of<'a>(cards: &'a [Card], row: &CardRow) -> Option<&'a Card> {
         }
         None => cards.iter().filter(|card| card.id.is_none()).find(at),
     }
+}
+
+/// A card's `block` (its text in its note, from its deck's mark on) put in the deck `deck`:
+/// the mark's deck replaced, the rest as it was. None when the block does not begin with a
+/// deck's mark, or `deck` is no deck's name (empty, or with a space in it).
+pub fn in_deck(block: &str, deck: &str) -> Option<String> {
+    let deck = deck.trim().trim_matches('/');
+    let rest = block.strip_prefix("#@")?;
+    // The mark's deck ends at a space, a brace (a card in braces) or the block's end.
+    let end = rest.find(|c: char| c.is_whitespace() || c == '{').unwrap_or(rest.len());
+    (!deck.is_empty() && end > 0 && !deck.contains(|c: char| c.is_whitespace() || c == '{')).then(|| format!("#@{deck}{}", &rest[end..]))
 }
 
 /// The note's `text` with the card's block `old` (found at `start` when the table was filled)

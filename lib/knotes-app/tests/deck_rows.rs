@@ -4,7 +4,7 @@ use knotes_core::{CardRow, CardState, DeckCount, Reviewed};
 /// A card of `deck` in `path`, never reviewed, or first reviewed at `first` and due at `due`.
 fn card(path: &str, deck: &str, id: &str, reviewed: Option<(i64, i64)>) -> CardRow {
     let reviewed = reviewed.map(|(first, due)| Reviewed { state: CardState { stability: 3.0, difficulty: 5.0, last: first, step: None, relearning: false }, first, due, reviews: 1, lapses: 0 });
-    CardRow { path: path.into(), start: 0, end: 1, deck: deck.into(), id: Some(id.into()), reviewed }
+    CardRow { path: path.into(), start: 0, end: 1, deck: deck.into(), id: Some(id.into()), reviewed, paused: false }
 }
 
 fn ids(cards: Vec<knotes_core::DueCard>) -> Vec<String> {
@@ -33,3 +33,17 @@ fn a_part_of_the_cards_is_counted_and_queued_as_the_index_does_all() {
     assert_eq!(ids(cards_ahead(&rows, "мови", 350, 10)), ["c-5", "c-1", "c-3"], "the soonest due first");
     assert!(cards_ahead(&rows, "історія", 0, 10).is_empty() && deck_counts(&[], 0).is_empty());
 }
+
+#[test]
+fn a_card_paused_is_counted_in_its_deck_but_does_not_wait() {
+    let mut rows = vec![card("a.md", "en", "due", Some((0, 50))), card("a.md", "en", "ahead", Some((0, 500))), card("a.md", "en", "new", None)];
+    let ids = |cards: Vec<knotes_core::DueCard>| cards.into_iter().map(|c| c.id.unwrap_or_default()).collect::<Vec<_>>().join(" ");
+    assert_eq!((ids(due_cards(&rows, "en", 100, 10, 10)), ids(cards_ahead(&rows, "en", 100, 10))), ("due new".to_owned(), "ahead".to_owned()));
+    for row in &mut rows {
+        row.paused = true;
+    }
+    let counts = deck_counts(&rows, 100);
+    assert_eq!((counts[0].cards, counts[0].due, counts[0].fresh), (3, 0, 0));
+    assert_eq!((ids(due_cards(&rows, "en", 100, 10, 10)), ids(cards_ahead(&rows, "en", 100, 10))), (String::new(), String::new()));
+}
+

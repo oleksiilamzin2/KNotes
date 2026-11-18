@@ -1,4 +1,4 @@
-use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, replace_block, standing};
+use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, in_deck, replace_block, standing};
 use knotes_cards::scan_cards;
 use knotes_core::{CardRow, CardState, Reviewed};
 
@@ -7,7 +7,7 @@ const DAY: i64 = 86_400;
 
 fn card(path: &str, start: u32, deck: &str, id: Option<&str>, reviewed: Option<(i64, i64, u32, u32, Option<u8>)>) -> CardRow {
     let reviewed = reviewed.map(|(last, due, reviews, lapses, step)| Reviewed { state: CardState { stability: 1.0, difficulty: 5.0, last, step, relearning: false }, first: last, due, reviews, lapses });
-    CardRow { path: path.into(), start, end: start + 10, deck: deck.into(), id: id.map(str::to_owned), reviewed }
+    CardRow { path: path.into(), start, end: start + 10, deck: deck.into(), id: id.map(str::to_owned), reviewed, paused: false }
 }
 
 /// Four cards as the index gives them, by note: one new, one learned, two with their days.
@@ -135,5 +135,31 @@ fn a_search_keeps_the_cards_of_a_deck_named_so_and_those_written_where_the_words
     table.search(&CardSearch::new("історія", Vec::new()));
     table.reload(rows());
     assert_eq!((table.rows().len(), table.count()), (4, 4));
+}
+
+#[test]
+fn a_card_is_paused_moved_to_another_deck_and_removed_in_its_row_at_once() {
+    let mut table = CardTable::new(rows());
+    // Paused: its row says so, whatever its schedule; a card with no id is given the one it
+    // was paused by. The same in every card while a search shows a part.
+    table.search(&CardSearch::new("мови 2", Vec::new()));
+    let typed = table.rows().iter().find(|row| row.id.is_none()).unwrap().clone();
+    table.set_paused(&typed, "c-9", true);
+    table.search(&CardSearch::new("", Vec::new()));
+    let paused = table.rows().iter().find(|row| row.id.as_deref() == Some("c-9")).unwrap();
+    assert_eq!((paused.paused, standing(paused)), (true, Standing::Paused));
+    let reviewed = table.rows()[0].clone();
+    table.set_paused(&reviewed, "c-1", true);
+    assert_eq!(standing(&table.rows()[0]), Standing::Paused, "a reviewed card too");
+    table.set_paused(&reviewed, "c-1", false);
+    assert!(matches!(standing(&table.rows()[0]), Standing::Review { .. }), "resumed, it stands as it stood");
+    // Removed from its note: its row goes, the others stay.
+    table.remove(&reviewed);
+    assert_eq!((ids(&table).as_str(), table.count()), ("c-9 c-3 c-4", 3));
+    // A card's text put in another deck: its mark's deck alone changes.
+    assert_eq!(in_deck("#@мови/англійська cat::кіт ^c-1", "тварини").as_deref(), Some("#@тварини cat::кіт ^c-1"));
+    assert_eq!(in_deck("#@en{\nQ\n?\nA\n} ^c-2", " en/verbs/ ").as_deref(), Some("#@en/verbs{\nQ\n?\nA\n} ^c-2"), "a card in braces; the name tidied");
+    assert_eq!(in_deck("#@en Що?\n?\nТе.", "x").as_deref(), Some("#@x Що?\n?\nТе."));
+    assert_eq!((in_deck("cat::кіт", "x"), in_deck("#@en a::b", " "), in_deck("#@en a::b", "two words"), in_deck("#@ a::b", "x")), (None, None, None, None));
 }
 

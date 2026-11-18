@@ -135,6 +135,14 @@ pub enum Logged<'a> {
     Review(i64, &'a str, Grade),
     /// The review of this card at this time is as if it had not been.
     TakenBack(i64, &'a str),
+    /// The card was paused at this time (asked no more until it is resumed), or resumed.
+    Paused(i64, &'a str, bool),
+}
+
+/// The line that pauses `card` at `when` (`P`), or resumes it (`R`). Of a card's such lines,
+/// in whatever logs, the latest by its time says how the card stands.
+pub fn paused_line(when: i64, card: &str, paused: bool) -> String {
+    format!("{when}\t{card}\t{}\n", if paused { 'P' } else { 'R' })
 }
 
 /// The line that takes back the review of `card` logged at `when`.
@@ -149,5 +157,11 @@ pub fn parse_logged(line: &str) -> Option<Logged<'_>> {
     }
     let mut parts = line.trim_end_matches(['\n', '\r']).split('\t');
     let (when, card, grade) = (parts.next()?.parse().ok()?, parts.next()?, parts.next()?);
-    (parts.next().is_none() && !card.is_empty() && grade == "0").then_some(Logged::TakenBack(when, card))
+    (parts.next().is_none() && !card.is_empty()).then_some(())?;
+    match grade {
+        "0" => Some(Logged::TakenBack(when, card)),
+        "P" => Some(Logged::Paused(when, card, true)),
+        "R" => Some(Logged::Paused(when, card, false)),
+        _ => None,
+    }
 }

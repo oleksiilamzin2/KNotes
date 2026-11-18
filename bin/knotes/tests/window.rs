@@ -4263,6 +4263,38 @@ fn a_deck_s_cards_show_as_a_table_and_a_card_s_text_is_changed_there() {
 }
 
 #[test]
+fn a_card_is_paused_put_in_another_deck_and_deleted_from_its_row_s_menu() {
+    let notes = [("Мови.md", "Слова.\n\n#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес\n\n#@мови/німецька Hund::пес ^c-3\n")];
+    let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{name}: {out}")).to_owned();
+    let table = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_DECK_TABLE", "")];
+    // dog (typed, no id yet) paused, cat put in another deck, Hund deleted.
+    let (vault, out) = probe_notes(&notes, &[table[0], table[1], ("KNOTES_PROBE_DECK_TABLE_ACT", "1=pause;0=deck;2=delete"), ("KNOTES_PROBE_CARD", "тварини|")]);
+    let acted = line(&out, "deck-table-acted: ");
+    assert!(acted.starts_with("Картки: Усі колоди — 2 (2 cards, as written): cat · тварини · нова | [dog · мови/англійська · призупинено] ~ #@мови/англійська dog::пес ^c-"), "{acted}");
+    // The note: cat's mark says its new deck, dog has the id it was paused by, Hund is gone,
+    // the rest as it was.
+    let note = std::fs::read_to_string(vault.path().join("Мови.md")).unwrap();
+    let id = note.split("dog::пес ^").nth(1).and_then(|rest| rest.split('\n').next()).unwrap_or_else(|| panic!("{note}")).to_owned();
+    assert_eq!(note, format!("Слова.\n\n#@тварини cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^{id}\n\n\n"), "{out}");
+    // The log says the pause, by the card's id.
+    let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
+    let log = std::fs::read_to_string(logs[0].path()).unwrap();
+    assert!(log.ends_with(&format!("\t{id}\tP\n")) && log.lines().count() == 1, "{log}");
+    // The next launch: the card paused does not wait (its deck asks nothing), and is not asked
+    // with all the decks; the table still has it, paused.
+    let out = probe_env(&[vault.path()], None, &table);
+    assert!(out.contains("sidebar: Усі колоди (1) | мови (0) | тварини (1)\n"), "{out}");
+    assert!(line(&out, "deck-table: ").contains("| dog · мови/англійська · призупинено ~ "), "{out}");
+    let out = probe_env(&[vault.path()], None, &[table[0], ("KNOTES_PROBE_SELECT", "d:"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
+    assert_eq!(review_line_of(&out), "done Усі колоди 1", "cat alone was asked: {out}");
+    // Resumed from the same menu: it waits again.
+    let out = probe_env(&[vault.path()], None, &[table[0], table[1], ("KNOTES_PROBE_DECK_TABLE_ACT", "1=pause")]);
+    assert!(line(&out, "deck-table-acted: ").contains("[dog · мови/англійська · нова]"), "{out}");
+    let out = probe_env(&[vault.path()], None, &table);
+    assert!(out.contains("| мови (1) | "), "{out}");
+}
+
+#[test]
 fn the_decks_first_row_reviews_all_of_them_together() {
     // Above the decks, «Усі колоди», with what they ask between them; chosen, its review takes
     // every deck's cards, in a tab of that name.

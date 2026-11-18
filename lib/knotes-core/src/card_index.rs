@@ -51,6 +51,8 @@ pub struct CardRow {
     pub id: Option<String>,
     /// None for a card never reviewed.
     pub reviewed: Option<Reviewed>,
+    /// Paused: asked no more, and not counted among those that wait, until it is resumed.
+    pub paused: bool,
 }
 
 /// A reviewed card's schedule: what is remembered of it, when it is due again (seconds since

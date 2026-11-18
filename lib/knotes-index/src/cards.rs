@@ -76,11 +76,25 @@ impl SqliteIndex {
         {
             let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO reviews(card_id, at, grade) VALUES (?1, ?2, ?3)")?;
             let mut take_back = tx.prepare_cached("DELETE FROM reviews WHERE card_id = ?1 AND at = ?2")?;
+            // The latest by its time, whatever log it came from and when (a second Mac's
+            // arrive late): an older line does not undo a newer one. Of two in one second, the
+            // one that resumes stands, in whatever order the logs are read: a card is not left
+            // out of sight by chance.
+            let mut pause = tx.prepare_cached(
+                "INSERT INTO card_pauses(card_id, at, paused) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(card_id) DO UPDATE SET at = excluded.at, paused = excluded.paused
+                 WHERE excluded.at > card_pauses.at OR (excluded.at = card_pauses.at AND excluded.paused < card_pauses.paused)",
+            )?;
             // In the log's order: a review taken back is taken back by a line after it.
             for logged in text[..whole].lines().filter_map(parse_logged) {
                 let (changed, card) = match logged {
                     Logged::Review(when, card, grade) => (insert.execute(params![card, when, grade as i64])?, card),
                     Logged::TakenBack(when, card) => (take_back.execute(params![card, when])?, card),
+                    // Not a review: nothing of the card's schedule changes.
+                    Logged::Paused(when, card, paused) => {
+                        new += pause.execute(params![card, when, paused])?;
+                        continue;
+                    }
                 };
                 if changed > 0 {
                     new += 1;
@@ -127,8 +141,9 @@ fn put_schedule(tx: &Transaction, id: &str, fsrs: &Fsrs, settings: &DeckSettings
 impl CardIndex for SqliteIndex {
     fn deck_counts(&self, until: i64) -> Result<Vec<DeckCount>, BoxError> {
         let mut st = self.conn.prepare_cached(
-            "SELECT c.deck, COUNT(*), COUNT(CASE WHEN s.due <= ?1 THEN 1 END), COUNT(CASE WHEN s.card_id IS NULL THEN 1 END)
-             FROM cards c LEFT JOIN card_states s ON s.card_id = c.card_id GROUP BY c.deck ORDER BY c.deck",
+            // A card paused is the deck's, but neither due nor new: it does not wait.
+            "SELECT c.deck, COUNT(*), COUNT(CASE WHEN s.due <= ?1 AND COALESCE(p.paused, 0) = 0 THEN 1 END), COUNT(CASE WHEN s.card_id IS NULL AND COALESCE(p.paused, 0) = 0 THEN 1 END)
+             FROM cards c LEFT JOIN card_states s ON s.card_id = c.card_id LEFT JOIN card_pauses p ON p.card_id = c.card_id GROUP BY c.deck ORDER BY c.deck",
         )?;
         let rows = st.query_map([until], |r| {
             Ok(DeckCount { deck: r.get(0)?, cards: r.get::<_, i64>(1)? as usize, due: r.get::<_, i64>(2)? as usize, fresh: r.get::<_, i64>(3)? as usize })
@@ -143,7 +158,7 @@ impl CardIndex for SqliteIndex {
         let mut st = self.conn.prepare_cached(
             "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.due
              FROM cards c JOIN files f ON f.id = c.file_id JOIN card_states s ON s.card_id = c.card_id
-             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due <= ?4
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due <= ?4 AND NOT EXISTS (SELECT 1 FROM card_pauses p WHERE p.card_id = c.card_id AND p.paused = 1)
              ORDER BY s.due, f.path, c.ord LIMIT ?5",
         )?;
         let mut cards: Vec<DueCard> = st.query_map(params![own, from, to, until, limit as i64], card)?.collect::<Result<_, _>>()?;
@@ -152,7 +167,7 @@ impl CardIndex for SqliteIndex {
             let mut st = self.conn.prepare_cached(
                 "SELECT f.path, c.start, c.end, c.deck, c.card_id, NULL
                  FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
-                 WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.card_id IS NULL
+                 WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.card_id IS NULL AND NOT EXISTS (SELECT 1 FROM card_pauses p WHERE p.card_id = c.card_id AND p.paused = 1)
                  ORDER BY f.path, c.ord LIMIT ?4",
             )?;
             for row in st.query_map(params![own, from, to, new as i64], card)? {
@@ -166,7 +181,7 @@ impl CardIndex for SqliteIndex {
         let mut st = self.conn.prepare_cached(
             "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.due
              FROM cards c JOIN files f ON f.id = c.file_id JOIN card_states s ON s.card_id = c.card_id
-             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due > ?4
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due > ?4 AND NOT EXISTS (SELECT 1 FROM card_pauses p WHERE p.card_id = c.card_id AND p.paused = 1)
              ORDER BY s.due, f.path, c.ord LIMIT ?5",
         )?;
         let (from, to) = under(deck);
@@ -190,7 +205,8 @@ impl CardIndex for SqliteIndex {
         // As `due_cards` takes a deck and those under it.
         let (from, to) = deck.map(under).unzip();
         let mut st = self.conn.prepare_cached(
-            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses, s.first, s.step, s.relearning
+            "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses, s.first, s.step, s.relearning,
+                    COALESCE((SELECT p.paused FROM card_pauses p WHERE p.card_id = c.card_id), 0)
              FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
              WHERE (?1 IS NULL OR c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND (?4 IS NULL OR f.path = ?4)
              ORDER BY f.path, c.ord",
@@ -200,7 +216,7 @@ impl CardIndex for SqliteIndex {
                 Some(stability) => Some(Reviewed { state: CardState { stability, difficulty: r.get(6)?, last: r.get(7)?, step: r.get(12)?, relearning: r.get(13)? }, first: r.get(11)?, due: r.get(8)?, reviews: r.get(9)?, lapses: r.get(10)? }),
                 None => None,
             };
-            Ok(CardRow { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, reviewed })
+            Ok(CardRow { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, reviewed, paused: r.get(14)? })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }

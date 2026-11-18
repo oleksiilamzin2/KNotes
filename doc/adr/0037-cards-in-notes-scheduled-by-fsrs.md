@@ -407,3 +407,18 @@ test missed, each of them relaunching the app after a grade:
   the time from one place (`knotes_session::now`), which the app's tests set for a whole run
   (`KNOTES_PROBE_NOW`). With the Mac's clock, a run that slept between two launches found
   the card graded in the first, «due in ten minutes», due in the second, and failed.
+- **A card paused, moved, deleted** (2026-11-18). A row's menu in the table (a secondary
+  click): «Призупинити» / «Повернути до повторення», «Перенести в колоду…», «Видалити
+  картку…».
+  A paused card is its deck's still, with its schedule kept, but does not wait: it is neither
+  due nor new, is not asked, and does not come ahead of the schedule. Where it is kept was the
+  owner's choice: in the review log, not in the note. A line `when⇥card⇥P` pauses, `R`
+  resumes; of a card's such lines, in whatever logs, the latest by its time says how it
+  stands (a second Mac's arrive late: an older line does not undo a newer; of two in one
+  second the one that resumes stands, in whatever order the logs are read). The index keeps
+  that in `card_pauses`. A card is paused by its id: one with none is given it then, as at
+  its first grade. The note does not say a card is paused; the table does. The deck's
+  statistics count a paused card as any other.
+  Moved, a card's mark in its note names the other deck (`in_deck`); deleted, its text goes
+  from its note (asked first) and its reviews stay in the log. Both are written as a card's
+  text is, not over a note changed meanwhile. Not done: several cards chosen at once.

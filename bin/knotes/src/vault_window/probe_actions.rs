@@ -44,6 +44,14 @@ impl VaultWindow {
                     table.probe_sort(column);
                 }
                 println!("deck-table: {}", table.describe());
+                // `KNOTES_PROBE_DECK_TABLE_ACT=1=pause;0=deck;2=delete`: rows' menu items in turn
+                // (`deck` takes `KNOTES_PROBE_CARD=name|`).
+                if let Ok(acts) = std::env::var("KNOTES_PROBE_DECK_TABLE_ACT") {
+                    for (row, act) in acts.split(';').filter_map(|act| act.split_once('=')) {
+                        table.probe_act(row.parse().unwrap_or(0), act);
+                    }
+                    println!("deck-table-acted: {}", table.describe());
+                }
                 if let Some((row, text)) = std::env::var("KNOTES_PROBE_DECK_TABLE_EDIT").ok().as_deref().and_then(|spec| spec.split_once('=')) {
                     let written = table.probe_edit(row.parse().unwrap_or(0), &text.replace("\\n", "\n"));
                     println!("deck-table-edit: {}", if written { "written" } else { "not written" });
