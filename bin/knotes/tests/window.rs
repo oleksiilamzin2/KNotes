@@ -4357,6 +4357,34 @@ fn an_id_written_at_two_cards_is_asked_once_and_the_card_where_it_was_found() {
 }
 
 #[test]
+fn the_last_grade_is_taken_back_and_the_card_graded_as_meant() {
+    let notes = [("n.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-2\n")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    // cat graded Good by a slip: taken back, it shows again with its answer, a new card as it
+    // was (not at its second step), and dog waits its turn again.
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,undo")]);
+    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 1 хв, Важко · 6 хв, Добре · 10 хв, Легко · 16 д (list hidden)", "{out}");
+    // Graded Easy, as meant: its days begin, dog is next, and nothing more is to take back
+    // than that grade.
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,undo,4")]);
+    assert_eq!(review_line_of(&out), "question мови 1/1 | dog (list hidden)", "{out}");
+    // The log says all three: the grade, that it was taken back, the grade meant.
+    let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
+    let log = std::fs::read_to_string(logs[0].path()).unwrap();
+    let grades: Vec<&str> = log.lines().map(|l| l.rsplit('\t').next().unwrap()).collect();
+    assert_eq!(grades, ["3", "0", "4"], "{log}");
+    // The next launch: cat stands as graded Easy alone (in sixteen days), dog new.
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
+    assert!(review_line_of(&out).starts_with("answer мови 0/1 | dog | пес | "), "{out}");
+    // The review's last card graded and that taken back: it is back from «done».
+    let (_vault, out) = probe_notes(&[("n.md", "#@мови cat::кіт ^c-1\n")], &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,undo")]);
+    assert!(review_line_of(&out).starts_with("answer мови 0/1 | cat | кіт | "), "{out}");
+    // Nothing graded yet: nothing to take back.
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,undo")]);
+    assert_eq!(review_line_of(&out), "question мови 0/2 | cat (list hidden)", "{out}");
+}
+
+#[test]
 fn what_is_selected_in_a_note_becomes_a_card() {
     let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
     // «тварина» (9..16) the answer to a question asked.

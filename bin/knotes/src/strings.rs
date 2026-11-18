@@ -34,6 +34,8 @@ pub fn review_ahead(cards: usize, more: bool) -> String {
 pub const REVIEW_AHEAD_HELP: &str = "Повторити й ті картки колоди, яким за розкладом ще не час. Оцінки записуються та змінюють розклад.";
 pub const REVIEW_SHOW_ANSWER: &str = "Показати відповідь";
 pub const REVIEW_OPEN_NOTE: &str = "Відкрити нотатку";
+pub const REVIEW_UNDO: &str = "Скасувати оцінку";
+pub const REVIEW_UNDO_HELP: &str = "Зняти останню оцінку й показати картку знову (⌘Z)";
 pub const REVIEW_NOTHING: &str = "У цій колоді зараз нема чого повторювати.";
 pub const GRADES: [&str; 4] = ["Знову", "Важко", "Добре", "Легко"];
 /// "12 карток до повторення", "200+ карток до повторення".

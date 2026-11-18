@@ -126,3 +126,28 @@ pub fn parse_review(line: &str) -> Option<(i64, &str, Grade)> {
     (parts.next().is_none() && !card.is_empty()).then_some(())?;
     Some((when, card, Grade::from_number(grade)?))
 }
+
+/// What a log's line says: a review, or a review taken back (the user graded by mistake and
+/// undid it). A log is only ever added to, so a review is taken back by a line after it: the
+/// same time and card, the grade 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Logged<'a> {
+    Review(i64, &'a str, Grade),
+    /// The review of this card at this time is as if it had not been.
+    TakenBack(i64, &'a str),
+}
+
+/// The line that takes back the review of `card` logged at `when`.
+pub fn taken_back_line(when: i64, card: &str) -> String {
+    format!("{when}\t{card}\t0\n")
+}
+
+/// What a log's line says; none for a line that says nothing (cut short, or damaged).
+pub fn parse_logged(line: &str) -> Option<Logged<'_>> {
+    if let Some((when, card, grade)) = parse_review(line) {
+        return Some(Logged::Review(when, card, grade));
+    }
+    let mut parts = line.trim_end_matches(['\n', '\r']).split('\t');
+    let (when, card, grade) = (parts.next()?.parse().ok()?, parts.next()?, parts.next()?);
+    (parts.next().is_none() && !card.is_empty() && grade == "0").then_some(Logged::TakenBack(when, card))
+}

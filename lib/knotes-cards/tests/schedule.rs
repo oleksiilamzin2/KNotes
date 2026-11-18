@@ -1,4 +1,4 @@
-use knotes_cards::{Fsrs, Grade, Schedule, Steps, parse_review, review, review_line, schedule};
+use knotes_cards::{Fsrs, Grade, Logged, Schedule, Steps, parse_logged, parse_review, review, review_line, schedule, taken_back_line};
 
 const DAY: i64 = 86_400;
 
@@ -68,5 +68,17 @@ fn a_review_is_logged_as_a_line_and_read_back() {
     assert_eq!(parse_review(&line), Some((1_763_370_000, "c-a1b2c3", Grade::Hard)));
     for damaged in ["", "1763370000\tc-1", "x\tc-1\t3", "1\tc-1\t5", "1\t\t3", "1\tc-1\t3\textra"] {
         assert_eq!(parse_review(damaged), None, "{damaged:?}");
+    }
+}
+
+#[test]
+fn a_review_is_taken_back_by_a_line_after_it() {
+    let line = taken_back_line(1_763_370_000, "c-a1b2c3");
+    assert_eq!(line, "1763370000\tc-a1b2c3\t0\n");
+    assert_eq!(parse_logged(&line), Some(Logged::TakenBack(1_763_370_000, "c-a1b2c3")));
+    assert_eq!(parse_review(&line), None, "no review itself: an older Knotes passes it over");
+    assert_eq!(parse_logged(&review_line(5, "c-1", Grade::Good)), Some(Logged::Review(5, "c-1", Grade::Good)));
+    for damaged in ["", "1\tc-1", "x\tc-1\t0", "1\t\t0", "1\tc-1\t0\textra", "1\tc-1\t5"] {
+        assert_eq!(parse_logged(damaged), None, "{damaged:?}");
     }
 }

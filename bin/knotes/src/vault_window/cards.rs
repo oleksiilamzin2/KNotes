@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use knotes_cards::{DeckSettings, Fsrs, Grade, Memory, asks, card_id, give_id, make_card, review_line, scan_cards};
+use knotes_cards::{DeckSettings, Fsrs, Grade, Memory, asks, card_id, give_id, make_card, review_line, scan_cards, taken_back_line};
 use knotes_app::deck_rows;
 use knotes_core::{CardIndex, CardRow, CardState, DueCard};
 
@@ -71,6 +71,21 @@ pub(super) struct Review {
     /// came back at once looked new again, was sent to its first step again, and so on at
     /// every Good, each one logged.
     graded: std::collections::HashMap<String, knotes_cards::Schedule>,
+    /// The last grade given, while it can be taken back (⌘Z): one step, as far as a slip of
+    /// the finger goes.
+    last: Option<LastGrade>,
+}
+
+/// A grade as it was given: what taking it back puts right.
+struct LastGrade {
+    card: DueCard,
+    front: String,
+    back: String,
+    /// When it was logged, and where the card stood before it (none: a new card).
+    at: i64,
+    before: Option<knotes_cards::Schedule>,
+    /// Still learned after it, the card was put at the queue's end.
+    pushed: bool,
 }
 
 /// The card shown.
@@ -306,7 +321,7 @@ impl VaultWindow {
                 // note duplicated), the first is asked and the other not, a second time over.
                 let mut ids = std::collections::HashSet::new();
                 queue.retain(|card| card.id.as_ref().is_none_or(|id| ids.insert(id.clone())));
-                *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0, graded: std::collections::HashMap::new() });
+                *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0, graded: std::collections::HashMap::new(), last: None });
                 self.next_card();
             }
             Asked::ShowAnswer => {
@@ -316,6 +331,7 @@ impl VaultWindow {
                 self.show_review();
             }
             Asked::Grade(grade) => self.grade_card(grade),
+            Asked::Undo => self.undo_grade(),
             // A link in the card's text: the note it names (in a tab beside the review's), or
             // the web's address in the browser.
             Asked::Link(knotes_cards::CardLink::Note(target)) => self.open_chat_link(&target),
@@ -396,6 +412,7 @@ impl VaultWindow {
         };
         self.show_list_column(!matches!(shown, Shown::Card { .. }));
         self.review_view.show(Some(shown));
+        self.review_view.set_undo(self.review.borrow().as_ref().is_some_and(|review| review.last.is_some()));
     }
 
     fn card_state(&self, id: &str) -> Option<CardState> {
@@ -464,11 +481,49 @@ impl VaultWindow {
         if let Some(review) = self.review.borrow_mut().as_mut() {
             review.reviewed += 1;
             review.graded.insert(id, after);
-            if after.step.is_some() {
+            let pushed = after.step.is_some();
+            let (front, back) = review.current.as_ref().map(|c| (c.front.clone(), c.back.clone())).unwrap_or_default();
+            review.last = Some(LastGrade { card: card.clone(), front, back, at, before, pushed });
+            if pushed {
                 review.queue.push_back(card);
             }
         }
         self.next_card();
+    }
+
+    /// The last grade taken back (⌘Z, «Скасувати оцінку»): a line in the log says so (a log is
+    /// only added to), and the card shows again with its answer, to be graded as meant.
+    fn undo_grade(&self) {
+        let Some(vault) = self.vault() else { return };
+        let Some(last) = self.review.borrow_mut().as_mut().and_then(|review| review.last.take()) else { return };
+        let id = last.card.id.clone().unwrap_or_default();
+        let device = knotes_session::AppSettings::device_name(&knotes_session::app_data_dir());
+        if let Err(e) = FsVault::new(&vault).append_review(&device, &taken_back_line(last.at, &id)) {
+            self.tell_failed(&strings::review_failed(document_name(&last.card.path)), &e);
+            if let Some(review) = self.review.borrow_mut().as_mut() {
+                review.last = Some(last);
+            }
+            return;
+        }
+        if let Some(review) = self.review.borrow_mut().as_mut() {
+            review.reviewed = review.reviewed.saturating_sub(1);
+            // Where it stood before the grade, as this review knows it.
+            match last.before {
+                Some(before) => review.graded.insert(id.clone(), before),
+                None => review.graded.remove(&id),
+            };
+            // Out of the queue's end if the grade put it there; the card shown waits its turn again.
+            if last.pushed
+                && let Some(at) = review.queue.iter().rposition(|c| c.id.as_deref() == Some(id.as_str()))
+            {
+                review.queue.remove(at);
+            }
+            if let Some(shown) = review.current.take() {
+                review.queue.push_front(shown.card);
+            }
+            review.current = Some(Current { card: last.card, front: last.front, back: last.back, answered: true });
+        }
+        self.show_review();
     }
 
     /// The review, for the probe, and whether the list's column shows beside it.
@@ -484,6 +539,7 @@ impl VaultWindow {
                 "ahead" => Asked::StartAhead,
                 "show" => Asked::ShowAnswer,
                 "open" => Asked::OpenNote,
+                "undo" => Asked::Undo,
                 // `link0`: the first link of the card's text.
                 link if link.starts_with("link") => {
                     self.review_view.click_link(link[4..].parse().unwrap_or(0));

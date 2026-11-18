@@ -356,3 +356,17 @@ test missed, each of them relaunching the app after a grade:
   earlier lines were never taken. A log is read on only when a line ended at that place, else
   again from its start (a review already taken is not taken twice). One replaced by a log
   whose line ends just there is still read on: only what differs before that place is missed.
+
+## Built (2026-11-18): the last grade taken back
+
+- A grade given by a slip of the finger could not be undone, and moved the card's schedule
+  for long. «Скасувати оцінку» (⌘Z) under a card takes the last grade of this review back:
+  the card shows again with its answer, standing as before the grade (the review remembers
+  that), the card that had come after it waits its turn again, and a card the grade had put
+  at the queue's end leaves it. One step: the grade after an undo can be taken back in its
+  turn, the one before it not.
+- **A log is only added to**, so a review is taken back by a line after it: its time and
+  card with the grade 0 (`taken_back_line`, `Logged::TakenBack`). The index reads the log in
+  order, puts a review in and takes it out again, and schedules the card from what is left
+  (a card whose only review went has no schedule: new again). It goes with the log to the
+  user's other Macs; a Knotes older than this passes the line over and keeps the review.

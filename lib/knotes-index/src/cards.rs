@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use knotes_cards::{CardKind, DeckSettings, Fsrs, Grade, parse_review, scan_cards, schedule};
+use knotes_cards::{CardKind, DeckSettings, Fsrs, Grade, Logged, parse_logged, scan_cards, schedule};
 use knotes_core::{BoxError, CardIndex, CardRow, CardState, DeckCount, DeckStats, DueCard, FORECAST_DAYS, MATURE_DAYS, PAST_DAYS, Reviewed};
 use rusqlite::{Transaction, params};
 
@@ -69,8 +69,14 @@ impl SqliteIndex {
         let mut new = 0;
         {
             let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO reviews(card_id, at, grade) VALUES (?1, ?2, ?3)")?;
-            for (when, card, grade) in text[..whole].lines().filter_map(parse_review) {
-                if insert.execute(params![card, when, grade as i64])? > 0 {
+            let mut take_back = tx.prepare_cached("DELETE FROM reviews WHERE card_id = ?1 AND at = ?2")?;
+            // In the log's order: a review taken back is taken back by a line after it.
+            for logged in text[..whole].lines().filter_map(parse_logged) {
+                let (changed, card) = match logged {
+                    Logged::Review(when, card, grade) => (insert.execute(params![card, when, grade as i64])?, card),
+                    Logged::TakenBack(when, card) => (take_back.execute(params![card, when])?, card),
+                };
+                if changed > 0 {
                     new += 1;
                     cards.insert(card);
                 }
@@ -97,11 +103,17 @@ fn put_schedule(tx: &Transaction, id: &str, fsrs: &Fsrs, settings: &DeckSettings
     // Its deck's chance of recall and steps; a card no note holds, the defaults.
     let steps = deck.as_deref().map_or_else(knotes_cards::Steps::default, |deck| settings.steps(deck));
     let fsrs = Fsrs { retention: deck.map_or(fsrs.retention, |deck| settings.retention(&deck)), ..fsrs.clone() };
-    if let Some(s) = schedule(&fsrs, &steps, reviews) {
-        tx.prepare_cached(
-            "INSERT OR REPLACE INTO card_states(card_id, stability, difficulty, first, last, due, reviews, lapses, step, relearning) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )?
-        .execute(params![id, s.memory.stability, s.memory.difficulty, s.first, s.last, s.due, s.reviews, s.lapses, s.step, s.relearning])?;
+    match schedule(&fsrs, &steps, reviews) {
+        Some(s) => {
+            tx.prepare_cached(
+                "INSERT OR REPLACE INTO card_states(card_id, stability, difficulty, first, last, due, reviews, lapses, step, relearning) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?
+            .execute(params![id, s.memory.stability, s.memory.difficulty, s.first, s.last, s.due, s.reviews, s.lapses, s.step, s.relearning])?;
+        }
+        // Its only review taken back: never reviewed again.
+        None => {
+            tx.prepare_cached("DELETE FROM card_states WHERE card_id = ?1")?.execute([id])?;
+        }
     }
     Ok(())
 }

@@ -1,4 +1,4 @@
-use knotes_cards::{DeckSettings, Fsrs, Grade, review_line};
+use knotes_cards::{DeckSettings, Fsrs, Grade, review_line, taken_back_line};
 use knotes_core::{CardIndex, DeckCount, FileKind, IndexChange, IndexWriter, NoteParser, VaultFile};
 use knotes_index::SqliteIndex;
 use knotes_md::MarkdownParser;
@@ -198,4 +198,31 @@ fn a_new_card_is_learned_in_its_deck_s_steps() {
     // The deck's steps taken away: scheduled again, its first Good began its days.
     assert!(index.take_deck_settings(r#"{"мови": {"steps": []}}"#, &fsrs).unwrap());
     assert_eq!(stands(&index, "c-2"), (DAY, None, false), "Again with no step: its days too, the shortest");
+}
+
+#[test]
+fn a_review_taken_back_is_gone_and_its_card_stands_as_before_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-2\n");
+    let fsrs = Fsrs::default();
+    let now = 1_000_000;
+    // c-1 graded once and that taken back: new again. c-2 graded twice, the second taken back.
+    let log = review_line(now, "c-1", Grade::Easy)
+        + &taken_back_line(now, "c-1")
+        + &review_line(now, "c-2", Grade::Good)
+        + &review_line(now + 600, "c-2", Grade::Again)
+        + &taken_back_line(now + 600, "c-2");
+    assert_eq!(index.take_reviews("mac.tsv", 0, &log, &fsrs, &no_steps()).unwrap(), 5, "each line changed something");
+    assert_eq!(index.card_state("c-1").unwrap(), None, "never reviewed, as far as the schedule goes");
+    assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 2, 0, 1));
+    let dog = index.card_rows(None, None).unwrap().into_iter().find(|c| c.id.as_deref() == Some("c-2")).unwrap().reviewed.unwrap();
+    assert_eq!((dog.reviews, dog.lapses, dog.due), (1, 0, now + 3 * DAY), "as after its Good alone");
+    // The whole log read again (the index built anew): the same.
+    assert_eq!(index.take_reviews("mac.tsv", 0, &log, &fsrs, &no_steps()).unwrap(), 4, "the two taken back are put in and taken back again");
+    assert_eq!(index.card_state("c-1").unwrap(), None);
+    // The card graded anew after the undo: that review stands.
+    let more = review_line(now + 5, "c-1", Grade::Good);
+    index.take_reviews("mac.tsv", log.len() as u64, &more, &fsrs, &no_steps()).unwrap();
+    assert_eq!(index.card_state("c-1").unwrap().map(|s| s.last), Some(now + 5));
 }

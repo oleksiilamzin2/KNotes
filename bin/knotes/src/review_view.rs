@@ -26,6 +26,8 @@ pub enum Asked {
     Grade(Grade),
     /// The note the card is written in.
     OpenNote,
+    /// The last grade taken back, its card shown again.
+    Undo,
     /// A link in the card's text, clicked.
     Link(CardLink),
 }
@@ -91,6 +93,11 @@ define_class!(
         fn open(&self, _sender: Option<&AnyObject>) {
             self.ask(Asked::OpenNote);
         }
+
+        #[unsafe(method(reviewUndo:))]
+        fn undo(&self, _sender: Option<&AnyObject>) {
+            self.ask(Asked::Undo);
+        }
     }
 );
 
@@ -136,6 +143,9 @@ pub struct ReviewView {
     grades: Retained<NSStackView>,
     grade_buttons: [Retained<NSButton>; 4],
     open: Retained<NSButton>,
+    /// Takes the last grade back (⌘Z), while there is one of this review to take back.
+    undo: Retained<NSButton>,
+    links: Retained<NSStackView>,
     target: Retained<ReviewTarget>,
     shown: RefCell<Option<Shown>>,
 }
@@ -213,7 +223,17 @@ impl ReviewView {
         let starts = NSStackView::stackViewWithViews(&NSArray::from_slice(&both), mtm);
         starts.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         starts.setSpacing(8.0);
-        let rows: [&NSView; 4] = [&starts, &show, &grades, &open];
+        let undo = button(strings::REVIEW_UNDO, sel!(reviewUndo:), "z");
+        undo.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags::Command);
+        undo.setBordered(false);
+        undo.setContentTintColor(Some(&NSColor::linkColor()));
+        undo.setToolTip(Some(&NSString::from_str(strings::REVIEW_UNDO_HELP)));
+        undo.setHidden(true);
+        let quiet: [&NSView; 2] = [&open, &undo];
+        let links = NSStackView::stackViewWithViews(&NSArray::from_slice(&quiet), mtm);
+        links.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        links.setSpacing(18.0);
+        let rows: [&NSView; 4] = [&starts, &show, &grades, &links];
         let controls = NSStackView::stackViewWithViews(&NSArray::from_slice(&rows), mtm);
         controls.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
         controls.setAlignment(objc2_app_kit::NSLayoutAttribute::Leading);
@@ -262,7 +282,7 @@ impl ReviewView {
             controls.bottomAnchor().constraintEqualToAnchor(&column.bottomAnchor()),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
-        Self { view, header, text: card, text_scroll: scroll, charts_scroll, charts, start, ahead, starts, show, grades, grade_buttons, open, target, shown: RefCell::new(None) }
+        Self { view, header, text: card, text_scroll: scroll, charts_scroll, charts, start, ahead, starts, show, grades, grade_buttons, open, undo, links, target, shown: RefCell::new(None) }
     }
 
     /// Called with what a button asks for.
@@ -312,7 +332,16 @@ impl ReviewView {
         self.show.setHidden(!card || answered);
         self.grades.setHidden(!answered);
         self.open.setHidden(!card);
+        // With what is shown changed, no grade to take back until the window says there is.
+        self.undo.setHidden(true);
+        self.links.setHidden(!card);
         *self.shown.borrow_mut() = shown;
+    }
+
+    /// Whether a grade of this review can be taken back: its button shows then.
+    pub fn set_undo(&self, there: bool) {
+        self.undo.setHidden(!there);
+        self.links.setHidden(self.open.isHidden() && !there);
     }
 
     /// The text shown: `front`, and under a rule `back` when there is one; their links (wiki and
@@ -404,6 +433,7 @@ impl ReviewView {
             Asked::ShowAnswer => &self.show,
             Asked::Grade(grade) => &self.grade_buttons[grade as usize - 1],
             Asked::OpenNote => &self.open,
+            Asked::Undo => &self.undo,
             Asked::Link(_) => return,
         };
         if !button.isHiddenOrHasHiddenAncestor() {
