@@ -144,15 +144,6 @@ define_class!(
             self.scroll_by(-by);
         }
 
-        /// A secondary click (two fingers on a trackpad, the right button): the tab's menu, shown
-        /// here and not left to the toolbar the strip sits in.
-        #[unsafe(method(rightMouseDown:))]
-        fn right_mouse_down(&self, event: &NSEvent) {
-            if let Some(menu) = self.tab_menu(event) {
-                NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
-            }
-        }
-
         /// A tab's menu: it closes, or every other does.
         #[unsafe(method_id(menuForEvent:))]
         fn menu_for_event(&self, event: &NSEvent) -> Option<Retained<NSMenu>> {
@@ -250,6 +241,20 @@ impl TabStrip {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         // SAFETY: a plain view's init.
         unsafe { msg_send![super(Self::alloc(mtm).set_ivars(StripIvars::default())), init] }
+    }
+
+    /// A secondary click on a tab (two fingers on a trackpad, the right button): the tab's menu.
+    /// False when the click is on no tab.
+    fn secondary_click(&self, event: &NSEvent) -> bool {
+        let Some(menu) = self.tab_menu(event) else { return false };
+        // Driven by the tests, the menu is said, not shown (it would wait for a choice).
+        if crate::probe::enabled() {
+            let titles: Vec<String> = menu.itemArray().iter().map(|item| item.title().to_string()).collect();
+            println!("tab-menu-shown: {}", titles.join(" | "));
+        } else {
+            NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
+        }
+        true
     }
 
     /// The menu of the tab under the event: it closes, or every other does.
@@ -475,6 +480,12 @@ impl TabStrip {
         }
     }
 
+    /// The middle of `tab`, in the window (probe mode: where a click on it lands).
+    pub fn tab_middle(&self, tab: usize) -> Option<NSPoint> {
+        let place = *self.places().get(tab)?;
+        Some(self.convertPoint_toView(NSPoint::new(place.origin.x + place.size.width / 2.0, place.origin.y + place.size.height / 2.0), None))
+    }
+
     /// The middle of `tab`'s cross (probe mode: where a click on it lands).
     pub fn cross_middle(&self, tab: usize) -> Option<NSPoint> {
         let cross = cross_place(*self.places().get(tab)?);
@@ -567,3 +578,29 @@ impl TabStrip {
         objc2_app_kit::NSGraphicsContext::restoreGraphicsState_class();
     }
 }
+
+/// Has the app give a secondary click on a tab to the tab's strip, once for the app. A window
+/// keeps such a click in its toolbar for the toolbar's own menu (how its items show), and the
+/// strip, though the click lands on it, never hears of it: it is taken here, before the window
+/// has it.
+pub fn take_secondary_clicks() {
+    let handler = block2::RcBlock::new(|event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit gives the monitor a live event.
+        let taken = secondary_click_on_tab(unsafe { event.as_ref() });
+        if taken { std::ptr::null_mut() } else { event.as_ptr() }
+    });
+    // SAFETY: the block takes and gives an event as the monitor asks; it is kept for the app's
+    // life (the monitor is never removed).
+    let monitor = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(objc2_app_kit::NSEventMask::RightMouseDown, &handler) };
+    std::mem::forget(monitor);
+}
+
+/// Whether `event`, a secondary click, was on a tab of its window's strip, whose menu it showed.
+pub fn secondary_click_on_tab(event: &NSEvent) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    let Some(window) = event.window(mtm) else { return false };
+    // SAFETY: the content view's superview is the window's frame view, alive with the window.
+    let hit = window.contentView().and_then(|view| unsafe { view.superview() }).and_then(|frame| frame.hitTest(event.locationInWindow()));
+    hit.and_then(|view| view.downcast::<TabStrip>().ok()).is_some_and(|strip| strip.secondary_click(event))
+}
+

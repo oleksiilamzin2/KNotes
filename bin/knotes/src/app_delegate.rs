@@ -44,6 +44,8 @@ define_class!(
             let mtm = self.mtm();
             let app = NSApplication::sharedApplication(mtm);
             main_menu::install(&app, mtm);
+            // A secondary click on a tab is the tab's, not the toolbar's.
+            crate::tab_strip::take_secondary_clicks();
             // Another model for search by meaning: every window's chat and search take it.
             let this = objc2::Message::retain(self);
             crate::settings_window::on_meaning_change(move || this.meaning_changed());

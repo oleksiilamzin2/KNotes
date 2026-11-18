@@ -2498,6 +2498,16 @@ fn the_tab_closed_last_is_opened_again_by_its_key() {
 }
 
 #[test]
+fn a_secondary_click_on_a_tab_shows_the_tab_s_menu_not_the_toolbar_s() {
+    // The window keeps a secondary click in its toolbar for the toolbar's own menu: the strip,
+    // though the click lands on it, never heard of it, and the owner saw the toolbar's menu.
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_RIGHT_CLICK", "a.md")]);
+    assert!(out.contains("tab-right-click-hits: KnotesTabStrip\n"), "{out}");
+    assert!(out.contains("tab-menu-shown: Закрити вкладку | Закрити інші вкладки\n"), "{out}");
+}
+
+#[test]
 fn more_tabs_than_fit_keep_their_width_and_the_one_shown_is_in_view() {
     // Each PDF opens in a tab of its own: forty of them, far more than the strip holds.
     let vault = tempfile::tempdir().unwrap();

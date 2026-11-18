@@ -1112,6 +1112,24 @@ fn tabs_requested(window: &VaultWindow) {
         }
         window.window.displayIfNeeded();
     }
+    // `KNOTES_PROBE_TAB_RIGHT_CLICK=a.md`: a secondary click on that document's tab, sent to
+    // the window as the system sends it (so whatever takes it before the strip does here too).
+    if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_RIGHT_CLICK") {
+        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+        window.window.displayIfNeeded();
+        if let Some(at) = window.tab_strip.tab_of(&path).and_then(|tab| window.tab_strip.tab_middle(tab)) {
+            // SAFETY: the content view's superview is the window's frame view, alive with the window.
+            let hit = window.window.contentView().and_then(|v| unsafe { v.superview() }).and_then(|frame| frame.hitTest(at));
+            println!("tab-right-click-hits: {}", hit.map_or("nothing".to_owned(), |view| view.class().name().to_string_lossy().into_owned()));
+            let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(NSEventType::RightMouseDown, at, NSEventModifierFlags::empty(), 0.0, window.window.windowNumber(), None, 0, 1, 1.0);
+            if let Some(event) = event {
+                // As the app's watch for such clicks takes it; left alone, the window has it.
+                if !crate::tab_strip::secondary_click_on_tab(&event) {
+                    window.window.sendEvent(&event);
+                }
+            }
+        }
+    }
     // `KNOTES_PROBE_TAB_DRAG=a.md:2`: that document's tab dragged to that place (from 0).
     if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_DRAG")
         && let Some((path, to)) = spec.rsplit_once(':')
