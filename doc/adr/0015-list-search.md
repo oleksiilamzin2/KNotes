@@ -108,3 +108,7 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   (`SearchWorker`, one of the window's own), which asks the embedding model; the list is
   empty until its answer comes, and an answer to an older question is dropped. No scope, no
   columns or sorting as DEVONthink's have.
+- Later the same day: the document shown in the search's lower half shows no paragraph's markup
+  for the cursor's sake (`LivePreview::show_only`: nothing is typed there, and the first
+  heading stood with its `#`); and the list's «Aa» is drawn as the vault's search's, a switch
+  of one segment, readable while on.

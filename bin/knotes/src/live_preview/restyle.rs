@@ -237,7 +237,7 @@ impl LivePreview {
     /// (ADR 0034).
     pub(super) fn cursor_paragraph(&self, storage: &NSTextStorage, view: &NSTextView) -> (usize, usize) {
         let focused = view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r as *const _ as *const u8, view as *const _ as *const u8));
-        if self.ivars().embedded.get() && !focused {
+        if self.ivars().embedded.get() && !focused || self.ivars().shown_only.get() {
             return NOWHERE;
         }
         paragraph(storage, view.selectedRange())

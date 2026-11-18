@@ -504,6 +504,8 @@ impl SearchWindow {
         let live = crate::live_preview::LivePreview::new(mtm);
         preview.setDelegate(Some(ProtocolObject::from_ref(&*live)));
         live.attach(&preview);
+        // Nothing is typed there: no paragraph shows its `#` or `**` for the cursor's sake.
+        live.show_only();
         preview.setEditable(false);
         let clicks = live.clone();
         // Every click as with Cmd: a link is followed in the paragraph the cursor stands in too

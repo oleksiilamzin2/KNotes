@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, sel};
 use knotes_app::SearchMode;
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSButtonType, NSControlStateValueOn, NSControlSize, NSLayoutConstraint, NSScrollView, NSSearchField, NSSegmentDistribution, NSSegmentSwitchTracking, NSSegmentedControl, NSView};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSControlSize, NSLayoutConstraint, NSScrollView, NSSearchField, NSSegmentDistribution, NSSegmentSwitchTracking, NSSegmentedControl, NSView};
 use objc2_foundation::{NSArray, NSEdgeInsets, NSString};
 
 use crate::strings;
@@ -26,8 +26,10 @@ pub struct SearchBar {
     /// Files, content or meaning: rewrites the query's operator (`content:`, `meaning:`), which
     /// stays the truth.
     pub mode: Retained<NSSegmentedControl>,
-    /// «Aa» beside the switch: on while the query's case is ignored (as it starts).
-    case: Retained<NSButton>,
+    /// «Aa» beside the switch: on while the query's case is ignored (as it starts). A switch
+    /// of one segment, drawn as the one beside it: as a push button, on, it was a pale plate
+    /// whose letters could not be read (as in the vault's search, where the owner saw it).
+    case: Retained<NSSegmentedControl>,
     bar: Retained<NSView>,
     scroll: Retained<NSScrollView>,
 }
@@ -60,9 +62,10 @@ impl SearchBar {
         mode.setTranslatesAutoresizingMaskIntoConstraints(false);
         bar.addSubview(&mode);
         // SAFETY: no target yet (`set_target` sets it).
-        let case = unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str("Aa"), None, None, mtm) };
-        case.setButtonType(NSButtonType::PushOnPushOff);
-        case.setState(NSControlStateValueOn);
+        let case = unsafe {
+            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&NSArray::from_retained_slice(&[NSString::from_str("Aa")]), objc2_app_kit::NSSegmentSwitchTracking::SelectAny, None, None, mtm)
+        };
+        case.setSelected_forSegment(true, 0);
         case.setControlSize(NSControlSize::Small);
         case.setToolTip(Some(&NSString::from_str(strings::FIND_IGNORE_CASE)));
         case.setTranslatesAutoresizingMaskIntoConstraints(false);
@@ -101,13 +104,16 @@ impl SearchBar {
 
     /// Whether the query's case is ignored («Aa» on).
     pub fn ignore_case(&self) -> bool {
-        self.case.state() == NSControlStateValueOn
+        self.case.isSelectedForSegment(0)
     }
 
     /// A click on «Aa» (probe mode).
     pub fn click_case(&self) {
-        // SAFETY: a click on the row's own button.
-        unsafe { self.case.performClick(None) };
+        // As a click: the segment turned, its action sent to its target.
+        self.case.setSelected_forSegment(!self.case.isSelectedForSegment(0), 0);
+        let (action, target) = (self.case.action(), self.case.target());
+        // SAFETY: the control's own action and target.
+        unsafe { self.case.sendAction_to(action, target.as_deref()) };
     }
 
     /// Shows the mode of the current query in the switch.

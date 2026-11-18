@@ -205,6 +205,9 @@ pub struct Ivars {
     hovered_image: Cell<Option<usize>>,
     /// Styling a note embedded in another, in a view of its own (ADR 0034): no centred column.
     embedded: Cell<bool>,
+    /// A note only shown, never typed in (the vault's search): no paragraph's markup shows for
+    /// the cursor's sake.
+    shown_only: Cell<bool>,
     /// Each embedded note's box height (by `embed_key`): the room its line keeps.
     embed_heights: RefCell<HashMap<String, f64>>,
     /// An embedded note's own undo steps (the window's would undo the note around it).
@@ -474,6 +477,7 @@ impl LivePreview {
             table_columns: RefCell::new(HashMap::new()),
             hovered_image: Cell::new(None),
             embedded: Cell::new(false),
+            shown_only: Cell::new(false),
             embed_heights: RefCell::new(HashMap::new()),
             undo: RefCell::new(None),
             table_editing: Cell::new(false),
@@ -518,6 +522,11 @@ impl LivePreview {
     }
 
     /// Makes `view` keep its text at the readable width as it resizes, and draw formulas.
+    /// The note is only shown, never typed in: no paragraph shows its markup for the cursor.
+    pub fn show_only(&self) {
+        self.ivars().shown_only.set(true);
+    }
+
     pub fn attach(&self, view: &NSTextView) {
         view.setPostsFrameChangedNotifications(true);
         let observer: &AnyObject = self.as_ref();
