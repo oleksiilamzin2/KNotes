@@ -2,48 +2,6 @@
 
 use super::*;
 
-/// The space's tags as the snapshot counted them (ADR 0030), or counted here while the window's
-/// folders are ahead of it (a folder just made or put in a space, before the snapshot after).
-pub(super) fn counted_space_tags<'a>(state: &'a State, space: &SpaceFolders) -> std::borrow::Cow<'a, SpaceTags> {
-    let id = state.space.as_deref().unwrap_or_default();
-    match state.space_tags.iter().find(|counted| counted.id == id && counted.folders == *space) {
-        Some(counted) => std::borrow::Cow::Borrowed(counted),
-        None => std::borrow::Cow::Owned(SpaceTags::count(id, space.clone(), &state.tagged, &state.untagged)),
-    }
-}
-
-/// Tags and "Untagged" have no folder and no `.knotes.json`: their list options last the session.
-pub(super) fn session_settings_key(item: &SidebarItem) -> Option<String> {
-    matches!(item, SidebarItem::Tag(_) | SidebarItem::Untagged | SidebarItem::Deck(_)).then(|| item.key())
-}
-
-pub(super) fn folder_exists(node: &FolderNode, path: &str) -> bool {
-    node.path == path || node.children.iter().any(|c| folder_exists(c, path))
-}
-
-/// The folder at `path` in the tree.
-pub(super) fn find_folder_node<'a>(node: &'a FolderNode, path: &str) -> Option<&'a FolderNode> {
-    if node.path == path {
-        return Some(node);
-    }
-    node.children.iter().find_map(|c| find_folder_node(c, path))
-}
-
-/// Every tag of `nodes` and below them.
-pub(super) fn tag_names(nodes: &[TagNode]) -> HashSet<String> {
-    let mut names = HashSet::new();
-    let mut stack: Vec<&TagNode> = nodes.iter().collect();
-    while let Some(node) = stack.pop() {
-        names.insert(node.tag.clone());
-        stack.extend(node.children.iter());
-    }
-    names
-}
-
-pub(super) fn tag_exists(nodes: &[TagNode], tag: &str) -> bool {
-    nodes.iter().any(|n| n.tag == tag || tag_exists(&n.children, tag))
-}
-
 impl VaultWindow {
     /// Folders or tags under "All notes" (the toolbar switch); the list keeps what it shows.
     pub fn set_sidebar_mode(&self, mode: SidebarMode) {
@@ -61,34 +19,11 @@ impl VaultWindow {
             return;
         }
         self.sidebar_waiting.set(false);
-        let (model, rest_tags) = {
-            let state = self.state.borrow();
-            if state.sidebar_mode == SidebarMode::Cards {
-                let model = Sidebar::decks(&state.decks);
-                drop(state);
-                self.sidebar.set_model(model);
-                self.outline.reloadData();
-                return;
-            }
-            // In a space: its folders and tags (counted there), the inbox if it is one of them,
-            // its untagged notes; then the rest of the vault under a row of its own (ADR 0030).
-            // Its tags as the snapshot counted them: nothing counted here after every save.
-            let space = state.space_folders.as_ref();
-            let counted = space.map(|space| counted_space_tags(&state, space));
-            let split = space.map(|space| state.folders.split(space));
-            let untagged = counted.as_ref().map_or(state.untagged.len(), |counted| counted.untagged);
-            let rest_tags = counted.as_ref().map(|counted| tag_names(&counted.rest)).unwrap_or_default();
-            let (folders, tags) = match (&split, &counted) {
-                (Some((folders, _)), Some(counted)) => (folders, counted.tags.as_slice()),
-                _ => (&*state.folders, state.tags.as_slice()),
-            };
-            let rest = split.as_ref().zip(counted.as_ref()).map(|((_, rest_folders), counted)| RestPart { folders: rest_folders, tags: &counted.rest, notes: rest_folders.notes });
-            let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
-            let inbox = state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)).then_some(inbox);
-            let model = Sidebar::new(folders, tags, state.sidebar_mode, inbox.as_deref(), untagged, &|path| resolve_list_settings(path, &state.rules).include_subfolders, rest, state.trash.len());
-            (model, rest_tags)
-        };
-        self.state.borrow_mut().rest_tags = rest_tags;
+        // What it holds is knotes-app's to say (`VaultState::sidebar`).
+        let (model, rest_tags) = self.state.borrow().sidebar(strings::NEW_NOTES_FOLDER);
+        if let Some(rest_tags) = rest_tags {
+            self.state.borrow_mut().rest_tags = rest_tags;
+        }
         self.sidebar.set_model(model);
         self.outline.reloadData();
     }
@@ -135,55 +70,25 @@ impl VaultWindow {
             return;
         }
         let mut state = self.state.borrow_mut();
-        let selection = state.selection.clone();
-        let (title, listed) = match &selection {
-            SidebarItem::Folder(path) => (path.rsplit('/').next().unwrap_or(path).to_owned(), None),
-            SidebarItem::Tag(tag) => (format!("#{tag}"), Some(Arc::new(self.notes_with_tag(&mut state, tag)))),
-            // A deck: the notes its cards are written in, its sub-decks' too (ADR 0037).
-            SidebarItem::Deck(deck) => (deck.rsplit('/').next().unwrap_or(deck).to_owned(), Some(Arc::new(self.notes_with_deck(&mut state, deck)))),
-            SidebarItem::Untagged => (strings::UNTAGGED.to_owned(), Some(Arc::clone(&state.untagged))),
-            SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), None),
-            _ => (strings::ALL_NOTES.to_owned(), None),
+        let title = match &state.selection {
+            SidebarItem::Folder(path) => path.rsplit('/').next().unwrap_or(path).to_owned(),
+            SidebarItem::Tag(tag) => format!("#{tag}"),
+            SidebarItem::Deck(deck) => deck.rsplit('/').next().unwrap_or(deck).to_owned(),
+            SidebarItem::Untagged => strings::UNTAGGED.to_owned(),
+            SidebarItem::Rest => strings::REST_OF_VAULT.to_owned(),
+            _ => strings::ALL_NOTES.to_owned(),
         };
-        let filter = match (&selection, &listed) {
-            (SidebarItem::Folder(path), _) => ListFilter::Folder(path),
-            (_, Some(paths)) => ListFilter::Paths(paths),
-            _ => ListFilter::All,
-        };
-        let folder = match &selection {
-            SidebarItem::Folder(path) => path.as_str(),
-            _ => "",
-        };
-        let session_key = session_settings_key(&selection);
-        let settings = match &session_key {
-            Some(key) => state.tag_settings.get(key).copied().unwrap_or_else(|| resolve_list_settings("", &state.rules)),
-            None => resolve_list_settings(folder, &state.rules),
-        };
-        self.list_menu.update(&settings, session_key.is_none());
-        // Search results replace the list; it is built only without them (50k notes: ~2 ms).
-        // What a search here covers: the list's notes and its PDFs (ADR 0022).
-        let searching = !state.search.trim().is_empty();
-        // In a space: its notes, then the rest of the list's under «Решта бази»; a row of the
-        // sidebar's «Решта бази» lists the notes outside the space (ADR 0030).
-        let outside = match &selection {
-            SidebarItem::Rest => true,
-            SidebarItem::Folder(path) => state.space_folders.as_ref().is_some_and(|space| !space.holds_folder(path)),
-            SidebarItem::Tag(tag) => state.rest_tags.contains(tag),
-            _ => false,
-        };
-        let space = state.space_folders.as_ref().map(|space| if outside { SpaceList::Rest(space) } else { SpaceList::Space(space) });
-        *self.search_scope.borrow_mut() = (searching && !matches!(selection, SidebarItem::AllNotes)).then(|| list_scope(&state.rows, &filter, &settings, space));
-        *self.search_space.borrow_mut() = match space {
-            Some(SpaceList::Space(folders)) if searching => Some(list_space_scope(&state.rows, &filter, &settings, folders)),
-            _ => None,
-        };
+        // What it holds is knotes-app's to say (`VaultState::listed`): the notes of the row, or
+        // a search's finds among them.
+        self.ensure_reader(&mut state);
+        let among = state.notes_listed();
         let results = self.search_results.borrow();
-        let items = match results.as_ref().filter(|_| searching) {
-            Some(results) => search_list(&state.rows, &filter, &settings, &results.titles, &results.content, space),
-            None => build_note_list(&state.rows, &filter, &settings, &note_list_view::now(), space),
-        };
+        let listed = state.listed(among.as_deref(), results.as_ref().map(|r| (r.titles.as_slice(), r.content.as_slice())), &note_list_view::now());
         drop(results);
-        self.list.set_items(Arc::clone(&state.rows), items);
+        self.list_menu.update(&listed.settings, listed.session_key.is_none());
+        *self.search_scope.borrow_mut() = listed.scope;
+        *self.search_space.borrow_mut() = listed.space_scope;
+        self.list.set_items(Arc::clone(&state.rows), listed.items);
         drop(state);
         self.table.reloadData();
         self.highlight_open_note();
@@ -215,35 +120,8 @@ impl VaultWindow {
         self.highlighting.set(false);
     }
 
-    pub(super) fn notes_with_tag(&self, state: &mut State, tag: &str) -> HashSet<String> {
-        self.ensure_reader(state);
-        state.reader.as_ref().and_then(|r| r.notes_with_tag(tag).ok()).unwrap_or_default().into_iter().collect()
-    }
-
-    pub(super) fn notes_with_deck(&self, state: &mut State, deck: &str) -> HashSet<String> {
-        use knotes_core::CardIndex;
-        self.ensure_reader(state);
-        let notes = state.reader.as_ref().and_then(|r| r.deck_notes(deck).ok()).unwrap_or_default();
-        // In a space, its notes only: the deck is the space's part of it.
-        notes.into_iter().filter(|path| state.space.as_ref().is_none_or(|id| state.spaces.holds(path, id))).collect()
-    }
-
     pub(super) fn exists(&self, item: &SidebarItem) -> bool {
-        let state = self.state.borrow();
-        match item {
-            // The inbox row shows before its folder exists.
-            // Every folder shows, in a space or under «Решта бази» (ADR 0030); the inbox row
-            // before its folder exists, but not outside the space.
-            SidebarItem::Folder(path) => {
-                let inbox = new_notes_folder(&state.rules, strings::NEW_NOTES_FOLDER);
-                folder_exists(&state.folders, path) || (*path == inbox && state.space_folders.as_ref().is_none_or(|space| space.holds_folder(&inbox)))
-            }
-            SidebarItem::Rest => state.space.is_some(),
-            SidebarItem::Deleted => !state.trash.is_empty(),
-            SidebarItem::Tag(tag) => tag_exists(&state.tags, tag),
-            SidebarItem::Deck(deck) => tag_exists(&state.decks, deck),
-            _ => true,
-        }
+        self.state.borrow().exists(item, strings::NEW_NOTES_FOLDER)
     }
 
     /// The path bar's click: the vault's notes (`""`) or a folder's, in the list, its row

@@ -57,3 +57,11 @@ named Knotes with bundle id `app.knotes.Knotes`.
   tags, a table's column, the AI's `list_notes` by name): by code points є, і, ї and ґ (and ё) came
   after я, "Інжир" and "Ґанок" after "Яблуко". `natural_cmp` and `natural_key` moved to
   knotes-core for all of them; the alphabets of Ukrainian and Russian are one order.
+- **What the window shows is decided outside it** (2026-11-18). The app's binary grew to hold
+  most of the code, its rules tested only by launching it. They move to libraries, the window
+  left to ask and to draw: `knotes_app::VaultState` is the window's state (the last snapshot,
+  the row selected, its space, the search typed) and says what the sidebar and the note list
+  hold; `knotes_app::search` what a search finds (ADR 0015); `knotes_app::ReviewSession` a
+  review under way (ADR 0037); `knotes-assistant` the chat's and the vectors' threads (ADR
+  0027). A rule is tested where it lives, with no window; the window's tests keep what only
+  a window shows.

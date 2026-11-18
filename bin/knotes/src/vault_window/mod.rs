@@ -16,7 +16,7 @@ mod probe_actions;
 mod ai;
 mod cards;
 
-use self::{completion::*, editing::*, find::*, list::*};
+use self::{completion::*, editing::*, find::*};
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -27,17 +27,15 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{Moves, Relinks, embed_images, list_scope, pasted_image_name, plan_relinks, 
-    FolderNode, FolderRules, History, ListFilter, ListOption, ListSettings, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    search_list, with_search_mode, build_note_list, new_notes_folder, ListItem, trash_days, SpaceFolders, SpaceList, SpaceTags, RestPart, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder, list_space_scope,
-    note_file_stem, resolve_list_settings, unique_file_path, unique_note_path,
+use knotes_app::{find_folder_node, session_settings_key, tag_exists, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
+    FolderRules, ListOption, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
+    with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder,     note_file_stem, resolve_list_settings, unique_file_path, unique_note_path,
 };
-use knotes_core::{AttachmentStore, CatalogEntry, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TagIndex, TrashEntry, TrashStore, VaultReader};
+use knotes_core::{AttachmentStore, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, TagCompletion, embedded_part, conflict_path, link_completion, note_headings, subpath_offset, tag_completion, tag_typed, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
-use knotes_search::TitleIndex;
 use knotes_session::{Event, Snapshot};
 use knotes_spaces::{FolderSpace, Space, SpaceColor, Spaces, new_space_id, set_folder_space, set_spaces};
 use knotes_vault::FsVault;
@@ -69,63 +67,8 @@ use crate::space_switcher::SpaceSwitcher;
 use crate::toolbar::{self, ToolbarDelegate};
 use crate::{probe, strings, window};
 
-/// What the window shows: the last snapshot and the selected sidebar row.
-struct State {
-    selection: SidebarItem,
-    rows: Arc<Vec<NoteRow>>,
-    rules: Arc<HashMap<String, FolderRules>>,
-    folders: Arc<FolderNode>,
-    /// Every folder of the vault, empty ones too (the snapshot's list).
-    folder_paths: Arc<Vec<String>>,
-    tags: Arc<Vec<TagNode>>,
-    /// The decks of the notes' cards as a tree (ADR 0037), each with its cards to review.
-    decks: Arc<Vec<TagNode>>,
-    /// Notes without any tag (the "Untagged" row), and every tag with its note, a note's
-    /// together (a space's tags count from them, ADR 0030): the last snapshot's.
-    untagged: Arc<HashSet<String>>,
-    tagged: Arc<Vec<(String, String)>>,
-    /// Each space's tags and untagged notes, as the last snapshot counted them.
-    space_tags: Arc<Vec<SpaceTags>>,
-    index_dir: Option<PathBuf>,
-    vault: Option<PathBuf>,
-    /// List settings of tag views: tags have no folder and no `.knotes.json`; kept for the session.
-    tag_settings: HashMap<String, ListSettings>,
-    history: History,
-    /// Read-only index connection, opened on first need (the index exists after the first snapshot).
-    reader: Option<SqliteIndex>,
-    /// Link resolution of the last snapshot (ADR 0013); `None` until the first one.
-    links: Option<Arc<LinkTargets>>,
-    /// Every vault file of the last snapshot, to resolve links as they will be after a move.
-    catalog: Arc<Vec<CatalogEntry>>,
-    /// Title search of the last snapshot, for link completion.
-    titles: Option<Arc<TitleIndex>>,
-    /// Folders or tags under "All notes".
-    sidebar_mode: SidebarMode,
-    /// Text in the search field over the list; the list shows its results when not empty.
-    search: String,
-    /// The vault's spaces (ADR 0030), the window's (none: the whole vault) and its folders.
-    spaces: Arc<Spaces>,
-    space: Option<String>,
-    space_folders: Option<SpaceFolders>,
-    /// The tags the sidebar lists under «Решта бази» (none there in the space).
-    rest_tags: HashSet<String>,
-    /// The recently deleted, the newest first (ADR 0032).
-    trash: Arc<Vec<TrashEntry>>,
-    /// What is kept from the AI (ADR 0036).
-    ai: Arc<knotes_spaces::KeptFromAi>,
-}
-
-impl State {
-    /// The space's folders again, after a snapshot or a change of space; none when the vault
-    /// no longer has the space.
-    fn fit_space(&mut self) {
-        if self.space.as_ref().is_some_and(|id| self.spaces.get(id).is_none()) {
-            self.space = None;
-        }
-        self.space_folders = self.space.as_ref().map(|id| SpaceFolders::new(&self.folders, &self.spaces, id));
-    }
-
-}
+/// What the window shows (knotes-app's `VaultState`), over this app's index.
+type State = knotes_app::VaultState<SqliteIndex, LinkTargets>;
 
 /// Autosave runs after this long without edits (ADR 0011).
 const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
@@ -392,34 +335,7 @@ impl VaultWindow {
         search_bar.set_meaning_on(knotes_assistant::meaning::model().is_some());
         let tab_strip = crate::tab_strip::TabStrip::new(mtm);
         toolbar::install(&window, &toolbar, &search_bar.field, &tab_strip);
-        let state = State {
-            selection: SidebarItem::AllNotes,
-            rows: Arc::new(Vec::new()),
-            rules: Arc::new(HashMap::new()),
-            folders: Arc::new(FolderNode::default()),
-            folder_paths: Arc::new(Vec::new()),
-            tags: Arc::new(Vec::new()),
-            decks: Arc::default(),
-            untagged: Arc::default(),
-            tagged: Arc::default(),
-            space_tags: Arc::default(),
-            index_dir: None,
-            vault: None,
-            tag_settings: HashMap::new(),
-            history: History::default(),
-            reader: None,
-            links: None,
-            catalog: Arc::new(Vec::new()),
-            titles: None,
-            sidebar_mode: SidebarMode::Folders,
-            search: String::new(),
-            spaces: Arc::new(Spaces::default()),
-            space: None,
-            space_folders: None,
-            rest_tags: HashSet::new(),
-            trash: Arc::new(Vec::new()),
-            ai: Arc::default(),
-        };
+        let state = State::default();
         let this = Rc::new(Self {
             window,
             sidebar,
@@ -1086,7 +1002,7 @@ impl VaultWindow {
             // A deck's review stays a tab while the deck has cards.
             let decks = Arc::clone(&self.state.borrow().decks);
             self.tabs.borrow_mut().retain(|p| match cards::deck_of_tab(p) {
-                Some(deck) => list::tag_exists(&decks, deck),
+                Some(deck) => tag_exists(&decks, deck),
                 None => vault.join(p).is_file(),
             });
         }
