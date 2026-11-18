@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::{FolderSpace, SHARED, Space};
+use crate::{FolderSpace, SHARED, Space, SpaceColor};
 
 /// A folder's rules file with its space set as `space` says, its other keys kept.
 pub fn set_folder_space(rules: &str, space: FolderSpace) -> Result<String, String> {
@@ -73,6 +73,13 @@ pub fn set_spaces(rules: &str, spaces: &[Space]) -> Result<String, String> {
         root.insert("spaces".into(), Value::Array(listed));
     }
     Ok(pretty(&root))
+}
+
+/// A new space named `name`, after `spaces`: an id from its name that no other has, and the
+/// first colour no space has (round the palette again when all are taken).
+pub fn new_space(spaces: &[Space], name: &str) -> Space {
+    let color = SpaceColor::ALL.into_iter().find(|color| spaces.iter().all(|space| space.color != *color)).unwrap_or(SpaceColor::ALL[spaces.len() % SpaceColor::ALL.len()]);
+    Space { id: new_space_id(spaces, name), name: name.to_owned(), color }
 }
 
 /// An id for a new space named `name`: its letters in Latin (Ukrainian transliterated), lower

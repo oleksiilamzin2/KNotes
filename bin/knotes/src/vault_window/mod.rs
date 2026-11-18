@@ -37,7 +37,7 @@ use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, TagCompletion, embedded_part, conflict_path, link_completion, note_headings, subpath_offset, tag_completion, tag_typed, utf16_offsets};
 use knotes_index::{LinkTargets, SqliteIndex};
 use knotes_session::{Event, Snapshot};
-use knotes_spaces::{FolderSpace, Space, SpaceColor, Spaces, new_space_id, set_folder_space, set_spaces};
+use knotes_spaces::{FolderSpace, Spaces, set_folder_space, set_spaces};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::MainThreadMarker;

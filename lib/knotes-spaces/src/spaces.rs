@@ -64,6 +64,23 @@ impl Spaces {
         Self::from_rules(parsed.iter().map(|(folder, rules)| (*folder, rules)))
     }
 
+    /// What a folder under `parent` must say to be in the space `id` (none: in no space): nothing
+    /// when its parent's is that already, unless the parent is in every space (then the folder
+    /// says its own).
+    pub fn says_for<'a>(&self, parent: &str, id: Option<&'a str>) -> crate::FolderSpace<'a> {
+        let inherited = (!self.shared(parent)).then(|| self.of_folder(parent).map(|space| space.id.as_str()));
+        match id {
+            _ if inherited == Some(id) => crate::FolderSpace::Inherit,
+            Some(id) => crate::FolderSpace::In(id),
+            None => crate::FolderSpace::None,
+        }
+    }
+
+    /// What a folder under `parent` must say to be in every space: nothing when its parent is.
+    pub fn says_for_every(&self, parent: &str) -> crate::FolderSpace<'static> {
+        if self.shared(parent) { crate::FolderSpace::Inherit } else { crate::FolderSpace::Shared }
+    }
+
     /// The spaces, in the order the root lists them.
     pub fn list(&self) -> &[Space] {
         &self.list

@@ -17,6 +17,13 @@ pub enum SpaceColor {
 impl SpaceColor {
     pub const ALL: [Self; 9] = [Self::Blue, Self::Purple, Self::Pink, Self::Red, Self::Orange, Self::Yellow, Self::Green, Self::Teal, Self::Gray];
 
+    /// One's own colour, from red, green and blue as the colour panel gives them (0 to 1; what
+    /// is past either end is the end).
+    pub fn from_srgb(red: f64, green: f64, blue: f64) -> Self {
+        let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Self::Custom(byte(red), byte(green), byte(blue))
+    }
+
     /// Its name in the rules file: a system colour's, or `#rrggbb` for one of one's own.
     pub fn name(self) -> String {
         let name = match self {

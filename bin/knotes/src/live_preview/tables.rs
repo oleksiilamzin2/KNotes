@@ -137,45 +137,24 @@ impl LivePreview {
     /// line break a space; typed between cells it goes into the nearest one; deleting a hidden
     /// pipe or space, or across cells, does nothing. Those changes are made right after.
     pub(super) fn allow_table_edit(&self, view: &NSTextView, range: NSRange, text: &str) -> bool {
-        let styled = self.ivars().styled.borrow();
         let (start, end) = (range.location, range.location + range.length);
-        // Above a table: what is removed up to its start must leave it starting a line, or the
-        // line above joins its header (`Intro| a | b |`) and it is a table no more.
-        if range.length > 0 && styled.tables.iter().any(|t| t.range.start == end) {
-            let at_line_start = start == 0 || view.string().characterAtIndex(start - 1) == u16::from(b'\n');
-            return at_line_start || text.ends_with('\n');
-        }
-        // Typed at a table's start (the cursor may stand there, before its first cell): on a line
-        // of its own above it, so that a note starting with a table can get a line before it
-        // (it went into the first cell).
-        if range.length == 0 && !self.ivars().table_editing.get() && styled.tables.iter().any(|t| t.range.start == start) {
-            if !text.ends_with('\n') {
-                self.ivars().line_above_table.set(Some(start + text.encode_utf16().count()));
+        let at_line_start = start == 0 || view.string().characterAtIndex(start - 1) == u16::from(b'\n');
+        // What may be typed where is knotes-editor's to say (`table_typing`).
+        let typing = knotes_editor::table_typing(&self.ivars().styled.borrow().tables, start, end, text, at_line_start, self.ivars().table_editing.get());
+        match typing {
+            TableTyping::Allow => true,
+            TableTyping::AboveTable(line_break_at) => {
+                if line_break_at.is_some() {
+                    self.ivars().line_above_table.set(line_break_at);
+                }
+                true
             }
-            return true;
-        }
-        let Some(table) = styled.tables.iter().find(|t| start < t.range.end && (end > t.range.start || (start == end && start >= t.range.start))) else {
-            return true;
-        };
-        if start <= table.range.start && end >= table.range.end {
-            return true;
-        }
-        let in_cell = table.rows.iter().flat_map(|r| r.cells.iter()).any(|c| c.start <= start && end <= c.end);
-        let clean = cell_text(text);
-        if in_cell {
-            if clean != text {
-                self.edit_later(view, range, clean);
-                return false;
+            TableTyping::Refuse => false,
+            TableTyping::Instead { at, len, text } => {
+                self.edit_later(view, NSRange::new(at, len), text);
+                false
             }
-            return true;
         }
-        if range.length == 0
-            && !text.is_empty()
-            && let Some(at) = nearest_cell_edge(&styled, start)
-        {
-            self.edit_later(view, NSRange::new(at, 0), clean);
-        }
-        false
     }
 
     /// Replaces `range` with `text` once the edit being checked is over (changing the text from
@@ -218,7 +197,7 @@ impl LivePreview {
         }
         let at = selection.location;
         let styled = self.ivars().styled.borrow();
-        let Some((t, row, column)) = cell_at(&styled, at) else { return false };
+        let Some((t, row, column)) = cell_at(&styled.tables, at) else { return false };
         let table = &styled.tables[t];
         let rows = table.rows.len();
         let cell = &table.rows[row].cells[column];
@@ -284,7 +263,7 @@ impl LivePreview {
             let styled = self.ivars().styled.borrow();
             // A note starting with a table keeps its cursor at its very start, before the first
             // cell: the only place to type a line above it.
-            if cell_at(&styled, at).is_some() || (at == 0 && styled.tables.first().is_some_and(|t| t.range.start == 0)) { None } else { nearest_cell_edge(&styled, at) }
+            if cell_at(&styled.tables, at).is_some() || (at == 0 && styled.tables.first().is_some_and(|t| t.range.start == 0)) { None } else { nearest_cell_edge(&styled.tables, at) }
         };
         if let Some(edge) = edge.filter(|&e| e != at) {
             view.setSelectedRange(NSRange::new(edge, 0));
@@ -412,7 +391,7 @@ impl LivePreview {
     /// The cursor in a cell of a column scrolled out of view, or partly: the table scrolls to
     /// show the column.
     pub(super) fn show_cursor_column(&self, view: &NSTextView, at: usize) {
-        let Some((t, _, column)) = cell_at(&self.ivars().styled.borrow(), at) else { return };
+        let Some((t, _, column)) = cell_at(&self.ivars().styled.borrow().tables, at) else { return };
         let Some(widths) = self.ivars().table_widths.borrow().get(&t).cloned() else { return };
         let scroll = self.ivars().table_scroll.borrow().get(&t).copied().unwrap_or(0.0);
         let room = text_column(view);
@@ -611,7 +590,7 @@ impl LivePreview {
     pub(super) fn cell_menu(&self, index: usize) -> Option<(usize, Vec<(&'static str, TableAction)>)> {
         let cell = {
             let styled = self.ivars().styled.borrow();
-            cell_at(&styled, index).or_else(|| nearest_cell_edge(&styled, index).and_then(|edge| cell_at(&styled, edge)))
+            cell_at(&styled.tables, index).or_else(|| nearest_cell_edge(&styled.tables, index).and_then(|edge| cell_at(&styled.tables, edge)))
         };
         let (t, row, column) = cell?;
         let mut items = self.table_menu(TableControl::RowHandle(t, row));
@@ -790,37 +769,4 @@ pub(super) fn table_row_at(layout: &NSTextLayoutManager, content: &objc2_app_kit
     // Not past the row's own lines (the note's last row also holds the empty line after it).
     let (top, bottom) = row_band(layout, content, start)?;
     (y >= top && y < bottom).then_some((t, row))
-}
-
-/// The table, row and cell whose text holds `index` (its end too).
-pub(super) fn cell_at(styled: &Highlight, index: usize) -> Option<(usize, usize, usize)> {
-    styled.tables.iter().enumerate().filter(|(_, t)| t.range.start <= index && index <= t.range.end).find_map(|(t, table)| {
-        table.rows.iter().enumerate().find_map(|(r, row)| row.cells.iter().position(|c| c.start <= index && index <= c.end).map(|c| (t, r, c)))
-    })
-}
-
-/// The nearest cell edge to `index` when it lies on a table's line outside its cells (on a
-/// hidden pipe or space, or the folded delimiter row).
-pub(super) fn nearest_cell_edge(styled: &Highlight, index: usize) -> Option<usize> {
-    let table = styled.tables.iter().find(|t| t.range.start <= index && index < t.range.end)?;
-    if table.delimiter.start <= index && index <= table.delimiter.end {
-        return table.rows.first()?.cells.last().map(|c| c.end);
-    }
-    let row = table.rows.iter().find(|r| r.range.start <= index && index <= r.range.end)?;
-    row.cells.iter().flat_map(|c| [c.start, c.end]).min_by_key(|p| p.abs_diff(index))
-}
-
-/// `text` fit for a table cell: a `|` escaped, line breaks as spaces.
-pub(super) fn cell_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut escaped = false;
-    for c in text.chars() {
-        match c {
-            '|' if !escaped => out.push_str("\\|"),
-            '\n' | '\r' => out.push(' '),
-            _ => out.push(c),
-        }
-        escaped = c == '\\' && !escaped;
-    }
-    out
 }

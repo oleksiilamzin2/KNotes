@@ -46,8 +46,7 @@ impl VaultWindow {
         let parent = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
         // Every space: said here unless the parent says it already.
         if choice == FolderChoice::EverySpace {
-            let wanted = if spaces.shared(parent) { FolderSpace::Inherit } else { FolderSpace::Shared };
-            write(folder, rules_of(folder).and_then(|text| set_folder_space(&text, wanted)));
+            write(folder, rules_of(folder).and_then(|text| set_folder_space(&text, spaces.says_for_every(parent))));
             return;
         }
         let id = match choice {
@@ -56,10 +55,9 @@ impl VaultWindow {
             FolderChoice::NewSpace => {
                 let Some(name) = rename_dialog::ask_space_name(MainThreadMarker::from(&*self.window)) else { return };
                 let mut list = spaces.list().to_vec();
-                let id = new_space_id(&list, &name);
-                // The first colour no space has, else round the palette.
-                let color = SpaceColor::ALL.into_iter().find(|c| list.iter().all(|s| s.color != *c)).unwrap_or(SpaceColor::ALL[list.len() % SpaceColor::ALL.len()]);
-                list.push(Space { id: id.clone(), name, color });
+                let made = knotes_spaces::new_space(&list, &name);
+                let id = made.id.clone();
+                list.push(made);
                 if !write("", rules_of("").and_then(|text| set_spaces(&text, &list))) {
                     return;
                 }
@@ -67,12 +65,7 @@ impl VaultWindow {
             }
         };
         // The parent's space, unless it is in every space (then this folder must say its own).
-        let inherited = (!spaces.shared(parent)).then(|| spaces.of_folder(parent).map(|s| s.id.clone()));
-        let wanted = match &id {
-            _ if inherited.as_ref() == Some(&id) => FolderSpace::Inherit,
-            Some(id) => FolderSpace::In(id),
-            None => FolderSpace::None,
-        };
+        let wanted = spaces.says_for(parent, id.as_deref());
         write(folder, rules_of(folder).and_then(|text| set_folder_space(&text, wanted)));
     }
 

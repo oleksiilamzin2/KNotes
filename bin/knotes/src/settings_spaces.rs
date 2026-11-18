@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use knotes_core::FolderRulesStore;
-use knotes_spaces::{Space, SpaceColor, Spaces, new_space_id, set_spaces};
+use knotes_spaces::{Space, SpaceColor, Spaces, set_spaces};
 use knotes_vault::FsVault;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -80,8 +80,7 @@ define_class!(
         fn color_picked(&self, sender: &NSColorPanel) {
             let Some(row) = self.ivars().picking.get() else { return };
             let Some(srgb) = sender.color().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) else { return };
-            let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-            let color = SpaceColor::Custom(byte(srgb.redComponent()), byte(srgb.greenComponent()), byte(srgb.blueComponent()));
+            let color = SpaceColor::from_srgb(srgb.redComponent(), srgb.greenComponent(), srgb.blueComponent());
             self.edit(row, |list, i| list[i].color = color);
         }
 
@@ -110,9 +109,7 @@ define_class!(
         #[unsafe(method(addSpace:))]
         fn add(&self, _sender: Option<&AnyObject>) {
             let Some(mut list) = self.spaces() else { return };
-            let color = SpaceColor::ALL.into_iter().find(|c| list.iter().all(|s| s.color != *c)).unwrap_or(SpaceColor::ALL[list.len() % SpaceColor::ALL.len()]);
-            let id = new_space_id(&list, strings::NEW_SPACE_NAME);
-            list.push(Space { id, name: strings::NEW_SPACE_NAME.to_owned(), color });
+            list.push(knotes_spaces::new_space(&list, strings::NEW_SPACE_NAME));
             self.write(&list);
         }
     }

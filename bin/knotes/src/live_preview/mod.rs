@@ -28,7 +28,7 @@ use std::sync::Arc;
 use dispatch2::DispatchQueue;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
-use knotes_editor::{CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width, CodeHighlighter, CodeRun, CodeToken, utf16_offsets};
+use knotes_editor::{TableTyping, cell_at, nearest_cell_edge, CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width, CodeHighlighter, CodeRun, CodeToken, utf16_offsets};
 
 use crate::image_loader::{self, DeferredImage};
 use crate::preview_fragment::{Anchor, BULLET_ROOM, EXTERNAL_ROOM, Mark, PDF_CAPTION, PREVIEW_GAP, PreviewFragment, TASK_ROOM, TableControls, table_controls};

@@ -1,4 +1,4 @@
-use knotes_spaces::{FolderSpace, Space, SpaceColor, Spaces, new_space_id, set_folder_space, set_spaces};
+use knotes_spaces::{FolderSpace, Space, SpaceColor, Spaces, new_space, new_space_id, set_folder_space, set_spaces};
 use serde_json::{Value, json};
 
 fn space(id: &str, name: &str, color: SpaceColor) -> Space {
@@ -46,4 +46,42 @@ fn a_new_space_gets_an_id_from_its_name_that_no_other_has() {
 fn a_folder_in_every_space_is_written_as_a_star() {
     let written: Value = serde_json::from_str(&set_folder_space("{}", FolderSpace::Shared).unwrap()).unwrap();
     assert_eq!(written, json!({"space": "*"}));
+}
+
+#[test]
+fn a_new_space_takes_the_first_colour_no_space_has() {
+    let made = new_space(&[], "Робота");
+    assert_eq!((made.id.as_str(), made.name.as_str(), made.color), ("robota", "Робота", SpaceColor::Blue));
+    let two = [space("a", "A", SpaceColor::Blue), space("b", "B", SpaceColor::Pink)];
+    assert_eq!(new_space(&two, "C").color, SpaceColor::Purple, "the first free, not the one after the last");
+    assert_eq!(new_space(&two, "A").id, "a-2");
+    // All nine taken: round the palette again. One's own colour takes none of them.
+    let mut all: Vec<Space> = SpaceColor::ALL.iter().enumerate().map(|(i, color)| space(&format!("s{i}"), "", *color)).collect();
+    assert_eq!(new_space(&all, "X").color, SpaceColor::Blue);
+    all.push(space("own", "", SpaceColor::Custom(1, 2, 3)));
+    assert_eq!(new_space(&all, "X").color, SpaceColor::Purple);
+    assert_eq!(new_space(&[space("own", "", SpaceColor::Custom(1, 2, 3))], "X").color, SpaceColor::Blue);
+    assert_eq!(SpaceColor::from_srgb(1.0, 0.5, 0.0), SpaceColor::Custom(255, 128, 0));
+    assert_eq!(SpaceColor::from_srgb(1.4, -0.2, 0.999), SpaceColor::Custom(255, 0, 255), "past an end is the end");
+}
+
+#[test]
+fn a_folder_says_its_space_only_when_its_parent_s_is_another() {
+    let rules = [
+        (String::new(), r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}, {"id": "home", "name": "Дім", "color": "green"}]}"#.to_owned()),
+        ("Work".to_owned(), r#"{"space": "work"}"#.to_owned()),
+        ("Shared".to_owned(), r#"{"space": "*"}"#.to_owned()),
+    ];
+    let spaces = Spaces::from_texts(&rules);
+    // Under a folder of the space: nothing to say for it, the other space or none said.
+    assert_eq!(spaces.says_for("Work", Some("work")), FolderSpace::Inherit);
+    assert_eq!(spaces.says_for("Work", Some("home")), FolderSpace::In("home"));
+    assert_eq!(spaces.says_for("Work", None), FolderSpace::None);
+    // At the vault's top (in no space): none is what it has already.
+    assert_eq!(spaces.says_for("", None), FolderSpace::Inherit);
+    assert_eq!(spaces.says_for("", Some("home")), FolderSpace::In("home"));
+    // Under a folder in every space, a folder says its own, whatever it is.
+    assert_eq!(spaces.says_for("Shared", Some("work")), FolderSpace::In("work"));
+    assert_eq!(spaces.says_for("Shared", None), FolderSpace::None);
+    assert_eq!((spaces.says_for_every("Shared"), spaces.says_for_every("Work"), spaces.says_for_every("")), (FolderSpace::Inherit, FolderSpace::Shared, FolderSpace::Shared));
 }

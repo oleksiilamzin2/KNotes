@@ -10,7 +10,7 @@ mod spaces;
 
 pub use folder_space::FolderSpace;
 pub use kept_from_ai::{KeptFromAi, NO_AI_TAG};
-pub use rules_text::{file_ai, new_space_id, set_file_ai, set_folder_ai, set_folder_space, set_spaces};
+pub use rules_text::{file_ai, new_space, new_space_id, set_file_ai, set_folder_ai, set_folder_space, set_spaces};
 pub use space::Space;
 pub use space_color::SpaceColor;
 pub use spaces::{SHARED, Spaces};
