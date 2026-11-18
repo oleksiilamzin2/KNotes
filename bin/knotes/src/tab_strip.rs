@@ -20,9 +20,9 @@ use crate::strings;
 
 /// The strip's height, and the gap between two tabs.
 pub const HEIGHT: f64 = 36.0;
-const GAP: f64 = 4.0;
+const GAP: f64 = knotes_app::TAB_GAP;
 /// A tab shows its name while it is at least this wide.
-const NAMED: f64 = 56.0;
+const NAMED: f64 = knotes_app::TAB_NAMED;
 /// How far a tab's piece of glass is from the strip's edge.
 const INSET: f64 = 2.0;
 /// The cross's room at a tab's left, and the symbol's size.
@@ -156,14 +156,15 @@ define_class!(
     }
 );
 
-/// Where a tab at `place` shows its cross: at its left; in its middle when it has no room for
-/// a name. Drawn there and clicked there.
+/// Where a tab at `place` shows its cross (knotes-app's `cross_of`): drawn there and clicked
+/// there.
 fn cross_place(place: NSRect) -> NSRect {
-    let middle = place.origin.y + place.size.height / 2.0;
-    const SIZE: f64 = 15.0;
-    // Clear of the round end of the strip's first tab.
-    let left = if place.size.width < NAMED { place.origin.x + (place.size.width - SIZE) / 2.0 } else { place.origin.x + 9.0 };
-    rect(left, middle - SIZE / 2.0, SIZE, SIZE)
+    let (left, top) = knotes_app::cross_of(slot_of(place), place.size.height);
+    rect(left, place.origin.y + top, knotes_app::cross_size(), knotes_app::cross_size())
+}
+
+fn slot_of(place: NSRect) -> knotes_app::Slot {
+    knotes_app::Slot { x: place.origin.x, width: place.size.width }
 }
 
 fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
@@ -297,14 +298,8 @@ impl TabStrip {
     /// that slips is no drag), and takes the place its middle is over.
     fn drag_to(&self, x: f64) {
         let Some((tab, grab)) = self.ivars().pressed.get() else { return };
-        let places = self.places();
-        let Some(place) = places.get(tab) else { return };
-        let left = (x - grab).clamp(0.0, (self.bounds().size.width - place.size.width).max(0.0));
-        if self.ivars().dragged.get().is_none() && (left - place.origin.x).abs() < 5.0 {
-            return;
-        }
-        let slot = place.size.width + GAP;
-        let over = (((left + place.size.width / 2.0) / slot) as usize).min(places.len() - 1);
+        let slots = self.slots();
+        let Some((left, over)) = knotes_app::drag_tab(&slots, tab, grab, x, self.bounds().size.width, self.ivars().dragged.get().is_some()) else { return };
         self.ivars().dragged.set(Some((tab, left, over)));
         self.ivars().hover.set(None);
         self.setNeedsDisplay(true);
@@ -402,25 +397,19 @@ impl TabStrip {
         }
     }
 
-    /// Each tab's place: all as wide, together filling the strip (as Safari's do).
+    /// Each tab's place along the strip (knotes-app's `tab_slots`).
+    fn slots(&self) -> Vec<knotes_app::Slot> {
+        knotes_app::tab_slots(self.ivars().tabs.borrow().len(), self.bounds().size.width)
+    }
+
     fn places(&self) -> Vec<NSRect> {
-        let count = self.ivars().tabs.borrow().len();
-        if count == 0 {
-            return Vec::new();
-        }
-        let bounds = self.bounds();
-        let width = ((bounds.size.width - GAP * (count - 1) as f64) / count as f64).max(1.0);
-        (0..count).map(|i| rect(i as f64 * (width + GAP), 0.0, width, bounds.size.height)).collect()
+        let height = self.bounds().size.height;
+        self.slots().into_iter().map(|slot| rect(slot.x, 0.0, slot.width, height)).collect()
     }
 
     /// The tab at `at`, and whether `at` is on its cross (or within a few points of it).
     fn tab_at(&self, at: NSPoint) -> Option<(usize, bool)> {
-        let places = self.places();
-        let tab = places.iter().position(|place| at.x >= place.origin.x && at.x < place.origin.x + place.size.width && at.y >= 0.0 && at.y <= place.size.height)?;
-        let cross = cross_place(places[tab]);
-        let near = 5.0;
-        let on_cross = at.x >= cross.origin.x - near && at.x <= cross.origin.x + cross.size.width + near && at.y >= cross.origin.y - near && at.y <= cross.origin.y + cross.size.height + near;
-        Some((tab, on_cross))
+        knotes_app::tab_at(&self.slots(), self.bounds().size.height, at.x, at.y)
     }
 
     /// A press at `at`: on a tab's cross it closes the tab, elsewhere on a tab it shows it.
@@ -450,13 +439,8 @@ impl TabStrip {
         // and it is drawn last, where the pointer has it.
         let dragged = self.ivars().dragged.get().filter(|(tab, _, _)| *tab < places.len());
         if let Some((tab, left, over)) = dragged {
-            let slots = places.clone();
-            let mut others: Vec<usize> = (0..slots.len()).filter(|i| *i != tab).collect();
-            others.insert(over.min(others.len()), tab);
-            for (slot, index) in others.into_iter().enumerate() {
-                places[index] = slots[slot];
-            }
-            places[tab].origin.x = left;
+            let height = self.bounds().size.height;
+            places = knotes_app::slots_dragged(&self.slots(), tab, left, over).into_iter().map(|slot| rect(slot.x, 0.0, slot.width, height)).collect();
         }
         // The strip itself: a grey capsule the tabs lie in (the owner's reference), whatever
         // the toolbar draws under it.

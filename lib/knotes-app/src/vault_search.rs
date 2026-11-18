@@ -169,3 +169,26 @@ fn by_meaning<R: ContentSearch + NoteText>(reader: &R, meaning: &dyn MeaningSear
         })
         .collect()
 }
+
+/// The documents a search's answer lists, each once: those found by their names first (`names`
+/// of them at most), each with the text found in it when its words are there too; then the
+/// others found by their text (`texts` at most looked at).
+pub fn found_documents(response: SearchResponse, names: usize, texts: usize) -> Vec<ContentMatch> {
+    let mut found: Vec<ContentMatch> = response.titles.into_iter().take(names).map(|path| ContentMatch { path, snippet: String::new() }).collect();
+    for by_text in response.content.into_iter().take(texts) {
+        match found.iter_mut().find(|by_name| by_name.path == by_text.path) {
+            Some(by_name) => by_name.snippet = by_text.snippet,
+            None => found.push(by_text),
+        }
+    }
+    found
+}
+
+/// Where `text` holds a word of `words` (two letters at least: one would mark half the text),
+/// whatever the case and anywhere in a word, in the text's order (bytes).
+pub fn marked_words(text: &str, words: &str) -> Vec<std::ops::Range<usize>> {
+    let mut found: Vec<std::ops::Range<usize>> = words.split_whitespace().filter(|word| word.chars().count() >= 2).flat_map(|word| crate::find_all(text, word)).collect();
+    found.sort_by_key(|range| range.start);
+    found
+}
+

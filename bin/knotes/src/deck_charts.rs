@@ -5,6 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 
+use knotes_app::{bar_length, bar_under, scale_top, share};
 use knotes_core::DeckStats;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -155,19 +156,6 @@ fn fill_bar(bar: NSRect, round: bool) {
     }
 }
 
-/// The top of a plot's scale for its largest value: 1, 2 or 5 times a power of ten.
-fn scale_top(most: usize) -> usize {
-    let mut power = 1;
-    loop {
-        for times in [1, 2, 5] {
-            if times * power >= most.max(1) {
-                return times * power;
-            }
-        }
-        power *= 10;
-    }
-}
-
 impl DeckCharts {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         // SAFETY: a plain view's init.
@@ -200,8 +188,8 @@ impl DeckCharts {
         let stats = stats.as_ref()?;
         [(Plot::Due, DUE_TOP, stats.due_by_day.len()), (Plot::Reviews, REVIEWS_TOP, stats.reviews_by_day.len())].into_iter().find_map(|(plot, top, bars)| {
             let area = self.plot(top);
-            let inside = bars > 0 && at.x >= area.origin.x && at.x < area.origin.x + area.size.width && at.y >= area.origin.y - 6.0 && at.y <= area.origin.y + area.size.height + 18.0;
-            inside.then(|| (plot, (((at.x - area.origin.x) / area.size.width * bars as f64) as usize).min(bars - 1)))
+            let inside = at.y >= area.origin.y - 6.0 && at.y <= area.origin.y + area.size.height + 18.0;
+            bar_under(at.x, area.origin.x, area.size.width, bars).filter(|_| inside).map(|bar| (plot, bar))
         })
     }
 
@@ -235,7 +223,7 @@ impl DeckCharts {
         NSGraphicsContext::restoreGraphicsState_class();
         let mut x = 0.0;
         for (i, (name, cards)) in kinds.iter().enumerate() {
-            x = self.legend(x, CARDS_TOP + 48.0, &colours[i], &format!("{name} {cards} · {} %", (cards * 100 + stats.cards / 2) / stats.cards.max(1)), &small, &quiet) + 18.0;
+            x = self.legend(x, CARDS_TOP + 48.0, &colours[i], &format!("{name} {cards} · {} %", share(*cards, stats.cards).unwrap_or(0)), &small, &quiet) + 18.0;
         }
 
         // What comes due: a bar a day, today first.
@@ -258,7 +246,7 @@ impl DeckCharts {
                 NSColor::quaternaryLabelColor().setFill();
                 NSBezierPath::fillRect(rect(x, area.origin.y, slot, area.size.height));
             }
-            let height = (area.size.height * cards as f64 / top as f64).max(if cards > 0 { 2.0 } else { 0.0 });
+            let height = bar_length(area.size.height, cards, top);
             colours[0].setFill();
             fill_bar(rect(x + 1.0, area.origin.y + area.size.height - height, (slot - 2.0).max(1.0), height), true);
             if day % 10 == 0 {
@@ -295,7 +283,7 @@ impl DeckCharts {
                 NSColor::quaternaryLabelColor().setFill();
                 NSBezierPath::fillRect(rect(x, area.origin.y, slot, area.size.height));
             }
-            let high = |n: usize| (area.size.height * n as f64 / top as f64).max(if n > 0 { 2.0 } else { 0.0 });
+            let high = |n: usize| bar_length(area.size.height, n, top);
             let (recalled, forgotten) = (high(reviews - forgotten), high(forgotten));
             let bar = (slot - 2.0).max(1.0);
             colours[0].setFill();
@@ -328,14 +316,14 @@ impl DeckCharts {
         for (row, (name, &reviews)) in strings::GRADES.iter().zip(&stats.grades).enumerate() {
             let y = GRADES_TOP + 28.0 + row as f64 * GRADE_ROW;
             draw_text(name, 0.0, y, &small, &quiet, Align::Left);
-            let long = (room * reviews as f64 / most as f64).max(if reviews > 0 { 2.0 } else { 0.0 });
+            let long = bar_length(room, reviews, most);
             colours[0].setFill();
             let bar = rect(GRADE_LEFT, y + 2.0, long, 10.0);
             NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bar, 3.0f64.min(long / 2.0), 3.0f64.min(long / 2.0)).fill();
             if long > 3.0 {
                 NSBezierPath::fillRect(rect(GRADE_LEFT, y + 2.0, long - 3.0, 10.0));
             }
-            let share = (reviews * 100 + graded / 2).checked_div(graded).map(|share| format!(" · {share} %")).unwrap_or_default();
+            let share = share(reviews, graded).map(|share| format!(" · {share} %")).unwrap_or_default();
             draw_text(&format!("{reviews}{share}"), GRADE_LEFT + long + 6.0, y, &small, &quiet, Align::Left);
         }
     }

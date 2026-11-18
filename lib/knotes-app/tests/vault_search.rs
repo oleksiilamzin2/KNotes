@@ -156,3 +156,27 @@ fn a_search_is_narrowed_by_a_phrase_a_word_left_out_a_tag_a_folder_and_a_space()
     assert_eq!(names("radar -budget"), "", "left out by its text though found by its name");
     assert_eq!(names("сад OR draft space:Дім"), "Home/Сад.md");
 }
+
+#[test]
+fn the_documents_found_are_listed_once_by_name_first_and_their_words_marked() {
+    use knotes_app::{ContentMatch, SearchResponse, found_documents, marked_words};
+    let by_text = |path: &str, snippet: &str| ContentMatch { path: path.into(), snippet: snippet.into() };
+    let response = || SearchResponse {
+        generation: 1,
+        titles: vec!["Radar.md".into(), "Radar 2.md".into(), "Radars.md".into()],
+        content: vec![by_text("Сад.md", "Radar once"), by_text("Radar 2.md", "the radar"), by_text("Late.md", "radar")],
+    };
+    let listed = |names, texts| found_documents(response(), names, texts).into_iter().map(|f| format!("{}~{}", f.path, f.snippet)).collect::<Vec<_>>().join(" | ");
+    assert_eq!(listed(60, 200), "Radar.md~ | Radar 2.md~the radar | Radars.md~ | Сад.md~Radar once | Late.md~radar", "by name first, with its text when found there too");
+    assert_eq!(listed(1, 200), "Radar.md~ | Сад.md~Radar once | Radar 2.md~the radar | Late.md~radar", "no more names than asked: the others by their text");
+    assert_eq!(listed(60, 2), "Radar.md~ | Radar 2.md~the radar | Radars.md~ | Сад.md~Radar once");
+    assert_eq!(listed(0, 0), "");
+    // The words marked: any case, anywhere in a word, in the text's order; one letter marks none.
+    let text = "Radar: the RADAR budget. Сад і город, садок.";
+    let marks = |words: &str| marked_words(text, words).into_iter().map(|range| &text[range]).collect::<Vec<_>>().join(",");
+    assert_eq!(marks("radar"), "Radar,RADAR");
+    assert_eq!(marks("budget radar"), "Radar,RADAR,budget", "in the text's order, not the words'");
+    assert_eq!(marks("сад"), "Сад,сад", "in a word too");
+    assert_eq!((marks("і"), marks(""), marks("zz")), (String::new(), String::new(), String::new()));
+}
+

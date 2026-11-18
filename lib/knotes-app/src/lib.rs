@@ -1,10 +1,12 @@
 //! View models of the Knotes window: plain Rust, no AppKit.
 
+mod chart_scale;
 pub mod deck_rows;
 mod follow_link;
 mod refine;
 mod relocation;
 mod review_session;
+mod tab_layout;
 mod vault_search;
 mod vault_state;
 mod connections;
@@ -51,11 +53,13 @@ pub use space_folders::SpaceFolders;
 pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
 pub use space_tags::SpaceTags;
+pub use chart_scale::{bar_length, bar_under, scale_top, share};
 pub use follow_link::{Followed, follow_link, linked_note_path, named_link, normalize_path};
 pub use refine::{Place, Refine};
 pub use relocation::{folder_moves, in_renamed_folder, moved_into, named_after, renamed, renamed_folder};
 pub use review_session::{CardAsked, Graded, ReviewSession, card_written, would_stand};
-pub use vault_search::{SearchRequest, SearchResponse, search};
+pub use vault_search::{SearchRequest, SearchResponse, found_documents, marked_words, search};
 pub use vault_state::{Listed, VaultState, find_folder_node, folder_exists, session_settings_key, tag_exists, tag_names};
+pub use tab_layout::{Slot, TAB_GAP, TAB_NAMED, cross_of, cross_size, drag_tab, slots_dragged, tab_at, tab_slots};
 pub use tabs::{AfterClose, TabPlace, Tabs};
 pub use tag_tree::{TagNode, count_tags, deck_tree, space_tag_trees, split_tags, suggest_tags, tag_tree};

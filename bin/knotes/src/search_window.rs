@@ -21,7 +21,7 @@ use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSBox, NSBoxType, NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSFontAttributeName, NSFontWeightSemibold, NSForegroundColorAttributeName,
     NSLayoutConstraint, NSResponder, NSScrollView, NSSearchField, NSSearchFieldDelegate, NSStringDrawing, NSTextFieldDelegate, NSTextView, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSStringCompareOptions};
+use objc2_foundation::{NSArray, NSDictionary, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 
 use crate::strings;
 
@@ -422,13 +422,7 @@ impl Controller {
         if response.generation != self.ivars().asked.get() {
             return;
         }
-        let mut found: Vec<Found> = response.titles.into_iter().take(MAX_NAMES).map(|path| Found { path, snippet: String::new(), space: None, kept_from_ai: false }).collect();
-        for by_text in response.content.into_iter().take(MAX_TEXTS) {
-            match found.iter_mut().find(|f| f.path == by_text.path) {
-                Some(by_name) => by_name.snippet = by_text.snippet,
-                None => found.push(Found { path: by_text.path, snippet: by_text.snippet, space: None, kept_from_ai: false }),
-            }
-        }
+        let found = knotes_app::found_documents(response, MAX_NAMES, MAX_TEXTS).into_iter().map(|found| Found { path: found.path, snippet: found.snippet, space: None, kept_from_ai: false }).collect();
         self.list(found);
     }
 
@@ -514,23 +508,19 @@ impl Controller {
     }
 }
 
-/// Where `text` holds a word of `query`, whatever the case, in the text's order.
+/// Where `text` holds a word of `query`, whatever the case, in the text's order (knotes-app's
+/// `marked_words`, in the text view's own units).
 fn marks(text: &NSString, query: &str) -> Vec<NSRange> {
-    let mut found = Vec::new();
-    for word in query.split_whitespace().filter(|w| w.chars().count() >= 2) {
-        let word = NSString::from_str(word);
-        let mut from = 0;
-        while from < text.length() {
-            let at = text.rangeOfString_options_range(&word, NSStringCompareOptions::CaseInsensitiveSearch, NSRange::new(from, text.length() - from));
-            if at.length == 0 {
-                break;
-            }
-            found.push(at);
-            from = at.location + at.length;
-        }
-    }
-    found.sort_by_key(|range| range.location);
-    found
+    let text = text.to_string();
+    let found = knotes_app::marked_words(&text, query);
+    // Two words' finds may overlap («radar» and «ada»): their ends put in order to be counted
+    // in one pass.
+    let mut ends: Vec<usize> = found.iter().flat_map(|range| [range.start, range.end]).collect();
+    ends.sort_unstable();
+    ends.dedup();
+    let counted = knotes_editor::utf16_offsets(&text, &ends);
+    let at = |byte: usize| ends.binary_search(&byte).map_or(0, |i| counted[i]);
+    found.iter().map(|range| NSRange::new(at(range.start), at(range.end) - at(range.start))).collect()
 }
 
 /// The vault's search window.
