@@ -52,6 +52,15 @@ impl VaultWindow {
         true
     }
 
+    /// `path`'s tab dragged to place `to` among the tabs: kept so for the next launch.
+    pub fn move_tab(&self, path: &str, to: usize) {
+        let from = self.tabs.borrow().paths().position(|p| p == path);
+        if let Some(from) = from {
+            self.tabs.borrow_mut().move_tab(from, to);
+            self.save_tabs();
+        }
+    }
+
     /// The tab `by` after the one shown (before, when negative), round the tabs' ends.
     pub fn step_tab(&self, by: isize) {
         let next = {

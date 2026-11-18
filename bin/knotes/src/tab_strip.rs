@@ -2,7 +2,8 @@
 //! they were rows of the sidebar): a strip that fills the toolbar between the sidebar's toggle
 //! and the panel's, each tab a capsule as wide as the others, the one shown lighter. A click
 //! shows a tab's document; the cross that shows with the pointer over a tab closes it; a tab's
-//! menu closes it or every other.
+//! menu closes it or every other. A tab dragged along the strip takes the place it is let go
+//! at, the others making room as it passes.
 
 use std::cell::{Cell, RefCell};
 
@@ -56,6 +57,12 @@ pub struct StripIvars {
     on_select: RefCell<Option<OnTab>>,
     on_close: RefCell<Option<OnTab>>,
     on_close_others: RefCell<Option<OnTab>>,
+    /// Called with a tab's path and the place it was dragged to.
+    on_move: RefCell<Option<Box<dyn Fn(String, usize)>>>,
+    /// The tab pressed, and how far into it (x): it is dragged once the pointer moves on.
+    pressed: Cell<Option<(usize, f64)>>,
+    /// The tab being dragged: which, where its left edge is now, and the place it would take.
+    dragged: Cell<Option<(usize, f64, usize)>>,
 }
 
 define_class!(
@@ -108,7 +115,23 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            self.press(self.convertPoint_fromView(event.locationInWindow(), None));
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            // A press on a tab's body may begin a drag; one on its cross closes it at once.
+            let body = self.tab_at(at).filter(|(_, cross)| !cross).map(|(tab, _)| tab);
+            self.press(at);
+            let pressed = body.and_then(|tab| self.places().get(tab).map(|place| (tab, at.x - place.origin.x)));
+            self.ivars().pressed.set(pressed);
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            self.drag_to(at.x);
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            self.let_go();
         }
 
         /// A tab's menu: it closes, or every other does.
@@ -244,6 +267,45 @@ impl TabStrip {
         self.setNeedsDisplay(true);
     }
 
+    /// Called with a tab's path and the place among the tabs it was dragged to.
+    pub fn on_move(&self, callback: impl Fn(String, usize) + 'static) {
+        *self.ivars().on_move.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The pointer at `x` with a tab pressed: the tab follows it (after a few points: a click
+    /// that slips is no drag), and takes the place its middle is over.
+    fn drag_to(&self, x: f64) {
+        let Some((tab, grab)) = self.ivars().pressed.get() else { return };
+        let places = self.places();
+        let Some(place) = places.get(tab) else { return };
+        let left = (x - grab).clamp(0.0, (self.bounds().size.width - place.size.width).max(0.0));
+        if self.ivars().dragged.get().is_none() && (left - place.origin.x).abs() < 5.0 {
+            return;
+        }
+        let slot = place.size.width + GAP;
+        let over = (((left + place.size.width / 2.0) / slot) as usize).min(places.len() - 1);
+        self.ivars().dragged.set(Some((tab, left, over)));
+        self.ivars().hover.set(None);
+        self.setNeedsDisplay(true);
+    }
+
+    /// The button let go: a tab dragged takes its place.
+    fn let_go(&self) {
+        self.ivars().pressed.set(None);
+        if let Some((tab, _, to)) = self.ivars().dragged.take() {
+            self.setNeedsDisplay(true);
+            self.move_tab(tab, to);
+        }
+    }
+
+    /// Tab `tab` moved to place `to` (also the probe's drag).
+    pub fn move_tab(&self, tab: usize, to: usize) {
+        let path = self.ivars().tabs.borrow().get(tab).map(|t| t.path.clone());
+        if let (Some(path), Some(callback), true) = (path, self.ivars().on_move.borrow().as_ref(), tab != to) {
+            callback(path, to);
+        }
+    }
+
     /// The tab clicked (also the probe's click).
     pub fn click(&self, tab: usize) {
         self.tell(&self.ivars().on_select, tab);
@@ -362,13 +424,27 @@ impl TabStrip {
         // The strip lies on the toolbar's own glass: the tab shown is a lighter piece of it, the
         // others the glass itself, a little darker under the pointer, a hairline between two.
         let dark = NSColor::textBackgroundColor().colorUsingColorSpace(&objc2_app_kit::NSColorSpace::sRGBColorSpace()).is_some_and(|c| c.redComponent() < 0.5);
-        let places = self.places();
+        let mut places = self.places();
+        // While a tab is dragged the others stand as if it were at the place it would take,
+        // and it is drawn last, where the pointer has it.
+        let dragged = self.ivars().dragged.get().filter(|(tab, _, _)| *tab < places.len());
+        if let Some((tab, left, over)) = dragged {
+            let slots = places.clone();
+            let mut others: Vec<usize> = (0..slots.len()).filter(|i| *i != tab).collect();
+            others.insert(over.min(others.len()), tab);
+            for (slot, index) in others.into_iter().enumerate() {
+                places[index] = slots[slot];
+            }
+            places[tab].origin.x = left;
+        }
         // The strip itself: a grey capsule the tabs lie in (the owner's reference), whatever
         // the toolbar draws under it.
         let bounds = self.bounds();
         NSColor::labelColor().colorWithAlphaComponent(if dark { 0.16 } else { 0.09 }).setFill();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, bounds.size.height / 2.0, bounds.size.height / 2.0).fill();
-        for ((i, tab), place) in tabs.iter().enumerate().zip(places.iter().copied()) {
+        let last = dragged.map(|(tab, _, _)| tab);
+        let order = (0..tabs.len()).filter(|i| Some(*i) != last).chain(last);
+        for (i, tab, place) in order.filter_map(|i| Some((i, tabs.get(i)?, *places.get(i)?))) {
             let shown = current == Some(i);
             let pointed = hover.is_some_and(|(at, _)| at == i);
             let piece = rect(place.origin.x + INSET, place.origin.y + INSET, place.size.width - 2.0 * INSET, place.size.height - 2.0 * INSET);
@@ -377,13 +453,13 @@ impl TabStrip {
                 // White on the grey, as the reference's; in the dark a lighter grey.
                 NSColor::whiteColor().colorWithAlphaComponent(if dark { 0.22 } else { 1.0 }).setFill();
                 capsule.fill();
-            } else if pointed {
+            } else if pointed || last == Some(i) {
                 NSColor::labelColor().colorWithAlphaComponent(0.10).setFill();
                 capsule.fill();
             }
             // Between two tabs neither of which is shown or pointed at.
             let quiet = |at: usize| current != Some(at) && !hover.is_some_and(|(pointed, _)| pointed == at);
-            if i > 0 && quiet(i) && quiet(i - 1) {
+            if dragged.is_none() && i > 0 && quiet(i) && quiet(i - 1) {
                 NSColor::separatorColor().setFill();
                 NSBezierPath::fillRect(rect(place.origin.x - GAP / 2.0 - 0.5, place.origin.y + 10.0, 1.0, place.size.height - 20.0));
             }

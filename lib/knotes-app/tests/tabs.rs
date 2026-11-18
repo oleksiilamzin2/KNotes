@@ -105,3 +105,16 @@ fn closing_the_other_tabs_keeps_one_and_shows_it() {
     assert_eq!(tabs.close_others(1), AfterClose::Same);
     assert_eq!(paths(&tabs), ["b.md"]);
 }
+
+#[test]
+fn a_tab_moved_takes_its_new_place_and_the_one_shown_stays_shown() {
+    let mut tabs = tabs_of(&["a.md", "b.md", "c.md"]);
+    tabs.move_tab(0, 2);
+    assert_eq!((paths(&tabs), tabs.current_path()), (vec!["b.md", "c.md", "a.md"], Some("c.md")), "c.md was shown, and is");
+    tabs.move_tab(1, 0);
+    assert_eq!((paths(&tabs), tabs.current_path()), (vec!["c.md", "b.md", "a.md"], Some("c.md")));
+    tabs.move_tab(1, 1);
+    tabs.move_tab(0, 9);
+    tabs.move_tab(7, 0);
+    assert_eq!(paths(&tabs), ["c.md", "b.md", "a.md"], "no such place: nothing moves");
+}

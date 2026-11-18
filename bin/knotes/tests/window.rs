@@ -2597,6 +2597,22 @@ fn the_keys_go_round_the_tabs_and_to_a_tab_by_its_number() {
 }
 
 #[test]
+fn a_tab_dragged_takes_its_new_place_and_keeps_it() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    std::fs::write(vault.path().join("c.md"), "c").unwrap();
+    probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")]);
+    probe_tabs(&vault, &home, &[("KNOTES_PROBE_NEW_TAB", "c.md")]);
+    // a dragged to the end: the others close up; c, shown, stays shown.
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TAB_DRAG", "a.md:2")]);
+    assert_eq!(sidebar_tabs(&out), ("b | c | a".to_owned(), "c".to_owned()), "{out}");
+    // The next launch has them so, and the keys count them so.
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_MENU_KEY", "1")]);
+    assert_eq!(sidebar_tabs(&out), ("b | c | a".to_owned(), "b".to_owned()), "{out}");
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TAB_DRAG", "c.md:0")]);
+    assert_eq!(sidebar_tabs(&out).0, "c | b | a", "{out}");
+}
+
+#[test]
 fn a_click_on_a_tab_shows_its_document() {
     let (vault, home) = (tabs_vault(), tabs_home());
     let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md"), ("KNOTES_PROBE_TAB_CLICK", "a.md")]);

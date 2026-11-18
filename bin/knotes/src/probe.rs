@@ -1097,6 +1097,13 @@ fn tabs_requested(window: &VaultWindow) {
         }
         window.window.displayIfNeeded();
     }
+    // `KNOTES_PROBE_TAB_DRAG=a.md:2`: that document's tab dragged to that place (from 0).
+    if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_DRAG")
+        && let Some((path, to)) = spec.rsplit_once(':')
+        && let (Some(tab), Ok(to)) = (window.tab_strip.tab_of(path), to.parse())
+    {
+        window.tab_strip.move_tab(tab, to);
+    }
     // `KNOTES_PROBE_TAB_HOVER=a.md` (or `a.md:out`): the pointer comes over that tab (or comes
     // and leaves).
     if let Ok(spec) = std::env::var("KNOTES_PROBE_TAB_HOVER") {

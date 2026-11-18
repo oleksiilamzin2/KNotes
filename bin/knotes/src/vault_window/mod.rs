@@ -774,6 +774,12 @@ impl VaultWindow {
             }
         });
         let weak_tab: Weak<Self> = Rc::downgrade(&this);
+        this.tab_strip.on_move(move |path, to| {
+            if let Some(window) = weak_tab.upgrade() {
+                window.move_tab(&path, to);
+            }
+        });
+        let weak_tab: Weak<Self> = Rc::downgrade(&this);
         this.tab_strip.on_close(move |path| {
             if let Some(window) = weak_tab.upgrade() {
                 window.close_tab(&path);

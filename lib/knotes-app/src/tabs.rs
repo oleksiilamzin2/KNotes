@@ -108,6 +108,18 @@ impl Tabs {
         if shown { AfterClose::Same } else { AfterClose::Show(self.tabs[0].clone()) }
     }
 
+    /// The tab at `from` moved to stand at `to` (the others close up); the tab shown stays the
+    /// one shown. Nothing for a place there is no tab at.
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
+            return;
+        }
+        let shown = self.current_path().map(str::to_owned);
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.current = shown.and_then(|shown| self.tabs.iter().position(|t| *t == shown));
+    }
+
     /// A document moved from `from` to `to`.
     pub fn rename(&mut self, from: &str, to: &str) {
         for tab in self.tabs.iter_mut().filter(|t| *t == from) {
