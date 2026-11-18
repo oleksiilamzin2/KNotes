@@ -89,6 +89,9 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   window and closes the search; Escape closes it. Opened by the toolbar's glass or by Edit's
   «Пошук у базі…», ⌥⌘F (⇧⌘F stays the list's search). Opened again, it searches what was typed
   before in the vault as it is now.
+- A document found has its marks after its name, as the list's rows and the tabs have them
+  (`row_marks`): the dot of its space when that is not the window's, and the AI's mark when
+  it is kept from the AI. The owner missed them in the first version.
 - Searched on the main thread as the field's text changes, with a reader of its own: a name
   search and a full-text search take a few milliseconds at 10 000 notes (ADR 0006's
   measurements), and no answers arrive out of order. No search by meaning there yet, no

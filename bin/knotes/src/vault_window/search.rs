@@ -30,9 +30,10 @@ impl VaultWindow {
     /// The toolbar's magnifying glass: the vault's search in a window of its own (as
     /// DEVONthink's, the owner's request). A document opened there shows here.
     pub fn search_vault(&self) {
-        let (Some(vault), Some(index_dir), titles, links) = ({
+        let (Some(vault), Some(index_dir), titles, links, marks) = ({
             let state = self.state.borrow();
-            (state.vault.clone(), state.index_dir.clone(), state.titles.clone(), state.links.clone())
+            let marks = crate::search_window::Marks { spaces: Arc::clone(&state.spaces), space: state.space.clone(), ai: Arc::clone(&state.ai) };
+            (state.vault.clone(), state.index_dir.clone(), state.titles.clone(), state.links.clone(), marks)
         }) else {
             return;
         };
@@ -49,7 +50,7 @@ impl VaultWindow {
             *self.search_window.borrow_mut() = Some(search);
         }
         if let Some(search) = self.search_window.borrow().as_ref() {
-            search.show(&vault, &index_dir, titles, links.map(|links| links as Arc<dyn knotes_core::LinkResolver>));
+            search.show(&vault, &index_dir, titles, links.map(|links| links as Arc<dyn knotes_core::LinkResolver>), marks);
         }
     }
 

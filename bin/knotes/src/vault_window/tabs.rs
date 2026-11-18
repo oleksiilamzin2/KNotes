@@ -9,13 +9,19 @@ impl VaultWindow {
     /// The tabs along the toolbar, as they are now.
     pub(super) fn show_tabs(&self) {
         let tabs = self.tabs.borrow();
+        // The marks the sidebar's rows of tabs had: another space's dot, and the AI's. (Asked
+        // while the window's state is being changed, a tab shows without them until the next.)
+        let state = self.state.try_borrow().ok();
         let shown = tabs
             .paths()
             .map(|path| {
                 let deck = super::cards::deck_of_tab(path);
+                let document = state.as_ref().filter(|_| deck.is_none());
+                let space = document.and_then(|state| knotes_app::space_mark(&state.spaces, state.space.as_deref(), path).map(|space| (space.color, space.name.clone())));
+                let kept_from_ai = document.is_some_and(|state| state.ai.holds(path));
                 let name = deck.map_or_else(|| document_name(path).to_owned(), |deck| deck.rsplit('/').next().unwrap_or(deck).to_owned());
                 let symbol = if deck.is_some() { "rectangle.stack" } else if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" };
-                crate::tab_strip::Tab { path: path.to_owned(), name, symbol }
+                crate::tab_strip::Tab { path: path.to_owned(), name, symbol, space, kept_from_ai }
             })
             .collect();
         self.tab_strip.set(shown, tabs.current());

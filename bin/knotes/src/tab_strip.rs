@@ -29,13 +29,18 @@ const CROSS: f64 = 26.0;
 const SYMBOL: f64 = 14.0;
 
 /// A tab as the strip shows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
     /// What it is a tab of: a document's vault path, or a deck's (`deck://…`).
     pub path: String,
     pub name: String,
     /// Its SF Symbol: a note's, a PDF's, a deck's.
     pub symbol: &'static str,
+    /// The space its document is in, when that is not the window's (ADR 0030): its colour,
+    /// shown as a dot after the name, and its name.
+    pub space: Option<(knotes_spaces::SpaceColor, String)>,
+    /// Its document is kept from the AI (ADR 0036): marked after the name.
+    pub kept_from_ai: bool,
 }
 
 type OnTab = Box<dyn Fn(String)>;
@@ -281,6 +286,23 @@ impl TabStrip {
         self.ivars().current.get().and_then(|i| self.ivars().tabs.borrow().get(i).map(|tab| tab.name.clone()))
     }
 
+    /// The tabs marked, each with its marks: `c • Дім | a • no-ai` (probe mode).
+    pub fn marks(&self) -> String {
+        let marked: Vec<String> = self
+            .ivars()
+            .tabs
+            .borrow()
+            .iter()
+            .filter(|tab| tab.space.is_some() || tab.kept_from_ai)
+            .map(|tab| {
+                let space = tab.space.iter().map(|(_, name)| name.as_str());
+                let marks: Vec<&str> = space.chain(tab.kept_from_ai.then_some("no-ai")).collect();
+                format!("{} • {}", tab.name, marks.join(", "))
+            })
+            .collect();
+        marked.join(" | ")
+    }
+
     /// The tabs' names (probe mode).
     pub fn names(&self) -> Vec<String> {
         self.ivars().tabs.borrow().iter().map(|tab| tab.name.clone()).collect()
@@ -390,10 +412,14 @@ impl TabStrip {
             if let Some(cross) = cross {
                 draw_symbol(&cross, cross_place(place));
             }
-            // The symbol and the name together in the tab's middle, clear of the cross's room.
-            let room = place.size.width - 2.0 * CROSS - SYMBOL - 5.0;
+            // The symbol, the name and its marks together in the tab's middle, clear of the
+            // cross's room.
+            let marks = crate::row_marks::width(tab.space.is_some(), tab.kept_from_ai);
+            let room = place.size.width - 2.0 * CROSS - SYMBOL - 5.0 - marks;
             let (name, width) = fitted(&tab.name, &font, room.max(1.0));
-            let left = place.origin.x + (place.size.width - (SYMBOL + 5.0 + width)) / 2.0;
+            let left = place.origin.x + (place.size.width - (SYMBOL + 5.0 + width + marks)) / 2.0;
+            // Another space's dot, and the AI's mark, as the list's rows have them.
+            crate::row_marks::draw(tab.space.as_ref().map(|(colour, _)| *colour), tab.kept_from_ai, left + SYMBOL + 5.0 + width, middle, &NSColor::secondaryLabelColor());
             if let Some(mark) = mark {
                 draw_symbol(&mark, rect(left, middle - SYMBOL / 2.0, SYMBOL, SYMBOL));
             }

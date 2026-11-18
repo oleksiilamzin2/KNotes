@@ -18,6 +18,8 @@ impl VaultWindow {
         self.show_spaces();
         // The space's decks: those of its notes' cards (ADR 0037).
         self.recount_decks();
+        // The tabs' dots: of the spaces that are not the window's now.
+        self.show_tabs();
         self.rebuild_sidebar();
         let mut selection = self.state.borrow().selection.clone();
         if !self.exists(&selection) {

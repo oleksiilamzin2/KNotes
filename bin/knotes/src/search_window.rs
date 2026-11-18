@@ -36,6 +36,10 @@ pub struct Found {
     pub path: String,
     /// The text around what was found; empty for a document found by its name alone.
     pub snippet: String,
+    /// Its marks, as the list's rows have them: its space when that is not the window's (its
+    /// colour and name), and whether it is kept from the AI.
+    pub space: Option<(knotes_spaces::SpaceColor, String)>,
+    pub kept_from_ai: bool,
 }
 
 /// The vault's documents `query` finds: those whose name holds it, best first, then those whose
@@ -45,7 +49,7 @@ pub fn find(reader: &SqliteIndex, titles: Option<&TitleIndex>, query: &str) -> V
     if query.is_empty() {
         return Vec::new();
     }
-    let mut found: Vec<Found> = titles.map(|t| t.search_titles(query, MAX_NAMES)).unwrap_or_default().into_iter().map(|hit| Found { path: hit.path, snippet: String::new() }).collect();
+    let mut found: Vec<Found> = titles.map(|t| t.search_titles(query, MAX_NAMES)).unwrap_or_default().into_iter().map(|hit| Found { path: hit.path, snippet: String::new(), space: None, kept_from_ai: false }).collect();
     let hits = reader.search(&ContentQuery { text: query, within: Within::Note, prefixes: true, scope: None, limit: MAX_TEXTS }).unwrap_or_default();
     for hit in hits {
         let text = reader.note_text(&hit.path).ok().flatten().unwrap_or_default();
@@ -54,7 +58,7 @@ pub fn find(reader: &SqliteIndex, titles: Option<&TitleIndex>, query: &str) -> V
         match found.iter_mut().find(|f| f.path == hit.path) {
             Some(by_name) if by_name.snippet.is_empty() => by_name.snippet = snippet,
             Some(_) => {}
-            None => found.push(Found { path: hit.path, snippet }),
+            None => found.push(Found { path: hit.path, snippet, space: None, kept_from_ai: false }),
         }
     }
     found
@@ -173,7 +177,10 @@ impl ResultList {
             let (folder, name) = found.path.rsplit_once('/').unwrap_or(("", &found.path));
             let folder = fitted(folder, &small, width * 0.4);
             let folder_width = unsafe { NSString::from_str(&folder).sizeWithAttributes(Some(&attributes(&small, &quiet))) }.width;
-            let name = fitted(knotes_app::title_of(name), &name_font, width - 36.0 - folder_width - 12.0);
+            let marks = crate::row_marks::width(found.space.is_some(), found.kept_from_ai);
+            let name = fitted(knotes_app::title_of(name), &name_font, width - 36.0 - folder_width - 12.0 - marks);
+            let name_width = unsafe { NSString::from_str(&name).sizeWithAttributes(Some(&attributes(&name_font, &ink))) }.width;
+            crate::row_marks::draw(found.space.as_ref().map(|(colour, _)| *colour), found.kept_from_ai, 18.0 + name_width, top + 14.0, &quiet);
             // SAFETY: a font and a colour are those attributes' values.
             unsafe {
                 NSString::from_str(&name).drawAtPoint_withAttributes(NSPoint::new(18.0, top + 5.0), Some(&attributes(&name_font, &ink)));
@@ -197,7 +204,19 @@ pub struct ControllerIvars {
     live: Retained<crate::live_preview::LivePreview>,
     reader: RefCell<Option<SqliteIndex>>,
     titles: RefCell<Option<Arc<TitleIndex>>>,
+    /// What marks a document found: the vault's spaces with the window's, and what is kept
+    /// from the AI.
+    marks: RefCell<Marks>,
     on_open: RefCell<Option<OnOpen>>,
+}
+
+/// What a document's marks are told from.
+#[derive(Default)]
+pub struct Marks {
+    pub spaces: Arc<knotes_spaces::Spaces>,
+    /// The window's space; none for the whole vault.
+    pub space: Option<String>,
+    pub ai: Arc<knotes_spaces::KeptFromAi>,
 }
 
 define_class!(
@@ -250,10 +269,16 @@ impl Controller {
     /// The documents the field's text finds, listed; the first shown below.
     fn search(&self) {
         let query = self.ivars().field.stringValue().to_string();
-        let found = match self.ivars().reader.borrow().as_ref() {
+        let mut found = match self.ivars().reader.borrow().as_ref() {
             Some(reader) => find(reader, self.ivars().titles.borrow().as_deref(), &query),
             None => Vec::new(),
         };
+        let marks = self.ivars().marks.borrow();
+        for document in &mut found {
+            document.space = knotes_app::space_mark(&marks.spaces, marks.space.as_deref(), &document.path).map(|space| (space.color, space.name.clone()));
+            document.kept_from_ai = marks.ai.holds(&document.path);
+        }
+        drop(marks);
         self.ivars().list.set(found, self.ivars().list_scroll.contentSize().width);
         self.show_chosen();
     }
@@ -380,7 +405,7 @@ impl SearchWindow {
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
         window.setContentView(Some(&content));
         window.setContentSize(NSSize::new(860.0, 640.0));
-        let ivars = ControllerIvars { window, field, list, list_scroll, preview, live, reader: RefCell::new(None), titles: RefCell::new(None), on_open: RefCell::new(None) };
+        let ivars = ControllerIvars { window, field, list, list_scroll, preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
         // SAFETY: a plain object's init.
         let controller: Retained<Controller> = unsafe { msg_send![super(Controller::alloc(mtm).set_ivars(ivars)), init] };
         let field = &controller.ivars().field;
@@ -414,8 +439,9 @@ impl SearchWindow {
     /// Shows the window over the vault at `vault` indexed at `index_dir`, its names as `titles`
     /// has them and its links as `links` resolves them, the field taking what is typed; what
     /// was searched before is searched again (the vault may have changed).
-    pub fn show(&self, vault: &std::path::Path, index_dir: &std::path::Path, titles: Option<Arc<TitleIndex>>, links: Option<Arc<dyn knotes_core::LinkResolver>>) {
+    pub fn show(&self, vault: &std::path::Path, index_dir: &std::path::Path, titles: Option<Arc<TitleIndex>>, links: Option<Arc<dyn knotes_core::LinkResolver>>, marks: Marks) {
         let ivars = self.controller.ivars();
+        *ivars.marks.borrow_mut() = marks;
         // What the note's look needs of the vault: its images, and which links lead somewhere.
         ivars.live.set_vault(vault.to_path_buf());
         if let Some(links) = links {
@@ -458,7 +484,12 @@ impl SearchWindow {
     pub fn describe(&self) -> String {
         let ivars = self.controller.ivars();
         let chosen = ivars.list.ivars().chosen.get();
-        let rows: Vec<String> = ivars.list.ivars().rows.borrow().iter().enumerate().map(|(i, f)| if chosen == Some(i) { format!("[{}]", f.path) } else { f.path.clone() }).collect();
+        // A marked document with its marks: `Home/c.md • Дім, no-ai`.
+        let named = |found: &Found| {
+            let marks: Vec<&str> = found.space.iter().map(|(_, name)| name.as_str()).chain(found.kept_from_ai.then_some("no-ai")).collect();
+            if marks.is_empty() { found.path.clone() } else { format!("{} • {}", found.path, marks.join(", ")) }
+        };
+        let rows: Vec<String> = ivars.list.ivars().rows.borrow().iter().enumerate().map(|(i, f)| if chosen == Some(i) { format!("[{}]", named(f)) } else { named(f) }).collect();
         let text = ivars.preview.string();
         let query = ivars.field.stringValue().to_string();
         let marks = marks(&text, &query);

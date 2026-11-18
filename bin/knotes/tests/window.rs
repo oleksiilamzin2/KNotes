@@ -3226,10 +3226,23 @@ fn files_in_spaces_show_their_space_s_dot_in_the_whole_vault() {
 }
 
 #[test]
-fn a_folder_shows_the_dot_of_the_space_it_sets() {
+fn a_folder_shows_the_dot_of_the_space_it_sets_and_a_tab_of_another_space_its_own() {
     let vault = spaced_vault();
     let out = probe_with(&[vault.path()], None);
     assert!(out.contains("sidebar-marks: Home • Дім | Work • Робота"), "{out}");
+    // Tabs opened in the whole vault come back in the space: the one of another space has
+    // that space's dot, the space's own none; and a tab of a note kept from the AI its mark.
+    std::fs::write(vault.path().join("Work/secret.md"), "#no-ai\n\nтаємне").unwrap();
+    let home = tempfile::tempdir().unwrap();
+    probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_OPEN", "Home/c.md"), ("KNOTES_PROBE_NEW_TAB", "Work/a.md")]);
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_NEW_TAB", "Work/secret.md")]);
+    assert!(out.contains("tab-marks: c • Дім | secret • no-ai\n"), "{out}");
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "")]);
+    assert!(out.contains("tab-marks: c • Дім | a • Робота | secret • Робота, no-ai\n"), "in the whole vault every space's: {out}");
+    // The vault's search marks what it finds the same way.
+    let out = probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_VAULT_SEARCH", "c")]);
+    let found = out.lines().find_map(|l| l.strip_prefix("vault-search: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(found.contains("Home/c.md • Дім") && found.contains("Work/secret.md • no-ai") && !found.contains("Робота"), "{found}");
 }
 
 #[test]
