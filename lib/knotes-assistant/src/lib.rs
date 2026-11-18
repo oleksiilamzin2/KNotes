@@ -3,5 +3,6 @@
 //! 0028), and the model chosen for search by meaning with its helper (ADR 0029).
 
 pub mod chat_eval;
+pub mod chat_state;
 pub mod chat_worker;
 pub mod meaning;

@@ -346,3 +346,8 @@ plan usage for open-source and local apps) on 2026-11-14:
   model chosen for search by meaning with its helper (ADR 0028, 0029), and the run of the
   test questions. None of it draws or asks AppKit anything: the app gives it the system's
   time zone and takes back the events of a turn. The app's binary is the windows.
+- **What the chat's panel shows and asks is kept outside it** (2026-11-18):
+  `knotes_assistant::chat_state::ChatState` holds the model and the effort chosen, the
+  conversations and the one open, the document offered and the turn under way, and says what
+  a turn takes, what becomes of it when it is done or fails, and what the lists of models,
+  efforts and conversations hold. The panel tells it what the user did and draws it.

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 use knotes_chat::{
-    ChatError, ChatEvent, Conversation, ConversationEntry, Conversations, CredentialStore, Credentials, KeychainStore, MemoryStore, Model, Registration, Run, RunLink, Shown, SignIn, SignInError, Transport, UreqTransport,
+    ChatError, ChatEvent, Conversation, Conversations, CredentialStore, Credentials, KeychainStore, MemoryStore, Model, Registration, Run, RunLink, Shown, SignIn, SignInError, Transport, UreqTransport,
     list_models, reply_runs,
 };
 use knotes_session::AppSettings;
@@ -25,7 +25,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
 use crate::chat_bubble::{CARD_INDENT, CODE, Card, ChatBubble, QUESTION, card_of};
-use knotes_assistant::chat_worker::{Account, ChatWorker, ScriptTransport, Turn};
+use knotes_assistant::chat_worker::{Account, ChatWorker, ScriptTransport};
 use crate::strings;
 
 /// Where a link in the conversation goes, as its attribute keeps it.
@@ -222,38 +222,8 @@ impl ChatTarget {
     }
 }
 
-/// A turn under way: the question, the reply so far and the tools it called.
-struct Asking {
-    question: String,
-    reply: String,
-    tools: Vec<(String, serde_json::Value)>,
-    /// The conversation's older part is being summarized first.
-    compacting: bool,
-    cancel: Arc<AtomicBool>,
-}
-
-struct State {
-    registration: Registration,
-    conversations: Option<Conversations>,
-    /// The conversations as the list shows them, newest first.
-    entries: Vec<ConversationEntry>,
-    current: Conversation,
-    document: Option<String>,
-    /// The document is offered to the model (the chip under the field not crossed out).
-    document_on: bool,
-    /// The window's space (ADR 0030): its id and name, told to the model each turn.
-    space: Option<(String, String)>,
-    models: Vec<Model>,
-    model: String,
-    /// How hard the model is asked to reason; none, its own default.
-    effort: Option<String>,
-    turn: Option<Asking>,
-    /// What went wrong in the last turn.
-    error: Option<ChatError>,
-    /// Set to call off the sign-in under way.
-    sign_in: Option<Arc<AtomicBool>>,
-    sign_in_words: String,
-}
+/// What the panel shows and asks (knotes-assistant's `ChatState`).
+type State = knotes_assistant::chat_state::ChatState;
 
 pub struct ChatPanel {
     pub view: Retained<NSView>,
@@ -464,22 +434,7 @@ impl ChatPanel {
         let settings = AppSettings::load(&app_data);
         let model = settings.chat_model.unwrap_or_default();
         let effort = settings.chat_effort;
-        let state = State {
-            registration: Registration::load(&app_data),
-            conversations: None,
-            entries: Vec::new(),
-            current: Conversation::new(&model),
-            document: None,
-            document_on: true,
-            space: None,
-            models: Vec::new(),
-            model,
-            effort,
-            turn: None,
-            error: None,
-            sign_in: None,
-            sign_in_words: String::new(),
-        };
+        let state = State::new(Registration::load(&app_data), model, effort);
         let worker = ChatWorker::new(Arc::clone(&account), || i64::try_from(objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT()).unwrap_or(0));
         let panel = Rc::new(Self {
             view,
@@ -555,10 +510,8 @@ impl ChatPanel {
         }
         self.eval_started.set(true);
         let out = std::env::var("KNOTES_CHAT_EVAL_OUT").unwrap_or_else(|_| format!("{questions}.answers.md"));
-        let name = state.models.iter().find(|m| m.slug == state.model).map_or(state.model.clone(), |m| m.name.clone());
-        let compact_at = compact_at_for(&state.models, &state.model);
-        let effort = effort_for(&state.models, &state.model, state.effort.as_ref());
-        let effort_name = shown_effort(&state.models, &state.model, effort.as_deref());
+        let (name, compact_at, effort) = (state.model_name(), state.compact_at(), state.asked_effort());
+        let effort_name = state.used_effort().map_or_else(|| "типові роздуми".to_string(), |effort| strings::chat_effort(&effort));
         match knotes_assistant::chat_eval::turns(knotes_assistant::chat_eval::questions(std::path::Path::new(&questions)), &state.model, &name, effort, &effort_name, compact_at, std::path::Path::new(&out)) {
             Ok(turns) => turns.into_iter().for_each(|turn| self.worker.send(turn)),
             Err(e) => eprintln!("knotes: cannot start the test questions: {e}"),
@@ -573,15 +526,9 @@ impl ChatPanel {
 
     /// The document open (a vault path), offered to the model unless crossed out.
     pub fn set_document(&self, document: Option<String>) {
-        {
-            let mut state = self.state.borrow_mut();
-            if state.document == document {
-                return;
-            }
-            state.document = document;
-            state.document_on = true;
+        if self.state.borrow_mut().set_document(document) {
+            self.show_document();
         }
-        self.show_document();
     }
 
     /// The question field takes the keys (when signed in).
@@ -737,14 +684,7 @@ impl ChatPanel {
     }
 
     fn set_models(&self, models: Vec<Model>) {
-        {
-            let mut state = self.state.borrow_mut();
-            if !models.iter().any(|m| m.slug == state.model) {
-                state.model = models.first().map(|m| m.slug.clone()).unwrap_or_default();
-            }
-            state.models = models;
-            state.effort = effort_for(&state.models, &state.model, state.effort.as_ref());
-        }
+        self.state.borrow_mut().set_models(models);
         self.show_models();
         self.maybe_start_eval();
     }
@@ -766,29 +706,28 @@ impl ChatPanel {
     fn show_efforts(&self) {
         let state = self.state.borrow();
         self.effort_popup.removeAllItems();
-        let Some(model) = state.models.iter().find(|m| m.slug == state.model) else { return };
-        for effort in &model.efforts {
+        let Some((efforts, chosen)) = state.efforts() else { return };
+        for effort in efforts {
             self.effort_popup.addItemWithTitle(&NSString::from_str(&strings::chat_effort(effort)));
         }
-        let chosen = state.effort.as_ref().unwrap_or(&model.default_effort);
-        if let Some(i) = model.efforts.iter().position(|e| e == chosen) {
+        if let Some(i) = chosen {
             self.effort_popup.selectItemAtIndex(i as isize);
         }
     }
 
+    /// The effort chosen in the list: asked for from now on, and kept for the next launch.
     fn choose_effort_at(&self, index: isize) {
-        let effort = {
-            let state = self.state.borrow();
-            let Some(model) = state.models.iter().find(|m| m.slug == state.model) else { return };
-            let Some(effort) = usize::try_from(index).ok().and_then(|i| model.efforts.get(i)) else { return };
-            effort.clone()
-        };
-        self.set_effort(effort);
+        let Some(effort) = self.state.borrow_mut().choose_effort(index) else { return };
+        self.keep_effort(effort);
     }
 
     /// `effort` asked for from now on, and kept for the next launch.
     fn set_effort(&self, effort: String) {
         self.state.borrow_mut().effort = Some(effort.clone());
+        self.keep_effort(effort);
+    }
+
+    fn keep_effort(&self, effort: String) {
         self.show_efforts();
         let mut settings = AppSettings::load(&self.app_data);
         settings.chat_effort = Some(effort);
@@ -798,14 +737,7 @@ impl ChatPanel {
     }
 
     fn choose_model(&self, index: isize) {
-        let slug = {
-            let mut state = self.state.borrow_mut();
-            let Some(model) = usize::try_from(index).ok().and_then(|i| state.models.get(i)).map(|m| m.slug.clone()) else { return };
-            state.model = model.clone();
-            // An effort the new model does not take gives way to its own.
-            state.effort = effort_for(&state.models, &state.model, state.effort.as_ref());
-            model
-        };
+        let Some(slug) = self.state.borrow_mut().choose_model(index) else { return };
         self.show_efforts();
         let mut settings = AppSettings::load(&self.app_data);
         settings.chat_model = Some(slug);
@@ -820,43 +752,28 @@ impl ChatPanel {
     fn list_conversations(&self) {
         let state = self.state.borrow();
         self.conversations_popup.removeAllItems();
-        let saved = state.entries.iter().position(|e| e.id == state.current.id);
-        if saved.is_none() {
-            self.conversations_popup.addItemWithTitle(&NSString::from_str(strings::CHAT_NEW));
-        }
-        for (i, entry) in state.entries.iter().enumerate() {
-            let title = if entry.title.is_empty() { strings::CHAT_UNTITLED } else { &entry.title };
+        let (titles, open) = state.conversation_titles(strings::CHAT_NEW, strings::CHAT_UNTITLED);
+        for (i, title) in titles.iter().enumerate() {
             // Equal titles would fold into one item.
             self.conversations_popup.addItemWithTitle(&NSString::from_str(&format!("{title}{}", "\u{200b}".repeat(i))));
             if let Some(item) = self.conversations_popup.lastItem() {
                 item.setTitle(&NSString::from_str(title));
             }
         }
-        self.conversations_popup.selectItemAtIndex(saved.map_or(0, |i| i as isize));
+        self.conversations_popup.selectItemAtIndex(open as isize);
         self.conversations_popup.setEnabled(state.turn.is_none());
     }
 
     fn choose_conversation(&self, index: isize) {
-        {
-            let mut state = self.state.borrow_mut();
-            let offset = usize::from(!state.entries.iter().any(|e| e.id == state.current.id));
-            let Some(entry) = usize::try_from(index).ok().and_then(|i| i.checked_sub(offset)).and_then(|i| state.entries.get(i)).cloned() else { return };
-            let Some(conversation) = state.conversations.as_ref().and_then(|c| c.load(&entry.id)) else { return };
-            state.current = conversation;
-            state.error = None;
+        if self.state.borrow_mut().choose_conversation(index) {
+            self.list_conversations();
+            self.render();
         }
-        self.list_conversations();
-        self.render();
     }
 
     fn new_conversation(&self) {
-        {
-            let mut state = self.state.borrow_mut();
-            if state.turn.is_some() || state.current.items.is_empty() {
-                return;
-            }
-            state.current = Conversation::new(&state.model);
-            state.error = None;
+        if !self.state.borrow_mut().new_conversation() {
+            return;
         }
         self.list_conversations();
         self.render();
@@ -866,23 +783,10 @@ impl ChatPanel {
     }
 
     fn delete_conversation(&self) {
-        {
-            let mut state = self.state.borrow_mut();
-            if state.turn.is_some() {
-                return;
-            }
-            let id = state.current.id.clone();
-            let Some(conversations) = state.conversations.as_ref() else { return };
-            conversations.delete(&id);
-            let entries = conversations.list();
-            let next = entries.first().and_then(|e| conversations.load(&e.id));
-            state.entries = entries;
-            let model = state.model.clone();
-            state.current = next.unwrap_or_else(|| Conversation::new(&model));
-            state.error = None;
+        if self.state.borrow_mut().delete_conversation() {
+            self.list_conversations();
+            self.render();
         }
-        self.list_conversations();
-        self.render();
     }
 
     fn show_more(&self, button: &NSButton) {
@@ -911,9 +815,7 @@ impl ChatPanel {
 
     /// How full the conversation is, for the menu: "Розмова: 45 тис. з 245 тис. токенів".
     fn context_words(&self) -> Option<String> {
-        let state = self.state.borrow();
-        let tokens = state.current.memory.tokens?;
-        Some(strings::chat_context(tokens, compact_at_for(&state.models, &state.model)))
+        self.state.borrow().context().map(|(tokens, compact_at)| strings::chat_context(tokens, compact_at))
     }
 
     // The document offered.
@@ -955,8 +857,7 @@ impl ChatPanel {
 
     /// Sends the question in the field; while a turn runs, stops it.
     fn send(&self) {
-        if let Some(turn) = &self.state.borrow().turn {
-            turn.cancel.store(true, Ordering::Relaxed);
+        if self.state.borrow().stop_turn() {
             return;
         }
         let text = self.composer.string().to_string().trim().to_string();
@@ -966,47 +867,28 @@ impl ChatPanel {
         if !self.account.is_signed_in() {
             return self.show_account();
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        let turn = {
-            let mut state = self.state.borrow_mut();
-            if state.model.is_empty() {
-                state.model = state.current.model.clone();
-            }
-            state.current.model = state.model.clone();
-            state.error = None;
-            state.turn = Some(Asking { question: text.clone(), reply: String::new(), tools: Vec::new(), compacting: false, cancel: Arc::clone(&cancel) });
-            let target = Arc::new(MainThreadBound::new(self.this.borrow().clone(), self.mtm()));
-            let events = Arc::clone(&target);
-            Turn {
-                items: state.current.items.clone(),
-                memory: state.current.memory.clone(),
-                compact_at: compact_at_for(&state.models, &state.model),
-                text,
-                open: state.document.clone().filter(|_| state.document_on),
-                space: state.space.clone(),
-                model: state.model.clone(),
-                effort: effort_for(&state.models, &state.model, state.effort.as_ref()),
-                cache_key: state.current.id.clone(),
-                cancel,
-                on_event: Box::new(move |event| {
-                    let target = Arc::clone(&events);
-                    DispatchQueue::main().exec_async(move || {
-                        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
-                        if let Some(panel) = target.get(mtm).upgrade() {
-                            panel.chat_event(event);
-                        }
-                    });
-                }),
-                done: Box::new(move |items, memory, result| {
-                    DispatchQueue::main().exec_async(move || {
-                        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
-                        if let Some(panel) = target.get(mtm).upgrade() {
-                            panel.turn_done(items, memory, result);
-                        }
-                    });
-                }),
-            }
-        };
+        let target = Arc::new(MainThreadBound::new(self.this.borrow().clone(), self.mtm()));
+        let events = Arc::clone(&target);
+        let turn = self.state.borrow_mut().begin_turn(
+            text,
+            Box::new(move |event| {
+                let target = Arc::clone(&events);
+                DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(panel) = target.get(mtm).upgrade() {
+                        panel.chat_event(event);
+                    }
+                });
+            }),
+            Box::new(move |items, memory, result| {
+                DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(panel) = target.get(mtm).upgrade() {
+                        panel.turn_done(items, memory, result);
+                    }
+                });
+            }),
+        );
         self.composer.setString(ns_string!(""));
         self.composer_changed();
         self.list_conversations();
@@ -1015,53 +897,13 @@ impl ChatPanel {
     }
 
     fn chat_event(&self, event: ChatEvent) {
-        {
-            let mut state = self.state.borrow_mut();
-            let Some(turn) = state.turn.as_mut() else { return };
-            match event {
-                ChatEvent::Text(text) => turn.reply.push_str(&text),
-                ChatEvent::ToolCall { name, arguments } => turn.tools.push((name, arguments)),
-                ChatEvent::ToolDone { .. } => {}
-                ChatEvent::Compacting => turn.compacting = true,
-            }
+        if self.state.borrow_mut().chat_event(event) {
+            self.render_later();
         }
-        self.render_later();
     }
 
     fn turn_done(&self, items: Vec<serde_json::Value>, memory: knotes_chat::Memory, result: Result<(), ChatError>) {
-        let question = {
-            let mut state = self.state.borrow_mut();
-            let turn = state.turn.take();
-            // A summary made for a turn that then failed still covers items from before it.
-            if memory != state.current.memory {
-                state.current.memory = memory;
-                if result.is_err()
-                    && let Some(conversations) = &state.conversations
-                    && let Err(e) = conversations.save(&state.current)
-                {
-                    eprintln!("knotes: cannot save the conversation: {e}");
-                }
-            }
-            match result {
-                Ok(()) => {
-                    let state = &mut *state;
-                    state.current.items = items;
-                    state.current.name_from_first_question();
-                    state.current.updated = now();
-                    if let Some(conversations) = &state.conversations {
-                        if let Err(e) = conversations.save(&state.current) {
-                            eprintln!("knotes: cannot save the conversation: {e}");
-                        }
-                        state.entries = conversations.list();
-                    }
-                    None
-                }
-                Err(error) => {
-                    state.error = Some(error);
-                    turn.map(|t| t.question)
-                }
-            }
-        };
+        let question = self.state.borrow_mut().turn_done(items, memory, result, now());
         // A failed question goes back into the field, to send again.
         if let Some(question) = question
             && self.composer.string().length() == 0
@@ -1186,7 +1028,7 @@ impl ChatPanel {
         }
         lines.push(format!("chat field: {}", self.composer.string()));
         let tokens = state.current.memory.tokens.map_or("unknown".to_string(), |t| t.to_string());
-        lines.push(format!("chat context: {tokens} of {}", compact_at_for(&state.models, &state.model)));
+        lines.push(format!("chat context: {tokens} of {}", state.compact_at()));
         let focused = self.view.window().and_then(|w| w.firstResponder()).is_some_and(|r| std::ptr::eq(&*r, &**self.composer as &objc2_app_kit::NSResponder));
         lines.push(format!("chat field focused: {}", if focused { "yes" } else { "no" }));
         lines
@@ -1298,26 +1140,6 @@ fn account() -> Account {
     let transport: Box<dyn Transport + Send + Sync> = Box::new(UreqTransport::default());
     let store: Box<dyn CredentialStore + Send + Sync> = if crate::probe::enabled() { Box::new(MemoryStore::default()) } else { Box::new(KeychainStore) };
     Account::new(transport, store)
-}
-
-/// The effort to ask `model` for: the one `chosen` if the model takes it (or while the list of
-/// models is not in yet), else none, so the model reasons as it does by default.
-fn effort_for(models: &[Model], model: &str, chosen: Option<&String>) -> Option<String> {
-    match models.iter().find(|m| m.slug == model) {
-        Some(m) => chosen.filter(|e| m.efforts.contains(e)).cloned(),
-        None => chosen.cloned(),
-    }
-}
-
-/// What the effort `model` is asked for is called: its own default when none.
-fn shown_effort(models: &[Model], model: &str, effort: Option<&str>) -> String {
-    let default = models.iter().find(|m| m.slug == model).map(|m| m.default_effort.as_str());
-    effort.or(default).map_or_else(|| "типові роздуми".to_string(), strings::chat_effort)
-}
-
-/// Where the conversation is summarized for `model` (its window from the plan's list).
-fn compact_at_for(models: &[Model], model: &str) -> u64 {
-    knotes_chat::compact_at(models.iter().find(|m| m.slug == model).and_then(|m| m.context_window))
 }
 
 fn now() -> u64 {
