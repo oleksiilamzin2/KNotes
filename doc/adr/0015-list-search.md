@@ -92,7 +92,14 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
 - A document found has its marks after its name, as the list's rows and the tabs have them
   (`row_marks`): the dot of its space when that is not the window's, and the AI's mark when
   it is kept from the AI. The owner missed them in the first version.
-- Searched on the main thread as the field's text changes, with a reader of its own: a name
-  search and a full-text search take a few milliseconds at 10 000 notes (ADR 0006's
-  measurements), and no answers arrive out of order. No search by meaning there yet, no
-  options (case, scope), no columns or sorting as DEVONthink's have.
+- **What is searched, and the case** (the owner asked for both), under the field: «Усе» (the
+  names, then the text; as it opens), «Файли» (the names), «Вміст» (the text), «За змістом»
+  (by meaning, ADR 0028); and «Aa», on while the letters' case is ignored, as the list's
+  search has it: off, only a name or a text holding each word as typed. The case has no part
+  in a search by meaning, and «Aa» is greyed then.
+- Names and text are searched on the main thread as the field's text changes, with a reader
+  of its own: they take a few milliseconds at 10 000 notes (ADR 0006's measurements), and no
+  answers arrive out of order. By meaning is asked of the list's search thread
+  (`SearchWorker`, one of the window's own), which asks the embedding model; the list is
+  empty until its answer comes, and an answer to an older question is dropped. No scope, no
+  columns or sorting as DEVONthink's have.

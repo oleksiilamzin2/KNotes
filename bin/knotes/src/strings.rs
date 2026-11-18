@@ -426,6 +426,8 @@ pub const UNTAGGED: &str = "Без тегів";
 pub const SEARCH: &str = "Пошук";
 /// Search modes over the note list (Obsidian's `file:` and `content:`).
 pub const SEARCH_FILES: &str = "Файли";
+/// The vault's search: the names and the text together.
+pub const SEARCH_ALL: &str = "Усе";
 pub const SEARCH_CONTENT: &str = "Вміст";
 pub const SEARCH_MEANING: &str = "За змістом";
 /// Asked before a rename changes links in other notes (ADR 0019).

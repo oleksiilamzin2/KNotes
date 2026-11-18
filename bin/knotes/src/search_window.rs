@@ -2,7 +2,8 @@
 //! toolbar's magnifying glass opens it. A field on top; under it every document of the vault
 //! the words find, by its name first, then by its text; and in the lower half the document
 //! chosen, shown as the vault's window shows a note (the live preview, read only), the words
-//! marked, scrolled to the first. Return (or a double click) opens
+//! marked, scrolled to the first. Under the field, what is searched (all, the names, the text,
+//! or by meaning) and whether the letters' case counts. Return (or a double click) opens
 //! the document in the vault's window; Escape closes the search.
 
 use std::cell::{Cell, RefCell};
@@ -42,17 +43,42 @@ pub struct Found {
     pub kept_from_ai: bool,
 }
 
+/// What a search looks in. By meaning is searched apart, on another thread (it asks the
+/// embedding model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The names, then the text.
+    All,
+    Names,
+    Text,
+    Meaning,
+}
+
+/// Whether `text` holds each word of `query` in the case it was typed in.
+fn holds_as_typed(text: &str, query: &str) -> bool {
+    query.split_whitespace().all(|word| text.contains(word))
+}
+
 /// The vault's documents `query` finds: those whose name holds it, best first, then those whose
-/// text holds every word (each once, with the text around the first find).
-pub fn find(reader: &SqliteIndex, titles: Option<&TitleIndex>, query: &str) -> Vec<Found> {
+/// text holds every word (each once, with the text around the first find); `kind` says which
+/// of the two. With `ignore_case` off, only those holding the words as typed.
+pub fn find(reader: &SqliteIndex, titles: Option<&TitleIndex>, query: &str, kind: Kind, ignore_case: bool) -> Vec<Found> {
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();
     }
-    let mut found: Vec<Found> = titles.map(|t| t.search_titles(query, MAX_NAMES)).unwrap_or_default().into_iter().map(|hit| Found { path: hit.path, snippet: String::new(), space: None, kept_from_ai: false }).collect();
-    let hits = reader.search(&ContentQuery { text: query, within: Within::Note, prefixes: true, scope: None, limit: MAX_TEXTS }).unwrap_or_default();
+    let names = if matches!(kind, Kind::All | Kind::Names) { titles.map(|t| t.search_titles(query, MAX_NAMES)).unwrap_or_default() } else { Vec::new() };
+    let mut found: Vec<Found> = names
+        .into_iter()
+        .filter(|hit| ignore_case || holds_as_typed(knotes_app::title_of(&hit.path), query))
+        .map(|hit| Found { path: hit.path, snippet: String::new(), space: None, kept_from_ai: false })
+        .collect();
+    let hits = if matches!(kind, Kind::All | Kind::Text) { reader.search(&ContentQuery { text: query, within: Within::Note, prefixes: true, scope: None, limit: MAX_TEXTS }).unwrap_or_default() } else { Vec::new() };
     for hit in hits {
         let text = reader.note_text(&hit.path).ok().flatten().unwrap_or_default();
+        if !ignore_case && !holds_as_typed(&text, query) {
+            continue;
+        }
         let block = text.get(hit.span.start as usize..hit.span.end as usize).unwrap_or(&text);
         let snippet = found_snippet(block, query, SNIPPET_CHARS);
         match found.iter_mut().find(|f| f.path == hit.path) {
@@ -198,6 +224,14 @@ pub struct ControllerIvars {
     field: Retained<NSSearchField>,
     list: Retained<ResultList>,
     list_scroll: Retained<NSScrollView>,
+    /// What is searched (all, names, text, by meaning), and «Aa»: on while the case is ignored.
+    kind: Retained<objc2_app_kit::NSSegmentedControl>,
+    case: Retained<objc2_app_kit::NSButton>,
+    /// Search by meaning, on its own thread: made at the first such search; only the answer to
+    /// the latest question is shown.
+    index_dir: RefCell<Option<std::path::PathBuf>>,
+    worker: RefCell<Option<crate::search_worker::SearchWorker>>,
+    asked: Cell<u64>,
     /// The document chosen, as a note's view shows it: the live preview over a note's text
     /// view, not edited here.
     preview: Retained<crate::note_view::NoteTextView>,
@@ -266,13 +300,81 @@ impl Controller {
         true
     }
 
-    /// The documents the field's text finds, listed; the first shown below.
+    fn kind(&self) -> Kind {
+        [Kind::All, Kind::Names, Kind::Text, Kind::Meaning].get(self.ivars().kind.selectedSegment() as usize).copied().unwrap_or(Kind::All)
+    }
+
+    fn ignore_case(&self) -> bool {
+        self.ivars().case.state() == objc2_app_kit::NSControlStateValueOn
+    }
+
+    /// The documents the field's text finds, listed; the first shown below. By meaning they
+    /// come later, from the search's thread (`found_by_meaning`).
     fn search(&self) {
         let query = self.ivars().field.stringValue().to_string();
-        let mut found = match self.ivars().reader.borrow().as_ref() {
-            Some(reader) => find(reader, self.ivars().titles.borrow().as_deref(), &query),
+        // A question asked since: an answer by meaning still on its way is for an older one.
+        self.ivars().asked.set(self.ivars().asked.get() + 1);
+        // The case has no part in a search by meaning.
+        self.ivars().case.setEnabled(self.kind() != Kind::Meaning);
+        if self.kind() == Kind::Meaning {
+            self.list(Vec::new());
+            self.ask_by_meaning(query.trim());
+            return;
+        }
+        let found = match self.ivars().reader.borrow().as_ref() {
+            Some(reader) => find(reader, self.ivars().titles.borrow().as_deref(), &query, self.kind(), self.ignore_case()),
             None => Vec::new(),
         };
+        self.list(found);
+    }
+
+    /// Asks the search's thread for the documents near `query` in meaning.
+    fn ask_by_meaning(&self, query: &str) {
+        if query.is_empty() {
+            return;
+        }
+        let Some(index_dir) = self.ivars().index_dir.borrow().clone() else { return };
+        // The model loads while the answer is waited for.
+        if let Some(embedder) = crate::meaning::embedder() {
+            embedder.warm();
+        }
+        if self.ivars().worker.borrow().is_none() {
+            let target = Arc::new(dispatch2::MainThreadBound::new(objc2::rc::Weak::from_retained(&objc2::Message::retain(self)), self.mtm()));
+            let worker = crate::search_worker::SearchWorker::start(index_dir, move |response| {
+                let target = Arc::clone(&target);
+                dispatch2::DispatchQueue::main().exec_async(move || {
+                    let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(controller) = target.get(mtm).load() {
+                        controller.found_by_meaning(response);
+                    }
+                });
+            });
+            *self.ivars().worker.borrow_mut() = Some(worker);
+        }
+        if let Some(worker) = self.ivars().worker.borrow().as_ref() {
+            let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
+            worker.request(crate::search_worker::SearchRequest {
+                generation: self.ivars().asked.get(),
+                mode: knotes_app::SearchMode::Meaning,
+                query: query.to_owned(),
+                scope: None,
+                titles: None,
+                closeness,
+                space: None,
+                ignore_case: true,
+            });
+        }
+    }
+
+    /// The answer of a search by meaning: listed unless something was asked since.
+    fn found_by_meaning(&self, response: crate::search_worker::SearchResponse) {
+        if response.generation == self.ivars().asked.get() && self.kind() == Kind::Meaning {
+            self.list(response.content.into_iter().map(|found| Found { path: found.path, snippet: found.snippet, space: None, kept_from_ai: false }).collect());
+        }
+    }
+
+    /// `found` listed with their marks; the first shown below.
+    fn list(&self, mut found: Vec<Found>) {
         let marks = self.ivars().marks.borrow();
         for document in &mut found {
             document.space = knotes_app::space_mark(&marks.spaces, marks.space.as_deref(), &document.path).map(|space| (space.color, space.name.clone()));
@@ -378,10 +480,22 @@ impl SearchWindow {
                 look.appearance_changed(&shown);
             }
         });
+        // What is searched, and «Aa», under the field.
+        let labels = NSArray::from_retained_slice(&[strings::SEARCH_ALL, strings::SEARCH_FILES, strings::SEARCH_CONTENT, strings::SEARCH_MEANING].map(NSString::from_str));
+        // SAFETY: labels and no target yet (set below, once the controller is made).
+        let kind = unsafe { objc2_app_kit::NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(&labels, objc2_app_kit::NSSegmentSwitchTracking::SelectOne, None, None, mtm) };
+        kind.setSelectedSegment(0);
+        kind.setControlSize(objc2_app_kit::NSControlSize::Small);
+        // SAFETY: as above.
+        let case = unsafe { objc2_app_kit::NSButton::buttonWithTitle_target_action(&NSString::from_str("Aa"), None, None, mtm) };
+        case.setButtonType(objc2_app_kit::NSButtonType::PushOnPushOff);
+        case.setState(objc2_app_kit::NSControlStateValueOn);
+        case.setControlSize(objc2_app_kit::NSControlSize::Small);
+        case.setToolTip(Some(&NSString::from_str(strings::FIND_IGNORE_CASE)));
         let line = NSBox::new(mtm);
         line.setBoxType(NSBoxType::Separator);
         let content = NSView::new(mtm);
-        for part in [&*field as &NSView, &list_scroll, &line, &preview_scroll] {
+        for part in [&*field as &NSView, &kind, &case, &list_scroll, &line, &preview_scroll] {
             part.setTranslatesAutoresizingMaskIntoConstraints(false);
             content.addSubview(part);
         }
@@ -389,7 +503,11 @@ impl SearchWindow {
             field.topAnchor().constraintEqualToAnchor_constant(&content.topAnchor(), 12.0),
             field.leadingAnchor().constraintEqualToAnchor_constant(&content.leadingAnchor(), 12.0),
             field.trailingAnchor().constraintEqualToAnchor_constant(&content.trailingAnchor(), -12.0),
-            list_scroll.topAnchor().constraintEqualToAnchor_constant(&field.bottomAnchor(), 10.0),
+            kind.topAnchor().constraintEqualToAnchor_constant(&field.bottomAnchor(), 8.0),
+            kind.leadingAnchor().constraintEqualToAnchor_constant(&content.leadingAnchor(), 12.0),
+            case.centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
+            case.leadingAnchor().constraintEqualToAnchor_constant(&kind.trailingAnchor(), 10.0),
+            list_scroll.topAnchor().constraintEqualToAnchor_constant(&kind.bottomAnchor(), 8.0),
             list_scroll.leadingAnchor().constraintEqualToAnchor(&content.leadingAnchor()),
             list_scroll.trailingAnchor().constraintEqualToAnchor(&content.trailingAnchor()),
             line.topAnchor().constraintEqualToAnchor(&list_scroll.bottomAnchor()),
@@ -405,7 +523,7 @@ impl SearchWindow {
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
         window.setContentView(Some(&content));
         window.setContentSize(NSSize::new(860.0, 640.0));
-        let ivars = ControllerIvars { window, field, list, list_scroll, preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
+        let ivars = ControllerIvars { window, field, list, list_scroll, kind, case, index_dir: RefCell::new(None), worker: RefCell::new(None), asked: Cell::new(0), preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
         // SAFETY: a plain object's init.
         let controller: Retained<Controller> = unsafe { msg_send![super(Controller::alloc(mtm).set_ivars(ivars)), init] };
         let field = &controller.ivars().field;
@@ -414,6 +532,11 @@ impl SearchWindow {
             field.setTarget(Some(&controller));
             field.setAction(Some(sel!(queryChanged:)));
             field.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
+            // Another kind, or the case: searched again.
+            controller.ivars().kind.setTarget(Some(&controller));
+            controller.ivars().kind.setAction(Some(sel!(queryChanged:)));
+            controller.ivars().case.setTarget(Some(&controller));
+            controller.ivars().case.setAction(Some(sel!(queryChanged:)));
         }
         // A click on a row shows its document below; a double click opens it.
         let weak = objc2::rc::Weak::from_retained(&controller);
@@ -442,6 +565,11 @@ impl SearchWindow {
     pub fn show(&self, vault: &std::path::Path, index_dir: &std::path::Path, titles: Option<Arc<TitleIndex>>, links: Option<Arc<dyn knotes_core::LinkResolver>>, marks: Marks) {
         let ivars = self.controller.ivars();
         *ivars.marks.borrow_mut() = marks;
+        // Another vault's index: its search by meaning has a thread of its own.
+        if ivars.index_dir.borrow().as_deref() != Some(index_dir) {
+            *ivars.worker.borrow_mut() = None;
+            *ivars.index_dir.borrow_mut() = Some(index_dir.to_path_buf());
+        }
         // What the note's look needs of the vault: its images, and which links lead somewhere.
         ivars.live.set_vault(vault.to_path_buf());
         if let Some(links) = links {
@@ -459,6 +587,17 @@ impl SearchWindow {
     pub fn window(&self) -> Option<Retained<NSWindow>> {
         let window = &self.controller.ivars().window;
         window.isVisible().then(|| window.clone())
+    }
+
+    /// The kind of search chosen, and «Aa» clicked when `keep_case` (probe mode).
+    pub fn choose(&self, kind: Kind, keep_case: bool) {
+        let segment = [Kind::All, Kind::Names, Kind::Text, Kind::Meaning].iter().position(|k| *k == kind).unwrap_or(0);
+        self.controller.ivars().kind.setSelectedSegment(segment as isize);
+        if keep_case {
+            // SAFETY: a click on the window's own button.
+            unsafe { self.controller.ivars().case.performClick(None) };
+        }
+        self.controller.search();
     }
 
     /// `query` typed in the field (probe mode).

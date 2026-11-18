@@ -65,6 +65,15 @@ impl VaultWindow {
         self.search_vault();
         let search = self.search_window.borrow();
         let Some(search) = search.as_ref() else { return };
+        // `KNOTES_PROBE_VAULT_SEARCH_KIND=names` (or `text`), `KNOTES_PROBE_VAULT_SEARCH_CASE=1`
+        // for «Aa» clicked (the case kept).
+        let kind = match std::env::var("KNOTES_PROBE_VAULT_SEARCH_KIND").as_deref() {
+            Ok("names") => crate::search_window::Kind::Names,
+            Ok("text") => crate::search_window::Kind::Text,
+            Ok("meaning") => crate::search_window::Kind::Meaning,
+            _ => crate::search_window::Kind::All,
+        };
+        search.choose(kind, std::env::var_os("KNOTES_PROBE_VAULT_SEARCH_CASE").is_some());
         search.type_query(query);
         search.step(down);
         println!("vault-search: {}", search.describe());

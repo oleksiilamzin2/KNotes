@@ -2541,6 +2541,18 @@ fn the_vault_s_search_lists_documents_by_name_then_by_text_and_shows_the_one_cho
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "budget grows"), ("KNOTES_PROBE_VAULT_SEARCH_OPEN", "1")]);
     assert!(found(&out).starts_with("[Projects/Radar.md] ~ 3 marks, first «Budget»"), "{out}");
     assert!(out.contains("note: Projects/Radar.md") && !out.contains("vault-search-window: open"), "{out}");
+    // What is searched: the names alone, or the text alone.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "radar"), ("KNOTES_PROBE_VAULT_SEARCH_KIND", "names")]);
+    assert!(found(&out).starts_with("[Projects/Radar.md] ~ "), "by its name only: {out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "budget"), ("KNOTES_PROBE_VAULT_SEARCH_KIND", "text")]);
+    assert!(found(&out).contains("Projects/Radar.md") && found(&out).contains("Budget.md"), "{out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "budget"), ("KNOTES_PROBE_VAULT_SEARCH_KIND", "names")]);
+    assert!(found(&out).starts_with("[Budget.md] ~ "), "{out}");
+    // «Aa» off: the letters' case counts, in a name and in the text.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "radar"), ("KNOTES_PROBE_VAULT_SEARCH_CASE", "1")]);
+    assert!(found(&out).starts_with("[Projects/Radar.md] ~ "), "«radar» small is in Radar's text, not in Сад's («Radar»): {out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "Radar"), ("KNOTES_PROBE_VAULT_SEARCH_CASE", "1")]);
+    assert!(found(&out).contains("Projects/Radar.md") && found(&out).contains("Сад.md"), "{out}");
     // Nothing typed, nothing listed; words no document holds, none.
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "")]);
     assert_eq!(found(&out), " ~ 0 marks, first «», 0 letters shown", "{out}");
