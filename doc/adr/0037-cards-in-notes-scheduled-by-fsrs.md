@@ -330,3 +330,13 @@ test missed, each of them relaunching the app after a grade:
 - Tests that do not relaunch: a card graded twice in one review (its second labels, the
   review done, two lines a second apart), and a grade reaching the sidebar's count in the
   same launch, in a vault whose logs' folder is there already (without the fix it fails).
+- **Typed cards with no id were passed over** (the audit's finding 3): a card graded is given
+  its id in its note, ten bytes that move every card after it; the review found a card with no
+  id by its place and passed over the moved ones as gone, so a note of twenty typed cards gave
+  one a review. The cards of that note still waiting are moved on by what was written.
+- **A deck's settings could be written over all the others'** (finding 4): the dialog read
+  `.knotes/decks.json` and took one that could not be read, or was not what Knotes writes (a
+  sync's conflict, a comma too many), for an empty one, then wrote back the one deck changed.
+  It says so now and writes nothing (`DeckSettings::read`: none for a damaged text; the
+  schedule still goes on by the defaults, `parse`), and the file is written as a note is, on
+  the disk before it takes the old one's place (ADR 0035).

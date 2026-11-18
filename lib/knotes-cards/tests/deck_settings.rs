@@ -41,3 +41,14 @@ fn a_deck_s_steps_are_its_own_the_nearest_above_or_the_vault_s() {
     assert_eq!(set.to_text(), "{\n  \"a\": {\n    \"steps\": []\n  }\n}\n");
     assert_eq!(DeckSettings::parse(&set.to_text()).own("a").steps, Some(vec![]));
 }
+
+#[test]
+fn a_damaged_file_is_told_from_no_file_when_it_is_to_be_written_back() {
+    assert_eq!(DeckSettings::read(""), Some(DeckSettings::default()), "no file yet");
+    assert_eq!(DeckSettings::read("  \n"), Some(DeckSettings::default()));
+    assert!(DeckSettings::read(r#"{"мови": {"new_a_day": 5}}"#).is_some_and(|s| s.new_a_day("мови") == 5));
+    for damaged in ["{", r#"{"мови": {"new_a_day": 5},}"#, "[]", "null", "<<<<<<< HEAD"] {
+        assert_eq!(DeckSettings::read(damaged), None, "{damaged:?}: not to be written over");
+        assert_eq!(DeckSettings::parse(damaged), DeckSettings::default(), "the schedule goes on by the defaults");
+    }
+}

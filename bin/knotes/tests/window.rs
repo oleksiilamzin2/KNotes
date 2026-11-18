@@ -4296,6 +4296,41 @@ fn a_grade_reaches_the_index_while_the_app_runs() {
 }
 
 #[test]
+fn typed_cards_with_no_id_are_all_asked_though_each_id_written_moves_the_rest() {
+    // Three cards typed in one note, none with an id: each graded is given one, which moves
+    // the others on in the text. They were found by their old place, and passed over.
+    let notes = [("n.md", "#@мови cat::кіт\n\n#@мови dog::пес\n\n#@мови fox::лис\n")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4,show")]);
+    assert!(review_line_of(&out).starts_with("answer мови 2/1 | fox | лис | "), "the third, after two graded: {out}");
+    let (vault2, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4,show,4")]);
+    assert_eq!(review_line_of(&out), "done мови 3", "{out}");
+    let note = std::fs::read_to_string(vault2.path().join("n.md")).unwrap();
+    assert_eq!(note.matches(" ^c-").count(), 3, "each has its id, at its own line's end: {note}");
+    assert!(note.lines().filter(|l| l.starts_with("#@")).all(|l| l.contains(" ^c-")), "{note}");
+    drop(vault);
+}
+
+#[test]
+fn a_deck_s_settings_are_not_written_over_a_file_that_cannot_be_read_as_one() {
+    let notes = [("n.md", "#@мови cat::кіт ^c-1\n\n#@історія Коли?::Тоді ^c-2\n")];
+    let (vault, _) = probe_notes(&notes, &[]);
+    let file = vault.path().join(".knotes/decks.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    // A sync's conflict left in it: the other decks' settings are in there still.
+    let damaged = "{\n<<<<<<< HEAD\n  \"історія\": {\"new_a_day\": 3}\n}\n";
+    std::fs::write(&file, damaged).unwrap();
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови"), ("KNOTES_PROBE_DECK_SETTINGS", "85|2|")]);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), damaged, "left as it was: {out}");
+    assert!(out.contains("failed: Не вдалося прочитати налаштування колод"), "and said: {out}");
+    // Mended, it is changed again, the other deck's settings kept.
+    std::fs::write(&file, "{\"історія\": {\"new_a_day\": 3}}").unwrap();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови"), ("KNOTES_PROBE_DECK_SETTINGS", "85|2|")]);
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(written.contains("\"історія\": {\n    \"new_a_day\": 3") && written.contains("\"мови\": {\n    \"new_a_day\": 2"), "{written}");
+}
+
+#[test]
 fn what_is_selected_in_a_note_becomes_a_card() {
     let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
     // «тварина» (9..16) the answer to a question asked.

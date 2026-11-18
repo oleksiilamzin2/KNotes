@@ -34,15 +34,14 @@ impl FsVault {
         }
     }
 
-    /// Writes the decks' settings, whole (through a temporary file: never half of it).
+    /// Writes the decks' settings, whole, as a note is written: on the disk before it takes
+    /// the old file's place, so a crash leaves the old settings or the new, never an empty file.
     pub fn write_deck_settings(&self, text: &str) -> io::Result<()> {
         self.make_knotes_folder()?;
         let target = self.root.join(DECKS);
         let dir = target.parent().unwrap_or(&self.root);
         fs::create_dir_all(dir)?;
-        let tmp = dir.join(".decks.json.knotes-tmp");
-        fs::write(&tmp, text)?;
-        fs::rename(tmp, target)
+        crate::fs_vault::replace_file(&target, &dir.join(".decks.json.knotes-tmp"), text)
     }
 
     /// The logs there are, each with its size in bytes, sorted by name; none without the folder.

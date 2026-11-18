@@ -242,8 +242,17 @@ impl VaultWindow {
     pub(super) fn set_deck(&self, deck: &str) {
         let Some(vault) = self.vault() else { return };
         let files = FsVault::new(&vault);
-        // As the file has them now: another Mac may have written since.
-        let mut settings = files.read_deck_settings().map(|text| DeckSettings::parse(&text)).unwrap_or_default();
+        // As the file has them now: another Mac may have written since. One that cannot be read,
+        // or is not what Knotes writes (a sync's conflict, a comma too many), is not written
+        // over as if it were empty: every other deck's settings would go with it.
+        let read = files.read_deck_settings().map_err(|e| e.to_string()).and_then(|text| DeckSettings::read(&text).ok_or_else(|| strings::DECK_SETTINGS_DAMAGED.to_owned()));
+        let mut settings = match read {
+            Ok(settings) => settings,
+            Err(e) => {
+                self.tell_failed(strings::DECK_SETTINGS_NOT_READ, &e);
+                return;
+            }
+        };
         let Some(asked) = rename_dialog::ask_deck_settings(MainThreadMarker::from(&*self.window), deck, settings.own(deck), settings.inherited(deck)) else { return };
         settings.set(deck, asked);
         if let Err(e) = files.write_deck_settings(&settings.to_text()) {
@@ -406,12 +415,26 @@ impl VaultWindow {
             let id = card_id(seed);
             let given = files.read_utf8(&card.path).map_err(|e| e.to_string()).and_then(|text| {
                 let (at, mark) = give_id(&text, card.start as usize..card.end as usize, &id).ok_or_else(|| strings::CARD_MOVED.to_owned())?;
-                files.write_note(&card.path, &format!("{}{mark}{}", &text[..at], &text[at..])).map_err(|e| e.to_string())
+                files.write_note(&card.path, &format!("{}{mark}{}", &text[..at], &text[at..])).map_err(|e| e.to_string())?;
+                Ok((at, mark.len()))
             });
-            if let Err(e) = given {
-                self.tell_failed(&strings::review_failed(document_name(&card.path)), &e);
-                return;
+            let (at, added) = match given {
+                Ok(written) => written,
+                Err(e) => {
+                    self.tell_failed(&strings::review_failed(document_name(&card.path)), &e);
+                    return;
+                }
+            };
+            // The cards of this note still waiting stand further on by the id just written:
+            // one with no id is found by its place, and was passed over as gone (a note of
+            // twenty typed cards gave one a review).
+            if let Some(review) = self.review.borrow_mut().as_mut() {
+                for waiting in review.queue.iter_mut().filter(|w| w.path == card.path && w.start as usize >= at) {
+                    waiting.start += added as u32;
+                    waiting.end += added as u32;
+                }
             }
+            card.end += added as u32;
             card.id = Some(id);
         }
         let id = card.id.clone().unwrap_or_default();

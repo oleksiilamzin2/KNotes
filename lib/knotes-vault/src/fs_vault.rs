@@ -279,7 +279,7 @@ impl NoteWriter for FsVault {
 /// permissions, creation date, extended attributes (Finder's tags among them) and ACL. The text
 /// reaches the disk before the rename, so a crash leaves the old file or the new one, never an
 /// empty one.
-fn replace_file(target: &Path, tmp: &Path, text: &str) -> io::Result<()> {
+pub(crate) fn replace_file(target: &Path, tmp: &Path, text: &str) -> io::Result<()> {
     let written = (|| {
         let mut file = fs::File::create(tmp)?;
         io::Write::write_all(&mut file, text.as_bytes())?;

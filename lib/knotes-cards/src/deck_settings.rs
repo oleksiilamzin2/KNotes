@@ -36,11 +36,22 @@ pub struct DeckSettings {
 }
 
 impl DeckSettings {
-    /// What `text` sets; nothing for a text that is not the file's (empty, damaged). A retention
-    /// out of range is brought into it.
+    /// What `text` sets; nothing for a text that is not the file's (empty, damaged): what the
+    /// schedule is worked out by, which goes on by the defaults. A retention out of range is
+    /// brought into it.
     pub fn parse(text: &str) -> Self {
+        Self::read(text).unwrap_or_default()
+    }
+
+    /// What `text` sets, to be changed and written back: none for a text that is not the
+    /// file's (damaged), which must not be written over as if it set nothing. No file yet (an
+    /// empty text) sets nothing.
+    pub fn read(text: &str) -> Option<Self> {
         let mut settings = Self::default();
-        let Ok(Value::Object(decks)) = serde_json::from_str::<Value>(text) else { return settings };
+        if text.trim().is_empty() {
+            return Some(settings);
+        }
+        let Ok(Value::Object(decks)) = serde_json::from_str::<Value>(text) else { return None };
         for (deck, value) in decks {
             let Value::Object(mut value) = value else { continue };
             let retention = value.remove("retention").and_then(|v| v.as_f64()).map(|r| r.clamp(RETENTION_RANGE.0, RETENTION_RANGE.1));
@@ -49,7 +60,7 @@ impl DeckSettings {
             settings.decks.insert(deck.clone(), DeckSetting { retention, new_a_day, steps });
             settings.other.insert(deck, value);
         }
-        settings
+        Some(settings)
     }
 
     /// The file's text: the decks that set something, sorted.

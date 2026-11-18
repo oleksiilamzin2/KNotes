@@ -19,6 +19,8 @@ pub const DECK_RETENTION: &str = "Запам'ятовування, %";
 pub const DECK_NEW_A_DAY: &str = "Нових карток на день";
 pub const DECK_STEPS: &str = "Кроки навчання, хв";
 pub const DECK_SETTINGS_NOT_SAVED: &str = "Не вдалося зберегти налаштування колоди";
+pub const DECK_SETTINGS_NOT_READ: &str = "Не вдалося прочитати налаштування колод";
+pub const DECK_SETTINGS_DAMAGED: &str = "файл .knotes/decks.json пошкоджено; виправте його або видаліть, і налаштування можна буде змінювати знову";
 /// The settings dialog's title: «Колода «англійська»».
 pub fn deck_settings_of(deck: &str) -> String {
     format!("Колода «{deck}»")
