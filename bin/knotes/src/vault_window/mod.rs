@@ -153,7 +153,7 @@ pub struct VaultWindow {
     pub path_bar: crate::path_bar::PathBar,
     /// A deck's review, over the note column (ADR 0037), and the review under way.
     review_view: crate::review_view::ReviewView,
-    review: RefCell<Option<cards::Review>>,
+    review: RefCell<Option<knotes_app::ReviewSession>>,
     /// The deck whose review the note column shows (its tab is the one shown).
     review_deck: RefCell<Option<String>>,
     /// The deck the last card was made in, offered for the next.

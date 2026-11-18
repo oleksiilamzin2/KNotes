@@ -602,6 +602,7 @@ version = "0.1.0"
 name = "knotes-app"
 version = "0.1.0"
 dependencies = [
+ "knotes-cards",
  "knotes-core",
  "knotes-index",
  "knotes-md",

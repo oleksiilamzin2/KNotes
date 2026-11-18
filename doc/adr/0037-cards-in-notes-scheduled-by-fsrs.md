@@ -370,3 +370,9 @@ test missed, each of them relaunching the app after a grade:
   order, puts a review in and takes it out again, and schedules the card from what is left
   (a card whose only review went has no schedule: new again). It goes with the log to the
   user's other Macs; a Knotes older than this passes the line over and keeps the review.
+- **A review under way is kept outside the window** (2026-11-18): `knotes_app::ReviewSession`
+  holds the queue, the card shown, where each card graded stands and the last grade while it
+  can be taken back. It reads no file and no clock: the window gives it the notes' text and
+  the time, gives a card its id in the note, writes the log, and only then tells the session
+  the grade is kept (a log that cannot be written leaves the review as it was). So the
+  review's rules are tested without launching the app.

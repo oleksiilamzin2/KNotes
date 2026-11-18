@@ -1,10 +1,8 @@
 //! The notes' cards in the window (ADR 0037): a card made from what is selected in the note,
 //! and a deck's review in the note column.
 
-use std::collections::VecDeque;
-
-use knotes_cards::{DeckSettings, Fsrs, Grade, Memory, asks, card_id, give_id, make_card, review_line, scan_cards, taken_back_line};
-use knotes_app::deck_rows;
+use knotes_app::{ReviewSession, deck_rows};
+use knotes_cards::{DeckSettings, Grade, asks, card_id, give_id, make_card, review_line, taken_back_line};
 use knotes_core::{CardIndex, CardRow, CardState, DueCard};
 
 use super::*;
@@ -60,43 +58,6 @@ impl PartialEq for DecksCounted {
     }
 }
 
-/// A deck's review under way.
-pub(super) struct Review {
-    deck: String,
-    queue: VecDeque<DueCard>,
-    current: Option<Current>,
-    reviewed: usize,
-    /// Where each card graded in this review stands after its grades, by its id. The index
-    /// learns of a grade only at the sync after it is logged: asked of the index, a card that
-    /// came back at once looked new again, was sent to its first step again, and so on at
-    /// every Good, each one logged.
-    graded: std::collections::HashMap<String, knotes_cards::Schedule>,
-    /// The last grade given, while it can be taken back (⌘Z): one step, as far as a slip of
-    /// the finger goes.
-    last: Option<LastGrade>,
-}
-
-/// A grade as it was given: what taking it back puts right.
-struct LastGrade {
-    card: DueCard,
-    front: String,
-    back: String,
-    /// When it was logged, and where the card stood before it (none: a new card).
-    at: i64,
-    before: Option<knotes_cards::Schedule>,
-    /// Still learned after it, the card was put at the queue's end.
-    pushed: bool,
-}
-
-/// The card shown.
-struct Current {
-    card: DueCard,
-    front: String,
-    back: String,
-    /// Its answer shows.
-    answered: bool,
-}
-
 /// When today began, by the Mac's clock (seconds since 1970): a day's new cards count from it.
 fn day_start() -> i64 {
     let offset = objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT() as i64;
@@ -105,13 +66,6 @@ fn day_start() -> i64 {
 
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
-}
-
-/// Where the card would stand graded `grade` at `at`, from where it stands now (`before`;
-/// none: a new card), by its deck's chance of recall and steps.
-fn graded(settings: &DeckSettings, deck: &str, before: Option<&knotes_cards::Schedule>, at: i64, grade: Grade) -> knotes_cards::Schedule {
-    let fsrs = Fsrs { retention: settings.retention(deck), ..Fsrs::default() };
-    knotes_cards::review(&fsrs, &settings.steps(deck), before, at, grade)
 }
 
 /// When a card would come back, said short: «10 хв» while it is learned, then «3 д», «2 міс»,
@@ -312,21 +266,15 @@ impl VaultWindow {
         match asked {
             Asked::Start | Asked::StartAhead => {
                 let Some(deck) = self.review_deck.borrow().clone() else { return };
-                let mut queue: VecDeque<DueCard> = self.due_cards(&deck).into();
+                let due = self.due_cards(&deck);
                 // Ahead of the schedule: after what is due, the cards not due yet, the soonest first.
-                if asked == Asked::StartAhead {
-                    queue.extend(self.cards_ahead(&deck, REVIEW_CARDS.saturating_sub(queue.len())));
-                }
-                // An id is one card's, with one schedule: written at two cards (a line copied, a
-                // note duplicated), the first is asked and the other not, a second time over.
-                let mut ids = std::collections::HashSet::new();
-                queue.retain(|card| card.id.as_ref().is_none_or(|id| ids.insert(id.clone())));
-                *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0, graded: std::collections::HashMap::new(), last: None });
+                let ahead = if asked == Asked::StartAhead { self.cards_ahead(&deck, REVIEW_CARDS.saturating_sub(due.len())) } else { Vec::new() };
+                *self.review.borrow_mut() = Some(ReviewSession::start(&deck, due, ahead));
                 self.next_card();
             }
             Asked::ShowAnswer => {
-                if let Some(current) = self.review.borrow_mut().as_mut().and_then(|r| r.current.as_mut()) {
-                    current.answered = true;
+                if let Some(review) = self.review.borrow_mut().as_mut() {
+                    review.show_answer();
                 }
                 self.show_review();
             }
@@ -337,7 +285,7 @@ impl VaultWindow {
             Asked::Link(knotes_cards::CardLink::Note(target)) => self.open_chat_link(&target),
             Asked::Link(knotes_cards::CardLink::Web(address)) => super::links::open_url(&address),
             Asked::OpenNote => {
-                let at = self.review.borrow().as_ref().and_then(|r| r.current.as_ref()).map(|c| (c.card.path.clone(), c.card.start as usize));
+                let at = self.review.borrow().as_ref().and_then(|r| r.current()).map(|c| (c.card.path.clone(), c.card.start as usize));
                 if let Some((path, start)) = at
                     && self.open_note(&path, true)
                 {
@@ -355,32 +303,8 @@ impl VaultWindow {
     fn next_card(&self) {
         let Some(vault) = self.vault() else { return };
         let files = FsVault::new(&vault);
-        loop {
-            let Some(card) = self.review.borrow_mut().as_mut().and_then(|r| r.queue.pop_front()) else {
-                if let Some(review) = self.review.borrow_mut().as_mut() {
-                    review.current = None;
-                }
-                break;
-            };
-            // As the note holds it now: by its id, or where it was.
-            let written = files.read_utf8(&card.path).ok().and_then(|text| {
-                let cards = scan_cards(&text);
-                let at = |c: &&knotes_cards::Card| c.span.start == card.start as usize;
-                match &card.id {
-                    // With its id; of two with it in the note, the one where the index found
-                    // this one (the first was shown for both).
-                    Some(id) => {
-                        let with_id = || cards.iter().filter(|c| c.id.as_ref() == Some(id));
-                        with_id().find(at).or_else(|| with_id().next()).cloned()
-                    }
-                    None => cards.iter().filter(|c| c.id.is_none()).find(at).cloned(),
-                }
-            });
-            if let (Some(written), Some(review)) = (written, self.review.borrow_mut().as_mut()) {
-                let card = DueCard { start: written.span.start as u32, end: written.span.end as u32, ..card };
-                review.current = Some(Current { card, front: written.front, back: written.back, answered: false });
-                break;
-            }
+        if let Some(review) = self.review.borrow_mut().as_mut() {
+            review.next(|path| files.read_utf8(path).ok());
         }
         self.show_review();
     }
@@ -397,22 +321,18 @@ impl VaultWindow {
         let shown = {
             let review = self.review.borrow();
             let Some(review) = review.as_ref() else { return };
-            match &review.current {
-                None => Shown::Done { deck: review.deck.clone(), reviewed: review.reviewed },
+            match review.current() {
+                None => Shown::Done { deck: review.deck().to_owned(), reviewed: review.reviewed() },
                 Some(current) => {
-                    let answer = current.answered.then(|| {
-                        let before = current.card.id.as_deref().and_then(|id| self.standing(review, id));
-                        let at = now();
-                        let settings = self.deck_settings.borrow();
-                        (current.back.clone(), [Grade::Again, Grade::Hard, Grade::Good, Grade::Easy].map(|grade| comes_back(&graded(&settings, &current.card.deck, before.as_ref(), at, grade))))
-                    });
-                    Shown::Card { deck: review.deck.clone(), done: review.reviewed, left: review.queue.len() + 1, front: current.front.clone(), answer }
+                    let after = review.would_come_back(&self.deck_settings.borrow(), now(), |id| self.card_state(id));
+                    let answer = after.map(|after| (current.back.clone(), after.map(|after| comes_back(&after))));
+                    Shown::Card { deck: review.deck().to_owned(), done: review.reviewed(), left: review.left(), front: current.front.clone(), answer }
                 }
             }
         };
         self.show_list_column(!matches!(shown, Shown::Card { .. }));
         self.review_view.show(Some(shown));
-        self.review_view.set_undo(self.review.borrow().as_ref().is_some_and(|review| review.last.is_some()));
+        self.review_view.set_undo(self.review.borrow().as_ref().is_some_and(ReviewSession::can_undo));
     }
 
     fn card_state(&self, id: &str) -> Option<CardState> {
@@ -421,21 +341,13 @@ impl VaultWindow {
         state.reader.as_ref().and_then(|r| r.card_state(id).ok()).flatten()
     }
 
-    /// Where the card `id` stands now: as this review left it when it graded it, else as the
-    /// index has it; none for a card never reviewed.
-    fn standing(&self, review: &Review, id: &str) -> Option<knotes_cards::Schedule> {
-        review.graded.get(id).copied().or_else(|| {
-            self.card_state(id).map(|s| knotes_cards::Schedule::standing(Memory { stability: s.stability, difficulty: s.difficulty }, s.last, s.step, s.relearning))
-        })
-    }
-
     /// The card shown graded: given an id in its note if it has none, its review logged in the
     /// vault (this Mac's log), the next card shown. Graded Again, it comes back at the review's
     /// end.
     fn grade_card(&self, grade: Grade) {
         let Some(vault) = self.vault() else { return };
         let files = FsVault::new(&vault);
-        let Some(mut card) = self.review.borrow().as_ref().and_then(|r| r.current.as_ref()).filter(|c| c.answered).map(|c| c.card.clone()) else { return };
+        let Some(card) = self.review.borrow().as_ref().and_then(|r| r.current()).filter(|c| c.answered).map(|c| c.card.clone()) else { return };
         if card.id.is_none() {
             // What is typed and not written yet is written first, not written over.
             let _ = self.write_all();
@@ -446,47 +358,27 @@ impl VaultWindow {
                 files.write_note(&card.path, &format!("{}{mark}{}", &text[..at], &text[at..])).map_err(|e| e.to_string())?;
                 Ok((at, mark.len()))
             });
-            let (at, added) = match given {
-                Ok(written) => written,
+            match given {
+                Ok((at, added)) => {
+                    if let Some(review) = self.review.borrow_mut().as_mut() {
+                        review.id_given(id, at, added);
+                    }
+                }
                 Err(e) => {
                     self.tell_failed(&strings::review_failed(document_name(&card.path)), &e);
                     return;
                 }
-            };
-            // The cards of this note still waiting stand further on by the id just written:
-            // one with no id is found by its place, and was passed over as gone (a note of
-            // twenty typed cards gave one a review).
-            if let Some(review) = self.review.borrow_mut().as_mut() {
-                for waiting in review.queue.iter_mut().filter(|w| w.path == card.path && w.start as usize >= at) {
-                    waiting.start += added as u32;
-                    waiting.end += added as u32;
-                }
             }
-            card.end += added as u32;
-            card.id = Some(id);
         }
-        let id = card.id.clone().unwrap_or_default();
-        // Where it stood before this grade, and stands after it: still learned, it is asked
-        // again in this review.
-        let before = self.review.borrow().as_ref().and_then(|review| self.standing(review, &id));
-        // A second later than its last grade at least: the index tells a card's reviews apart
-        // by their second, and one asked again at once was graded twice in one.
-        let at = before.map_or(now(), |before| now().max(before.last + 1));
-        let after = graded(&self.deck_settings.borrow(), &card.deck, before.as_ref(), at, grade);
+        let graded = self.review.borrow().as_ref().and_then(|review| review.grade(&self.deck_settings.borrow(), now(), grade, |id| self.card_state(id)));
+        let Some(graded) = graded else { return };
         let device = knotes_session::AppSettings::device_name(&knotes_session::app_data_dir());
-        if let Err(e) = files.append_review(&device, &review_line(at, &id, grade)) {
+        if let Err(e) = files.append_review(&device, &review_line(graded.at, &graded.id, grade)) {
             self.tell_failed(&strings::review_failed(document_name(&card.path)), &e);
             return;
         }
         if let Some(review) = self.review.borrow_mut().as_mut() {
-            review.reviewed += 1;
-            review.graded.insert(id, after);
-            let pushed = after.step.is_some();
-            let (front, back) = review.current.as_ref().map(|c| (c.front.clone(), c.back.clone())).unwrap_or_default();
-            review.last = Some(LastGrade { card: card.clone(), front, back, at, before, pushed });
-            if pushed {
-                review.queue.push_back(card);
-            }
+            review.graded(graded);
         }
         self.next_card();
     }
@@ -495,33 +387,14 @@ impl VaultWindow {
     /// only added to), and the card shows again with its answer, to be graded as meant.
     fn undo_grade(&self) {
         let Some(vault) = self.vault() else { return };
-        let Some(last) = self.review.borrow_mut().as_mut().and_then(|review| review.last.take()) else { return };
-        let id = last.card.id.clone().unwrap_or_default();
+        let Some((at, id, path)) = self.review.borrow().as_ref().and_then(|review| review.last_grade().map(|(at, card)| (at, card.id.clone().unwrap_or_default(), card.path.clone()))) else { return };
         let device = knotes_session::AppSettings::device_name(&knotes_session::app_data_dir());
-        if let Err(e) = FsVault::new(&vault).append_review(&device, &taken_back_line(last.at, &id)) {
-            self.tell_failed(&strings::review_failed(document_name(&last.card.path)), &e);
-            if let Some(review) = self.review.borrow_mut().as_mut() {
-                review.last = Some(last);
-            }
+        if let Err(e) = FsVault::new(&vault).append_review(&device, &taken_back_line(at, &id)) {
+            self.tell_failed(&strings::review_failed(document_name(&path)), &e);
             return;
         }
         if let Some(review) = self.review.borrow_mut().as_mut() {
-            review.reviewed = review.reviewed.saturating_sub(1);
-            // Where it stood before the grade, as this review knows it.
-            match last.before {
-                Some(before) => review.graded.insert(id.clone(), before),
-                None => review.graded.remove(&id),
-            };
-            // Out of the queue's end if the grade put it there; the card shown waits its turn again.
-            if last.pushed
-                && let Some(at) = review.queue.iter().rposition(|c| c.id.as_deref() == Some(id.as_str()))
-            {
-                review.queue.remove(at);
-            }
-            if let Some(shown) = review.current.take() {
-                review.queue.push_front(shown.card);
-            }
-            review.current = Some(Current { card: last.card, front: last.front, back: last.back, answered: true });
+            review.take_back();
         }
         self.show_review();
     }
