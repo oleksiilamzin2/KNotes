@@ -203,14 +203,7 @@ impl VaultWindow {
     /// The next (or previous) occurrence, round the note.
     pub(super) fn find_step(&self, forward: bool) {
         if let Some(n) = self.pdf_view.borrow().as_ref().map(PdfViewer::found_len) {
-            if n == 0 {
-                return;
-            }
-            let i = match self.find_current.get() {
-                Some(i) if forward => (i + 1) % n,
-                Some(i) => (i + n - 1) % n,
-                None => 0,
-            };
+            let Some(i) = knotes_app::step_found(self.find_current.get(), n, forward) else { return };
             self.find_current.set(Some(i));
             if let Some(viewer) = self.pdf_view.borrow().as_ref() {
                 viewer.show_found(i);
@@ -219,14 +212,7 @@ impl VaultWindow {
             return;
         }
         let n = self.find_matches.borrow().len();
-        if n == 0 {
-            return;
-        }
-        let i = match self.find_current.get() {
-            Some(i) if forward => (i + 1) % n,
-            Some(i) => (i + n - 1) % n,
-            None => 0,
-        };
+        let Some(i) = knotes_app::step_found(self.find_current.get(), n, forward) else { return };
         self.find_current.set(Some(i));
         self.select_match(i);
         self.find_bar.show_count(Some(i), n, true);

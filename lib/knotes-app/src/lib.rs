@@ -1,6 +1,7 @@
 //! View models of the Knotes window: plain Rust, no AppKit.
 
 mod chart_scale;
+mod completion_list;
 pub mod deck_rows;
 mod follow_link;
 mod refine;
@@ -53,6 +54,7 @@ pub use space_folders::SpaceFolders;
 pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
 pub use space_tags::SpaceTags;
+pub use completion_list::{Offered, offer_blocks, offer_headings, offer_notes, offer_tags, recent_notes, step_found};
 pub use chart_scale::{bar_length, bar_under, scale_top, share};
 pub use follow_link::{Followed, follow_link, linked_note_path, named_link, normalize_path};
 pub use refine::{Place, Refine};

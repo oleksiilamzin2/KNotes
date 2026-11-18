@@ -60,14 +60,8 @@ const PADDING: f64 = 4.0;
 const ROW_INSET: f64 = 8.0;
 pub const MAX_ROWS: usize = 8;
 
-#[derive(Debug, Clone)]
-pub struct CompletionItem {
-    pub title: String,
-    /// Folder of a note, empty for the vault root and for headings.
-    pub detail: String,
-    /// Text that replaces what was typed after `[[` (or after `#`).
-    pub insert: String,
-}
+/// A row of the list (knotes-app's `Offered`).
+pub use knotes_app::Offered as CompletionItem;
 
 pub struct CompletionPanel {
     panel: Retained<NSPanel>,

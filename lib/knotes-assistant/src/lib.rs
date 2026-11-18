@@ -5,4 +5,5 @@
 pub mod chat_eval;
 pub mod chat_state;
 pub mod chat_worker;
+pub mod connections;
 pub mod meaning;

@@ -57,7 +57,7 @@ impl VaultWindow {
         let target = MainThreadBound::new(self.this.borrow().clone(), mtm);
         let name = document_name(&document).to_owned();
         std::thread::spawn(move || {
-            let found = crate::connections_worker::gather(&vault, &index_dir, &document, &name, &links, &cancelled);
+            let found = knotes_assistant::connections::gather(&vault, &index_dir, &document, &name, &links, &cancelled);
             DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
                 // A newer list asked for, or another document: this one is stale.

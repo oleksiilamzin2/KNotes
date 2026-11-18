@@ -617,6 +617,7 @@ dependencies = [
 name = "knotes-assistant"
 version = "0.1.0"
 dependencies = [
+ "knotes-app",
  "knotes-chat",
  "knotes-core",
  "knotes-embed",

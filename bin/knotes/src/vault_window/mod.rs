@@ -29,9 +29,9 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Followed, follow_link, linked_note_path, named_link, find_folder_node, session_settings_key, tag_exists, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
     FolderRules, ListOption, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder,     resolve_list_settings, unique_note_path,
+    with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, folder_tree_with, unique_folder_path, space_notes_folder,     resolve_list_settings, unique_note_path,
 };
-use knotes_core::{AttachmentStore, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TrashEntry, TrashStore, VaultReader};
+use knotes_core::{AttachmentStore, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteWriter, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;
 use knotes_core::TitleSearch;
 use knotes_editor::{DiskChange, Document, LinkCompletion, TagCompletion, embedded_part, conflict_path, link_completion, note_headings, subpath_offset, tag_completion, tag_typed, utf16_offsets};

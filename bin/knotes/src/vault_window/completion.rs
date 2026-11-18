@@ -20,19 +20,6 @@ pub(super) enum CompletionTarget {
 /// only up to here while typing.
 pub(super) const FRONTMATTER_MOST: usize = 8192;
 
-/// Paths of the `n` most recently modified notes, newest first.
-pub(super) fn recent_notes(rows: &[NoteRow], n: usize) -> Vec<String> {
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    let n = n.min(order.len());
-    if n == 0 {
-        return Vec::new();
-    }
-    order.select_nth_unstable_by_key(n - 1, |&i| std::cmp::Reverse(rows[i].mtime_ns));
-    order.truncate(n);
-    order.sort_by_key(|&i| std::cmp::Reverse(rows[i].mtime_ns));
-    order.into_iter().map(|i| rows[i].path.clone()).collect()
-}
-
 impl VaultWindow {
     /// Shows, updates or hides the link completion list for the text before the cursor.
     pub(super) fn update_completion(&self) {
@@ -104,14 +91,7 @@ impl VaultWindow {
     pub(super) fn tag_items(&self, tag: &TagCompletion) -> Vec<CompletionItem> {
         let state = self.state.borrow();
         let space = state.space.as_ref().and_then(|id| state.space_tags.iter().find(|counted| counted.id == *id));
-        suggest_tags(&tag.query, space.map_or(&[][..], |counted| counted.tags.as_slice()), &state.tags, MAX_ROWS)
-            .into_iter()
-            .map(|(name, notes)| CompletionItem {
-                title: if tag.frontmatter { name.to_owned() } else { format!("#{name}") },
-                detail: notes.to_string(),
-                insert: name.to_owned(),
-            })
-            .collect()
+        knotes_app::offer_tags(&tag.query, tag.frontmatter, space.map_or(&[][..], |counted| counted.tags.as_slice()), &state.tags, MAX_ROWS)
     }
 
     pub(super) fn completion_items(&self, completion: &LinkCompletion, source: &str, view: &NSTextView) -> Vec<CompletionItem> {
@@ -121,24 +101,12 @@ impl VaultWindow {
         };
         match completion {
             LinkCompletion::Title { query, .. } => {
-                let paths: Vec<(String, Option<String>)> = if query.is_empty() {
-                    recent_notes(&state.rows, MAX_ROWS).into_iter().map(|p| (p, None)).collect()
+                let found: Vec<(String, Option<String>)> = if query.is_empty() {
+                    knotes_app::recent_notes(&state.rows, MAX_ROWS).into_iter().map(|p| (p, None)).collect()
                 } else {
                     titles.search_titles(query, MAX_ROWS).into_iter().map(|h| (h.path, h.alias)).collect()
                 };
-                paths
-                    .into_iter()
-                    .map(|(path, alias)| {
-                        let (folder, name) = path.rsplit_once('/').unwrap_or(("", &path));
-                        let name = name.strip_suffix(".md").unwrap_or(name);
-                        let link = links.link_text(&path, source);
-                        CompletionItem {
-                            title: alias.clone().unwrap_or_else(|| name.to_owned()),
-                            detail: folder.to_owned(),
-                            insert: alias.map_or_else(|| link.clone(), |a| format!("{link}|{a}")),
-                        }
-                    })
-                    .collect()
+                knotes_app::offer_notes(found, source, &**links)
             }
             LinkCompletion::Heading { target, query, .. } | LinkCompletion::Block { target, query, .. } => {
                 let Some(path) = links.resolve(LinkKind::Wiki, target, source) else { return Vec::new() };
@@ -147,28 +115,10 @@ impl VaultWindow {
                 } else {
                     state.vault.as_ref().and_then(|v| FsVault::new(v).read_text(&path).ok()).unwrap_or_default()
                 };
-                let query = query.to_lowercase();
                 if matches!(completion, LinkCompletion::Block { .. }) {
-                    // The block anchors of the target, each with the start of its line.
-                    return MarkdownParser::new()
-                        .parse(&text)
-                        .anchors
-                        .into_iter()
-                        .filter(|a| a.name.to_lowercase().contains(&query))
-                        .take(MAX_ROWS)
-                        .map(|a| {
-                            let start = text[..a.span.start as usize].rfind('\n').map_or(0, |n| n + 1);
-                            let line: String = text[start..a.span.start as usize].trim().chars().take(60).collect();
-                            CompletionItem { title: format!("^{}", a.name), detail: line, insert: format!("^{}", a.name) }
-                        })
-                        .collect();
+                    return knotes_app::offer_blocks(&text, MarkdownParser::new().parse(&text).anchors, query, MAX_ROWS);
                 }
-                note_headings(&text)
-                    .into_iter()
-                    .filter(|h| h.text.to_lowercase().contains(&query))
-                    .take(MAX_ROWS)
-                    .map(|h| CompletionItem { insert: h.text.clone(), title: h.text, detail: format!("H{}", h.level) })
-                    .collect()
+                knotes_app::offer_headings(note_headings(&text), query, MAX_ROWS)
             }
         }
     }
