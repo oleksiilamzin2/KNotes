@@ -2480,6 +2480,24 @@ fn sidebar_tabs(out: &str) -> (String, String) {
 }
 
 #[test]
+fn the_tab_closed_last_is_opened_again_by_its_key() {
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let open = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB", "b.md")];
+    // b's tab closed by its cross: a is left. ⇧⌘T brings b back, beside a, and shows it.
+    let out = probe_tabs(&vault, &home, &[open[0], open[1], ("KNOTES_PROBE_TAB_CLOSE", "b.md")]);
+    assert_eq!(sidebar_tabs(&out), ("a".to_owned(), "a".to_owned()), "{out}");
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_tabs(&vault, &home, &[open[0], open[1], ("KNOTES_PROBE_TAB_CLOSE", "b.md"), ("KNOTES_PROBE_MENU_KEY", "shift-t")]);
+    assert!(out.contains("menu-key: Відкрити закриту вкладку\n"), "{out}");
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()), "{out}");
+    assert!(out.contains("note: b.md"), "its document shows: {out}");
+    // Nothing closed: the key does nothing.
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let out = probe_tabs(&vault, &home, &[open[0], open[1], ("KNOTES_PROBE_MENU_KEY", "shift-t")]);
+    assert_eq!(sidebar_tabs(&out), ("a | b".to_owned(), "b".to_owned()), "{out}");
+}
+
+#[test]
 fn more_tabs_than_fit_keep_their_width_and_the_one_shown_is_in_view() {
     // Each PDF opens in a tab of its own: forty of them, far more than the strip holds.
     let vault = tempfile::tempdir().unwrap();

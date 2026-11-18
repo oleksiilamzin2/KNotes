@@ -82,6 +82,28 @@ impl VaultWindow {
         }
     }
 
+    /// Window → Reopen Closed Tab (⇧⌘T): the tab closed last comes back where it stood, its
+    /// document shown where it was. The document open is left first (its edits written); false
+    /// when no closed tab is left, or the user stays with edits that cannot be written.
+    pub fn reopen_tab(&self) -> bool {
+        let Some(vault) = self.vault() else { return false };
+        self.remember_place();
+        if !self.leave() {
+            self.stay();
+            return false;
+        }
+        // A deck's review comes back while the deck has cards; a document while its file is there.
+        let decks = Arc::clone(&self.state.borrow().decks);
+        let path = self.tabs.borrow_mut().reopen(|path| match super::cards::deck_of_tab(path) {
+            Some(deck) => tag_exists(&decks, deck),
+            None => vault.join(path).is_file(),
+        });
+        let Some(path) = path else { return false };
+        self.open_note(&path, true);
+        self.save_tabs();
+        true
+    }
+
     /// Closes the tab shown (Cmd+W); false when there is none.
     pub fn close_current_tab(&self) -> bool {
         let Some(path) = self.tabs.borrow().current_path().map(str::to_owned) else { return false };

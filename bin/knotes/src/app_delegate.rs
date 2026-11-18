@@ -213,6 +213,14 @@ define_class!(
             }
         }
 
+        /// Window → Reopen Closed Tab (⇧⌘T).
+        #[unsafe(method(reopenTab:))]
+        fn reopen_tab(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.reopen_tab();
+            }
+        }
+
         /// ⌘1 to ⌘9: the tab of that number (the sender's tag), ⌘9 the last.
         #[unsafe(method(showTabNumber:))]
         fn show_tab_number(&self, sender: &objc2_app_kit::NSMenuItem) {

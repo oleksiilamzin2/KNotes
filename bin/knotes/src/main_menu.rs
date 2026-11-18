@@ -104,6 +104,8 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
         // the one before (round), ⇧⌘] and ⇧⌘[ the same, ⌘1 to ⌘8 by number, ⌘9 the last.
         Some(item(mtm, s::NEXT_TAB, sel!(nextTab:), "\t", NSEventModifierFlags::Control)),
         Some(item(mtm, s::PREVIOUS_TAB, sel!(previousTab:), "\u{19}", NSEventModifierFlags::Control | NSEventModifierFlags::Shift)),
+        // The tab closed last, back where it stood, as Safari's ⇧⌘T.
+        Some(item(mtm, s::REOPEN_TAB, sel!(reopenTab:), "t", cmd(NSEventModifierFlags::Shift))),
     ]);
     // The other keys for the same: no rows of their own in the menu.
     let quiet = |title: &str, action: Sel, key: &str, mods: NSEventModifierFlags, tag: isize| {

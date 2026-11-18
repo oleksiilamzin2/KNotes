@@ -135,3 +135,46 @@ fn tabs_are_gone_through_by_step_and_by_number_and_found_under_a_folder() {
     assert_eq!((tabs_of(&["a.md"]).stepped(1), Tabs::default().stepped(1), Tabs::default().numbered(9)), (None, None, None));
 }
 
+#[test]
+fn the_tab_closed_last_comes_back_where_it_stood() {
+    let all = |_: &str| true;
+    let mut tabs = tabs_of(&["a.md", "b.md", "c.md", "d.md"]);
+    assert_eq!(tabs.reopen(all), None, "nothing closed yet");
+    // b and then d closed: d comes back first, at the end again; then b, second again.
+    tabs.close(1);
+    tabs.close(2);
+    assert_eq!(paths(&tabs), ["a.md", "c.md"]);
+    assert_eq!((tabs.reopen(all).as_deref(), paths(&tabs), tabs.current_path()), (Some("d.md"), vec!["a.md", "c.md", "d.md"], Some("d.md")));
+    assert_eq!((tabs.reopen(all).as_deref(), paths(&tabs), tabs.current_path()), (Some("b.md"), vec!["a.md", "b.md", "c.md", "d.md"], Some("b.md")));
+    assert_eq!(tabs.reopen(all), None);
+    // Where it was when left is kept, as for any document.
+    tabs.navigate("c.md");
+    tabs.remember(TabPlace { top: (40, 0.0), cursor: Some((7, 0)) });
+    tabs.close(2);
+    assert_eq!(tabs.reopen(all).as_deref(), Some("c.md"));
+    assert_eq!(tabs.place_of("c.md"), Some(TabPlace { top: (40, 0.0), cursor: Some((7, 0)) }));
+    // A document gone since, or in a tab again, is passed over for the one closed before it.
+    tabs.close(0);
+    tabs.close(0);
+    tabs.close(0);
+    assert_eq!(paths(&tabs), ["d.md"]);
+    tabs.open_beside("b.md");
+    assert_eq!(tabs.reopen(|path| path != "c.md").as_deref(), Some("a.md"), "c is gone from the disk, b has a tab already");
+    assert_eq!(paths(&tabs), ["a.md", "d.md", "b.md"]);
+    // A document renamed while its tab was closed comes back under its new name.
+    tabs.close(0);
+    tabs.rename("a.md", "A.md");
+    assert_eq!(tabs.reopen(all).as_deref(), Some("A.md"));
+    // Every other tab closed at once: they come back one by one, each to its place.
+    let mut tabs = tabs_of(&["a.md", "b.md", "c.md"]);
+    tabs.close_others(1);
+    assert_eq!(paths(&tabs), ["b.md"]);
+    tabs.reopen(all);
+    tabs.reopen(all);
+    assert_eq!(paths(&tabs), ["a.md", "b.md", "c.md"]);
+    // The last tab closed leaves none; it comes back as the only one.
+    let mut tabs = tabs_of(&["a.md"]);
+    assert_eq!(tabs.close(0), AfterClose::Nothing);
+    assert_eq!((tabs.reopen(all).as_deref(), tabs.current()), (Some("a.md"), Some(0)));
+}
+

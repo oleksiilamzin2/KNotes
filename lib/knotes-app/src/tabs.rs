@@ -32,7 +32,13 @@ pub struct Tabs {
     /// Where each document was when last left, tab or not: a tab moving on to another
     /// document does not lose where the first was.
     places: HashMap<String, TabPlace>,
+    /// The tabs closed, the last one last, each with the place among the tabs it had: brought
+    /// back by `reopen`. Kept while the app runs, not for the next launch.
+    closed: Vec<(String, usize)>,
 }
+
+/// Closed tabs remembered: more than anyone goes back through.
+const CLOSED_KEPT: usize = 30;
 
 impl Tabs {
     /// Shows `path` in the tab shown (a first tab when there is none), or brings back its tab
@@ -77,7 +83,8 @@ impl Tabs {
         if i >= self.tabs.len() {
             return AfterClose::Same;
         }
-        self.tabs.remove(i);
+        let closed = self.tabs.remove(i);
+        self.closed(closed, i);
         match self.current {
             Some(c) if c == i => {
                 if self.tabs.is_empty() {
@@ -101,11 +108,39 @@ impl Tabs {
         if i >= self.tabs.len() {
             return AfterClose::Same;
         }
-        let kept = self.tabs.swap_remove(i);
+        let kept = self.tabs.remove(i);
         let shown = self.current == Some(i);
+        // Brought back one by one, the last tab first, each to where it stood.
+        let others: Vec<String> = std::mem::take(&mut self.tabs);
+        for (at, path) in others.into_iter().enumerate() {
+            self.closed(path, if at < i { at } else { at + 1 });
+        }
         self.tabs = vec![kept];
         self.current = Some(0);
         if shown { AfterClose::Same } else { AfterClose::Show(self.tabs[0].clone()) }
+    }
+
+    fn closed(&mut self, path: String, at: usize) {
+        self.closed.push((path, at));
+        if self.closed.len() > CLOSED_KEPT {
+            self.closed.remove(0);
+        }
+    }
+
+    /// The tab closed last brought back where it stood (at the end, when there are fewer tabs
+    /// now) and shown; its document, to be opened. One whose document is gone (`exists` says
+    /// which are there), or is in a tab again, is passed over for the one closed before it.
+    /// None when no closed tab is left.
+    pub fn reopen(&mut self, exists: impl Fn(&str) -> bool) -> Option<String> {
+        while let Some((path, at)) = self.closed.pop() {
+            if self.position(&path).is_none() && exists(&path) {
+                let at = at.min(self.tabs.len());
+                self.tabs.insert(at, path.clone());
+                self.current = Some(at);
+                return Some(path);
+            }
+        }
+        None
     }
 
     /// The tab at `from` moved to stand at `to` (the others close up); the tab shown stays the
@@ -127,6 +162,9 @@ impl Tabs {
         }
         if let Some(place) = self.places.remove(from) {
             self.places.insert(to.to_owned(), place);
+        }
+        for (closed, _) in self.closed.iter_mut().filter(|(closed, _)| closed == from) {
+            *closed = to.to_owned();
         }
     }
 
