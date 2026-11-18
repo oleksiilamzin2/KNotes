@@ -2561,6 +2561,55 @@ fn the_vault_s_search_lists_documents_by_name_then_by_text_and_shows_the_one_cho
 }
 
 #[test]
+fn the_vault_s_search_is_narrowed_by_a_phrase_a_word_left_out_a_tag_a_folder_and_a_space() {
+    let notes = [
+        (".knotes.json", r#"{"spaces": [{"id": "work", "name": "Робота", "color": "blue"}, {"id": "home", "name": "Дім", "color": "green"}]}"#),
+        ("Projects/.knotes.json", r#"{"space": "work"}"#),
+        ("Home/.knotes.json", r#"{"space": "home"}"#),
+        ("Projects/Radar.md", "# Radar\n\nThe radar budget grows next year. #work\n"),
+        ("Projects/Draft.md", "Radar draft: the year next to budget. #work/old\n"),
+        ("Home/Сад.md", "Radar is mentioned here once. #garden\n"),
+    ];
+    let (vault, _) = probe_notes(&notes, &[]);
+    let search = |query: &str| {
+        let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", query)]);
+        out.lines().find_map(|l| l.strip_prefix("vault-search: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
+    };
+    // The documents listed, in the alphabet's order, without their marks.
+    let found = |query: &str| {
+        let line = search(query);
+        let mut paths: Vec<String> = line.split(" ~ ").next().unwrap().split(" | ").map(|row| row.trim_matches(['[', ']']).split(" • ").next().unwrap().to_owned()).filter(|p| !p.is_empty()).collect();
+        paths.sort();
+        paths.join(", ")
+    };
+    assert_eq!(found("radar"), "Home/Сад.md, Projects/Draft.md, Projects/Radar.md");
+    assert_eq!(found(r#"radar "next year""#), "Projects/Radar.md", "word for word: Draft has «year next»");
+    assert!(search(r#"radar "next year""#).contains("~ 4 marks, first «Radar»"), "the phrase's words are marked, not its quotes: {}", search(r#"radar "next year""#));
+    assert_eq!(found("radar -draft"), "Home/Сад.md, Projects/Radar.md", "left out by its name and its text");
+    assert_eq!(found("radar tag:work"), "Projects/Draft.md, Projects/Radar.md", "a tag with those under it");
+    assert_eq!(found("radar тег:#work/old"), "Projects/Draft.md");
+    assert_eq!(found("radar folder:home"), "Home/Сад.md");
+    assert_eq!(found("radar space:дім"), "Home/Сад.md");
+    assert_eq!(found("radar простір:Робота -draft"), "Projects/Radar.md");
+    assert_eq!(found("radar space:Nowhere"), "", "a space the vault has not");
+    // `OR` between two places: one or the other; `AND`, or nothing: both.
+    assert_eq!(found("radar space:Дім OR space:Робота"), "Home/Сад.md, Projects/Draft.md, Projects/Radar.md");
+    assert_eq!(found("radar space:Дім AND space:Робота"), "", "no document is in two spaces");
+    assert_eq!(found("radar tag:garden OR tag:work/old"), "Home/Сад.md, Projects/Draft.md");
+    assert_eq!(found("radar tag:work AND tag:work/old"), "Projects/Draft.md");
+    assert_eq!(found("radar tag:work tag:work/old"), "Projects/Draft.md");
+    assert_eq!(found("radar tag:garden OR folder:projects AND -draft"), "Home/Сад.md, Projects/Radar.md", "of different kinds");
+    assert_eq!(found("folder:home OR folder:projects -draft"), "Home/Сад.md, Projects/Radar.md");
+    assert_eq!(found("radar AND budget"), "Projects/Draft.md, Projects/Radar.md", "`AND` between words is as if not written");
+    // Where to look and no words: every document there.
+    assert_eq!(found("space:Робота"), "Projects/Draft.md, Projects/Radar.md");
+    assert_eq!(found("tag:garden"), "Home/Сад.md");
+    assert_eq!(found("folder:Projects tag:garden"), "");
+    // A word left out alone lists nothing: it says nothing of where to look.
+    assert_eq!(found("-draft"), "");
+}
+
+#[test]
 fn the_search_marks_the_words_in_its_rows_and_goes_through_a_document_s_finds() {
     let notes = [
         ("Projects/Radar.md", "# Radar\n\nThe radar project starts in May.\n\n## Budget\n\nThe budget of the radar grows next year.\n"),

@@ -2,13 +2,13 @@
 //! typing in the search field never waits for the title matcher, full-text search or search by
 //! meaning (ADR 0028), which reads the vectors Knotes keeps beside the index.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 
-use knotes_app::{ContentMatch, SearchMode, found_snippet};
-use knotes_core::{ContentQuery, ContentSearch, MeaningSearch, NoteText, TitleSearch, Within};
+use knotes_app::{ContentMatch, Place, SearchMode, found_snippet};
+use knotes_core::{ContentQuery, ContentSearch, MeaningSearch, NoteText, TagIndex, TitleSearch, Within};
 use knotes_embed::Embedder;
 use knotes_index::SqliteIndex;
 use knotes_search::TitleIndex;
@@ -44,6 +44,11 @@ pub struct SearchRequest {
     /// With a search of the text, the names too (`titles` gives them): the vault's search
     /// window lists both at once. The list's search asks for one or the other.
     pub names_too: bool,
+    /// What the query itself narrows the search by (a phrase, a word left out, a tag, a folder,
+    /// a space): the vault's search window reads these; the list's search has none.
+    pub refine: knotes_app::Refine,
+    /// The vault's spaces, for a search narrowed to one.
+    pub spaces: Option<Arc<knotes_spaces::Spaces>>,
 }
 
 pub struct SearchResponse {
@@ -132,9 +137,21 @@ fn search(request: &SearchRequest, reader: Option<&SqliteIndex>, meaning: Option
             titles.retain(|path: &String| holds_as_typed(knotes_app::title_of(path), query));
         }
     }
-    if request.mode == SearchMode::Meaning {
+    // The notes of each tag asked for. Where a tag must be had (it stands alone, or with other
+    // tags only, in its list), only such notes are searched, so the most blocks looked at are
+    // theirs.
+    let refine = &request.refine;
+    let with_tag: HashMap<&str, HashSet<String>> = refine.tags().into_iter().map(|tag| (tag, reader.and_then(|r| r.notes_with_tag(tag).ok()).unwrap_or_default().into_iter().collect())).collect();
+    let mut tagged: Option<HashSet<&String>> = None;
+    for any in refine.places.iter().filter(|any| any.iter().all(|place| matches!(place, Place::Tag(_)))) {
+        let notes: HashSet<&String> = any.iter().filter_map(|place| if let Place::Tag(tag) = place { with_tag.get(tag.as_str()) } else { None }).flatten().collect();
+        tagged = Some(tagged.map_or(notes.clone(), |t| t.intersection(&notes).copied().collect()));
+    }
+    let tagged: Option<Vec<String>> = tagged.map(|notes| notes.into_iter().filter(|path| request.scope.as_ref().is_none_or(|scope| scope.contains(path))).cloned().collect());
+    let scope = tagged.as_deref().or(request.scope.as_deref());
+    if request.mode == SearchMode::Meaning || query.is_empty() {
     } else if let (Some(reader), Some(within)) = (reader, within)
-        && let Ok(hits) = reader.search(&ContentQuery { text: query, within, prefixes: true, scope: request.scope.as_deref(), limit: MAX_BLOCKS })
+        && let Ok(hits) = reader.search(&ContentQuery { text: query, within, prefixes: true, scope, limit: MAX_BLOCKS })
     {
         let mut seen = HashSet::new();
         for hit in hits {
@@ -149,6 +166,22 @@ fn search(request: &SearchRequest, reader: Option<&SqliteIndex>, meaning: Option
                 continue;
             }
             content.push(ContentMatch { snippet: found_snippet(block, query, SNIPPET_CHARS), path: hit.path });
+        }
+    }
+    if refine.narrows() {
+        let reads = !(refine.phrases.is_empty() && refine.without.is_empty());
+        let keeps = |path: &String| {
+            let space = request.spaces.as_ref().and_then(|spaces| spaces.of(path)).map(|space| space.name.as_str());
+            refine.in_places(path, space, |tag| with_tag.get(tag).is_some_and(|notes| notes.contains(path)))
+                && (!reads || refine.holds(knotes_app::title_of(path), &reader.and_then(|r| r.note_text(path).ok().flatten()).unwrap_or_default(), request.ignore_case))
+        };
+        if query.is_empty() && !refine.places.is_empty() && request.mode != SearchMode::Meaning {
+            // Where to look and no words: every document there, by its name.
+            titles = request.titles.as_ref().map(|t| t.paths().iter().filter(|path| keeps(path)).take(MAX_TITLES).cloned().collect()).unwrap_or_default();
+            titles.sort_by(|a, b| knotes_app::natural_cmp(a, b));
+        } else {
+            titles.retain(&keeps);
+            content.retain(|found| keeps(&found.path));
         }
     }
     SearchResponse { generation: request.generation, titles, content }
@@ -224,7 +257,7 @@ mod tests {
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
         let near = Near(vec![("Аптечка.md", 0, whole(0), 0.45), ("Дорога.md", 0, whole(2), 0.36), ("Мама.md", 0, whole(1), 0.30), ("Піца.md", 0, whole(3), 0.20)]);
-        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "ліки від тиску".into(), scope: None, titles: None, closeness: CLOSE, space: None, ignore_case: true, names_too: false };
+        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "ліки від тиску".into(), scope: None, titles: None, closeness: CLOSE, space: None, ignore_case: true, names_too: false, refine: Default::default(), spaces: None };
         let found = search(&request, Some(&index), Some(&near));
         let paths: Vec<&str> = found.content.iter().map(|c| c.path.as_str()).collect();
         assert_eq!(paths, ["Мама.md", "Аптечка.md", "Дорога.md"], "the note with the words first; the far one left out");
@@ -237,7 +270,7 @@ mod tests {
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
         let near = Near(vec![("Ванна.md", 0, whole(0), 0.70), ("Балкон.md", 0, whole(1), 0.62), ("Хорватія.md", 0, whole(2), 0.55)]);
-        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "скільки коштувала переробка санвузла".into(), scope: None, titles: None, closeness: CLOSE, space: None, ignore_case: true, names_too: false };
+        let request = SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "скільки коштувала переробка санвузла".into(), scope: None, titles: None, closeness: CLOSE, space: None, ignore_case: true, names_too: false, refine: Default::default(), spaces: None };
         let paths: Vec<String> = search(&request, Some(&index), Some(&near)).content.into_iter().map(|c| c.path).collect();
         assert_eq!(paths, ["Ванна.md", "Балкон.md"], "0.55 is too far behind 0.70");
     }
@@ -249,7 +282,7 @@ mod tests {
         let index = index_of(dir.path(), &notes);
         let whole = |i: usize| notes[i].1.len() as u32;
         let near = Near(vec![("Cat.md", 0, whole(0), 0.50), ("Cat.md", 0, 6, 0.48), ("Work/Plan.md", 0, whole(2), 0.47), ("Shop.md", 0, whole(1), 0.45)]);
-        let request = |scope: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "чим годувати кота".into(), scope, titles: None, closeness: CLOSE, space: None, ignore_case: true, names_too: false };
+        let request = |scope: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "чим годувати кота".into(), scope, titles: None, closeness: CLOSE, space: None, ignore_case: true, names_too: false, refine: Default::default(), spaces: None };
         let found = search(&request(None), Some(&index), Some(&near));
         let paths: Vec<&str> = found.content.iter().map(|c| c.path.as_str()).collect();
         assert_eq!(paths, ["Cat.md", "Work/Plan.md", "Shop.md"], "nearest first, each note once");
@@ -265,7 +298,7 @@ mod tests {
         let notes = [("Out1.md", "один"), ("Out2.md", "два"), ("Out3.md", "три"), ("Work/In.md", "робоче")];
         let index = index_of(dir.path(), &notes);
         let near = Near(vec![("Out1.md", 0, 4, 0.50), ("Out2.md", 0, 4, 0.48), ("Out3.md", 0, 4, 0.47), ("Work/In.md", 0, 4, 0.30)]);
-        let request = |space: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "щось".into(), scope: None, titles: None, closeness: CLOSE, space, ignore_case: true, names_too: false };
+        let request = |space: Option<Vec<String>>| SearchRequest { generation: 1, mode: SearchMode::Meaning, query: "щось".into(), scope: None, titles: None, closeness: CLOSE, space, ignore_case: true, names_too: false, refine: Default::default(), spaces: None };
         let paths = |space| search(&request(space), Some(&index), Some(&near)).content.into_iter().map(|c| c.path).collect::<Vec<_>>();
         assert!(!paths(None).contains(&"Work/In.md".to_string()), "in the whole vault the nearer notes raise the bar past it");
         assert_eq!(paths(Some(vec!["Work/In.md".into()])), ["Work/In.md", "Out1.md", "Out2.md", "Out3.md"], "the space's first, near enough among its own");

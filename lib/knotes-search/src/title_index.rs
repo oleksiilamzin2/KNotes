@@ -47,6 +47,11 @@ impl TitleIndex {
         index
     }
 
+    /// Every file's path, as given.
+    pub fn paths(&self) -> &[String] {
+        &self.paths
+    }
+
     fn score(&self, entry: &Entry, pattern: &Pattern, matcher: &mut Matcher) -> Option<u32> {
         if let Some(s) = pattern.score(entry.title.slice(..), matcher) {
             return Some(s + TITLE_BONUS);

@@ -610,7 +610,7 @@ pub const SEARCH_NOTES: &str = "Пошук у нотатках";
 /// The vault's search window: its title, and its field's grey words.
 pub const SEARCH_VAULT: &str = "Пошук у базі";
 pub const SEARCH_VAULT_MENU: &str = "Пошук у базі…";
-pub const SEARCH_VAULT_HINT: &str = "Назва або слова з тексту";
+pub const SEARCH_VAULT_HINT: &str = "Назва або слова · \"фраза\" · -слово · tag: folder: space: · AND OR";
 pub const SEARCH_NEXT_MATCH: &str = "Наступний збіг (⌘G)";
 pub const SEARCH_PREVIOUS_MATCH: &str = "Попередній збіг (⇧⌘G)";
 /// Which of a document's finds is shown: "3 з 12".

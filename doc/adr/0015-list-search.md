@@ -127,3 +127,18 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   find and the one before, round the document's ends, each scrolled into view and pointed at
   with the system's find indicator. The words are found as they are marked in the preview:
   any case, anywhere in a word.
+- **The query narrows itself** in that window (2026-11-18). A phrase in quotes must stand in
+  the name or the text word for word (`"позовна давність"`); `-word` leaves out the documents
+  whose name or text holds it; `tag:work` (`тег:`) keeps the notes with the tag or one under
+  it; `folder:Авто` (`тека:`) those in a folder of that name anywhere in their path, several
+  in a row as `Work/Проєкти`; `space:Дім` (`простір:`) those in the space of that name. A
+  value with spaces goes in quotes (`folder:"Мої проєкти"`); these places narrow together, with
+  `AND` between them or nothing (`tag:a AND tag:b`: both tags); `OR` between two makes them
+  one or the other, of any kinds (`space:Дім OR space:Робота`, `tag:work OR folder:Авто`).
+  The two are written in capitals. `AND` between words is left out (the words are all asked
+  for anyway); `OR` between words is not an operator: it is searched as a word. With a
+  tag, a folder or a space and no words, every document there is listed by its name. The
+  phrases' words are searched by and marked as the others; what narrows is not marked.
+  `Refine` (knotes-app) takes the query apart; the search's thread applies it after the names
+  and the text are found (a tag before: only its notes are searched). The list's search row
+  is not narrowed so: its scope is the list chosen in the sidebar.

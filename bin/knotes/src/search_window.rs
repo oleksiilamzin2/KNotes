@@ -335,6 +335,12 @@ impl Controller {
         self.ivars().kind.setSelectedSegment(segment);
     }
 
+    /// The words searched by, which the rows and the document shown mark: the field's text
+    /// without what narrows it (`tag:…`, `-word`), a phrase's words among them.
+    fn words(&self) -> String {
+        knotes_app::Refine::parse(&self.ivars().field.stringValue().to_string()).words
+    }
+
     fn ignore_case(&self) -> bool {
         self.ivars().case.isSelectedForSegment(0)
     }
@@ -345,13 +351,16 @@ impl Controller {
     /// some hundreds of notes are read for their words), and the field must take the next
     /// letter meanwhile.
     fn search(&self) {
-        let query = self.ivars().field.stringValue().to_string().trim().to_owned();
+        // The query's own narrowing taken out of it (a phrase, `-word`, `tag:`, `folder:`,
+        // `space:`, `AND` and `OR` between these): the words left are searched by.
+        let refine = knotes_app::Refine::parse(&self.ivars().field.stringValue().to_string());
+        let query = refine.words.clone();
         self.ivars().asked.set(self.ivars().asked.get() + 1);
         let kind = self.kind();
         // The case has no part in a search by meaning: «Aa» goes (greyed while on, it was a pale
         // blue plate with letters that could not be read).
         self.ivars().case.setHidden(kind == Kind::Meaning);
-        if query.is_empty() {
+        if query.is_empty() && refine.places.is_empty() {
             self.list(Vec::new());
             return;
         }
@@ -370,6 +379,8 @@ impl Controller {
             space: None,
             ignore_case: self.ignore_case(),
             names_too: kind == Kind::All,
+            refine,
+            spaces: Some(Arc::clone(&self.ivars().marks.borrow().spaces)),
         };
         // Driven by the probe, the answer is wanted before the next step: found here.
         if crate::probe::enabled() {
@@ -429,7 +440,7 @@ impl Controller {
             document.kept_from_ai = marks.ai.holds(&document.path);
         }
         drop(marks);
-        let query = self.ivars().field.stringValue().to_string();
+        let query = self.words();
         self.ivars().list.set(found, self.ivars().list_scroll.contentSize().width, &query);
         self.show_chosen();
     }
@@ -458,7 +469,7 @@ impl Controller {
         let chosen = self.chosen();
         let text = chosen.as_ref().and_then(|found| self.ivars().reader.borrow().as_ref().and_then(|reader| reader.note_text(&found.path).ok().flatten())).unwrap_or_default();
         live.show(preview, chosen.as_ref().map_or("", |found| found.path.as_str()), &text);
-        let query = self.ivars().field.stringValue().to_string();
+        let query = self.words();
         let marks: Vec<(usize, usize)> = marks(&preview.string(), &query).iter().map(|range| (range.location, range.location + range.length)).collect();
         live.show_found(preview, &marks);
         if marks.is_empty() {
@@ -810,7 +821,7 @@ impl SearchWindow {
         };
         let rows: Vec<String> = ivars.list.ivars().rows.borrow().iter().enumerate().map(|(i, f)| if chosen == Some(i) { format!("[{}]", named(f)) } else { named(f) }).collect();
         let text = ivars.preview.string();
-        let query = ivars.field.stringValue().to_string();
+        let query = self.controller.words();
         let marks = marks(&text, &query);
         let first = marks.first().map(|range| text.substringWithRange(*range).to_string()).unwrap_or_default();
         format!("{} ~ {} marks, first «{first}», {} letters shown", rows.join(" | "), marks.len(), text.length())
