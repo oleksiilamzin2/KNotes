@@ -66,3 +66,7 @@ A restore read where an entry goes back from its `entry.json` and used it unchec
 audit's finding 13): a path with `..`, or an absolute one, in an entry damaged or come from
 elsewhere with the vault's sync, put the file outside the vault. It is checked now as every
 path Knotes is given (`FsVault::inside`), and such a restore fails.
+
+A new note with a first line typed and no name yet could not be deleted (finding 15):
+closing its tab left it, which named its file after its line, and the delete then looked for
+the old name. It is named first and deleted under that name.

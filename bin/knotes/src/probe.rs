@@ -18,6 +18,8 @@ thread_local! {
     /// The window to report on; main thread only.
     static WINDOW: RefCell<Option<Rc<VaultWindow>>> = const { RefCell::new(None) };
     static SCHEDULED: Cell<bool> = const { Cell::new(false) };
+    /// How many times the report was put off for the chat's check to finish.
+    static EVAL_WAITS: Cell<u32> = const { Cell::new(0) };
     static ACTED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -819,8 +821,21 @@ pub fn schedule(with_sidebar: bool) {
         return;
     }
     let delay = std::env::var("KNOTES_PROBE_DELAY_MS").ok().and_then(|d| d.parse().ok()).unwrap_or(500);
+    // Put off for the chat's check: looked at again soon.
+    let delay = if EVAL_WAITS.with(Cell::get) > 0 { 250 } else { delay };
     let when = DispatchTime::try_from(Duration::from_millis(delay)).expect("short delay");
     let _ = DispatchQueue::main().after(when, move || {
+        // The chat's check (`KNOTES_CHAT_EVAL`) writes «Готово» when its last answer is down:
+        // the report waits for that, not for a time that a busy Mac outlasts (a test of it
+        // failed so once in a full run). Half a minute at most.
+        let checking = std::env::var_os("KNOTES_CHAT_EVAL_OUT").filter(|_| std::env::var_os("KNOTES_CHAT_EVAL").is_some());
+        let done = checking.as_ref().is_none_or(|out| std::fs::read_to_string(out).is_ok_and(|answers| answers.contains("Готово:")));
+        if !done && EVAL_WAITS.with(Cell::get) < 120 {
+            EVAL_WAITS.with(|waits| waits.set(waits.get() + 1));
+            SCHEDULED.with(|s| s.set(false));
+            schedule(with_sidebar);
+            return;
+        }
         let mtm = MainThreadMarker::new().expect("main queue");
         WINDOW.with(|w| {
             if let Some(window) = w.borrow().as_ref() {

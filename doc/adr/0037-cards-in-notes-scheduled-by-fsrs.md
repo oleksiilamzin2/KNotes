@@ -350,3 +350,9 @@ test missed, each of them relaunching the app after a grade:
   schedule's: a review asks one card of it (the first; the others' entries are dropped from
   its queue), and of two with the id in one note shows the one where the index found it, not
   the first for both. The deck's counts still count each: they are the cards written.
+- **A review log replaced by another as long or longer** (finding 14: a sync's conflict
+  settled, a restore) was read on from where the old one had been read to, the middle of a
+  line as likely as not: the line's tail could pass for a review of 1970, and the new file's
+  earlier lines were never taken. A log is read on only when a line ended at that place, else
+  again from its start (a review already taken is not taken twice). One replaced by a log
+  whose line ends just there is still read on: only what differs before that place is missed.

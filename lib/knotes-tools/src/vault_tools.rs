@@ -580,7 +580,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
             }
         }
         let total = notes.len();
-        let next = (offset + limit < total).then_some(offset + limit);
+        let next = offset.checked_add(limit).filter(|next| *next < total);
         let notes: Vec<Value> = notes.into_iter().skip(offset).take(limit).collect();
         Ok(json!({"notes": notes, "total": total, "next_offset": next}))
     }
@@ -644,7 +644,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 note
             })
             .collect();
-        let next = (offset + limit < total).then_some(offset + limit);
+        let next = offset.checked_add(limit).filter(|next| *next < total);
         Ok(json!({"notes": notes, "total": total, "next_offset": next}))
     }
 
@@ -773,7 +773,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
                 card
             })
             .collect();
-        let next = (offset + limit < total).then_some(offset + limit);
+        let next = offset.checked_add(limit).filter(|next| *next < total);
         Ok(json!({"cards": cards, "total": total, "next_offset": next}))
     }
 

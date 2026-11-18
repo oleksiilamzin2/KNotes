@@ -234,6 +234,12 @@ fn take_reviews(index: &mut SqliteIndex, files: &FsVault) -> usize {
         if size == from {
             continue;
         }
+        // Read on from where it was read to only when a line ended there: a log replaced by
+        // another as long or longer (a sync's conflict settled, a restore) was read on from the
+        // middle of a line, whose tail could pass for a review of 1970, and its earlier lines
+        // never. Read again whole, a review already taken is not taken twice.
+        let whole_line_before = from == 0 || files.read_review_log(&name, from - 1).is_ok_and(|tail| tail.starts_with('\n'));
+        let from = if whole_line_before { from } else { 0 };
         match files.read_review_log(&name, from).map_err(BoxError::from).and_then(|text| index.take_reviews(&name, from, &text, &fsrs, &settings)) {
             Ok(taken) => new += taken,
             Err(e) => eprintln!("knotes: cannot read the review log {name}: {e}"),
@@ -253,5 +259,40 @@ fn purge_expired(files: &FsVault) {
         if let Err(e) = files.purge(&entry.id) {
             eprintln!("knotes: cannot delete {} for good: {e}", entry.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use knotes_core::CardIndex;
+    use knotes_index::SqliteIndex;
+    use knotes_vault::FsVault;
+
+    use super::take_reviews;
+
+    #[test]
+    fn a_review_log_replaced_by_a_longer_one_is_read_again_from_its_start() {
+        let (vault, idx) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(vault.path().join("a.md"), "#@a q1::a1 ^c-1\n\n#@a q2::a2 ^c-2\n\n#@a q3::a3 ^c-3\n").unwrap();
+        let files = FsVault::new(vault.path());
+        let mut index = SqliteIndex::open(idx.path()).unwrap();
+        knotes_indexer::Indexer::new(FsVault::new(vault.path()), knotes_md::MarkdownParser::new()).sync(&mut index).unwrap();
+        let log = vault.path().join(".knotes/reviews/mac.tsv");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        // Read to its end.
+        std::fs::write(&log, "1000000000\tc-1\t4\n").unwrap();
+        assert_eq!(take_reviews(&mut index, &files), 1);
+        // Added to: read on from there (34 bytes read).
+        std::fs::write(&log, "1000000000\tc-1\t4\n1000000100\tc-2\t4\n").unwrap();
+        assert_eq!(take_reviews(&mut index, &files), 1);
+        // Replaced by another, longer, whose byte 34 is inside its second line: read whole, not
+        // from the middle of that line.
+        std::fs::write(&log, "1000000000\tc-1\t4\n10000002000\tc-2\t4\n10000003000\tc-3\t4\n").unwrap();
+        take_reviews(&mut index, &files);
+        let first = |id: &str| index.card_rows(None, None).unwrap().into_iter().find(|c| c.id.as_deref() == Some(id)).and_then(|c| c.reviewed).map(|r| r.first);
+        assert_eq!(first("c-3"), Some(10_000_003_000));
+        assert_eq!(index.card_state("c-2").unwrap().map(|s| s.last), Some(10_000_002_000), "the line the old place fell inside is taken whole");
+        // No review of 1970 came of a line's tail.
+        assert!(index.card_rows(None, None).unwrap().iter().filter_map(|c| c.reviewed).all(|r| r.first >= 1_000_000_000));
     }
 }

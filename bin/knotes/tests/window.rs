@@ -3405,6 +3405,20 @@ fn deleted_entries(vault: &std::path::Path) -> usize {
 }
 
 #[test]
+fn a_new_note_with_a_first_line_typed_is_deleted_under_the_name_it_takes() {
+    // A new note, one line typed (no line break yet: it keeps «Без назви» until it is left).
+    // Deleted, it is left first and takes its line's name; it went to the deleted under that
+    // name or the delete failed, looking for the old one.
+    let (vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "new"), ("KNOTES_PROBE_TYPE", "Ідея"), ("KNOTES_PROBE_DELETE_OPEN", "1")]);
+    assert!(!out.contains("failed: "), "{out}");
+    let left: Vec<String> = std::fs::read_dir(vault.path().join("Вхідні")).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    assert!(left.iter().all(|name| !name.ends_with(".md")), "no note left behind: {left:?} {out}");
+    let trash = vault.path().join(".knotes/trash");
+    let deleted = std::fs::read_dir(&trash).unwrap().flatten().count();
+    assert_eq!(deleted, 1, "{out}");
+}
+
+#[test]
 fn a_note_deleted_from_its_menu_goes_to_recently_deleted_and_comes_back_from_there() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);

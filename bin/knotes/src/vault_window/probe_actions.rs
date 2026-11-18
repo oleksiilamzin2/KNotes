@@ -68,6 +68,13 @@ impl VaultWindow {
         // A list row renamed, or dropped on a sidebar folder, by its path
         // (`list-rename-path=Docs/a.pdf=New name`, `drop-path=Docs/a.pdf=Folder`): a PDF is listed
         // only among a search's results, which come later; these reach what its row calls.
+        // `KNOTES_PROBE_DELETE_OPEN=1`: the note open deleted, as its row's «Видалити» does,
+        // after what was typed in it.
+        if std::env::var_os("KNOTES_PROBE_DELETE_OPEN").is_some()
+            && let Some(path) = self.open_path()
+        {
+            self.delete(&path);
+        }
         if let Ok(action) = std::env::var("KNOTES_PROBE_ACTION") {
             if let Some((path, name)) = action.strip_prefix("list-rename-path=").and_then(|s| s.split_once('=')) {
                 self.rename_note(path, name);

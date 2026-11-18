@@ -332,3 +332,12 @@ plan usage for open-source and local apps) on 2026-11-14:
 - Left: the model's own earlier answers, and a summary, keep what they said of such a note; a
   note just tagged `#no-ai` is shared until it is indexed and for up to 10 s after
   (`TITLES_LAST`).
+
+## Fixed (2026-11-18)
+
+- An `offset` near the largest number a tool takes, added to the page's length, went round
+  to a small one (an audit's finding 17): `list_notes`, `list_tasks` and `list_cards` gave a
+  `next_offset` that meant nothing. The sum is checked.
+- The window test of the chat's check (`KNOTES_CHAT_EVAL`) reported after a fixed 2.5 s and
+  failed once on a busy Mac, the answers not yet written (finding 18): the probe's report
+  waits now for the check's «Готово» (half a minute at most).

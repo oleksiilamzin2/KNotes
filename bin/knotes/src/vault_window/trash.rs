@@ -12,6 +12,17 @@ impl VaultWindow {
     /// it closes first (its edits written).
     pub fn delete(&self, path: &str) {
         let Some(vault) = self.vault() else { return };
+        // A new note not named yet takes its first line's name as it is left: named now, and
+        // deleted under that name (closing its tab renamed its file, and the delete then
+        // looked for the old one and failed).
+        let named;
+        let path = if self.open_path().as_deref() == Some(path) {
+            self.name_new_note(true);
+            named = self.open_path().unwrap_or_else(|| path.to_owned());
+            named.as_str()
+        } else {
+            path
+        };
         // Edits typed in an embed of it go with it, not beside it after it went.
         self.save_embeds();
         let inside = format!("{path}/");
