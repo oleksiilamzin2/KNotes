@@ -2516,6 +2516,9 @@ fn the_buttons_after_the_tabs_search_the_vault_and_make_a_new_note() {
     assert!(!probe_tabs(&vault, &home, &[]).contains("vault-search-window: open"));
     let searching = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TOOLBAR_BUTTON", "search")]);
     assert!(searching.contains("vault-search-window: open\n") && !searching.contains("search-row: shown"), "not the list's search: {searching}");
+    // The menu's item does the same, by its keys (⌥⌘F; ⇧⌘F is the list's search).
+    let by_key = probe_tabs(&vault, &home, &[("KNOTES_PROBE_MENU_KEY", "alt-f")]);
+    assert!(by_key.contains("menu-key: Пошук у базі…\n") && by_key.contains("vault-search-window: open\n"), "{by_key}");
 }
 
 #[test]

@@ -86,7 +86,8 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   are), the query's words marked and the first scrolled into view (a PDF's as its indexed
   text). Its links lead nowhere from there. Down
   and up choose, a click too; Return or a double click opens the document in the vault's
-  window and closes the search; Escape closes it. Opened again, it searches what was typed
+  window and closes the search; Escape closes it. Opened by the toolbar's glass or by Edit's
+  «Пошук у базі…», ⌥⌘F (⇧⌘F stays the list's search). Opened again, it searches what was typed
   before in the vault as it is now.
 - Searched on the main thread as the field's text changes, with a reader of its own: a name
   search and a full-text search take a few milliseconds at 10 000 notes (ADR 0006's

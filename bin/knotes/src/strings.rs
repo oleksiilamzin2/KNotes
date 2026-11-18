@@ -597,6 +597,7 @@ pub const FIND_PREVIOUS: &str = "Знайти попереднє";
 pub const SEARCH_NOTES: &str = "Пошук у нотатках";
 /// The vault's search window: its title, and its field's grey words.
 pub const SEARCH_VAULT: &str = "Пошук у базі";
+pub const SEARCH_VAULT_MENU: &str = "Пошук у базі…";
 pub const SEARCH_VAULT_HINT: &str = "Назва або слова з тексту";
 pub const ASK_AI: &str = "Запитати ШІ";
 /// The find bar over the note.

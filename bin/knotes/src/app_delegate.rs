@@ -198,6 +198,14 @@ define_class!(
             }
         }
 
+        /// Edit → Search the Vault (⌥⌘F): the vault's search, in a window of its own.
+        #[unsafe(method(searchVault:))]
+        fn search_vault(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.search_vault();
+            }
+        }
+
         /// View → Ask the AI: the chat shown, its question field focused.
         #[unsafe(method(askAI:))]
         fn ask_ai(&self, _sender: Option<&AnyObject>) {

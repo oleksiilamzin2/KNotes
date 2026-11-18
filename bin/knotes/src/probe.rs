@@ -1157,15 +1157,20 @@ fn tabs_requested(window: &VaultWindow) {
             _ => {}
         }
     }
-    // `KNOTES_PROBE_MENU_KEY=w`: the main menu's item for Cmd and that key, chosen as the key
-    // does; then how File closes the window.
+    // `KNOTES_PROBE_MENU_KEY=w` (`alt-f`: with Option): the main menu's item for Cmd and that
+    // key, chosen as the key does; then how File closes the window.
     if let Ok(key) = std::env::var("KNOTES_PROBE_MENU_KEY") {
         let mtm = window.window.mtm();
         let items: Vec<objc2::rc::Retained<objc2_app_kit::NSMenuItem>> = NSApplication::sharedApplication(mtm)
             .mainMenu()
             .map(|bar| bar.itemArray().iter().filter_map(|i| i.submenu()).flat_map(|m| m.itemArray().iter().collect::<Vec<_>>()).collect())
             .unwrap_or_default();
-        let only_cmd = |i: &objc2_app_kit::NSMenuItem| i.keyEquivalentModifierMask() == objc2_app_kit::NSEventModifierFlags::Command;
+        // `alt-f`: with Option too.
+        let (key, wanted) = match key.strip_prefix("alt-") {
+            Some(key) => (key.to_owned(), objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Option),
+            None => (key, objc2_app_kit::NSEventModifierFlags::Command),
+        };
+        let only_cmd = |i: &objc2_app_kit::NSMenuItem| i.keyEquivalentModifierMask() == wanted;
         if let Some(item) = items.iter().find(|i| i.keyEquivalent().to_string() == key && only_cmd(i)) {
             println!("menu-key: {}", item.title());
             // SAFETY: the item's own action, up the responder chain as a key equivalent goes.
