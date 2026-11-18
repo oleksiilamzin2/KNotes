@@ -383,16 +383,13 @@ impl VaultWindow {
     /// Renames the note at `old` to `name` in its folder (a number added when the name is
     /// taken), with the links to it (ADR 0019); a PDF keeps `.pdf`. False when nothing moved.
     pub fn rename_note(&self, old: &str, name: &str) -> bool {
-        // The list renames its PDFs (search results) through here too.
-        if FileKind::from_path(old) == FileKind::Pdf {
-            return self.rename_pdf(old, name);
+        // The list renames its PDFs (search results) through here too. Where it goes is
+        // knotes-app's to say (`renamed`).
+        let Some(vault) = self.vault() else { return false };
+        match knotes_app::renamed(old, name, |p| vault.join(p).exists()) {
+            Some(new) => self.move_notes(Moves::from([(old.to_owned(), new)])),
+            None => false,
         }
-        let (Some(stem), Some(vault)) = (note_file_stem(name), self.vault()) else { return false };
-        let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
-        // A change of case only is a rename of the same file.
-        let same = |p: &str| p.to_lowercase() == old.to_lowercase();
-        let new = unique_note_path(folder, &stem, |p| !same(p) && vault.join(p).exists());
-        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
     }
 
     /// Asks for a folder and moves the note at `path` there, with the links to it (ADR 0019).
@@ -416,42 +413,23 @@ impl VaultWindow {
     /// links to it; its file name stays, numbered when taken.
     pub fn move_note_to(&self, path: &str, folder: &str) {
         let Some(vault) = self.vault() else { return };
-        let file = path.rsplit('/').next().unwrap_or(path);
-        let wanted = if folder.is_empty() { file.to_owned() } else { format!("{folder}/{file}") };
-        if wanted == path {
-            return;
+        if let Some(new) = knotes_app::moved_into(path, folder, |p| vault.join(p).exists()) {
+            self.move_notes(Moves::from([(path.to_owned(), new)]));
         }
-        let new = unique_file_path(folder, file, |p| vault.join(p).exists());
-        self.move_notes(Moves::from([(path.to_owned(), new)]));
     }
 
     /// Renames the folder at `folder` to `name` (a `/` in it becomes `-`), with the links into
     /// it (ADR 0019): the folder itself moves, attachments and all. False when nothing moved.
     pub fn rename_folder(&self, folder: &str, name: &str) -> bool {
-        let name = name.trim().replace('/', "-");
-        let Some(vault) = self.vault().filter(|_| !name.is_empty()) else { return false };
-        let new = match folder.rsplit_once('/') {
-            Some((parent, _)) => format!("{parent}/{name}"),
-            None => name,
-        };
-        if new == folder || (new.to_lowercase() != folder.to_lowercase() && vault.join(&new).exists()) {
-            return false;
-        }
-        let prefix = format!("{folder}/");
-        let moves: Moves = self
-            .state
-            .borrow()
-            .catalog
-            .iter()
-            .filter_map(|e| e.path.strip_prefix(&prefix).map(|rest| (e.path.clone(), format!("{new}/{rest}"))))
-            .collect();
+        let Some(vault) = self.vault() else { return false };
+        let Some(new) = knotes_app::renamed_folder(folder, name, |p| vault.join(p).exists()) else { return false };
+        let moves = knotes_app::folder_moves(self.state.borrow().catalog.iter().map(|e| e.path.as_str()), folder, &new);
         if !self.relocate(moves, Some((folder, &new))) {
             return false;
         }
         // The sidebar keeps showing the folder (or the folder inside it) under its new name.
         let selected = match &self.state.borrow().selection {
-            SidebarItem::Folder(path) if path == folder => Some(new.clone()),
-            SidebarItem::Folder(path) => path.strip_prefix(&prefix).map(|rest| format!("{new}/{rest}")),
+            SidebarItem::Folder(path) => knotes_app::in_renamed_folder(path, folder, &new),
             _ => None,
         };
         if let Some(path) = selected {
@@ -579,22 +557,6 @@ impl VaultWindow {
         true
     }
 
-    /// Renames the PDF at `old` to `name` (`.pdf` added when left out) in its folder, links to
-    /// it updated as a note's are; false when declined or impossible.
-    pub fn rename_pdf(&self, old: &str, name: &str) -> bool {
-        let name = name.trim();
-        let stem = if name.to_lowercase().ends_with(".pdf") { &name[..name.len() - 4] } else { name };
-        let (Some(stem), Some(vault)) = (note_file_stem(stem), self.vault()) else { return false };
-        let folder = old.rsplit_once('/').map_or(String::new(), |(dir, _)| format!("{dir}/"));
-        // A change of case only is a rename of the same file.
-        let free = |p: &str| p.to_lowercase() == old.to_lowercase() || !vault.join(p).exists();
-        let new = (0..)
-            .map(|n| if n == 0 { format!("{folder}{stem}.pdf") } else { format!("{folder}{stem} {n}.pdf") })
-            .find(|p| free(p))
-            .unwrap_or_default();
-        new != old && self.move_notes(Moves::from([(old.to_owned(), new)]))
-    }
-
     /// The link edits `moves` call for, worked out from the index and the files; why not, when
     /// the index cannot say which notes link to them.
     pub(super) fn relinks(&self, moves: &Moves) -> Result<Relinks, String> {
@@ -618,10 +580,8 @@ impl VaultWindow {
             Some(editing) if editing.document.wants_name(&text, leaving) => editing.path.clone(),
             _ => return,
         };
-        let Some(stem) = note_file_stem(text.lines().next().unwrap_or("")) else { return };
         let Some(vault) = self.vault() else { return };
-        let folder = old.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let path = unique_note_path(folder, &stem, |p| p != old && vault.join(p).exists());
+        let Some(path) = knotes_app::named_after(&old, text.lines().next().unwrap_or(""), |p| vault.join(p).exists()) else { return };
         if path != old
             && let Err(e) = FsVault::new(&vault).move_note(&old, &path)
         {
@@ -629,7 +589,7 @@ impl VaultWindow {
             if let Some(editing) = self.editing.borrow_mut().as_mut() {
                 editing.document.named();
             }
-            self.tell_failed(&strings::name_failed(&stem), &e);
+            self.tell_failed(&strings::name_failed(knotes_app::title_of(&path)), &e);
             return;
         }
         if let Some(editing) = self.editing.borrow_mut().as_mut() {

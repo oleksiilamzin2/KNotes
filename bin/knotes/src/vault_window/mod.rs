@@ -29,7 +29,7 @@ use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
 use knotes_app::{Followed, follow_link, linked_note_path, named_link, find_folder_node, session_settings_key, tag_exists, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
     FolderRules, ListOption, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
-    with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder,     note_file_stem, resolve_list_settings, unique_file_path, unique_note_path,
+    with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, suggest_tags, folder_tree_with, unique_folder_path, space_notes_folder,     resolve_list_settings, unique_note_path,
 };
 use knotes_core::{AttachmentStore, FileKind, FolderRulesStore, Link, LinkKind, LinkResolver, NoteMover, NoteParser, NoteRow, NoteWriter, TrashEntry, TrashStore, VaultReader};
 use knotes_md::MarkdownParser;
@@ -808,7 +808,7 @@ impl VaultWindow {
                     }
                     renamed
                 }
-                (None, Some(pdf)) => window.rename_pdf(&pdf, &name),
+                (None, Some(pdf)) => window.rename_note(&pdf, &name),
                 (None, None) => false,
             };
             if !renamed {
