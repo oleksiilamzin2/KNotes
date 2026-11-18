@@ -43,10 +43,6 @@ impl VaultWindow {
             AfterClose::Same => {}
         }
         self.save_tabs();
-        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
-            self.rebuild_sidebar();
-            self.highlight(&SidebarItem::Gap);
-        }
         true
     }
 
@@ -70,10 +66,6 @@ impl VaultWindow {
             self.open_note(&next, true);
         }
         self.save_tabs();
-        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
-            self.rebuild_sidebar();
-            self.highlight(&SidebarItem::Gap);
-        }
     }
 
     /// The document at `path` shown as a tab (ADR 0024): the sidebar's tabs follow. Gives
@@ -86,10 +78,6 @@ impl VaultWindow {
         let beside = self.new_tab_next.replace(false) || FileKind::from_path(path) == FileKind::Pdf || on_review;
         let place = if beside { self.tabs.borrow_mut().open_beside(path) } else { self.tabs.borrow_mut().navigate(path) };
         self.show_tabs();
-        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
-            self.rebuild_sidebar();
-            self.highlight(&SidebarItem::Gap);
-        }
         place
     }
 

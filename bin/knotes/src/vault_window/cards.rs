@@ -151,10 +151,6 @@ impl VaultWindow {
         }
         self.tabs.borrow_mut().open_beside(&format!("{DECK_TAB}{deck}"));
         self.save_tabs();
-        if self.state.borrow().sidebar_mode == SidebarMode::Tabs {
-            self.rebuild_sidebar();
-            self.highlight(&SidebarItem::Gap);
-        }
         *self.review_deck.borrow_mut() = Some(deck.to_owned());
         let cards = self.due_cards(deck);
         self.show_list_column(true);

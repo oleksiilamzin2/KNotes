@@ -782,18 +782,6 @@ impl VaultWindow {
                 window.close_other_tabs(&path);
             }
         });
-        let weak_close: Weak<Self> = Rc::downgrade(&this);
-        this.sidebar.on_close(move |path| {
-            if let Some(window) = weak_close.upgrade() {
-                window.close_tab(&path);
-            }
-        });
-        let weak_others: Weak<Self> = Rc::downgrade(&this);
-        this.sidebar.on_close_others(move |path| {
-            if let Some(window) = weak_others.upgrade() {
-                window.close_other_tabs(&path);
-            }
-        });
         this.sidebar.on_rename(move |folder, name| {
             if let Some(window) = weak.upgrade() {
                 window.rename_folder(&folder, &name);
@@ -821,15 +809,6 @@ impl VaultWindow {
                 && !window.shows_deleted(&id)
             {
                 window.show_deleted(&id);
-            }
-        });
-        // The button after the tabs: a new note in a tab of its own beside the one shown.
-        let weak: Weak<Self> = Rc::downgrade(&this);
-        this.toolbar_delegate.on_new_tab(move || {
-            if let Some(window) = weak.upgrade() {
-                window.new_tab_next.set(true);
-                window.new_note();
-                window.new_tab_next.set(false);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);

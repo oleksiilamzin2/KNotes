@@ -70,13 +70,6 @@ impl VaultWindow {
                 self.outline.reloadData();
                 return;
             }
-            if state.sidebar_mode == SidebarMode::Tabs {
-                let tabs: Vec<(String, String)> = self.tabs.borrow().paths().map(|p| (p.to_owned(), document_name(p).to_owned())).collect();
-                drop(state);
-                self.sidebar.set_model(Sidebar::tabs(&tabs));
-                self.outline.reloadData();
-                return;
-            }
             // In a space: its folders and tags (counted there), the inbox if it is one of them,
             // its untagged notes; then the rest of the vault under a row of its own (ADR 0030).
             // Its tags as the snapshot counted them: nothing counted here after every save.
@@ -103,11 +96,6 @@ impl VaultWindow {
     /// Shows the notes of a sidebar item.
     pub fn select(&self, item: SidebarItem) {
         if self.highlighting.get() {
-            return;
-        }
-        // A tab: its document shown; the list keeps what it shows.
-        if let SidebarItem::Tab(path) = &item {
-            self.open_note(path, true);
             return;
         }
         // A deck: its review, in a tab of its own (ADR 0037); the list shows its notes.
@@ -278,13 +266,6 @@ impl VaultWindow {
 
     /// Selects the row of `item` in the sidebar without notifying (the list follows `state`).
     pub(super) fn highlight(&self, item: &SidebarItem) {
-        // The tabs show the document shown, whatever the list shows.
-        let tab = (self.state.borrow().sidebar_mode == SidebarMode::Tabs).then(|| self.tabs.borrow().current_path().map(|p| SidebarItem::Tab(p.to_owned())));
-        let item = match &tab {
-            Some(Some(tab)) => tab,
-            Some(None) => &SidebarItem::Gap,
-            None => item,
-        };
         // SAFETY: the item object comes from this outline view's data source.
         let row = unsafe { self.outline.rowForItem(Some(&self.sidebar.object_for(item))) };
         self.highlighting.set(true);

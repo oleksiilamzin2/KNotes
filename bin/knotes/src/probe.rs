@@ -900,13 +900,15 @@ pub fn schedule(with_sidebar: bool) {
     });
 }
 
-/// `KNOTES_PROBE_NEW_TAB_BUTTON=1`: a click on the toolbar's button after the tabs, its action
-/// sent to its target as the toolbar sends it.
-pub fn new_tab_button_requested(window: &NSWindow) {
-    if std::env::var_os("KNOTES_PROBE_NEW_TAB_BUTTON").is_none() {
-        return;
-    }
-    let item = window.toolbar().and_then(|toolbar| toolbar.items().iter().find(|item| item.itemIdentifier().to_string() == crate::toolbar::NEW_TAB));
+/// `KNOTES_PROBE_TOOLBAR_BUTTON=search` (or `new-note`): a click on that button after the tabs,
+/// its action sent to its target as the toolbar sends it.
+pub fn toolbar_button_requested(window: &NSWindow) {
+    let id = match std::env::var("KNOTES_PROBE_TOOLBAR_BUTTON").as_deref() {
+        Ok("search") => crate::toolbar::TOOLBAR_SEARCH,
+        Ok("new-note") => crate::toolbar::TOOLBAR_NEW_NOTE,
+        _ => return,
+    };
+    let item = window.toolbar().and_then(|toolbar| toolbar.items().iter().find(|item| item.itemIdentifier().to_string() == id));
     if let Some((item, action)) = item.and_then(|item| item.action().map(|action| (item, action))) {
         // SAFETY: the item's own action and target, with it as the sender.
         unsafe { NSApplication::sharedApplication(window.mtm()).sendAction_to_from(action, item.target().as_deref(), Some(&item)) };

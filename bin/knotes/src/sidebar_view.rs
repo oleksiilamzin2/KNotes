@@ -2,28 +2,27 @@
 //! note dragged from the list onto a folder moves there, and a folder is renamed in its row
 //! from the context menu (ADR 0019).
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use knotes_app::{Sidebar, SidebarItem, folder_space_mark, space_mark};
+use knotes_app::{Sidebar, SidebarItem, folder_space_mark};
 use knotes_spaces::{KeptFromAi, Spaces};
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControl, NSEvent, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemValidation, NSTextFieldDelegate, NSTextView, NSDraggingInfo, NSFont, NSImage, NSImageView, NSOutlineView, NSOutlineViewDataSource,
     NSOutlineViewDelegate, NSPasteboard, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextField, NSUserInterfaceItemIdentification,
     NSView,
 };
-use objc2_foundation::{NSArray, NSEdgeInsets, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, NSZeroRect, ns_string};
+use objc2_foundation::{NSArray, NSEdgeInsets, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
 
 use crate::note_list_view::NOTE_PATH_TYPE;
 use crate::strings;
 
 type OnSelect = Box<dyn Fn(SidebarItem)>;
 type OnDrop = Box<dyn Fn(String, String)>;
-type OnClose = Box<dyn Fn(String)>;
 type OnFolderSpace = Box<dyn Fn(String, FolderChoice)>;
 type OnNewFolder = Box<dyn Fn(String)>;
 type OnRenameEnd = Box<dyn Fn()>;
@@ -50,8 +49,6 @@ pub struct Ivars {
     on_rename: RefCell<Option<OnDrop>>,
     /// Called with the path of a tab whose cross was clicked (ADR 0024), or of the tab whose
     /// menu closes the others.
-    on_close: RefCell<Option<OnClose>>,
-    on_close_others: RefCell<Option<OnClose>>,
     /// The vault's spaces and the window's (for a folder's menu and the rows' dots), and what
     /// choosing a space in a folder's menu calls.
     spaces: RefCell<(Arc<Spaces>, Option<String>)>,
@@ -162,33 +159,6 @@ define_class!(
     }
 
     impl SidebarSource {
-        /// A tab's menu: that tab closes.
-        #[unsafe(method(closeTabFromMenu:))]
-        fn close_tab_from_menu(&self, item: &NSMenuItem) {
-            if let (Some(path), Some(callback)) = (menu_tab(item), self.ivars().on_close.borrow().as_ref()) {
-                callback(path);
-            }
-        }
-
-        /// A tab's menu: every other tab closes.
-        #[unsafe(method(closeOtherTabs:))]
-        fn close_other_tabs(&self, item: &NSMenuItem) {
-            if let (Some(path), Some(callback)) = (menu_tab(item), self.ivars().on_close_others.borrow().as_ref()) {
-                callback(path);
-            }
-        }
-
-        /// A tab's cross: the tab closes.
-        #[unsafe(method(closeTab:))]
-        fn close_tab(&self, sender: &NSView) {
-            let outline = self.ivars().outline.borrow().load();
-            let row = outline.as_ref().map_or(-1, |o| o.rowForView(sender));
-            let item = outline.filter(|_| row >= 0).and_then(|o| o.itemAtRow(row)).and_then(|o| item_of(&o));
-            if let (Some(SidebarItem::Tab(path)), Some(callback)) = (item, self.ivars().on_close.borrow().as_ref()) {
-                callback(path);
-            }
-        }
-
         /// A folder's menu: a space chosen for it.
         #[unsafe(method(chooseFolderSpace:))]
         fn choose_folder_space(&self, item: &NSMenuItem) {
@@ -284,8 +254,6 @@ impl SidebarSource {
             on_select: RefCell::new(None),
             on_drop: RefCell::new(None),
             on_rename: RefCell::new(None),
-            on_close: RefCell::new(None),
-            on_close_others: RefCell::new(None),
             spaces: RefCell::new((Arc::new(Spaces::default()), None)),
             on_folder_space: RefCell::new(None),
             on_new_folder: RefCell::new(None),
@@ -314,8 +282,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             SidebarItem::Tag(_) => (model.name(&item).to_owned(), Some("number")),
             SidebarItem::Deck(_) => (model.name(&item).to_owned(), Some("rectangle.stack")),
             // A deck's review is a tab too (ADR 0037).
-            SidebarItem::Tab(path) if path.starts_with("deck://") => (model.name(&item).to_owned(), Some("rectangle.stack")),
-            SidebarItem::Tab(path) => (model.name(&item).to_owned(), Some(if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" })),
             SidebarItem::Rest => (strings::REST_OF_VAULT.to_owned(), Some("rectangle.stack")),
             SidebarItem::Deleted => (strings::RECENTLY_DELETED.to_owned(), Some("trash")),
             SidebarItem::DeletedGap => return Some(NSView::new(self.mtm())),
@@ -342,18 +308,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
             let text = model.count(&item).map(|n| n.to_string()).unwrap_or_default();
             count.setStringValue(&NSString::from_str(&text));
         }
-        if let Some(close) = close_button(&cell) {
-            // A tab's cross shows with the pointer over its row (as Safari's).
-            if let Some(hover) = cell.downcast_ref::<SidebarCell>() {
-                hover.ivars().closable.set(matches!(item, SidebarItem::Tab(_)));
-                hover.show_cross_if_pointed();
-            }
-            // SAFETY: the source outlives the outline's cells (it is the outline's data source).
-            unsafe {
-                close.setTarget(Some(self));
-                close.setAction(Some(sel!(closeTab:)));
-            }
-        }
         Some(Retained::into_super(cell))
     }
 
@@ -365,14 +319,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         *self.ivars().on_drop.borrow_mut() = Some(Box::new(callback));
     }
 
-    pub fn on_close(&self, callback: impl Fn(String) + 'static) {
-        *self.ivars().on_close.borrow_mut() = Some(Box::new(callback));
-    }
-
-    pub fn on_close_others(&self, callback: impl Fn(String) + 'static) {
-        *self.ivars().on_close_others.borrow_mut() = Some(Box::new(callback));
-    }
-
     /// Fills the context menu for `item`'s row: a folder's rename, a tab's closing, nothing
     /// for other rows. Each item knows its row's item.
     pub fn fill_menu(&self, menu: &NSMenu, item: Option<&SidebarItem>) {
@@ -380,7 +326,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let ai = if item.is_some_and(|i| self.kept_from_ai(i)) { strings::SHOW_TO_AI } else { strings::KEEP_FROM_AI };
         let entries: &[(&str, Sel)] = match item {
             Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (ai, sel!(toggleFolderAi:)), (strings::DELETE, sel!(deleteFolder:))],
-            Some(SidebarItem::Tab(_)) => &[(strings::CLOSE_TAB, sel!(closeTabFromMenu:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))],
             Some(SidebarItem::Deck(_)) => &[(strings::DECK_SETTINGS, sel!(deckSettings:))],
             // Below the rows: a new folder at the vault's top.
             None => &[(strings::NEW_FOLDER, sel!(newFolder:))],
@@ -458,7 +403,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let ai = self.ivars().ai.borrow();
         match item {
             SidebarItem::Folder(folder) => ai.holds_folder(folder),
-            SidebarItem::Tab(path) => ai.holds(path),
             _ => false,
         }
     }
@@ -481,7 +425,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let (spaces, current) = &*self.ivars().spaces.borrow();
         match item {
             SidebarItem::Folder(folder) => folder_space_mark(spaces, current.as_deref(), folder).cloned(),
-            SidebarItem::Tab(path) => space_mark(spaces, current.as_deref(), path).cloned(),
             _ => None,
         }
     }
@@ -601,15 +544,6 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     }
 }
 
-/// The tab a menu item was made for.
-fn menu_tab(item: &NSMenuItem) -> Option<String> {
-    let key = item.representedObject()?.downcast::<NSString>().ok()?.to_string();
-    match SidebarItem::from_key(&key)? {
-        SidebarItem::Tab(path) => Some(path),
-        _ => None,
-    }
-}
-
 /// The folder a note dropped on `item` moves to; only folders take notes.
 pub fn drop_folder(item: &SidebarItem) -> Option<&str> {
     match item {
@@ -661,7 +595,6 @@ const CELL_ID: &str = "SidebarCell";
 /// Height of the empty row between the fixed rows and the tree.
 const GAP_HEIGHT: f64 = 10.0;
 const COUNT_ID: &str = "count";
-const CLOSE_ID: &str = "close";
 /// A row's space dot (ADR 0030), among its marks.
 const DOT_ID: &str = "space-dot";
 
@@ -673,7 +606,7 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     if let Some(cell) = reused.and_then(|v| v.downcast::<NSTableCellView>().ok()) {
         return cell;
     }
-    let cell = SidebarCell::new(mtm);
+    let cell = NSTableCellView::new(mtm);
     cell.setIdentifier(Some(&id));
     let image = NSImageView::new(mtm);
     let name = NSTextField::labelWithString(ns_string!(""), mtm);
@@ -681,21 +614,13 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     count.setIdentifier(Some(&NSString::from_str(COUNT_ID)));
     count.setTextColor(Some(&NSColor::secondaryLabelColor()));
     count.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(NSFont::systemFontSize(), 0.0)));
-    // A tab's cross (ADR 0024); hidden on other rows.
-    let close = NSButton::new(mtm);
-    close.setBordered(false);
-    close.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("xmark"), Some(&NSString::from_str(strings::CLOSE_TAB))).as_deref());
-    close.setToolTip(Some(&NSString::from_str(strings::CLOSE_TAB)));
-    close.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
-    close.setIdentifier(Some(&NSString::from_str(CLOSE_ID)));
-    close.setHidden(true);
     // The AI's mark (ADR 0036) and the dot of a space (ADR 0030), right after the name; hidden
     // on most rows.
     let dot = NSImageView::new(mtm);
     dot.setIdentifier(Some(&NSString::from_str(DOT_ID)));
     dot.setHidden(true);
     let marks = crate::ai_mark::marks(mtm, &dot);
-    for view in [&*image as &NSView, &name, &count, &close, &marks] {
+    for view in [&*image as &NSView, &name, &count, &marks] {
         view.setTranslatesAutoresizingMaskIntoConstraints(false);
         cell.addSubview(view);
     }
@@ -707,13 +632,9 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         name.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         count.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -6.0),
         count.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
-        close.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
-        close.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
-        close.widthAnchor().constraintEqualToConstant(16.0),
         marks.leadingAnchor().constraintEqualToAnchor_constant(&name.trailingAnchor(), 5.0),
         marks.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         marks.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&count.leadingAnchor(), -6.0),
-        marks.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&close.leadingAnchor(), -4.0),
     ];
     for c in &constraints {
         c.setActive(true);
@@ -722,81 +643,7 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         cell.setImageView(Some(&image));
         cell.setTextField(Some(&name));
     }
-    Retained::into_super(cell)
-}
-
-pub struct CellIvars {
-    /// A tab's row: its cross shows with the pointer over it.
-    closable: Cell<bool>,
-    /// The tracking area the cell made, replaced as the cell moves.
-    tracking: RefCell<Option<Retained<NSTrackingArea>>>,
-}
-
-define_class!(
-    /// A sidebar row that knows when the pointer is over it.
-    #[unsafe(super(NSTableCellView, NSView, NSResponder, NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "KnotesSidebarCell"]
-    #[ivars = CellIvars]
-    pub struct SidebarCell;
-
-    impl SidebarCell {
-        #[unsafe(method(updateTrackingAreas))]
-        fn update_tracking_areas(&self) {
-            if let Some(old) = self.ivars().tracking.borrow_mut().take() {
-                self.removeTrackingArea(&old);
-            }
-            let options = NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveInActiveApp | NSTrackingAreaOptions::InVisibleRect;
-            // SAFETY: the cell owns the area and removes it before making another.
-            let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(<NSTrackingArea as objc2::AnyThread>::alloc(), NSZeroRect, options, Some(self), None) };
-            self.addTrackingArea(&area);
-            *self.ivars().tracking.borrow_mut() = Some(area);
-            // SAFETY: the superclass's own handling.
-            let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
-            // Rows move under a still pointer as tabs close.
-            self.show_cross_if_pointed();
-        }
-
-        #[unsafe(method(mouseEntered:))]
-        fn mouse_entered(&self, _event: &NSEvent) {
-            self.show_cross(true);
-        }
-
-        #[unsafe(method(mouseExited:))]
-        fn mouse_exited(&self, _event: &NSEvent) {
-            self.show_cross(false);
-        }
-    }
-);
-
-impl SidebarCell {
-    fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(CellIvars { closable: Cell::new(false), tracking: RefCell::new(None) });
-        // SAFETY: NSView's initializer.
-        unsafe { msg_send![super(this), init] }
-    }
-
-    fn show_cross(&self, pointed: bool) {
-        if let Some(close) = close_button(self) {
-            close.setHidden(!(pointed && self.ivars().closable.get()));
-        }
-    }
-
-    /// Shows the cross when the pointer is over the row now.
-    fn show_cross_if_pointed(&self) {
-        let inside = self.window().is_some_and(|w| {
-            let at = self.convertPoint_fromView(w.mouseLocationOutsideOfEventStream(), None);
-            let b = self.bounds();
-            at.x >= b.origin.x && at.x < b.origin.x + b.size.width && at.y >= b.origin.y && at.y < b.origin.y + b.size.height
-        });
-        self.show_cross(inside);
-    }
-}
-
-/// A cell's cross for closing a tab.
-pub fn close_button(cell: &NSTableCellView) -> Option<Retained<NSButton>> {
-    let id = NSString::from_str(CLOSE_ID);
-    cell.subviews().iter().find(|v| v.identifier().is_some_and(|i| i.isEqualToString(&id))).and_then(|v| v.downcast::<NSButton>().ok())
+    cell
 }
 
 pub fn count_field(cell: &NSTableCellView) -> Option<Retained<NSTextField>> {

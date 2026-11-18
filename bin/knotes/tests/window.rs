@@ -118,8 +118,8 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, space, tabs, space, new-tab, space, panel",
-        "the sidebar's button, the tabs, a new tab's button, the panel's button, each apart"
+        "toggle-sidebar, space, tabs, space, toolbar-search, toolbar-new-note, space, panel",
+        "the sidebar's button, the tabs, the search and a new note together, the panel's button"
     );
     // What belongs to the list and the note is in the row under the toolbar, each part over its
     // column.
@@ -2505,12 +2505,17 @@ fn a_note_opens_in_a_new_tab_from_the_list_s_menu_and_a_document_with_a_tab_brin
 }
 
 #[test]
-fn the_button_after_the_tabs_makes_a_new_note_in_a_tab_of_its_own() {
+fn the_buttons_after_the_tabs_search_the_list_and_make_a_new_note() {
     let (vault, home) = (tabs_vault(), tabs_home());
-    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_NEW_TAB_BUTTON", "1")]);
-    let (tabs, shown) = sidebar_tabs(&out);
-    assert!(tabs.starts_with("a | ") && tabs.matches(" | ").count() == 1 && shown != "a", "a.md keeps its tab, the new note has one beside it: {out}");
-    assert!(std::fs::read_dir(vault.path()).unwrap().flatten().count() > 3 || vault.path().join("Вхідні").is_dir(), "the note was made: {out}");
+    let before = std::fs::read_dir(vault.path()).unwrap().count();
+    let out = probe_tabs(&vault, &home, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TOOLBAR_BUTTON", "new-note")]);
+    let made = std::fs::read_dir(vault.path()).unwrap().count() > before || vault.path().join("Вхідні").is_dir();
+    assert!(made && !out.contains("note: a.md"), "a new note is made and shown, as the row's button does: {out}");
+    // The search's button shows the list's search field, as the magnifying glass over the list.
+    let (vault, home) = (tabs_vault(), tabs_home());
+    let plain = probe_tabs(&vault, &home, &[]);
+    let searching = probe_tabs(&vault, &home, &[("KNOTES_PROBE_TOOLBAR_BUTTON", "search")]);
+    assert!(!plain.contains("search-row: shown") && searching.contains("search-row: shown\n"), "{searching}");
 }
 
 #[test]

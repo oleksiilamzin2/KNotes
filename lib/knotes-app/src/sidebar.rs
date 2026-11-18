@@ -15,8 +15,6 @@ pub enum SidebarItem {
     RestGap,
     Folder(String),
     Tag(String),
-    /// A document open as a tab (ADR 0024), by its vault path.
-    Tab(String),
     /// A deck of cards (ADR 0037), by its path.
     Deck(String),
     /// The rest of the vault, in a space (ADR 0030): its notes, and its folders or tags below.
@@ -37,7 +35,6 @@ impl SidebarItem {
             Self::RestGap => "restgap".into(),
             Self::Folder(path) => format!("f:{path}"),
             Self::Tag(tag) => format!("t:{tag}"),
-            Self::Tab(path) => format!("tab:{path}"),
             Self::Deck(deck) => format!("d:{deck}"),
             Self::Rest => "rest".into(),
             Self::Deleted => "deleted".into(),
@@ -57,7 +54,6 @@ impl SidebarItem {
             _ => match key.split_once(':')? {
                 ("f", path) => Some(Self::Folder(path.into())),
                 ("t", tag) => Some(Self::Tag(tag.into())),
-                ("tab", path) => Some(Self::Tab(path.into())),
                 ("d", deck) => Some(Self::Deck(deck.into())),
                 _ => None,
             },
@@ -65,13 +61,13 @@ impl SidebarItem {
     }
 }
 
-/// What the sidebar lists: the folder tree or the tag tree under "All notes", or the tabs.
+/// What the sidebar lists: the folder tree or the tag tree under "All notes", or the decks.
+/// (The tabs were a list of it too; they are along the toolbar now, ADR 0024.)
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMode {
     #[default]
     Folders,
     Tags,
-    Tabs,
     /// The decks of the notes' cards (ADR 0037).
     Cards,
 }
@@ -81,7 +77,6 @@ impl SidebarMode {
         match self {
             Self::Folders => "folders",
             Self::Tags => "tags",
-            Self::Tabs => "tabs",
             Self::Cards => "cards",
         }
     }
@@ -90,7 +85,6 @@ impl SidebarMode {
         match key {
             "folders" => Some(Self::Folders),
             "tags" => Some(Self::Tags),
-            "tabs" => Some(Self::Tabs),
             "cards" => Some(Self::Cards),
             _ => None,
         }
@@ -153,7 +147,6 @@ impl Sidebar {
                 top.extend(folders.children.iter().filter(|f| f.path != skip).map(|f| add_folder(f, &mut entries, skip, with_subfolders)));
             }
             SidebarMode::Tags => top.extend(tags.iter().map(|t| add_tag(t, &mut entries))),
-            SidebarMode::Tabs => return Self::tabs(&[]),
             SidebarMode::Cards => return Self::decks(&[]),
         }
         if let Some(rest) = rest {
@@ -171,20 +164,6 @@ impl Sidebar {
             top.extend([SidebarItem::DeletedGap, SidebarItem::Deleted]);
         }
         Self { top, entries, inbox: inbox_item }
-    }
-
-    /// The tabs (ADR 0024): a row per document, each its path and the name it shows.
-    pub fn tabs(tabs: &[(String, String)]) -> Self {
-        let mut entries = HashMap::new();
-        let top = tabs
-            .iter()
-            .map(|(path, name)| {
-                let item = SidebarItem::Tab(path.clone());
-                entries.insert(item.clone(), Entry { name: name.clone(), count: None, children: Vec::new() });
-                item
-            })
-            .collect();
-        Self { top, entries, inbox: None }
     }
 
     /// The decks (ADR 0037): a tree as `deck_tree` gives it, each with its cards to review.

@@ -183,7 +183,7 @@ impl VaultWindow {
         if let Ok(path) = std::env::var("KNOTES_PROBE_NEW_TAB") {
             self.open_in_new_tab(&path);
         }
-        probe::new_tab_button_requested(&self.window);
+        probe::toolbar_button_requested(&self.window);
         // `KNOTES_PROBE_TAB_CLICK=a.md`: a click on that document's tab, after the opening.
         if let Ok(path) = std::env::var("KNOTES_PROBE_TAB_CLICK") {
             if let Some(tab) = self.tab_strip.tab_of(&path) {
