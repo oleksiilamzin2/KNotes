@@ -2,7 +2,9 @@
 //! toolbar's magnifying glass opens it. A field on top; under it every document of the vault
 //! the words find, by its name first, then by its text; and in the lower half the document
 //! chosen, shown as the vault's window shows a note (the live preview, read only), the words
-//! marked, scrolled to the first. Under the field, what is searched (all, the names, the text,
+//! marked, scrolled to the first; ⌘G and ⇧⌘G go to the next find and the one before, and a
+//! count says which of how many shows. A row marks the words too, in its name and in the text
+//! found. Under the field, what is searched (all, the names, the text,
 //! or by meaning) and whether the letters' case counts. Return (or a double click) opens
 //! the document in the vault's window; Escape closes the search.
 
@@ -77,11 +79,26 @@ fn fitted(text: &str, font: &NSFont, room: f64) -> String {
     letters[..low].iter().collect::<String>().trim_end().to_owned() + "…"
 }
 
+/// `text` drawn at `at`, the words of `query` it holds on a plate of `mark`.
+fn draw_marked(text: &str, at: NSPoint, font: &NSFont, ink: &NSColor, query: &str, mark: &NSColor) {
+    let text = NSString::from_str(text);
+    // SAFETY: a font and a colour are those attributes' values.
+    let drawn = unsafe { objc2_foundation::NSMutableAttributedString::initWithString_attributes(<objc2_foundation::NSMutableAttributedString as objc2::AllocAnyThread>::alloc(), &text, Some(&attributes(font, ink))) };
+    for range in marks(&text, query) {
+        // SAFETY: a colour is a background's value.
+        unsafe { drawn.addAttribute_value_range(objc2_app_kit::NSBackgroundColorAttributeName, mark, range) };
+    }
+    let drawn: &objc2_foundation::NSAttributedString = &drawn;
+    objc2_app_kit::NSAttributedStringNSStringDrawing::drawAtPoint(drawn, at);
+}
+
 type OnRow = Box<dyn Fn(usize)>;
 
 #[derive(Default)]
 pub struct ListIvars {
     rows: RefCell<Vec<Found>>,
+    /// What was searched: its words are marked in the rows.
+    query: RefCell<String>,
     chosen: Cell<Option<usize>>,
     on_choose: RefCell<Option<OnRow>>,
     on_open: RefCell<Option<OnRow>>,
@@ -128,8 +145,10 @@ impl ResultList {
         unsafe { msg_send![super(Self::alloc(mtm).set_ivars(ListIvars::default())), init] }
     }
 
-    /// Shows `rows`, the first chosen; as tall as they are, as wide as `width`.
-    fn set(&self, rows: Vec<Found>, width: f64) {
+    /// Shows `rows`, the first chosen; as tall as they are, as wide as `width`; `query`'s
+    /// words marked in them.
+    fn set(&self, rows: Vec<Found>, width: f64, query: &str) {
+        *self.ivars().query.borrow_mut() = query.to_owned();
         self.ivars().chosen.set((!rows.is_empty()).then_some(0));
         self.setFrameSize(NSSize::new(width, rows.len() as f64 * ROW));
         *self.ivars().rows.borrow_mut() = rows;
@@ -171,12 +190,13 @@ impl ResultList {
             let name = fitted(knotes_app::title_of(name), &name_font, width - 36.0 - folder_width - 12.0 - marks);
             let name_width = unsafe { NSString::from_str(&name).sizeWithAttributes(Some(&attributes(&name_font, &ink))) }.width;
             crate::row_marks::draw(found.space.as_ref().map(|(colour, _)| *colour), found.kept_from_ai, 18.0 + name_width, top + 14.0, &quiet);
+            // The words searched marked in the name and in the text found: why the row is there.
+            let query = self.ivars().query.borrow();
+            let mark = if chosen { NSColor::whiteColor().colorWithAlphaComponent(0.3) } else { NSColor::systemYellowColor().colorWithAlphaComponent(0.45) };
+            draw_marked(&name, NSPoint::new(18.0, top + 5.0), &name_font, &ink, &query, &mark);
+            draw_marked(&fitted(&found.snippet, &small, width - 36.0), NSPoint::new(18.0, top + 24.0), &small, &quiet, &query, &mark);
             // SAFETY: a font and a colour are those attributes' values.
-            unsafe {
-                NSString::from_str(&name).drawAtPoint_withAttributes(NSPoint::new(18.0, top + 5.0), Some(&attributes(&name_font, &ink)));
-                NSString::from_str(&folder).drawAtPoint_withAttributes(NSPoint::new(width - 18.0 - folder_width, top + 7.0), Some(&attributes(&small, &quiet)));
-                NSString::from_str(&fitted(&found.snippet, &small, width - 36.0)).drawAtPoint_withAttributes(NSPoint::new(18.0, top + 24.0), Some(&attributes(&small, &quiet)));
-            }
+            unsafe { NSString::from_str(&folder).drawAtPoint_withAttributes(NSPoint::new(width - 18.0 - folder_width, top + 7.0), Some(&attributes(&small, &quiet))) };
         }
     }
 }
@@ -188,6 +208,12 @@ pub struct ControllerIvars {
     field: Retained<NSSearchField>,
     list: Retained<ResultList>,
     list_scroll: Retained<NSScrollView>,
+    /// The finds in the document shown (UTF-16 ranges), which of them shows, and what says
+    /// so: «3 з 12» and the two buttons that go to the one before and the next.
+    finds: RefCell<Vec<(usize, usize)>>,
+    find_shown: Cell<usize>,
+    find_count: Retained<objc2_app_kit::NSTextField>,
+    find_steps: [Retained<objc2_app_kit::NSButton>; 2],
     /// What is searched: all, names or text; apart from them (the owner's wish: it is another
     /// kind of search), by meaning, which is chosen in their place; and «Aa», on while the
     /// case is ignored.
@@ -248,6 +274,17 @@ define_class!(
         #[unsafe(method(queryChanged:))]
         fn query_changed(&self, _sender: Option<&AnyObject>) {
             self.search();
+        }
+
+        /// ⌘G and ⇧⌘G (and the two buttons): the next find in the document shown, the one before.
+        #[unsafe(method(nextFind:))]
+        fn next_find(&self, _sender: Option<&AnyObject>) {
+            self.step_find(1);
+        }
+
+        #[unsafe(method(previousFind:))]
+        fn previous_find(&self, _sender: Option<&AnyObject>) {
+            self.step_find(-1);
         }
 
         /// All, names or text clicked: no longer by meaning.
@@ -392,7 +429,8 @@ impl Controller {
             document.kept_from_ai = marks.ai.holds(&document.path);
         }
         drop(marks);
-        self.ivars().list.set(found, self.ivars().list_scroll.contentSize().width);
+        let query = self.ivars().field.stringValue().to_string();
+        self.ivars().list.set(found, self.ivars().list_scroll.contentSize().width, &query);
         self.show_chosen();
     }
 
@@ -425,6 +463,35 @@ impl Controller {
         live.show_found(preview, &marks);
         if marks.is_empty() {
             preview.scrollRangeToVisible(NSRange::new(0, 0));
+        }
+        *self.ivars().finds.borrow_mut() = marks;
+        self.ivars().find_shown.set(0);
+        self.say_find();
+    }
+
+    /// The find `by` after the one shown (before, when negative), round the ends: scrolled
+    /// into view and pointed at.
+    fn step_find(&self, by: isize) {
+        let count = self.ivars().finds.borrow().len();
+        if count == 0 {
+            return;
+        }
+        let at = (self.ivars().find_shown.get() as isize + by).rem_euclid(count as isize) as usize;
+        self.ivars().find_shown.set(at);
+        let (start, end) = self.ivars().finds.borrow()[at];
+        let range = NSRange::new(start, end - start);
+        self.ivars().preview.scrollRangeToVisible(range);
+        self.ivars().preview.showFindIndicatorForRange(range);
+        self.say_find();
+    }
+
+    /// «3 з 12», and its buttons, while the document shown has finds.
+    fn say_find(&self) {
+        let count = self.ivars().finds.borrow().len();
+        let said = if count == 0 { String::new() } else { strings::match_of(self.ivars().find_shown.get() + 1, count) };
+        self.ivars().find_count.setStringValue(&NSString::from_str(&said));
+        for step in &self.ivars().find_steps {
+            step.setHidden(count < 2);
         }
     }
 
@@ -520,10 +587,32 @@ impl SearchWindow {
         case.setSelected_forSegment(true, 0);
         case.setControlSize(objc2_app_kit::NSControlSize::Small);
         case.setToolTip(Some(&NSString::from_str(strings::FIND_IGNORE_CASE)));
+        // At the row's right: which find of the document shown, and to the one before, the next.
+        let find_count = objc2_app_kit::NSTextField::labelWithString(&NSString::new(), mtm);
+        find_count.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(NSFont::smallSystemFontSize(), 0.0)));
+        find_count.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        let step = |symbol: &str, tip: &str, shift: bool| {
+            let image = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(symbol), Some(&NSString::from_str(tip)));
+            // SAFETY: no target yet (set below, once the controller is made).
+            let button = match image {
+                Some(image) => unsafe { objc2_app_kit::NSButton::buttonWithImage_target_action(&image, None, None, mtm) },
+                None => unsafe { objc2_app_kit::NSButton::buttonWithTitle_target_action(&NSString::from_str(if shift { "‹" } else { "›" }), None, None, mtm) },
+            };
+            button.setBordered(false);
+            button.setControlSize(objc2_app_kit::NSControlSize::Small);
+            button.setToolTip(Some(&NSString::from_str(tip)));
+            // ⌘G the next, ⇧⌘G the one before, as Find's are in a note.
+            button.setKeyEquivalent(&NSString::from_str("g"));
+            let shifted = if shift { objc2_app_kit::NSEventModifierFlags::Shift } else { objc2_app_kit::NSEventModifierFlags::empty() };
+            button.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags::Command | shifted);
+            button.setHidden(true);
+            button
+        };
+        let find_steps = [step("chevron.up", strings::SEARCH_PREVIOUS_MATCH, true), step("chevron.down", strings::SEARCH_NEXT_MATCH, false)];
         let line = NSBox::new(mtm);
         line.setBoxType(NSBoxType::Separator);
         let content = NSView::new(mtm);
-        for part in [&*field as &NSView, &kind, &meaning, &case, &list_scroll, &line, &preview_scroll] {
+        for part in [&*field as &NSView, &kind, &meaning, &case, &find_count, &find_steps[0], &find_steps[1], &list_scroll, &line, &preview_scroll] {
             part.setTranslatesAutoresizingMaskIntoConstraints(false);
             content.addSubview(part);
         }
@@ -538,6 +627,12 @@ impl SearchWindow {
             meaning.leadingAnchor().constraintEqualToAnchor_constant(&kind.trailingAnchor(), 20.0),
             case.centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
             case.leadingAnchor().constraintEqualToAnchor_constant(&meaning.trailingAnchor(), 20.0),
+            find_steps[1].trailingAnchor().constraintEqualToAnchor_constant(&content.trailingAnchor(), -14.0),
+            find_steps[1].centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
+            find_steps[0].trailingAnchor().constraintEqualToAnchor_constant(&find_steps[1].leadingAnchor(), -6.0),
+            find_steps[0].centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
+            find_count.trailingAnchor().constraintEqualToAnchor_constant(&find_steps[0].leadingAnchor(), -8.0),
+            find_count.centerYAnchor().constraintEqualToAnchor(&kind.centerYAnchor()),
             list_scroll.topAnchor().constraintEqualToAnchor_constant(&kind.bottomAnchor(), 8.0),
             list_scroll.leadingAnchor().constraintEqualToAnchor(&content.leadingAnchor()),
             list_scroll.trailingAnchor().constraintEqualToAnchor(&content.trailingAnchor()),
@@ -554,7 +649,7 @@ impl SearchWindow {
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
         window.setContentView(Some(&content));
         window.setContentSize(NSSize::new(860.0, 640.0));
-        let ivars = ControllerIvars { window, field, list, list_scroll, kind, meaning, case, index_dir: RefCell::new(None), worker: RefCell::new(None), asked: Cell::new(0), preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
+        let ivars = ControllerIvars { window, field, list, list_scroll, finds: RefCell::new(Vec::new()), find_shown: Cell::new(0), find_count, find_steps, kind, meaning, case, index_dir: RefCell::new(None), worker: RefCell::new(None), asked: Cell::new(0), preview, live, reader: RefCell::new(None), titles: RefCell::new(None), marks: RefCell::default(), on_open: RefCell::new(None) };
         // SAFETY: a plain object's init.
         let controller: Retained<Controller> = unsafe { msg_send![super(Controller::alloc(mtm).set_ivars(ivars)), init] };
         let field = &controller.ivars().field;
@@ -566,6 +661,10 @@ impl SearchWindow {
             // Another kind, or the case: searched again.
             controller.ivars().kind.setTarget(Some(&controller));
             controller.ivars().kind.setAction(Some(sel!(kindChosen:)));
+            controller.ivars().find_steps[0].setTarget(Some(&controller));
+            controller.ivars().find_steps[0].setAction(Some(sel!(previousFind:)));
+            controller.ivars().find_steps[1].setTarget(Some(&controller));
+            controller.ivars().find_steps[1].setAction(Some(sel!(nextFind:)));
             controller.ivars().meaning.setTarget(Some(&controller));
             controller.ivars().meaning.setAction(Some(sel!(meaningChosen:)));
             controller.ivars().case.setTarget(Some(&controller));
@@ -660,6 +759,38 @@ impl SearchWindow {
         for _ in 0..steps.abs() {
             self.controller.step(steps.signum());
         }
+    }
+
+    /// ⌘G pressed `steps` times (⇧⌘G when negative); says which find shows then: «2 з 3 radar»
+    /// (probe mode).
+    pub fn step_find(&self, steps: isize) -> String {
+        for _ in 0..steps.abs() {
+            self.controller.step_find(steps.signum());
+        }
+        let ivars = self.controller.ivars();
+        let shown = ivars.finds.borrow().get(ivars.find_shown.get()).map(|(start, end)| ivars.preview.string().substringWithRange(NSRange::new(*start, end - start)).to_string());
+        format!("{} {}", ivars.find_count.stringValue(), shown.unwrap_or_default())
+    }
+
+    /// The rows as drawn: each one's name and found text with the words marked in brackets
+    /// (probe mode).
+    pub fn describe_rows(&self) -> String {
+        let ivars = self.controller.ivars();
+        let query = ivars.list.ivars().query.borrow().clone();
+        let marked = |text: &str| {
+            let text = NSString::from_str(text);
+            let mut out = String::new();
+            let mut from = 0;
+            for range in marks(&text, &query) {
+                out.push_str(&text.substringWithRange(NSRange::new(from, range.location.saturating_sub(from))).to_string());
+                out.push_str(&format!("[{}]", text.substringWithRange(range)));
+                from = range.location + range.length;
+            }
+            out.push_str(&text.substringFromIndex(from.min(text.length())).to_string());
+            out
+        };
+        let rows: Vec<String> = ivars.list.ivars().rows.borrow().iter().map(|f| format!("{} ~ {}", marked(knotes_app::title_of(f.path.rsplit('/').next().unwrap_or(&f.path))), marked(&f.snippet))).collect();
+        rows.join(" | ")
     }
 
     /// Return pressed (probe mode).

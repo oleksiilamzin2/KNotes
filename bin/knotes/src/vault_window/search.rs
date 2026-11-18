@@ -85,6 +85,11 @@ impl VaultWindow {
         search.type_query(query);
         search.step(down);
         println!("vault-search: {}", search.describe());
+        println!("vault-search-rows: {}", search.describe_rows());
+        // `KNOTES_PROBE_VAULT_SEARCH_FIND=2` (`-1`): ⌘G that many times (⇧⌘G).
+        if let Some(steps) = std::env::var("KNOTES_PROBE_VAULT_SEARCH_FIND").ok().and_then(|n| n.parse().ok()) {
+            println!("vault-search-find: {}", search.step_find(steps));
+        }
         // `KNOTES_PROBE_VAULT_SEARCH_CLICK=6`: a click at that place of the document shown.
         if let Some(index) = std::env::var("KNOTES_PROBE_VAULT_SEARCH_CLICK").ok().and_then(|i| i.parse().ok()) {
             search.click_at(index);

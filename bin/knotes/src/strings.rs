@@ -611,6 +611,12 @@ pub const SEARCH_NOTES: &str = "Пошук у нотатках";
 pub const SEARCH_VAULT: &str = "Пошук у базі";
 pub const SEARCH_VAULT_MENU: &str = "Пошук у базі…";
 pub const SEARCH_VAULT_HINT: &str = "Назва або слова з тексту";
+pub const SEARCH_NEXT_MATCH: &str = "Наступний збіг (⌘G)";
+pub const SEARCH_PREVIOUS_MATCH: &str = "Попередній збіг (⇧⌘G)";
+/// Which of a document's finds is shown: "3 з 12".
+pub fn match_of(at: usize, all: usize) -> String {
+    format!("{at} з {all}")
+}
 pub const ASK_AI: &str = "Запитати ШІ";
 /// The find bar over the note.
 pub const FIND_PLACEHOLDER: &str = "Знайти в нотатці";

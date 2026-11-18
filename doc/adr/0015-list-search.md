@@ -120,3 +120,10 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   to an older question is dropped. Driven by the probe, the same search is run at once
   (`search_now`), the answer being wanted before the next step. The list of what is found
   starts at its top after each search, and is as wide as its window when that is resized.
+- **The words are marked in the rows, and a document's finds gone through** (2026-11-18): a
+  row draws its name and the text found with the query's words on a plate (yellow; paler on
+  the chosen row's blue), so it shows why the document is there. The document shown has a
+  count at the row of the kinds' right, «3 з 12», with two arrows: ⌘G and ⇧⌘G go to the next
+  find and the one before, round the document's ends, each scrolled into view and pointed at
+  with the system's find indicator. The words are found as they are marked in the preview:
+  any case, anywhere in a word.

@@ -2561,6 +2561,28 @@ fn the_vault_s_search_lists_documents_by_name_then_by_text_and_shows_the_one_cho
 }
 
 #[test]
+fn the_search_marks_the_words_in_its_rows_and_goes_through_a_document_s_finds() {
+    let notes = [
+        ("Projects/Radar.md", "# Radar\n\nThe radar project starts in May.\n\n## Budget\n\nThe budget of the radar grows next year.\n"),
+        ("Сад.md", "Нотатка про сад і город.\n\nRadar is mentioned here once.\n"),
+    ];
+    let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{name}: {out}")).to_owned();
+    // The words in a row's name and in its text found, whatever their case.
+    let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_VAULT_SEARCH", "radar")]);
+    let rows = line(&out, "vault-search-rows: ");
+    assert!(rows.starts_with("[Radar] ~ [Radar] The [radar] project") && rows.contains(" | Сад ~ ") && rows.contains("[Radar] is mentioned"), "{rows}");
+    // ⌘G goes on through the finds of the document shown, round its end; ⇧⌘G back.
+    let find = |steps: &str| line(&probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "radar"), ("KNOTES_PROBE_VAULT_SEARCH_FIND", steps)]), "vault-search-find: ");
+    assert_eq!(find("0"), "1 з 3 Radar", "the first shows as the document does");
+    assert_eq!(find("1"), "2 з 3 radar");
+    assert_eq!(find("3"), "1 з 3 Radar", "round the end");
+    assert_eq!(find("-1"), "3 з 3 radar", "and back round the start");
+    // A document found by its name alone has no find to go through.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_VAULT_SEARCH", "сад"), ("KNOTES_PROBE_VAULT_SEARCH_KIND", "names"), ("KNOTES_PROBE_VAULT_SEARCH_FIND", "1")]);
+    assert_eq!(line(&out, "vault-search-find: "), "1 з 1 сад", "its word is in its text once: {out}");
+}
+
+#[test]
 fn a_link_clicked_in_the_document_the_search_shows_opens_what_it_leads_to() {
     let notes = [("a.md", "See [[b]] here and [[nowhere]].\n"), ("b.md", "the target\n")];
     // A click inside `[[b]]`: b opens in the vault's window, the search closes.
