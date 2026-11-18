@@ -45,11 +45,15 @@ impl KeptFromAi {
     /// The rules of `folder`: its own `ai`, and its files'.
     pub fn add_rules(&mut self, folder: &str, rules: &Map<String, Value>) {
         let folder = composed(folder);
-        if let Some(ai) = rules.get("ai").and_then(Value::as_bool) {
+        // An `ai` that is neither true nor false (`"false"` in quotes, `0`, `null`) keeps: the
+        // user wrote it to say something of the AI, and kept by mistake is better than shared
+        // by mistake. (It was passed over, and the folder shared.)
+        let said = |value: &Value| value.as_bool().unwrap_or(false);
+        if let Some(ai) = rules.get("ai").map(said) {
             self.folders.insert(folder.clone(), ai);
         }
         for (name, file) in rules.get("files").and_then(Value::as_object).into_iter().flatten() {
-            if let Some(ai) = file.get("ai").and_then(Value::as_bool) {
+            if let Some(ai) = file.get("ai").map(said) {
                 let path = if folder.is_empty() { composed(name) } else { format!("{folder}/{}", composed(name)) };
                 self.files.insert(path, ai);
             }

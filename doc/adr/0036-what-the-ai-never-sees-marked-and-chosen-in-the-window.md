@@ -70,3 +70,18 @@ those kept marked with a small grey struck-through brain.
   `relocate`, written after it by `carry_ai`; copied on a restore under another name), read and
   set by `file_ai` and `set_file_ai`, which find a name written composed or not. Probe mode
   takes `delete-path=path`.
+
+## Fixed (2026-11-18): two ways a kept document was shared
+
+An audit of the whole repository found both; neither had a test.
+
+- **An index that did not answer shared everything.** The tools find out what is kept from
+  the index (the notes tagged `#no-ai`, the folders there are) and remember it ten seconds.
+  A query that failed (the index busy past its wait, or being built again under a running MCP
+  server) was taken for "none tagged, no folders": every kept note was shared until the next
+  look. Now everything is kept until the index answers (`Kept::everything`), as ADR 0027 said
+  of this lookup and only its reading of the rules files did.
+- **An `ai` that was neither true nor false shared its folder.** `"ai": "false"` in quotes,
+  `0` or `null` were passed over as if nothing were said. They keep now, a folder's and a
+  file's own alike: the user wrote it to say something of the AI, and kept by mistake is
+  better than shared by mistake (the rule a rules file that does not parse already followed).

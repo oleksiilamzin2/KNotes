@@ -46,3 +46,19 @@ fn a_file_s_own_setting_is_read_and_set_by_its_name_composed_or_not() {
     let shared = set_file_ai(&text, "Мій.pdf", Some(true)).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&shared).unwrap()["files"].as_object().unwrap().len(), 2, "replaced, not written twice");
 }
+
+#[test]
+fn an_ai_that_is_neither_true_nor_false_keeps() {
+    let mut kept = KeptFromAi::default();
+    for (folder, text) in [("Quoted", r#"{"ai": "false"}"#), ("Zero", r#"{"ai": 0}"#), ("Null", r#"{"ai": null}"#), ("Yes", r#"{"ai": "true"}"#)] {
+        kept.add_rules_text(folder, text);
+    }
+    for folder in ["Quoted", "Zero", "Null", "Yes"] {
+        assert!(kept.holds(&format!("{folder}/a.md")) && kept.holds_folder(folder), "{folder}: said of the AI, not as a yes or a no: kept");
+    }
+    // A file's own, the same; and a true or a false is taken as said.
+    kept.add_rules_text("Docs", r#"{"files": {"a.pdf": {"ai": "no"}, "b.pdf": {"ai": true}}, "ai": false}"#);
+    assert!(kept.holds("Docs/a.pdf") && !kept.holds("Docs/b.pdf") && kept.holds("Docs/c.pdf"));
+    kept.add_rules_text("Open", r#"{"list": {"sort": "name"}}"#);
+    assert!(!kept.holds("Open/a.md"), "nothing said of the AI: shared");
+}

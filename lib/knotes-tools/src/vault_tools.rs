@@ -27,16 +27,18 @@ pub use knotes_spaces::NO_AI_TAG;
 struct Kept {
     ai: KeptFromAi,
     spaces: Spaces,
+    /// What is kept could not be found out (the index did not answer): everything is.
+    everything: bool,
 }
 
 impl Kept {
     /// Whether `path` is kept: tagged `#no-ai`, listed so in its folder, or in a folder kept.
     fn holds(&self, path: &str) -> bool {
-        self.ai.holds(path)
+        self.everything || self.ai.holds(path)
     }
 
     fn is_empty(&self) -> bool {
-        self.ai.is_empty()
+        !self.everything && self.ai.is_empty()
     }
 }
 
@@ -132,9 +134,16 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
     }
 
     fn look_up_kept(&self) -> Kept {
-        let tagged = self.index.notes_with_tag(NO_AI_TAG).unwrap_or_default();
-        let mut folders: BTreeSet<String> = BTreeSet::from([String::new()]);
-        for entry in self.index.catalog().unwrap_or_default() {
+        // An index that does not answer (busy past its wait, being built again under a running
+        // MCP server) says nothing of what is tagged or which folders there are: everything is
+        // kept until it does. (Taken for "none tagged, no folders", every kept note was shared
+        // for the ten seconds the answer is remembered.)
+        let (Ok(tagged), Ok(catalog)) = (self.index.notes_with_tag(NO_AI_TAG), self.index.catalog()) else {
+            return Kept { everything: true, ..Kept::default() };
+        };
+        let mut folders: BTreeSet<String> = BTreeSet::new();
+        folders.insert(String::new());
+        for entry in catalog {
             let mut path = entry.path.as_str();
             while let Some((folder, _)) = path.rsplit_once('/') {
                 folders.insert(folder.to_string());
@@ -160,7 +169,7 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         for folder in &unreadable {
             ai.keep_folder(folder);
         }
-        Kept { ai, spaces }
+        Kept { ai, spaces, everything: false }
     }
 
     /// The space a tool's `space` argument names, by its name (any case) or id; none when not
@@ -1095,4 +1104,17 @@ fn cut(text: &str) -> String {
 
 fn failed(e: impl std::fmt::Display) -> ToolError {
     ToolError::Failed(e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Kept;
+
+    #[test]
+    fn what_is_kept_not_found_out_keeps_everything() {
+        let unknown = Kept { everything: true, ..Kept::default() };
+        assert!(unknown.holds("Projects/Radar.md") && unknown.holds("top.md") && !unknown.is_empty());
+        let known = Kept::default();
+        assert!(!known.holds("Projects/Radar.md") && known.is_empty());
+    }
 }
