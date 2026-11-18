@@ -40,6 +40,11 @@ pub enum Style {
     /// A card's id at its end, `^c-a1b2c3` (ADR 0037): the app's mark, not the user's text,
     /// shown small and muted.
     CardId,
+    /// A thematic break, `---` (or `***`, `___`) alone on its line: shown as a line across the
+    /// column, its signs away from the cursor.
+    Rule,
+    /// The frontmatter, its `---` fences included: the note's properties, shown small and muted.
+    Frontmatter,
     /// A card's deck, `#@deck/sub`: shown as a tag on a plate.
     CardDeck,
     /// A card's question: shown strong, apart from its answer.
@@ -336,6 +341,8 @@ pub fn highlight(source: &str) -> Highlight {
                     row.cells.push(start..start + content.len());
                 }
             }
+            Event::Rule => h.runs.push(Run { range: r.start..r.start + text.trim_end_matches(['\n', '\r']).len(), style: Style::Rule }),
+            Event::Start(Tag::MetadataBlock(_)) => h.runs.push(Run { range: r.start..r.start + text.trim_end_matches(['\n', '\r']).len(), style: Style::Frontmatter }),
             Event::Start(Tag::BlockQuote(_)) => {
                 if quotes == 0 {
                     quote_prefixes(&mut h, source, r.clone());

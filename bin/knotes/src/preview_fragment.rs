@@ -48,6 +48,8 @@ pub enum Mark {
     /// A quote level's bar down the whole paragraph, `x` from the text column's start.
     /// `card`: a card's bar (ADR 0037), in the cards' colour, not the accent.
     QuoteBar { x: f64, card: Option<Retained<NSColor>> },
+    /// A thematic break (`---`): a line across the column in the middle of its paragraph.
+    Rule,
     /// A code block's background across the column behind the paragraph, its corners rounded
     /// at the block's top and bottom.
     CodeBackground { top: bool, bottom: bool },
@@ -141,6 +143,10 @@ define_class!(
                     Mark::CodeBackground { top, bottom } => {
                         NSColor::quaternarySystemFillColor().setFill();
                         rounded(rect, CODE_CORNER, *top, *bottom).fill();
+                    }
+                    Mark::Rule => {
+                        NSColor::separatorColor().setFill();
+                        NSBezierPath::fillRect(NSRect::new(NSPoint::new(rect.origin.x, (rect.origin.y + rect.size.height / 2.0).round()), NSSize::new(rect.size.width, 1.0)));
                     }
                     Mark::CalloutBox { colour, top, bottom } => {
                         colour.colorWithAlphaComponent(0.1).setFill();
@@ -239,7 +245,7 @@ define_class!(
                             }
                         }
                     }
-                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::EmbedBox { .. }, _) => {}
+                    (Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::EmbedBox { .. } | Mark::Rule, _) => {}
                     (Mark::CalloutIcon { colour, symbol, label, font, .. }, _) => draw_callout_icon(rect, colour, symbol, label.as_deref(), font),
                     (Mark::External { .. }, _) => draw_external_arrow(rect),
                     (Mark::QuoteBar { card, .. }, _) => {
@@ -336,13 +342,20 @@ impl PreviewFragment {
             let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
             return Some(NSRect::new(NSPoint::new(-frame.origin.x, 0.0), NSSize::new(column, frame.size.height)));
         }
+        if let Mark::Rule = mark {
+            // Across the text column, within its padding.
+            let frame = self.layoutFragmentFrame();
+            let container = self.textLayoutManager().and_then(|l| l.textContainer());
+            let (column, padding) = container.map_or((frame.size.width, 0.0), |c| (c.size().width, c.lineFragmentPadding()));
+            return Some(NSRect::new(NSPoint::new(padding - frame.origin.x, 0.0), NSSize::new(column - 2.0 * padding, frame.size.height)));
+        }
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
             Mark::Formula { offset, anchor, .. } | Mark::Image { offset, anchor, .. } => (*offset, *anchor == Anchor::Below),
             Mark::Bullet { offset, .. } | Mark::Task { offset, .. } | Mark::External { offset, .. } | Mark::CalloutIcon { offset, .. } => (*offset, false),
             Mark::CodeNumber { .. } => (0, false),
             Mark::CodeCorner { .. } => return None,
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } | Mark::EmbedBox { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } | Mark::EmbedBox { .. } | Mark::Rule => return None,
         };
         // A preview goes below the line its source ends on: the note's last paragraph also
         // holds the empty line after its final line break, below the room kept for the preview.
@@ -391,7 +404,7 @@ impl PreviewFragment {
                 let width = CALLOUT_ICON + label.as_deref().map_or(0.0, |l| 4.0 + label_width(l, font));
                 NSRect::new(NSPoint::new(x + 1.0, baseline - centre - CALLOUT_ICON / 2.0), NSSize::new(width, CALLOUT_ICON))
             }
-            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } | Mark::CodeCorner { .. } | Mark::EmbedBox { .. } => return None,
+            Mark::QuoteBar { .. } | Mark::CodeBackground { .. } | Mark::CalloutBox { .. } | Mark::TableRow { .. } | Mark::CodeCorner { .. } | Mark::EmbedBox { .. } | Mark::Rule => return None,
         };
         Some(rect)
     }
@@ -432,6 +445,7 @@ impl PreviewFragment {
                     }
                     Mark::QuoteBar { card, .. } => format!("decoration: {} {x:.1} {y:.1} {w:.1} {h:.1}", if card.is_some() { "card" } else { "quote" }),
                     Mark::CodeBackground { .. } => format!("decoration: code {x:.1} {y:.1} {w:.1} {h:.1}"),
+                    Mark::Rule => format!("decoration: rule {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::EmbedBox { below, .. } => format!("decoration: embed{} {x:.1} {y:.1} {w:.1} {h:.1}", if *below { "-below" } else { "" }),
                     Mark::CodeNumber { number, .. } => format!("decoration: code-number {number} {x:.1} {y:.1} {w:.1} {h:.1}"),
                     Mark::CodeCorner { label, copy } => {

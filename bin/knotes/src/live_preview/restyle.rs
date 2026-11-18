@@ -80,6 +80,12 @@ impl LivePreview {
         for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Code | Style::CardDeck) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= SHADED);
         }
+        // A thematic break away from the cursor: its signs keep their line's height but do not
+        // show; the fragment draws the line (`Mark::Rule`).
+        for run in styled.runs.iter().filter(|r| r.style == Style::Rule && meets(&r.range) && !overlaps(&r.range, revealed)) {
+            let id = palette.look(&look.body, &look.clear, "rule-line");
+            canvas.paint(run.range.clone(), |p| p.look = id);
+        }
         for run in styled.runs.iter().filter(|r| r.style == Style::Mark && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= MARKED);
         }
@@ -242,7 +248,7 @@ impl LivePreview {
         let first = styled.markup.partition_point(|m| m.end <= para.0);
         let runs = styled.runs.partition_point(|r| r.range.start < para.0);
         styled.markup.get(first).is_some_and(|m| m.start < para.1)
-            || styled.runs[runs..].iter().take_while(|r| r.range.start < para.1).any(|r| matches!(r.style, Style::QuoteMarker { .. }))
+            || styled.runs[runs..].iter().take_while(|r| r.range.start < para.1).any(|r| matches!(r.style, Style::QuoteMarker { .. } | Style::Rule))
     }
 
     /// Records the new selection; the ranges of the list markers it now touches or left.
@@ -312,6 +318,8 @@ pub(super) fn run_look(style: Style, look: &Look) -> (&NSFont, &NSColor, &'stati
         Style::FootnoteRef => (&look.footnote, &look.accent, "footnote"),
         Style::FootnoteLabel => (&look.body, &look.muted, "footnote-label"),
         Style::CardId => (&look.footnote, &look.muted, "card-id"),
+        Style::Rule => (&look.body, &look.muted, "rule"),
+        Style::Frontmatter => (&look.footnote, &look.muted, "frontmatter"),
         Style::CardDeck => (&look.body, &look.card_deck, "card-deck"),
         Style::CardQuestion => (&look.bold, &look.text, "card-question"),
         Style::CardMark => (&look.body, &look.muted, "card-mark"),

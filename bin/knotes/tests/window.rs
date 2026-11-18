@@ -4279,6 +4279,21 @@ fn a_card_in_braces_is_reviewed_with_its_paragraphs_and_its_links_open_their_not
 }
 
 #[test]
+fn a_thematic_break_shows_as_a_line_and_the_frontmatter_small_and_muted() {
+    let note = "---\naliases: [Кіт]\n---\n# Барсик\n\nПерший.\n\n---\n\nДругий.\n\n***\n\nкінець";
+    let (_vault, out) = probe_notes(&[("n.md", note)], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
+    let runs = editor_runs(&out);
+    // Both breaks are lines, their signs not shown; the frontmatter's fences are no breaks.
+    assert_eq!(out.matches("decoration: rule ").count(), 2, "{out}");
+    assert_eq!(runs.matches("[rule-line]").count(), 2, "{runs}");
+    assert!(runs.contains("[frontmatter]---"), "the note's properties, with their fences, quiet: {runs}");
+    // With the cursor in a break's paragraph its signs show, to be edited; the other stays a line.
+    let (_vault, out) = probe_notes(&[("n.md", note)], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "43")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains("[rule]---") && out.matches("decoration: rule ").count() == 1 && runs.matches("[rule-line]").count() == 1, "{runs} {out}");
+}
+
+#[test]
 fn a_card_s_id_shows_small_and_muted_in_the_note() {
     let note = "#@мови cat::кіт ^c-h0a1ek\n\n#@історія{\nКоли?\n?\nТоді.\n} ^c-zz9\n\nтекст ^c-не-картка\n\nкінець";
     let (_vault, out) = probe_notes(&[("n.md", note)], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);

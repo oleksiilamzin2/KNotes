@@ -262,6 +262,13 @@ impl LivePreview {
         let task_centre = self.ivars().look.body.capHeight() / 2.0;
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
+            // A thematic break away from the cursor: a line in the place of its signs.
+            if run.style == Style::Rule {
+                if !overlaps(&run.range, revealed) {
+                    marks.push(Mark::Rule);
+                }
+                continue;
+            }
             if let Style::QuoteMarker { depth } = run.style {
                 // A callout's lines show its box instead of bars.
                 if !styled.callouts.iter().any(|c| run.range.start >= c.range.start && run.range.start < c.range.end) {

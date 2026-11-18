@@ -54,3 +54,13 @@ the reference (ADR 0011), with one change the owner asked for.
 
 - `- []` and a space typed in a fenced code block stay as typed: there they are an example, not
   a task to make.
+
+## Later (2026-11-18): thematic breaks and the frontmatter
+
+- Owner: «додай підтримку --- в рендер». A thematic break (`---`, `***`, `___` alone on its
+  line) shows as a line across the text column in the middle of its paragraph; its signs keep
+  their line's height but are not drawn, and show again, muted, with the cursor in their
+  paragraph (`Style::Rule`, `Mark::Rule`). It was three plain dashes.
+- The frontmatter, its `---` fences with it, is the note's properties, not its text: small
+  and muted (`Style::Frontmatter`). Its fences are no breaks (the parser reads the block
+  whole). Nothing of it is hidden: it is edited as it is.
