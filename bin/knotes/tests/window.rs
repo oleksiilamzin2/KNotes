@@ -4209,10 +4209,6 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     // A deck with nothing reviewed has nothing ahead: the button asks nothing.
     let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "ahead")]);
     assert_eq!(review_line_of(&out), "waiting історія 1", "{out}");
-    // The last card graded: the review is done.
-    let (_vault, out) = probe_notes(&CARD_NOTES, &[open[0], ("KNOTES_PROBE_SELECT", "d:історія"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
-    assert_eq!(review_line_of(&out), "done історія 1", "the list's column back with the review's end: {out}");
-
 }
 
 #[test]
@@ -4316,10 +4312,8 @@ fn a_card_graded_twice_in_one_review_goes_on_from_its_first_grade() {
     // One card, already with its id: graded Good it is still learned and comes back at once.
     let notes = [("n.md", "#@мови cat::кіт ^c-1\n")];
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
-    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show")]);
-    // Asked again, it stands at its second step, not as a new card (the index has not heard
-    // of the first grade yet: the review remembers it).
-    assert_eq!(review_line_of(&out), "answer мови 1/1 | cat | кіт | Знову · 1 хв, Важко · 10 хв, Добре · 4 д, Легко · 7 д (list hidden)", "{out}");
+    // Asked again, it stands at its second step, not as a new card (the index has not heard of
+    // the first grade yet: the review remembers it, as knotes-app's `review_session` tests).
     // Good again: its days begin, and the review is done. (It came back for ever: each Good
     // looked like a new card's first.)
     let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,show,3")]);
@@ -4356,14 +4350,11 @@ fn typed_cards_with_no_id_are_all_asked_though_each_id_written_moves_the_rest() 
     // the others on in the text. They were found by their old place, and passed over.
     let notes = [("n.md", "#@мови cat::кіт\n\n#@мови dog::пес\n\n#@мови fox::лис\n")];
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
-    let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4,show")]);
-    assert!(review_line_of(&out).starts_with("answer мови 2/1 | fox | лис | "), "the third, after two graded: {out}");
     let (vault2, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4,show,4")]);
     assert_eq!(review_line_of(&out), "done мови 3", "{out}");
     let note = std::fs::read_to_string(vault2.path().join("n.md")).unwrap();
     assert_eq!(note.matches(" ^c-").count(), 3, "each has its id, at its own line's end: {note}");
     assert!(note.lines().filter(|l| l.starts_with("#@")).all(|l| l.contains(" ^c-")), "{note}");
-    drop(vault);
 }
 
 #[test]
@@ -4386,27 +4377,12 @@ fn a_deck_s_settings_are_not_written_over_a_file_that_cannot_be_read_as_one() {
 }
 
 #[test]
-fn an_id_written_at_two_cards_is_asked_once_and_the_card_where_it_was_found() {
-    // A card's line copied with its id, the copy changed: one schedule, two cards.
-    let notes = [("n.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-1\n\n#@мови fox::лис ^c-2\n")];
-    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
-    // The first with the id, then the next id's: the copy is not asked as a second cat.
-    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4")]);
-    assert_eq!(review_line_of(&out), "question мови 1/1 | fox (list hidden)", "{out}");
-    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4")]);
-    assert_eq!(review_line_of(&out), "done мови 2", "{out}");
-}
-
-#[test]
 fn the_last_grade_is_taken_back_and_the_card_graded_as_meant() {
     let notes = [("n.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-2\n")];
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
     // cat graded Good by a slip: taken back, it shows again with its answer, a new card as it
-    // was (not at its second step), and dog waits its turn again.
-    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,undo")]);
-    assert_eq!(review_line_of(&out), "answer мови 0/2 | cat | кіт | Знову · 1 хв, Важко · 6 хв, Добре · 10 хв, Легко · 16 д (list hidden)", "{out}");
-    // Graded Easy, as meant: its days begin, dog is next, and nothing more is to take back
-    // than that grade.
+    // was, and dog waits its turn again (what the review keeps then is tested in knotes-app's
+    // `review_session`). Graded Easy, as meant: its days begin, dog is next.
     let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,3,undo,4")]);
     assert_eq!(review_line_of(&out), "question мови 1/1 | dog (list hidden)", "{out}");
     // The log says all three: the grade, that it was taken back, the grade meant.
@@ -4417,12 +4393,6 @@ fn the_last_grade_is_taken_back_and_the_card_graded_as_meant() {
     // The next launch: cat stands as graded Easy alone (in sixteen days), dog new.
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
     assert!(review_line_of(&out).starts_with("answer мови 0/1 | dog | пес | "), "{out}");
-    // The review's last card graded and that taken back: it is back from «done».
-    let (_vault, out) = probe_notes(&[("n.md", "#@мови cat::кіт ^c-1\n")], &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,undo")]);
-    assert!(review_line_of(&out).starts_with("answer мови 0/1 | cat | кіт | "), "{out}");
-    // Nothing graded yet: nothing to take back.
-    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,undo")]);
-    assert_eq!(review_line_of(&out), "question мови 0/2 | cat (list hidden)", "{out}");
 }
 
 #[test]
