@@ -18,7 +18,7 @@ use objc2_foundation::{NSArray, NSDictionary, NSObject, NSPoint, NSRect, NSSize,
 use crate::strings;
 
 /// The strip's height, and the gap between two tabs.
-pub const HEIGHT: f64 = 28.0;
+pub const HEIGHT: f64 = 36.0;
 const GAP: f64 = 4.0;
 /// A tab shows its name while it is at least this wide.
 const NAMED: f64 = 56.0;
@@ -26,7 +26,7 @@ const NAMED: f64 = 56.0;
 const INSET: f64 = 2.0;
 /// The cross's room at a tab's left, and the symbol's size.
 const CROSS: f64 = 26.0;
-const SYMBOL: f64 = 13.0;
+const SYMBOL: f64 = 14.0;
 
 /// A tab as the strip shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,7 +336,7 @@ impl TabStrip {
     fn draw(&self) {
         let tabs = self.ivars().tabs.borrow();
         let (current, hover) = (self.ivars().current.get(), self.ivars().hover.get());
-        let font = NSFont::systemFontOfSize(12.0);
+        let font = NSFont::systemFontOfSize(13.0);
         // The strip lies on the toolbar's own glass: the tab shown is a lighter piece of it, the
         // others the glass itself, a little darker under the pointer, a hairline between two.
         let dark = NSColor::textBackgroundColor().colorUsingColorSpace(&objc2_app_kit::NSColorSpace::sRGBColorSpace()).is_some_and(|c| c.redComponent() < 0.5);
@@ -363,11 +363,11 @@ impl TabStrip {
             let quiet = |at: usize| current != Some(at) && !hover.is_some_and(|(pointed, _)| pointed == at);
             if i > 0 && quiet(i) && quiet(i - 1) {
                 NSColor::separatorColor().setFill();
-                NSBezierPath::fillRect(rect(place.origin.x - GAP / 2.0 - 0.5, place.origin.y + 8.0, 1.0, place.size.height - 16.0));
+                NSBezierPath::fillRect(rect(place.origin.x - GAP / 2.0 - 0.5, place.origin.y + 10.0, 1.0, place.size.height - 20.0));
             }
-            // The name of the tab shown dark, the others' grey, as the reference's, but darker
-            // than the labels' second colour, which the owner found too pale here.
-            let ink = if shown { NSColor::labelColor() } else { NSColor::labelColor().colorWithAlphaComponent(0.62) };
+            // Every tab's name dark, as Safari's (the owner's reference): the tab shown is told
+            // by its white piece; the others' names are a shade quieter, no more.
+            let ink = if shown { NSColor::labelColor() } else { NSColor::labelColor().colorWithAlphaComponent(0.85) };
             let middle = place.origin.y + place.size.height / 2.0;
             // With the pointer over the tab, its cross at its left: a filled circle, as Safari's.
             let over_cross = hover.is_some_and(|(_, cross)| cross);
@@ -398,7 +398,7 @@ impl TabStrip {
                 draw_symbol(&mark, rect(left, middle - SYMBOL / 2.0, SYMBOL, SYMBOL));
             }
             // SAFETY: a font and a colour are those attributes' values.
-            unsafe { NSString::from_str(&name).drawAtPoint_withAttributes(NSPoint::new(left + SYMBOL + 5.0, middle - 8.0), Some(&attributes(&font, &ink))) };
+            unsafe { NSString::from_str(&name).drawAtPoint_withAttributes(NSPoint::new(left + SYMBOL + 5.0, middle - (font.ascender() - font.descender()) / 2.0), Some(&attributes(&font, &ink))) };
         }
     }
 }
