@@ -146,3 +146,8 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   `Refine` (knotes-app) takes the query apart; the search's thread applies it after the names
   and the text are found (a tag before: only its notes are searched). The list's search row
   is not narrowed so: its scope is the list chosen in the sidebar.
+- **What a search finds is found outside the window** (2026-11-18): `knotes_app::search` takes a
+  request and the index and gives the names and the text found, narrowed; the app's search
+  thread only calls it and hands the answer to the main thread. So its rules are tested
+  without launching the app; the window's tests keep what only a window shows (the rows, the
+  marks, the keys).

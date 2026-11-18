@@ -2,6 +2,7 @@
 
 pub mod deck_rows;
 mod refine;
+mod vault_search;
 mod connections;
 mod find_in_text;
 mod folder_rules;
@@ -47,5 +48,6 @@ pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
 pub use space_tags::SpaceTags;
 pub use refine::{Place, Refine};
+pub use vault_search::{SearchRequest, SearchResponse, search};
 pub use tabs::{AfterClose, TabPlace, Tabs};
 pub use tag_tree::{TagNode, count_tags, deck_tree, space_tag_trees, split_tags, suggest_tags, tag_tree};

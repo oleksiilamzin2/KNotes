@@ -9,8 +9,11 @@ publish.workspace = true
 [dependencies]
 knotes-core.workspace = true
 knotes-spaces.workspace = true
+knotes-search.workspace = true
+knotes-tools.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
 knotes-index.workspace = true
 knotes-md.workspace = true
+tempfile.workspace = true
