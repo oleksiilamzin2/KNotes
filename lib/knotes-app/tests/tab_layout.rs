@@ -1,4 +1,4 @@
-use knotes_app::{Slot, TAB_GAP, TAB_MIN, cross_of, cross_size, drag_tab, slots_dragged, tab_at, tab_scroll, tab_slots};
+use knotes_app::{Slot, TAB_GAP, TAB_MIN, cross_of, cross_size, drag_tab, slots_dragged, tab_at, tab_scroll, tab_slots, tabs_out_of_sight};
 
 const HEIGHT: f64 = 36.0;
 
@@ -36,12 +36,6 @@ fn a_cross_is_clicked_where_it_is_drawn() {
         assert_eq!(tab_at(&slots, HEIGHT, left + cross_size() + 4.0, middle.1), Some((tab, true)), "a few points off still");
         assert_eq!(tab_at(&slots, HEIGHT, left + cross_size() + 6.0, middle.1), Some((tab, false)), "further, the tab's body");
     }
-    // Too narrow for a name: the cross in the tab's middle, where its symbol was (it was drawn
-    // there and clicked at the left).
-    let narrow: Vec<Slot> = (0..12).map(|i| Slot { x: i as f64 * (48.0 + TAB_GAP), width: 48.0 }).collect();
-    let (left, _) = cross_of(narrow[5], HEIGHT);
-    assert_eq!(left + cross_size() / 2.0, narrow[5].x + narrow[5].width / 2.0);
-    assert_eq!(tab_at(&narrow, HEIGHT, narrow[5].x + 24.0, 18.0), Some((5, true)));
 }
 
 #[test]
@@ -86,5 +80,10 @@ fn tabs_longer_than_the_strip_are_scrolled_to_keep_the_one_shown_in_view() {
     assert_eq!(tab_scroll(&tab_slots(3, 600.0), 600.0, 250.0, Some(2)), 0.0);
     assert_eq!(tab_scroll(&tab_slots(40, 7_000.0), 7_000.0, 700.0, Some(39)), 0.0);
     assert_eq!(tab_scroll(&[], 600.0, 10.0, Some(0)), 0.0);
+    // The strip says at each end whether tabs lie past it.
+    assert_eq!(tabs_out_of_sight(&slots, 600.0, 0.0), (false, true), "at the start: more to the right");
+    assert_eq!(tabs_out_of_sight(&slots, 600.0, 400.0), (true, true));
+    assert_eq!(tabs_out_of_sight(&slots, 600.0, end), (true, false), "at the end: more to the left");
+    assert_eq!(tabs_out_of_sight(&tab_slots(3, 600.0), 600.0, 0.0), (false, false), "tabs that fit");
 }
 

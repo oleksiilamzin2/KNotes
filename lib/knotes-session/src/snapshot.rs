@@ -143,8 +143,7 @@ impl Snapshot {
             Some(p) => Arc::clone(&p.trash),
             None => Arc::new(trash),
         };
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-        let decks = index.deck_counts(now)?;
+        let decks = index.deck_counts(crate::now())?;
         let decks = match previous.filter(|p| *p.decks == decks) {
             Some(p) => Arc::clone(&p.decks),
             None => Arc::new(decks),

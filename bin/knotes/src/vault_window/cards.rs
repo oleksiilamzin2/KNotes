@@ -75,8 +75,9 @@ fn day_start() -> i64 {
     (now() + offset).div_euclid(86_400) * 86_400 - offset
 }
 
+/// Now, by the clock the session counts the decks by (`knotes_session::now`).
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    knotes_session::now()
 }
 
 /// When a card would come back, said short: «10 хв» while it is learned, then «3 д», «2 міс»,

@@ -890,6 +890,10 @@ pub fn schedule(with_sidebar: bool) {
                         render_png(&search, &path.to_string_lossy());
                     }
                 }
+                // The tabs' strip alone (a window's picture has no toolbar in it).
+                if let Some(path) = std::env::var_os("KNOTES_PROBE_TABS_PNG") {
+                    render_view_png(&window.tab_strip, &path.to_string_lossy());
+                }
                 // A deck's table: its picture when asked.
                 if let (Some(path), Some(table)) = (std::env::var_os("KNOTES_PROBE_DECK_TABLE_PNG"), window.deck_table().as_ref().and_then(|table| table.window())) {
                     render_png(&table, &path.to_string_lossy());
@@ -1445,6 +1449,11 @@ fn report_sidebar(outline: &NSOutlineView) {
 /// focus stealing). Layout and text are exact; system materials may look flatter.
 fn render_png(window: &NSWindow, path: &str) {
     let Some(view) = window.contentView() else { return };
+    render_view_png(&view, path);
+}
+
+/// The picture of `view` alone, as it draws itself.
+fn render_view_png(view: &objc2_app_kit::NSView, path: &str) {
     let bounds = view.bounds();
     let Some(rep) = view.bitmapImageRepForCachingDisplayInRect(bounds) else { return };
     view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);

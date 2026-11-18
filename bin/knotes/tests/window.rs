@@ -14,8 +14,14 @@ fn probe_with(args: &[&std::path::Path], home: Option<&std::path::Path>) -> Stri
 
 fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(&str, &str)]) -> String {
     let scratch_home = tempfile::tempdir().unwrap();
+    // One time for every launch of the run: a card graded in one launch is due «in ten
+    // minutes» in the next, whatever the Mac's clock did between them (a run that slept
+    // found such cards due and failed).
+    static NOW: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let now = NOW.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string());
     let mut child = Command::new(env!("CARGO_BIN_EXE_knotes"))
         .args(args)
+        .env("KNOTES_PROBE_NOW", now)
         .envs(env.iter().copied())
         .env("KNOTES_PROBE", "1")
         .env("HOME", home.unwrap_or(scratch_home.path()))

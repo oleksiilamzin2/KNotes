@@ -403,3 +403,7 @@ test missed, each of them relaunching the app after a grade:
   hold the words and only those are read for their cards (two thousand notes at most), after
   a pause in the typing. Not done: several cards chosen at once, a card deleted or moved to
   another deck from there.
+- **One clock** (2026-11-18): the session's counts of the decks and the window's queue read
+  the time from one place (`knotes_session::now`), which the app's tests set for a whole run
+  (`KNOTES_PROBE_NOW`). With the Mac's clock, a run that slept between two launches found
+  the card graded in the first, «due in ten minutes», due in the second, and failed.

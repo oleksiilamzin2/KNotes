@@ -4,8 +4,6 @@
 
 /// The gap between two tabs.
 pub const TAB_GAP: f64 = 4.0;
-/// A tab shows its name while it is at least this wide; narrower, its symbol alone.
-pub const TAB_NAMED: f64 = 56.0;
 /// A tab is never narrower than this (the owner's measure, from a tab as he wants the
 /// narrowest): room for its symbol and a short name. More tabs than fit so are longer than the
 /// strip, which shows a part of them (`tab_scroll`).
@@ -36,10 +34,9 @@ pub fn tab_slots(count: usize, strip: f64) -> Vec<Slot> {
 
 /// Where a tab in `slot` of a strip `height` tall shows its cross (its left and its top; it is
 /// square, `cross_size` a side): at the tab's left, clear of the round end of the strip's first
-/// tab; in its middle when it has no room for a name.
+/// tab. (A tab too narrow for its name had it in its middle; no tab is that narrow now.)
 pub fn cross_of(slot: Slot, height: f64) -> (f64, f64) {
-    let left = if slot.width < TAB_NAMED { slot.x + (slot.width - CROSS) / 2.0 } else { slot.x + 9.0 };
-    (left, height / 2.0 - CROSS / 2.0)
+    (slot.x + 9.0, height / 2.0 - CROSS / 2.0)
 }
 
 pub fn cross_size() -> f64 {
@@ -91,6 +88,12 @@ pub fn slots_dragged(slots: &[Slot], tab: usize, left: f64, over: usize) -> Vec<
 /// How far the tabs can be scrolled along a strip `strip` wide: how much longer they are.
 fn scroll_end(slots: &[Slot], strip: f64) -> f64 {
     (slots.last().map_or(0.0, |last| last.x + last.width) - strip).max(0.0)
+}
+
+/// Whether tabs lie out of sight before the strip's left end and after its right, scrolled
+/// `scroll` as they are: the strip says so at each end.
+pub fn tabs_out_of_sight(slots: &[Slot], strip: f64, scroll: f64) -> (bool, bool) {
+    (scroll > 0.5, scroll < scroll_end(slots, strip) - 0.5)
 }
 
 /// How far the tabs are scrolled (the point of them at the strip's left), from `scroll` where

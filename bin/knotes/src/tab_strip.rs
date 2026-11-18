@@ -21,8 +21,6 @@ use crate::strings;
 /// The strip's height, and the gap between two tabs.
 pub const HEIGHT: f64 = 36.0;
 const GAP: f64 = knotes_app::TAB_GAP;
-/// A tab shows its name while it is at least this wide.
-const NAMED: f64 = knotes_app::TAB_NAMED;
 /// How far a tab's piece of glass is from the strip's edge.
 const INSET: f64 = 2.0;
 /// The cross's room at a tab's left, and the symbol's size.
@@ -546,18 +544,6 @@ impl TabStrip {
             let circle = NSColor::labelColor().colorWithAlphaComponent(if over_cross { 0.75 } else { 0.5 });
             let cross = if pointed { cross_symbol(&NSColor::textBackgroundColor(), &circle) } else { None };
             let mark = symbol(tab.symbol, &ink);
-            if place.size.width < NAMED {
-                // No room for a name: the cross in the symbol's place.
-                match cross {
-                    Some(cross) => draw_symbol(&cross, cross_place(place)),
-                    None => {
-                        if let Some(mark) = mark {
-                            draw_symbol(&mark, rect(place.origin.x + (place.size.width - SYMBOL) / 2.0, middle - SYMBOL / 2.0, SYMBOL, SYMBOL));
-                        }
-                    }
-                }
-                continue;
-            }
             if let Some(cross) = cross {
                 draw_symbol(&cross, cross_place(place));
             }
@@ -574,6 +560,24 @@ impl TabStrip {
             }
             // SAFETY: a font and a colour are those attributes' values.
             unsafe { NSString::from_str(&name).drawAtPoint_withAttributes(NSPoint::new(left + SYMBOL + 5.0, middle - (font.ascender() - font.descender()) / 2.0), Some(&attributes(&font, &ink))) };
+        }
+        // Tabs out of sight past an end: the strip fades there and points that way.
+        let (before, after) = knotes_app::tabs_out_of_sight(&self.slots(), bounds.size.width, self.scroll());
+        const FADE: f64 = 34.0;
+        let ground = NSColor::windowBackgroundColor();
+        for (shown, left, sign) in [(before, 0.0, "‹"), (after, bounds.size.width - FADE, "›")] {
+            if !shown {
+                continue;
+            }
+            let (solid, clear) = (ground.colorWithAlphaComponent(0.95), ground.colorWithAlphaComponent(0.0));
+            let (from, to) = if left == 0.0 { (&solid, &clear) } else { (&clear, &solid) };
+            if let Some(fade) = objc2_app_kit::NSGradient::initWithStartingColor_endingColor(<objc2_app_kit::NSGradient as objc2::AnyThread>::alloc(), from, to) {
+                fade.drawInRect_angle(rect(left, 0.0, FADE, bounds.size.height), 0.0);
+            }
+            let mark = NSFont::systemFontOfSize_weight(15.0, unsafe { objc2_app_kit::NSFontWeightSemibold });
+            let x = if left == 0.0 { 8.0 } else { bounds.size.width - 16.0 };
+            // SAFETY: a font and a colour are those attributes' values.
+            unsafe { NSString::from_str(sign).drawAtPoint_withAttributes(NSPoint::new(x, bounds.size.height / 2.0 - 10.0), Some(&attributes(&mark, &NSColor::secondaryLabelColor()))) };
         }
         objc2_app_kit::NSGraphicsContext::restoreGraphicsState_class();
     }
