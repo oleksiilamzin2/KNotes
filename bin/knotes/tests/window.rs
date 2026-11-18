@@ -124,7 +124,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     // What belongs to the list and the note is in the row under the toolbar, each part over its
     // column.
     let row = out.lines().find_map(|l| l.strip_prefix("second-row: ")).unwrap_or_else(|| panic!("{out}"));
-    assert!(row.contains(" [search] [list-options] | [new-note] [back] [forward] "), "{row}");
+    assert!(row.contains(" [search] [list-options] | [back] [forward] "), "a new note's button is in the toolbar, not here too: {row}");
     let parts = out.lines().find_map(|l| l.strip_prefix("second-row-parts: ")).unwrap_or_else(|| panic!("{out}"));
     let edges: Vec<f64> = parts.split([' ', '+']).filter_map(|n| n.parse().ok()).collect();
     // The row spans the window: the list's part starts where the sidebar ends (it begins under

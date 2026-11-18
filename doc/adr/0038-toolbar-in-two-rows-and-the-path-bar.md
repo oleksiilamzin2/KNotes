@@ -25,8 +25,9 @@ asked and was taken back.
   - over the list: its name and its count, the search's magnifying glass and the list's
     options («…»); while the search shows, its field in the place of the name and the count
     (ADR 0015), with «Aa» to ignore case or not;
-  - over the note: a new note, back and forward, the document's name (renamed in place, ADR
-    0019) and when it was last changed;
+  - over the note: back and forward, the document's name (renamed in place, ADR 0019) and
+    when it was last changed (a new note's button stood first there until it went to the
+    toolbar, after the tabs, 2026-11-18);
   - over the panel: what it shows, three small buttons (the AI, the outline, the links; ADR
     0023, 0026).
   The row's parts follow the split view's columns: they are laid out again when a column is

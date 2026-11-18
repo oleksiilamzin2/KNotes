@@ -34,7 +34,6 @@ pub const SEARCH: &str = "knotes.search";
 /// The list's search field, in the place of the list's name while the search shows.
 pub const SEARCH_FIELD: &str = "knotes.search-field";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
-pub const NEW_NOTE: &str = "knotes.new-note";
 pub const HISTORY_BACK: &str = "knotes.history-back";
 pub const HISTORY_FORWARD: &str = "knotes.history-forward";
 /// The list's name and its count of notes, in the row under the toolbar.
@@ -463,8 +462,8 @@ impl ToolbarDelegate {
     /// The row under the toolbar (owner's request, 2026-11-17, after DEVONthink's): what belongs
     /// to a column over that column, as plain text and small buttons on the bar itself, no glass.
     /// Over the list: its name, its count, the search and its options; while the search shows,
-    /// `search_field` in the place of the name and the count. Over the note: a new note, back
-    /// and forward, the document's name (renamed in place) and when it was changed.
+    /// `search_field` in the place of the name and the count. Over the note: back and forward,
+    /// the document's name (renamed in place) and when it was changed.
     fn second_row(&self, search_field: &NSSearchField) -> Retained<NSView> {
         let mtm = self.mtm();
         let target: &AnyObject = self.as_ref();
@@ -493,7 +492,6 @@ impl ToolbarDelegate {
         search_field.setIdentifier(Some(&NSString::from_str(SEARCH_FIELD)));
         let search = button(SEARCH, "magnifyingglass", strings::SEARCH, sel!(toggleSearch:));
         let options = button(LIST_OPTIONS, "ellipsis", strings::LIST_OPTIONS, sel!(listOptions:));
-        let new_note = button(NEW_NOTE, "square.and.pencil", strings::NEW_NOTE, sel!(newNote:));
         let back = button(HISTORY_BACK, "chevron.left", strings::BACK, sel!(navigateBack:));
         let forward = button(HISTORY_FORWARD, "chevron.right", strings::FORWARD, sel!(navigateForward:));
         let title = TitleField::new(mtm, self.ivars().note_title_renamable.get());
@@ -580,7 +578,7 @@ impl ToolbarDelegate {
         row.addSubview(&over_sidebar);
         row.addSubview(&over_list);
         row.addSubview(&over_note);
-        for (part, views) in [(&over_list, [&*list_title as &NSView, &list_count, search_field, &search, &options].as_slice()), (&over_note, [&*new_note as &NSView, &back, &forward, &title, &date].as_slice())] {
+        for (part, views) in [(&over_list, [&*list_title as &NSView, &list_count, search_field, &search, &options].as_slice()), (&over_note, [&*back as &NSView, &forward, &title, &date].as_slice())] {
             for view in views {
                 view.setTranslatesAutoresizingMaskIntoConstraints(false);
                 part.addSubview(view);
@@ -599,8 +597,8 @@ impl ToolbarDelegate {
             search_field.trailingAnchor().constraintEqualToAnchor_constant(&search.leadingAnchor(), -8.0),
             search.trailingAnchor().constraintEqualToAnchor_constant(&options.leadingAnchor(), -10.0),
             options.trailingAnchor().constraintEqualToAnchor_constant(&over_list.trailingAnchor(), -12.0),
-            new_note.leadingAnchor().constraintEqualToAnchor_constant(&over_note.leadingAnchor(), 12.0),
-            back.leadingAnchor().constraintEqualToAnchor_constant(&new_note.trailingAnchor(), 14.0),
+            // (A new note's button stood first here; it is in the toolbar now, after the tabs.)
+            back.leadingAnchor().constraintEqualToAnchor_constant(&over_note.leadingAnchor(), 12.0),
             forward.leadingAnchor().constraintEqualToAnchor_constant(&back.trailingAnchor(), 12.0),
             title.leadingAnchor().constraintEqualToAnchor_constant(&forward.trailingAnchor(), 12.0),
             date.leadingAnchor().constraintEqualToAnchor_constant(&title.trailingAnchor(), 8.0),

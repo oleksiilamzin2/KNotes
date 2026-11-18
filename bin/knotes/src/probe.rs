@@ -967,7 +967,12 @@ fn report_toolbar(window: &NSWindow) {
         let frame = crate::toolbar::row_control(window, id).and_then(|v| unsafe { v.superview() }).map(|p| p.frame());
         frame.map_or(String::new(), |f| format!("{:.0}+{:.0}", f.origin.x, f.size.width))
     };
-    println!("second-row: {} · {} [search] [list-options] | [new-note] [back] [forward] {} · {}", text(crate::toolbar::LIST_TITLE), text(crate::toolbar::LIST_COUNT), text(crate::toolbar::NOTE_TITLE), text(crate::toolbar::NOTE_DATE));
+    // The row's buttons that are there, by their ids (not a list written here: a button taken
+    // out would still be told).
+    let buttons = |ids: &[(&str, &str)]| ids.iter().filter(|(id, _)| crate::toolbar::row_control(window, id).is_some()).map(|(_, name)| format!("[{name}]")).collect::<Vec<_>>().join(" ");
+    let over_list = buttons(&[(crate::toolbar::SEARCH, "search"), (crate::toolbar::LIST_OPTIONS, "list-options")]);
+    let over_note = buttons(&[("knotes.new-note", "new-note"), (crate::toolbar::HISTORY_BACK, "back"), (crate::toolbar::HISTORY_FORWARD, "forward")]);
+    println!("second-row: {} · {} {over_list} | {over_note} {} · {}", text(crate::toolbar::LIST_TITLE), text(crate::toolbar::LIST_COUNT), text(crate::toolbar::NOTE_TITLE), text(crate::toolbar::NOTE_DATE));
     println!("second-row-parts: list {} note {}", part(crate::toolbar::LIST_TITLE), part(crate::toolbar::NOTE_TITLE));
 }
 
