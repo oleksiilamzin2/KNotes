@@ -112,3 +112,11 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   for the cursor's sake (`LivePreview::show_only`: nothing is typed there, and the first
   heading stood with its `#`); and the list's «Aa» is drawn as the vault's search's, a switch
   of one segment, readable while on.
+- **Every kind of the vault's search is the search thread's** (2026-11-18, an audit's findings
+  11 and 12): the names and the text were searched on the main thread at each letter, which
+  grows with the vault (every name looked at, a full-text query slowest at one or two
+  letters, up to 200 notes read for their words); only by meaning went to `SearchWorker`.
+  All go there now (`names_too` asks a search of the text for the names as well); an answer
+  to an older question is dropped. Driven by the probe, the same search is run at once
+  (`search_now`), the answer being wanted before the next step. The list of what is found
+  starts at its top after each search, and is as wide as its window when that is resized.

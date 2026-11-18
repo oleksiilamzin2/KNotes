@@ -9,8 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use knotes_app::found_snippet;
-use knotes_core::{ContentQuery, ContentSearch, NoteText, TitleSearch, Within};
+use knotes_core::NoteText;
 use knotes_index::SqliteIndex;
 use knotes_search::TitleIndex;
 use objc2::rc::Retained;
@@ -29,7 +28,6 @@ const MAX_NAMES: usize = 60;
 const MAX_TEXTS: usize = 200;
 /// A row of the results: a document's name with where it is, and the text found under it.
 const ROW: f64 = 44.0;
-const SNIPPET_CHARS: usize = 160;
 
 /// A document found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,8 +41,7 @@ pub struct Found {
     pub kept_from_ai: bool,
 }
 
-/// What a search looks in. By meaning is searched apart, on another thread (it asks the
-/// embedding model).
+/// What a search looks in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// The names, then the text.
@@ -52,42 +49,6 @@ pub enum Kind {
     Names,
     Text,
     Meaning,
-}
-
-/// Whether `text` holds each word of `query` in the case it was typed in.
-fn holds_as_typed(text: &str, query: &str) -> bool {
-    query.split_whitespace().all(|word| text.contains(word))
-}
-
-/// The vault's documents `query` finds: those whose name holds it, best first, then those whose
-/// text holds every word (each once, with the text around the first find); `kind` says which
-/// of the two. With `ignore_case` off, only those holding the words as typed.
-pub fn find(reader: &SqliteIndex, titles: Option<&TitleIndex>, query: &str, kind: Kind, ignore_case: bool) -> Vec<Found> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let names = if matches!(kind, Kind::All | Kind::Names) { titles.map(|t| t.search_titles(query, MAX_NAMES)).unwrap_or_default() } else { Vec::new() };
-    let mut found: Vec<Found> = names
-        .into_iter()
-        .filter(|hit| ignore_case || holds_as_typed(knotes_app::title_of(&hit.path), query))
-        .map(|hit| Found { path: hit.path, snippet: String::new(), space: None, kept_from_ai: false })
-        .collect();
-    let hits = if matches!(kind, Kind::All | Kind::Text) { reader.search(&ContentQuery { text: query, within: Within::Note, prefixes: true, scope: None, limit: MAX_TEXTS }).unwrap_or_default() } else { Vec::new() };
-    for hit in hits {
-        let text = reader.note_text(&hit.path).ok().flatten().unwrap_or_default();
-        if !ignore_case && !holds_as_typed(&text, query) {
-            continue;
-        }
-        let block = text.get(hit.span.start as usize..hit.span.end as usize).unwrap_or(&text);
-        let snippet = found_snippet(block, query, SNIPPET_CHARS);
-        match found.iter_mut().find(|f| f.path == hit.path) {
-            Some(by_name) if by_name.snippet.is_empty() => by_name.snippet = snippet,
-            Some(_) => {}
-            None => found.push(Found { path: hit.path, snippet, space: None, kept_from_ai: false }),
-        }
-    }
-    found
 }
 
 fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
@@ -172,6 +133,9 @@ impl ResultList {
         self.ivars().chosen.set((!rows.is_empty()).then_some(0));
         self.setFrameSize(NSSize::new(width, rows.len() as f64 * ROW));
         *self.ivars().rows.borrow_mut() = rows;
+        // The first row is the one chosen: in view (the list stayed where the last one was
+        // scrolled to, the chosen row out of sight).
+        self.scrollPoint(NSPoint::new(0.0, 0.0));
         self.setNeedsDisplay(true);
     }
 
@@ -338,37 +302,53 @@ impl Controller {
         self.ivars().case.isSelectedForSegment(0)
     }
 
-    /// The documents the field's text finds, listed; the first shown below. By meaning they
-    /// come later, from the search's thread (`found_by_meaning`).
+    /// Asks the search's thread for the documents the field's text finds; they are listed when
+    /// its answer comes (`found`), unless something was asked since. Not searched here: a
+    /// search of the names and the text grows with the vault (every name is looked at, up to
+    /// some hundreds of notes are read for their words), and the field must take the next
+    /// letter meanwhile.
     fn search(&self) {
-        let query = self.ivars().field.stringValue().to_string();
-        // A question asked since: an answer by meaning still on its way is for an older one.
+        let query = self.ivars().field.stringValue().to_string().trim().to_owned();
         self.ivars().asked.set(self.ivars().asked.get() + 1);
+        let kind = self.kind();
         // The case has no part in a search by meaning: «Aa» goes (greyed while on, it was a pale
         // blue plate with letters that could not be read).
-        self.ivars().case.setHidden(self.kind() == Kind::Meaning);
-        if self.kind() == Kind::Meaning {
+        self.ivars().case.setHidden(kind == Kind::Meaning);
+        if query.is_empty() {
             self.list(Vec::new());
-            self.ask_by_meaning(query.trim());
             return;
         }
-        let found = match self.ivars().reader.borrow().as_ref() {
-            Some(reader) => find(reader, self.ivars().titles.borrow().as_deref(), &query, self.kind(), self.ignore_case()),
-            None => Vec::new(),
+        let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
+        let request = crate::search_worker::SearchRequest {
+            generation: self.ivars().asked.get(),
+            mode: match kind {
+                Kind::Names => knotes_app::SearchMode::Files,
+                Kind::All | Kind::Text => knotes_app::SearchMode::Content,
+                Kind::Meaning => knotes_app::SearchMode::Meaning,
+            },
+            query,
+            scope: None,
+            titles: self.ivars().titles.borrow().clone(),
+            closeness,
+            space: None,
+            ignore_case: self.ignore_case(),
+            names_too: kind == Kind::All,
         };
-        self.list(found);
-    }
-
-    /// Asks the search's thread for the documents near `query` in meaning.
-    fn ask_by_meaning(&self, query: &str) {
-        if query.is_empty() {
+        // Driven by the probe, the answer is wanted before the next step: found here.
+        if crate::probe::enabled() {
+            let response = crate::search_worker::search_now(&request, self.ivars().reader.borrow().as_ref());
+            self.found(response);
             return;
+        }
+        if kind == Kind::Meaning {
+            // The list waits for the model's answer empty, not with another kind's finds.
+            self.list(Vec::new());
+            // The model loads while the answer is waited for.
+            if let Some(embedder) = crate::meaning::embedder() {
+                embedder.warm();
+            }
         }
         let Some(index_dir) = self.ivars().index_dir.borrow().clone() else { return };
-        // The model loads while the answer is waited for.
-        if let Some(embedder) = crate::meaning::embedder() {
-            embedder.warm();
-        }
         if self.ivars().worker.borrow().is_none() {
             let target = Arc::new(dispatch2::MainThreadBound::new(objc2::rc::Weak::from_retained(&objc2::Message::retain(self)), self.mtm()));
             let worker = crate::search_worker::SearchWorker::start(index_dir, move |response| {
@@ -376,32 +356,32 @@ impl Controller {
                 dispatch2::DispatchQueue::main().exec_async(move || {
                     let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
                     if let Some(controller) = target.get(mtm).load() {
-                        controller.found_by_meaning(response);
+                        controller.found(response);
                     }
                 });
             });
             *self.ivars().worker.borrow_mut() = Some(worker);
         }
         if let Some(worker) = self.ivars().worker.borrow().as_ref() {
-            let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
-            worker.request(crate::search_worker::SearchRequest {
-                generation: self.ivars().asked.get(),
-                mode: knotes_app::SearchMode::Meaning,
-                query: query.to_owned(),
-                scope: None,
-                titles: None,
-                closeness,
-                space: None,
-                ignore_case: true,
-            });
+            worker.request(request);
         }
     }
 
-    /// The answer of a search by meaning: listed unless something was asked since.
-    fn found_by_meaning(&self, response: crate::search_worker::SearchResponse) {
-        if response.generation == self.ivars().asked.get() && self.kind() == Kind::Meaning {
-            self.list(response.content.into_iter().map(|found| Found { path: found.path, snippet: found.snippet, space: None, kept_from_ai: false }).collect());
+    /// The search thread's answer: listed unless something was asked since. The documents
+    /// found by their names first (`MAX_NAMES` of them), each with the text found in it when
+    /// its words are there too; then the others found by their text.
+    fn found(&self, response: crate::search_worker::SearchResponse) {
+        if response.generation != self.ivars().asked.get() {
+            return;
         }
+        let mut found: Vec<Found> = response.titles.into_iter().take(MAX_NAMES).map(|path| Found { path, snippet: String::new(), space: None, kept_from_ai: false }).collect();
+        for by_text in response.content.into_iter().take(MAX_TEXTS) {
+            match found.iter_mut().find(|f| f.path == by_text.path) {
+                Some(by_name) => by_name.snippet = by_text.snippet,
+                None => found.push(Found { path: by_text.path, snippet: by_text.snippet, space: None, kept_from_ai: false }),
+            }
+        }
+        self.list(found);
     }
 
     /// `found` listed with their marks; the first shown below.
@@ -498,6 +478,9 @@ impl SearchWindow {
         list_scroll.setAutohidesScrollers(true);
         list_scroll.setDrawsBackground(false);
         list_scroll.setDocumentView(Some(&list));
+        // As wide as its scroll view when the window is made wider or narrower (its rows were
+        // drawn at the old width until the next letter typed).
+        list.setAutoresizingMask(objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable);
         // A note's own view and its live preview, as the vault's window has them; read only.
         // Its links are clicked as a note's (`on_link` says where they lead).
         let (preview_scroll, preview) = crate::note_view::note_view(mtm);
