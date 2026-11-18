@@ -153,6 +153,7 @@ fn a_search_is_narrowed_by_a_phrase_a_word_left_out_a_tag_a_folder_and_a_space()
     // The names alone are narrowed as the text is.
     let names = |query: &str| self::found(&index, &notes, &spaces, query, SearchMode::Files);
     assert_eq!(names("radar"), "Projects/Radar.md");
+    assert_eq!(names("rdr"), "", "letters apart are not the word: «rdr» is not in «Radar»");
     assert_eq!(names("radar -budget"), "", "left out by its text though found by its name");
     assert_eq!(names("сад OR draft space:Дім"), "Home/Сад.md");
 }

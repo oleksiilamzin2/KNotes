@@ -66,3 +66,21 @@ fn empty_query_and_limit() {
     assert!(i.search_titles("", 10).is_empty());
     assert_eq!(i.search_titles("note", 10).len(), 10);
 }
+
+#[test]
+fn a_search_lists_the_names_holding_its_words_whole_not_their_letters_apart() {
+    let index = TitleIndex::new([("Мама.md", vec![]), ("Здоров'я/Мама аналізи.md", vec![]), ("Математика, мода.md", vec![]), ("Мама/Тиск.md", vec![]), ("Бабуся.md", vec!["мама тата".to_owned()]), ("Radar.md", vec![])].map(|(p, a)| (p.to_owned(), a)));
+    let words = |query: &str| index.search_words(query, 20).into_iter().map(|h| h.path).collect::<Vec<_>>();
+    // Letters apart find it by `search_titles` (jumping to a note), not in a search's list.
+    assert!(index.search_titles("мама", 20).iter().any(|h| h.path == "Математика, мода.md"));
+    let mut found = words("мама");
+    found.sort();
+    assert_eq!(found, ["Бабуся.md", "Здоров'я/Мама аналізи.md", "Мама.md", "Мама/Тиск.md"], "in its name, its alias, or its folder's name; any case");
+    assert_eq!(words("мама")[0], "Мама.md", "the name itself first");
+    // Every word, each whole, in any order.
+    assert_eq!(words("аналізи мама"), ["Здоров'я/Мама аналізи.md"]);
+    assert_eq!(words("мам ана"), ["Здоров'я/Мама аналізи.md"], "a word's part in a row is found");
+    assert_eq!(words("здоров мама"), ["Здоров'я/Мама аналізи.md"], "one word in its folder's name, one in its own");
+    assert!(words("мма").is_empty() && words("").is_empty());
+}
+

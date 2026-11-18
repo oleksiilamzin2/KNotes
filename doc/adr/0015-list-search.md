@@ -151,3 +151,9 @@ switch keeps a row of its own at the top of the list column, now 32 pt high inst
   thread only calls it and hands the answer to the main thread. So its rules are tested
   without launching the app; the window's tests keep what only a window shows (the rows, the
   marks, the keys).
+- **A search lists the names that hold its words** (2026-11-18). The names were matched as for
+  jumping to a note, letters apart: «мама» listed «Математика, мода» and every path with those
+  four letters in that order (the owner's report). A search, in the list's row and in the
+  vault's window, now lists a file when its name, its alias or its path holds each word in a
+  row, any case (`TitleIndex::search_words`); the completion of links keeps the looser match,
+  where a few letters are typed to reach a name known already.

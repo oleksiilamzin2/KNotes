@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use knotes_core::{TitleHit, TitleSearch};
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32String};
 use rayon::prelude::*;
 
@@ -60,9 +60,27 @@ impl TitleIndex {
     }
 }
 
-impl TitleSearch for TitleIndex {
-    fn search_titles(&self, query: &str, limit: usize) -> Vec<TitleHit> {
-        let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+impl TitleIndex {
+    /// The files whose name, alias or path holds every word of `query` whole, letters in a row
+    /// (any case), best first: what a search lists. `search_titles` matches letters apart too
+    /// (`мама` found «Математика, мода»), which suits jumping to a note by a few of its
+    /// letters, not a list of what was searched for.
+    pub fn search_words(&self, query: &str, limit: usize) -> Vec<TitleHit> {
+        // The matcher finds the names holding the words' letters in their order; of those, the
+        // ones holding each word in a row are kept here. (Its own match of a word in a row
+        // missed a word at a name's end, in letters outside ASCII: «аналізи» in «Мама аналізи».)
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        self.matching(&Pattern::new(query, CaseMatching::Ignore, Normalization::Smart, AtomKind::Fuzzy), limit, Some(&words))
+    }
+
+    /// Whether the entry's name (or alias), or its path, holds each of `words` in a row.
+    fn holds(entry: &Entry, words: &[String]) -> bool {
+        let name = entry.title.to_string().to_lowercase();
+        let path = entry.path.as_ref().map(|path| path.to_string().to_lowercase()).unwrap_or_default();
+        words.iter().all(|word| name.contains(word) || path.contains(word))
+    }
+
+    fn matching(&self, pattern: &Pattern, limit: usize, words: Option<&[String]>) -> Vec<TitleHit> {
         if pattern.atoms.is_empty() || limit == 0 {
             return Vec::new();
         }
@@ -72,11 +90,10 @@ impl TitleSearch for TitleIndex {
             .enumerate()
             .flat_map_iter(|(chunk, entries)| {
                 let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-                let pattern = &pattern;
                 entries
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, e)| self.score(e, pattern, &mut matcher).map(|s| (s, chunk * CHUNK + i)))
+                    .filter_map(|(i, e)| self.score(e, pattern, &mut matcher).filter(|_| words.is_none_or(|words| Self::holds(e, words))).map(|s| (s, chunk * CHUNK + i)))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -108,5 +125,11 @@ impl TitleSearch for TitleIndex {
                 }
             })
             .collect()
+    }
+}
+
+impl TitleSearch for TitleIndex {
+    fn search_titles(&self, query: &str, limit: usize) -> Vec<TitleHit> {
+        self.matching(&Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart), limit, None)
     }
 }

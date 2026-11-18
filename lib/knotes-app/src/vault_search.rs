@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use knotes_core::{ContentQuery, ContentSearch, MeaningSearch, NoteText, TagIndex, TitleSearch, Within};
+use knotes_core::{ContentQuery, ContentSearch, MeaningSearch, NoteText, TagIndex, Within};
 use knotes_search::TitleIndex;
 
 use crate::{ContentMatch, Place, SearchMode, found_snippet};
@@ -97,7 +97,7 @@ fn search_words<R: ContentSearch + NoteText + TagIndex>(request: &SearchRequest,
         }
     }
     if request.mode == SearchMode::Files || request.names_too && within.is_some() {
-        titles = request.titles.as_ref().map(|t| t.search_titles(query, MAX_TITLES).into_iter().map(|h| h.path).collect()).unwrap_or_default();
+        titles = request.titles.as_ref().map(|t| t.search_words(query, MAX_TITLES).into_iter().map(|h| h.path).collect()).unwrap_or_default();
         if !request.ignore_case {
             titles.retain(|path: &String| holds_as_typed(crate::title_of(path), query));
         }
