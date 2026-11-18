@@ -4331,6 +4331,18 @@ fn a_deck_s_settings_are_not_written_over_a_file_that_cannot_be_read_as_one() {
 }
 
 #[test]
+fn an_id_written_at_two_cards_is_asked_once_and_the_card_where_it_was_found() {
+    // A card's line copied with its id, the copy changed: one schedule, two cards.
+    let notes = [("n.md", "#@мови cat::кіт ^c-1\n\n#@мови dog::пес ^c-1\n\n#@мови fox::лис ^c-2\n")];
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    // The first with the id, then the next id's: the copy is not asked as a second cat.
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4")]);
+    assert_eq!(review_line_of(&out), "question мови 1/1 | fox (list hidden)", "{out}");
+    let (_vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4")]);
+    assert_eq!(review_line_of(&out), "done мови 2", "{out}");
+}
+
+#[test]
 fn what_is_selected_in_a_note_becomes_a_card() {
     let notes = [("n.md", "Кіт — це тварина.\n\nкінець")];
     // «тварина» (9..16) the answer to a question asked.

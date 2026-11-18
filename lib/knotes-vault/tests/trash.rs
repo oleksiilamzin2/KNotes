@@ -157,3 +157,25 @@ fn a_deletion_that_fails_leaves_no_entry() {
     assert!(deleted.is_err());
     assert_eq!(fs::read_dir(dir.path().join(".knotes/trash")).unwrap().count(), 1, "only a.md's entry");
 }
+
+#[test]
+fn a_restore_puts_nothing_outside_the_vault_whatever_its_entry_says() {
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("vault");
+    write(&root, "Work/Plan.md", "The plan.");
+    let vault = FsVault::new(&root);
+    for path in ["../escaped.md", "/tmp/knotes-escaped.md", "Work/../../escaped.md"] {
+        let entry = vault.trash("Work/Plan.md", NOW).unwrap();
+        // Its entry's file says another place: one outside the vault.
+        let file = root.join(".knotes/trash").join(&entry.id).join("entry.json");
+        let mut said: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        said["path"] = serde_json::json!(path);
+        fs::write(&file, said.to_string()).unwrap();
+        assert!(vault.restore(&entry.id).is_err(), "{path}");
+        assert!(!outer.path().join("escaped.md").exists() && !Path::new("/tmp/knotes-escaped.md").exists(), "{path}");
+        // Put right, it comes back.
+        said["path"] = serde_json::json!("Work/Plan.md");
+        fs::write(&file, said.to_string()).unwrap();
+        assert_eq!(vault.restore(&entry.id).unwrap(), "Work/Plan.md");
+    }
+}

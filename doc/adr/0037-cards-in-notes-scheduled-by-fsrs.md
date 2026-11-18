@@ -346,3 +346,7 @@ test missed, each of them relaunching the app after a grade:
   ends now at the next item of its depth or above, and any card at a heading (`ends_card`). A
   list inside the answer of a card that is no item, and an item nested under a card's, stay
   the card's.
+- **An id written at two cards** (finding 8: a card's line copied, a note duplicated) is one
+  schedule's: a review asks one card of it (the first; the others' entries are dropped from
+  its queue), and of two with the id in one note shows the one where the index found it, not
+  the first for both. The deck's counts still count each: they are the cards written.

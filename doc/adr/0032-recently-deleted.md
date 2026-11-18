@@ -59,3 +59,10 @@ The owner chose (2026-11-16): kept in the vault; the days set per vault; named Â
   whatever is left of its entry, whose `entry.json` at least goes, so it is not listed with
   nothing in it.
 - Deleting writes the edits typed in an embed of the note first, so they go with it.
+
+## Fixed (2026-11-18)
+
+A restore read where an entry goes back from its `entry.json` and used it unchecked (an
+audit's finding 13): a path with `..`, or an absolute one, in an entry damaged or come from
+elsewhere with the vault's sync, put the file outside the vault. It is checked now as every
+path Knotes is given (`FsVault::inside`), and such a restore fails.

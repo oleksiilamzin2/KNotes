@@ -302,6 +302,10 @@ impl VaultWindow {
                 if asked == Asked::StartAhead {
                     queue.extend(self.cards_ahead(&deck, REVIEW_CARDS.saturating_sub(queue.len())));
                 }
+                // An id is one card's, with one schedule: written at two cards (a line copied, a
+                // note duplicated), the first is asked and the other not, a second time over.
+                let mut ids = std::collections::HashSet::new();
+                queue.retain(|card| card.id.as_ref().is_none_or(|id| ids.insert(id.clone())));
                 *self.review.borrow_mut() = Some(Review { deck, queue, current: None, reviewed: 0, graded: std::collections::HashMap::new() });
                 self.next_card();
             }
@@ -344,10 +348,17 @@ impl VaultWindow {
             };
             // As the note holds it now: by its id, or where it was.
             let written = files.read_utf8(&card.path).ok().and_then(|text| {
-                scan_cards(&text).into_iter().find(|c| match &card.id {
-                    Some(id) => c.id.as_ref() == Some(id),
-                    None => c.id.is_none() && c.span.start == card.start as usize,
-                })
+                let cards = scan_cards(&text);
+                let at = |c: &&knotes_cards::Card| c.span.start == card.start as usize;
+                match &card.id {
+                    // With its id; of two with it in the note, the one where the index found
+                    // this one (the first was shown for both).
+                    Some(id) => {
+                        let with_id = || cards.iter().filter(|c| c.id.as_ref() == Some(id));
+                        with_id().find(at).or_else(|| with_id().next()).cloned()
+                    }
+                    None => cards.iter().filter(|c| c.id.is_none()).find(at).cloned(),
+                }
             });
             if let (Some(written), Some(review)) = (written, self.review.borrow_mut().as_mut()) {
                 let card = DueCard { start: written.span.start as u32, end: written.span.end as u32, ..card };

@@ -65,6 +65,10 @@ impl TrashStore for FsVault {
     fn restore(&self, id: &str) -> io::Result<String> {
         let dir = self.entry_dir(id)?;
         let (entry, rules) = read_entry(&dir).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no deleted entry {id}")))?;
+        // Where it goes back is read from the entry's file: checked as every path Knotes is
+        // given (no `..`, not absolute), so that an entry damaged, or come from elsewhere with
+        // the vault's sync, puts nothing outside the vault.
+        self.inside(&entry.path)?;
         // The folders above, made again with their rules where they went.
         let parent = entry.path.rsplit_once('/').map_or("", |(parent, _)| parent);
         let mut at = String::new();
