@@ -329,6 +329,8 @@ pub const CLOSE_TAB: &str = "Закрити вкладку";
 pub const NEXT_TAB: &str = "Наступна вкладка";
 pub const PREVIOUS_TAB: &str = "Попередня вкладка";
 pub const REOPEN_TAB: &str = "Відкрити закриту вкладку";
+/// The decks' first row, and its review's name: every deck together.
+pub const ALL_DECKS: &str = "Усі колоди";
 /// "Вкладка 3".
 pub fn tab_number(number: usize) -> String {
     format!("Вкладка {number}")

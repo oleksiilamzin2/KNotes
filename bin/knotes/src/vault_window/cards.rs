@@ -17,6 +17,17 @@ pub(crate) fn deck_of_tab(path: &str) -> Option<&str> {
     path.strip_prefix(DECK_TAB)
 }
 
+/// A deck's name on its tab and over its list: its path's last part; all the decks together
+/// (the deck `""`), «Усі колоди».
+pub(crate) fn deck_title(deck: &str) -> &str {
+    if deck.is_empty() { strings::ALL_DECKS } else { deck.rsplit('/').next().unwrap_or(deck) }
+}
+
+/// A deck as its review names it: its path; all the decks together, «Усі колоди».
+fn deck_named(deck: &str) -> String {
+    if deck.is_empty() { strings::ALL_DECKS.to_owned() } else { deck.to_owned() }
+}
+
 /// Cards a review takes at once from the index; more wait for the next.
 const REVIEW_CARDS: usize = 200;
 const DAY: f64 = 86_400.0;
@@ -217,7 +228,7 @@ impl VaultWindow {
         };
         let said = stats.as_ref().map(strings::deck_stats).unwrap_or_default();
         let ahead = self.cards_ahead(deck, REVIEW_CARDS);
-        self.review_view.show(Some(Shown::Waiting { deck: deck.to_owned(), cards: cards.len(), more: cards.len() == REVIEW_CARDS, stats: said, charts: stats, ahead: ahead.len(), ahead_more: ahead.len() == REVIEW_CARDS }));
+        self.review_view.show(Some(Shown::Waiting { deck: deck_named(deck), cards: cards.len(), more: cards.len() == REVIEW_CARDS, stats: said, charts: stats, ahead: ahead.len(), ahead_more: ahead.len() == REVIEW_CARDS }));
     }
 
     /// The waiting deck's statistics (probe mode).
@@ -286,11 +297,11 @@ impl VaultWindow {
             let review = self.review.borrow();
             let Some(review) = review.as_ref() else { return };
             match review.current() {
-                None => Shown::Done { deck: review.deck().to_owned(), reviewed: review.reviewed() },
+                None => Shown::Done { deck: deck_named(review.deck()), reviewed: review.reviewed() },
                 Some(current) => {
                     let after = review.would_come_back(&self.deck_settings.borrow(), now(), |id| self.card_state(id));
                     let answer = after.map(|after| (current.back.clone(), after.map(|after| comes_back(&after))));
-                    Shown::Card { deck: review.deck().to_owned(), done: review.reviewed(), left: review.left(), front: current.front.clone(), answer }
+                    Shown::Card { deck: deck_named(review.deck()), done: review.reviewed(), left: review.left(), front: current.front.clone(), answer }
                 }
             }
         };

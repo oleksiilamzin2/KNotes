@@ -6,8 +6,10 @@ use std::collections::BTreeMap;
 
 use knotes_core::{CardRow, DeckCount, DueCard};
 
+/// Whether the row's card is of `deck` or a deck under it; every card is of the deck `""`,
+/// which is all of them.
 fn under(row: &CardRow, deck: &str) -> bool {
-    row.deck == deck || row.deck.strip_prefix(deck).is_some_and(|rest| rest.starts_with('/'))
+    deck.is_empty() || row.deck == deck || row.deck.strip_prefix(deck).is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn due_card(row: &CardRow) -> DueCard {

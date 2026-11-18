@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 
-use knotes_app::{Followed, follow_link, linked_note_path, named_link, find_folder_node, session_settings_key, tag_exists, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
+use knotes_app::{Followed, follow_link, linked_note_path, named_link, find_folder_node, session_settings_key, Moves, Relinks, embed_images, pasted_image_name, plan_relinks, 
     FolderRules, ListOption, Outline, OutlineEntry, PanelMode, SearchMode, Sidebar, SidebarItem, SidebarMode, Tabs, AfterClose, TabPlace, TagNode, parse_search,
     with_search_mode, new_notes_folder, ListItem, trash_days, SpaceTags, folder_tree_with, unique_folder_path, space_notes_folder,     resolve_list_settings, unique_note_path,
 };
@@ -1002,7 +1002,7 @@ impl VaultWindow {
             // A deck's review stays a tab while the deck has cards.
             let decks = Arc::clone(&self.state.borrow().decks);
             self.tabs.borrow_mut().retain(|p| match cards::deck_of_tab(p) {
-                Some(deck) => tag_exists(&decks, deck),
+                Some(deck) => knotes_app::deck_exists(&decks, deck),
                 None => vault.join(p).is_file(),
             });
         }

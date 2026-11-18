@@ -147,7 +147,7 @@ impl Sidebar {
                 top.extend(folders.children.iter().filter(|f| f.path != skip).map(|f| add_folder(f, &mut entries, skip, with_subfolders)));
             }
             SidebarMode::Tags => top.extend(tags.iter().map(|t| add_tag(t, &mut entries))),
-            SidebarMode::Cards => return Self::decks(&[]),
+            SidebarMode::Cards => return Self::decks(&[], ""),
         }
         if let Some(rest) = rest {
             let children = match mode {
@@ -167,7 +167,9 @@ impl Sidebar {
     }
 
     /// The decks (ADR 0037): a tree as `deck_tree` gives it, each with its cards to review.
-    pub fn decks(decks: &[TagNode]) -> Self {
+    /// Above them, while there are any, a row for all of them together (the deck `""`), named
+    /// `all`, with what they ask between them.
+    pub fn decks(decks: &[TagNode], all: &str) -> Self {
         fn add(node: &TagNode, entries: &mut HashMap<SidebarItem, Entry>) -> SidebarItem {
             let children = node.children.iter().map(|c| add(c, entries)).collect();
             let item = SidebarItem::Deck(node.tag.clone());
@@ -175,7 +177,12 @@ impl Sidebar {
             item
         }
         let mut entries = HashMap::new();
-        let top = decks.iter().map(|deck| add(deck, &mut entries)).collect();
+        let mut top: Vec<SidebarItem> = decks.iter().map(|deck| add(deck, &mut entries)).collect();
+        if !decks.is_empty() {
+            let every = SidebarItem::Deck(String::new());
+            entries.insert(every.clone(), Entry { name: all.to_owned(), count: Some(decks.iter().map(|deck| deck.notes).sum()), children: Vec::new() });
+            top.insert(0, every);
+        }
         Self { top, entries, inbox: None }
     }
 

@@ -27,6 +27,12 @@ pub(crate) fn insert_cards(tx: &Transaction, file_id: i64, source: &str) -> Resu
     Ok(())
 }
 
+/// The decks under `deck`, as a range of their paths: from `deck/` up to, not with, `deck0`
+/// (`0` is the byte after `/`). The deck `""` is every deck: all of them are under it.
+fn under(deck: &str) -> (String, String) {
+    if deck.is_empty() { (String::new(), "\u{10FFFF}".to_owned()) } else { (format!("{deck}/"), format!("{deck}0")) }
+}
+
 impl SqliteIndex {
     /// Takes `text` (what `.knotes/decks.json` holds) as the decks' settings: when it is not
     /// the one the schedule was worked out with, every reviewed card's is worked out again
@@ -132,10 +138,7 @@ impl CardIndex for SqliteIndex {
 
     fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize) -> Result<Vec<DueCard>, BoxError> {
         // A deck and those under it: `deck` itself, and the range [deck + '/', deck + '0').
-        let (own, from, to) = match deck {
-            Some(deck) => (deck.to_owned(), format!("{deck}/"), format!("{deck}0")),
-            None => (String::new(), String::new(), "\u{10FFFF}".to_owned()),
-        };
+        let (own, (from, to)) = (deck.unwrap_or_default().to_owned(), under(deck.unwrap_or_default()));
         let card = |r: &rusqlite::Row| Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? });
         let mut st = self.conn.prepare_cached(
             "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.due
@@ -166,7 +169,8 @@ impl CardIndex for SqliteIndex {
              WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due > ?4
              ORDER BY s.due, f.path, c.ord LIMIT ?5",
         )?;
-        let rows = st.query_map(params![deck, format!("{deck}/"), format!("{deck}0"), after, limit as i64], |r| {
+        let (from, to) = under(deck);
+        let rows = st.query_map(params![deck, from, to, after, limit as i64], |r| {
             Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -184,7 +188,7 @@ impl CardIndex for SqliteIndex {
 
     fn card_rows(&self, deck: Option<&str>, path: Option<&str>) -> Result<Vec<CardRow>, BoxError> {
         // As `due_cards` takes a deck and those under it.
-        let (from, to) = (deck.map(|d| format!("{d}/")), deck.map(|d| format!("{d}0")));
+        let (from, to) = deck.map(under).unzip();
         let mut st = self.conn.prepare_cached(
             "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.stability, s.difficulty, s.last, s.due, s.reviews, s.lapses, s.first, s.step, s.relearning
              FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
@@ -222,7 +226,7 @@ impl CardIndex for SqliteIndex {
             "SELECT f.path, r.at, r.grade FROM cards c JOIN files f ON f.id = c.file_id JOIN reviews r ON r.card_id = c.card_id
              WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND r.at >= ?4 AND r.at < ?5",
         )?;
-        let rows = st.query_map(params![deck, format!("{deck}/"), format!("{deck}0"), since, day_start + DAY], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
+        let rows = st.query_map(params![deck, under(deck).0, under(deck).1, since, day_start + DAY], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
         for row in rows {
             let (path, at, grade) = row?;
             if !holds(&path) {
@@ -248,9 +252,10 @@ impl CardIndex for SqliteIndex {
     fn deck_notes(&self, deck: &str) -> Result<Vec<String>, BoxError> {
         let mut st = self.conn.prepare_cached(
             "SELECT DISTINCT f.path FROM cards c JOIN files f ON f.id = c.file_id
-             WHERE c.deck = ?1 OR (c.deck >= ?1 || '/' AND c.deck < ?1 || '0') ORDER BY f.path",
+             WHERE c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3) ORDER BY f.path",
         )?;
-        let rows = st.query_map([deck], |r| r.get(0))?;
+        let (from, to) = under(deck);
+        let rows = st.query_map(params![deck, from, to], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 }

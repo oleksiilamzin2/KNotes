@@ -326,6 +326,8 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         let ai = if item.is_some_and(|i| self.kept_from_ai(i)) { strings::SHOW_TO_AI } else { strings::KEEP_FROM_AI };
         let entries: &[(&str, Sel)] = match item {
             Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (ai, sel!(toggleFolderAi:)), (strings::DELETE, sel!(deleteFolder:))],
+            // All the decks together have no settings of their own: each deck's are its own.
+            Some(SidebarItem::Deck(deck)) if deck.is_empty() => &[],
             Some(SidebarItem::Deck(_)) => &[(strings::DECK_SETTINGS, sel!(deckSettings:))],
             // Below the rows: a new folder at the vault's top.
             None => &[(strings::NEW_FOLDER, sel!(newFolder:))],

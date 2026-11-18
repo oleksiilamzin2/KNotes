@@ -144,6 +144,11 @@ pub fn tag_exists(nodes: &[TagNode], tag: &str) -> bool {
     nodes.iter().any(|n| n.tag == tag || tag_exists(&n.children, tag))
 }
 
+/// Whether the decks have `deck`; the deck `""`, all of them together, while there is any.
+pub fn deck_exists(decks: &[TagNode], deck: &str) -> bool {
+    if deck.is_empty() { !decks.is_empty() } else { tag_exists(decks, deck) }
+}
+
 impl<R, L> VaultState<R, L> {
     /// The window's space as the vault has it now: none if it is gone, and its folders as the
     /// tree has them.
@@ -167,10 +172,10 @@ impl<R, L> VaultState<R, L> {
 
     /// The sidebar's rows, and the tags it lists under «Решта бази» (none said for the decks,
     /// which have no such row: what was there stays). `inbox_name`: the folder of new notes
-    /// when no rule names one.
-    pub fn sidebar(&self, inbox_name: &str) -> (Sidebar, Option<HashSet<String>>) {
+    /// when no rule names one; `all_decks`: the name of the row for every deck together.
+    pub fn sidebar(&self, inbox_name: &str, all_decks: &str) -> (Sidebar, Option<HashSet<String>>) {
         if self.sidebar_mode == SidebarMode::Cards {
-            return (Sidebar::decks(&self.decks), None);
+            return (Sidebar::decks(&self.decks, all_decks), None);
         }
         // In a space: its folders and tags (counted there), the inbox if it is one of them,
         // its untagged notes; then the rest of the vault under a row of its own (ADR 0030).
@@ -203,7 +208,7 @@ impl<R, L> VaultState<R, L> {
             SidebarItem::Rest => self.space.is_some(),
             SidebarItem::Deleted => !self.trash.is_empty(),
             SidebarItem::Tag(tag) => tag_exists(&self.tags, tag),
-            SidebarItem::Deck(deck) => tag_exists(&self.decks, deck),
+            SidebarItem::Deck(deck) => deck_exists(&self.decks, deck),
             _ => true,
         }
     }
@@ -300,16 +305,26 @@ impl<R: CardIndex, L> VaultState<R, L> {
     }
 
     /// The cards `deck` asks now, `limit` at most: those due, and of the new as many as it
-    /// still asks today by its settings. Asked of the index, not as the last snapshot had it:
+    /// still asks today by its settings (what its settings allow a day, less those first
+    /// reviewed today in it and under it). Asked of the index, not as the last snapshot had it:
     /// a review just done counts.
     pub fn due_cards(&self, deck: &str, settings: &DeckSettings, now: i64, day_start: i64, limit: usize) -> Vec<DueCard> {
+        // All the decks together (`""`): what each of the top ones asks, by its own settings (a
+        // day's new cards are a deck's, not shared out among them): those due first, the
+        // longest due first, then the new ones, deck by deck.
+        if deck.is_empty() {
+            let mut all: Vec<DueCard> = self.decks.iter().flat_map(|top| self.due_cards(&top.tag, settings, now, day_start, limit)).collect();
+            all.sort_by_key(|card| (card.due.is_none(), card.due));
+            all.truncate(limit);
+            return all;
+        }
         let Some(reader) = self.reader.as_ref() else { return Vec::new() };
         let rows = self.space_rows();
-        let under = format!("{deck}/");
         let introduced = match &rows {
             Some(rows) => deck_rows::introduced(rows, day_start),
             None => reader.introduced(day_start).unwrap_or_default(),
         };
+        let under = format!("{deck}/");
         let today: usize = introduced.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
         let new = (settings.new_a_day(deck) as usize).saturating_sub(today);
         match &rows {

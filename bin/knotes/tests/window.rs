@@ -4193,7 +4193,7 @@ fn the_sidebar_s_cards_mode_lists_the_decks_with_their_cards_to_review_and_a_dec
     ];
     let (vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
     assert!(out.contains("sidebar-mode: cards\n"), "{out}");
-    assert!(out.contains("sidebar: історія (1) | мови (3)\n"), "the decks, each with its cards and its sub-decks' to review: {out}");
+    assert!(out.contains("sidebar: Усі колоди (4) | історія (1) | мови (3)\n"), "the decks, each with its cards and its sub-decks' to review: {out}");
     let (_, out) = (0, probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")]));
     assert!(out.contains("title: мови\n"), "{out}");
     let mut listed = list_titles(&out);
@@ -4204,7 +4204,7 @@ fn the_sidebar_s_cards_mode_lists_the_decks_with_their_cards_to_review_and_a_dec
     std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
     std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{now}\tc-1\t3\n{now}\tc-4\t3\n")).unwrap();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
-    assert!(out.contains("sidebar: історія (0) | мови (2)\n"), "{out}");
+    assert!(out.contains("sidebar: Усі колоди (2) | історія (0) | мови (2)\n"), "{out}");
 }
 
 /// A vault with cards in two decks.
@@ -4215,6 +4215,24 @@ const CARD_NOTES: [(&str, &str); 2] = [
 
 fn review_line_of(out: &str) -> &str {
     out.lines().find_map(|l| l.strip_prefix("review: ")).unwrap_or_else(|| panic!("{out}"))
+}
+
+#[test]
+fn the_decks_first_row_reviews_all_of_them_together() {
+    // Above the decks, «Усі колоди», with what they ask between them; chosen, its review takes
+    // every deck's cards, in a tab of that name.
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:")];
+    let (vault, out) = probe_notes(&CARD_NOTES, &open);
+    let sidebar = out.lines().find_map(|l| l.strip_prefix("sidebar: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    assert!(sidebar.starts_with("Усі колоди (3) | "), "{sidebar}");
+    assert_eq!(review_line_of(&out), "waiting Усі колоди 3", "{out}");
+    assert!(out.contains("title: Усі колоди\n") && out.contains("tabs: Усі колоди\n"), "{out}");
+    // The cards of every deck are asked, one after another.
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4,show,4,show,4")]);
+    assert_eq!(review_line_of(&out), "done Усі колоди 3", "{out}");
+    // Reviewed, they wait no more, in their decks or together.
+    let out = probe_env(&[vault.path()], None, &open);
+    assert_eq!(review_line_of(&out), "waiting Усі колоди 0", "{out}");
 }
 
 #[test]
@@ -4253,7 +4271,7 @@ fn grading_a_card_logs_its_review_gives_it_an_id_and_goes_on() {
     // Next time: cat is due in ten minutes, dog in one; nothing waits now.
     let out = probe_env(&[vault.path()], None, &open);
     assert_eq!(review_line_of(&out), "waiting мови 0", "{out}");
-    assert!(out.contains("sidebar: історія (1) | мови (0)\n"), "{out}");
+    assert!(out.contains("sidebar: Усі колоди (1) | історія (1) | мови (0)\n"), "{out}");
     // Ahead of the schedule (owner's button): dog, due in a minute, then cat, in ten;
     // graded, the review is logged as any other.
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "ahead")]);
@@ -4277,7 +4295,7 @@ fn a_deck_s_settings_limit_its_new_cards_and_move_its_intervals() {
     let (vault, out) = probe_notes(&notes, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "85|2|0")]);
     let file = vault.path().join(".knotes/decks.json");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\n  \"мови\": {\n    \"new_a_day\": 2,\n    \"retention\": 0.85,\n    \"steps\": []\n  }\n}\n", "{out}");
-    assert!(out.contains("sidebar: історія (1) | мови (2)\n"), "counted again at once: {out}");
+    assert!(out.contains("sidebar: Усі колоди (3) | історія (1) | мови (2)\n"), "counted again at once: {out}");
     assert_eq!(review_line_of(&out), "waiting мови 2", "{out}");
     // The next launch: the same, and the intervals longer (a card forgotten more often is seen less).
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show")]);
@@ -4287,7 +4305,7 @@ fn a_deck_s_settings_limit_its_new_cards_and_move_its_intervals() {
     std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
     std::fs::write(vault.path().join(".knotes/reviews/mac.tsv"), format!("{now}\tc-1\t3\n")).unwrap();
     let out = probe_env(&[vault.path()], None, &open);
-    assert!(out.contains("sidebar: історія (1) | мови (1)\n"), "{out}");
+    assert!(out.contains("sidebar: Усі колоди (2) | історія (1) | мови (1)\n"), "{out}");
     assert_eq!(review_line_of(&out), "waiting мови 1", "{out}");
     // Its steps set: a new card comes back in minutes before its days.
     let out = probe_env(&[vault.path()], None, &[open[0], ("KNOTES_PROBE_SELECT", "d:мови/німецька"), ("KNOTES_PROBE_DECK_SETTINGS", "||2, 20"), ("KNOTES_PROBE_REVIEW", "start,show")]);
@@ -4346,11 +4364,11 @@ fn a_space_s_decks_are_those_of_its_notes_cards() {
     let stats = |out: &str| out.lines().find_map(|l| l.strip_prefix("deck-stats: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
     // The whole vault: every deck, with all its cards.
     let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", ""), ("KNOTES_PROBE_SELECT", "d:мови")]);
-    assert_eq!(sidebar(&out), "дім (1) | мови (2) | робота (1)", "{out}");
+    assert_eq!(sidebar(&out), "Усі колоди (4) | дім (1) | мови (2) | робота (1)", "{out}");
     assert!(stats(&out).starts_with("Карток: 3 — нових 2, молодих 1, зрілих 0⏎"), "{out}");
     // Work: the decks its notes' cards are in, with those cards only.
     let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_SELECT", "d:мови")]);
-    assert_eq!(sidebar(&out), "мови (1) | робота (1)", "{out}");
+    assert_eq!(sidebar(&out), "Усі колоди (2) | мови (1) | робота (1)", "{out}");
     assert_eq!(review_line_of(&out), "waiting мови 1", "{out}");
     assert_eq!(list_titles(&out), ["a"], "the deck's notes in the space: {out}");
     assert!(stats(&out).starts_with("Карток: 1 — нових 1, молодих 0, зрілих 0⏎⏎Сьогодні: повторів не було⏎"), "another space's review is not its: {out}");
@@ -4358,7 +4376,7 @@ fn a_space_s_decks_are_those_of_its_notes_cards() {
     assert_eq!(review_line_of(&out), "question мови 0/1 | cat (list hidden)", "{out}");
     // Home: its own, the reviewed card not waiting but there to review ahead.
     let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "home"), ("KNOTES_PROBE_SELECT", "d:мови")]);
-    assert_eq!(sidebar(&out), "дім (1) | мови (0)", "{out}");
+    assert_eq!(sidebar(&out), "Усі колоди (1) | дім (1) | мови (0)", "{out}");
     assert!(stats(&out).starts_with("Карток: 1 — нових 0, молодих 1, зрілих 0⏎⏎Сьогодні: 1 повтор, згадано 100 %⏎"), "{out}");
     let out = probe_env(&[vault.path()], None, &[cards, ("KNOTES_PROBE_SPACE", "home"), ("KNOTES_PROBE_SELECT", "d:мови"), ("KNOTES_PROBE_REVIEW", "ahead")]);
     assert_eq!(review_line_of(&out), "question мови 0/1 | dog (list hidden)", "{out}");
@@ -4398,7 +4416,7 @@ fn a_grade_reaches_the_index_while_the_app_runs() {
     let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:історія")];
     let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start,show,4"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
     assert_eq!(review_line_of(&out), "done історія 1", "{out}");
-    assert!(out.contains("sidebar: історія (0) | мови (2)\n"), "{out}");
+    assert!(out.contains("sidebar: Усі колоди (2) | історія (0) | мови (2)\n"), "{out}");
 }
 
 #[test]
@@ -4463,7 +4481,7 @@ fn what_is_selected_in_a_note_becomes_a_card() {
     assert!(id.starts_with("c-") && id.len() == 8, "{id}");
     // Its deck is there the next time.
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards")]);
-    assert!(out.contains("sidebar: біологія (1)\n"), "{out}");
+    assert!(out.contains("sidebar: Усі колоди (1) | біологія (1)\n"), "{out}");
     // Nothing selected, or no deck given: nothing is written.
     let (vault, _) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_ACTION", "make-card=9,7")]);
     assert_eq!(std::fs::read_to_string(vault.path().join("n.md")).unwrap(), notes[0].1);

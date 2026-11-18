@@ -20,7 +20,7 @@ impl VaultWindow {
         }
         self.sidebar_waiting.set(false);
         // What it holds is knotes-app's to say (`VaultState::sidebar`).
-        let (model, rest_tags) = self.state.borrow().sidebar(strings::NEW_NOTES_FOLDER);
+        let (model, rest_tags) = self.state.borrow().sidebar(strings::NEW_NOTES_FOLDER, strings::ALL_DECKS);
         if let Some(rest_tags) = rest_tags {
             self.state.borrow_mut().rest_tags = rest_tags;
         }
@@ -73,7 +73,7 @@ impl VaultWindow {
         let title = match &state.selection {
             SidebarItem::Folder(path) => path.rsplit('/').next().unwrap_or(path).to_owned(),
             SidebarItem::Tag(tag) => format!("#{tag}"),
-            SidebarItem::Deck(deck) => deck.rsplit('/').next().unwrap_or(deck).to_owned(),
+            SidebarItem::Deck(deck) => super::cards::deck_title(deck).to_owned(),
             SidebarItem::Untagged => strings::UNTAGGED.to_owned(),
             SidebarItem::Rest => strings::REST_OF_VAULT.to_owned(),
             _ => strings::ALL_NOTES.to_owned(),

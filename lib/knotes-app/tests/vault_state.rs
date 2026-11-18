@@ -109,16 +109,20 @@ fn in_a_space_the_list_holds_its_notes_then_the_rest_and_a_deck_only_its_part() 
     assert_eq!(listed(&state), "Work/2026/Radar.md", "the deck is the space's part of it");
     // The sidebar: the space's tags, the rest's under «Решта бази» (kept for the list: a tag
     // there lists outside the space).
-    let (sidebar, rest_tags) = state.sidebar(INBOX);
+    let (sidebar, rest_tags) = state.sidebar(INBOX, "Усі колоди");
     assert_eq!(rest_tags, Some(["garden".to_owned()].into()));
     assert_eq!(sidebar.count(&SidebarItem::AllNotes), Some(2), "the space's notes");
     state.rest_tags = rest_tags.unwrap();
     state.sidebar_mode = SidebarMode::Tags;
-    assert!(state.sidebar(INBOX).0.children(None).contains(&SidebarItem::Tag("work".into())));
+    assert!(state.sidebar(INBOX, "Усі колоди").0.children(None).contains(&SidebarItem::Tag("work".into())));
     // The decks have no such row: what the sidebar held of the rest's tags stays.
     state.sidebar_mode = SidebarMode::Cards;
-    let (decks, rest_tags) = state.sidebar(INBOX);
+    let (decks, rest_tags) = state.sidebar(INBOX, "Усі колоди");
     assert_eq!((decks.count(&SidebarItem::Deck("plants".into())), rest_tags), (Some(2), None));
+    // Above the decks, all of them together: named as asked, with what they ask between them.
+    let every = SidebarItem::Deck(String::new());
+    assert_eq!((decks.children(None), decks.name(&every), decks.count(&every)), (vec![every.clone(), SidebarItem::Deck("plants".into())], "Усі колоди", Some(2)));
+    assert!(state.exists(&every, INBOX));
     // A space the vault has no more: the whole vault again.
     state.space = Some("gone".into());
     state.fit_space();
@@ -206,6 +210,13 @@ fn a_deck_asks_its_due_cards_and_the_day_s_new_ones_and_in_a_space_those_of_its_
     assert_eq!(ids(state.cards_ahead("en", NOW, 200)), "c-1", "ahead of the schedule: the one reviewed and not due");
     let tree = |state: &State, settings: &DeckSettings| state.deck_tree(&counts, settings, NOW, DAY_START).iter().map(|deck| format!("{} {}", deck.tag, deck.notes)).collect::<Vec<_>>().join(", ");
     assert_eq!(tree(&state, &all), "de 1, en 3");
+    // All the decks together (the deck ""): every deck's due and new cards, as their rows add up.
+    state.decks = Arc::new(state.deck_tree(&counts, &two, NOW, DAY_START));
+    assert_eq!(ids(state.due_cards("", &two, NOW, DAY_START, 200)), "c-5 c-2", "each deck by its own settings: en one more new today, de its one");
+    assert_eq!(ids(state.due_cards("", &all, NOW, DAY_START, 200)), "c-5 c-2 c-3 c-4");
+    assert_eq!(ids(state.due_cards("", &all, NOW, DAY_START, 2)), "c-5 c-2", "no more than asked for at once");
+    assert_eq!(ids(state.cards_ahead("", NOW, 200)), "c-1");
+    assert_eq!(state.deck_stats("", DAY_START).map(|s| s.cards), Some(5));
     assert_eq!(tree(&state, &two), "de 1, en 1", "what each still asks today");
     assert_eq!(state.deck_stats("en", DAY_START).map(|s| (s.cards, s.fresh)), Some((4, 3)));
     assert!(state.deck_stats("none", DAY_START).is_none());
@@ -215,12 +226,17 @@ fn a_deck_asks_its_due_cards_and_the_day_s_new_ones_and_in_a_space_those_of_its_
     assert_eq!(ids(state.due_cards("en", &two, NOW, DAY_START, 200)), "c-2");
     assert_eq!(ids(state.cards_ahead("en", NOW, 200)), "c-1");
     assert_eq!(tree(&state, &all), "en 2", "no German deck here");
+    state.decks = Arc::new(state.deck_tree(&counts, &all, NOW, DAY_START));
+    assert_eq!(ids(state.due_cards("", &all, NOW, DAY_START, 200)), "c-2 c-3", "all the space's decks: its notes' cards only");
+    assert_eq!(state.deck_stats("", DAY_START).map(|s| s.cards), Some(3));
     assert_eq!(state.deck_stats("en", DAY_START).map(|s| s.cards), Some(3));
     state.space = Some("work".into());
     assert_eq!(ids(state.due_cards("en", &two, NOW, DAY_START, 200)), "c-4", "none of its new cards was asked today");
     assert_eq!(ids(state.cards_ahead("en", NOW, 200)), "");
     assert_eq!(tree(&state, &all), "de 1, en 1");
     assert!(state.deck_stats("en/verbs", DAY_START).is_none(), "no card of that deck in this space");
+    // No deck at all: no row for all of them.
+    assert!(!State::default().exists(&SidebarItem::Deck(String::new()), INBOX));
     // Before the index is open: nothing, and nothing broken.
     let empty = State::default();
     assert!(empty.due_cards("en", &all, NOW, DAY_START, 200).is_empty() && empty.cards_ahead("en", NOW, 200).is_empty() && empty.deck_stats("en", DAY_START).is_none());

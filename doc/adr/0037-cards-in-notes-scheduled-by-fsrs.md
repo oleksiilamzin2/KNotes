@@ -376,3 +376,10 @@ test missed, each of them relaunching the app after a grade:
   the time, gives a card its id in the note, writes the log, and only then tells the session
   the grade is kept (a log that cannot be written leaves the review as it was). So the
   review's rules are tested without launching the app.
+- **All the decks together** (2026-11-18, the owner's request): the decks' first row, «Усі
+  колоди», with what the decks ask between them. Chosen, it lists the notes of every card and
+  its review takes every deck's cards: those due first, the longest due first, then the new
+  ones, deck by deck. Each deck's cards come by its own settings (a day's new cards are a
+  deck's, not shared out among them), so the row asks what the decks' rows add up to. It is
+  the deck `""`, which every deck is under; it has no settings of its own and no menu. In a
+  space, it is the space's decks.

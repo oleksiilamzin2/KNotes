@@ -61,7 +61,7 @@ pub use refine::{Place, Refine};
 pub use relocation::{folder_moves, in_renamed_folder, moved_into, named_after, renamed, renamed_folder};
 pub use review_session::{CardAsked, Graded, ReviewSession, card_written, would_stand};
 pub use vault_search::{SearchRequest, SearchResponse, found_documents, marked_words, search};
-pub use vault_state::{Listed, VaultState, find_folder_node, folder_exists, session_settings_key, tag_exists, tag_names};
+pub use vault_state::{Listed, VaultState, deck_exists, find_folder_node, folder_exists, session_settings_key, tag_exists, tag_names};
 pub use tab_layout::{Slot, TAB_GAP, TAB_MIN, TAB_NAMED, cross_of, cross_size, drag_tab, slots_dragged, tab_at, tab_scroll, tab_slots};
 pub use tabs::{AfterClose, TabPlace, Tabs};
 pub use tag_tree::{TagNode, count_tags, deck_tree, space_tag_trees, split_tags, suggest_tags, tag_tree};

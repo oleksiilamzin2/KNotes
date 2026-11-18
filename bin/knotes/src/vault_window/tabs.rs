@@ -19,7 +19,7 @@ impl VaultWindow {
                 let document = state.as_ref().filter(|_| deck.is_none());
                 let space = document.and_then(|state| knotes_app::space_mark(&state.spaces, state.space.as_deref(), path).map(|space| (space.color, space.name.clone())));
                 let kept_from_ai = document.is_some_and(|state| state.ai.holds(path));
-                let name = deck.map_or_else(|| document_name(path).to_owned(), |deck| deck.rsplit('/').next().unwrap_or(deck).to_owned());
+                let name = deck.map_or_else(|| document_name(path).to_owned(), |deck| super::cards::deck_title(deck).to_owned());
                 let symbol = if deck.is_some() { "rectangle.stack" } else if path.to_lowercase().ends_with(".pdf") { "doc.richtext" } else { "doc.text" };
                 crate::tab_strip::Tab { path: path.to_owned(), name, symbol, space, kept_from_ai }
             })
@@ -95,7 +95,7 @@ impl VaultWindow {
         // A deck's review comes back while the deck has cards; a document while its file is there.
         let decks = Arc::clone(&self.state.borrow().decks);
         let path = self.tabs.borrow_mut().reopen(|path| match super::cards::deck_of_tab(path) {
-            Some(deck) => tag_exists(&decks, deck),
+            Some(deck) => knotes_app::deck_exists(&decks, deck),
             None => vault.join(path).is_file(),
         });
         let Some(path) = path else { return false };
