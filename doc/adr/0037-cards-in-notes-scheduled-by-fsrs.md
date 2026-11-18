@@ -383,3 +383,23 @@ test missed, each of them relaunching the app after a grade:
   deck's, not shared out among them), so the row asks what the decks' rows add up to. It is
   the deck `""`, which every deck is under; it has no settings of its own and no menu. In a
   space, it is the space's decks.
+- **A deck's cards as a table** (2026-11-18, the owner's request: Anki's browser). A deck's
+  menu, and the menu of «Усі колоди», has «Таблиця карток»: a window of its own with a row a
+  card (its question, its deck, when it comes, its interval, its reviews and how many of them
+  forgotten), sorted by a column clicked, again the other way; cards never reviewed stand
+  last. Under the rows, the text of the card chosen as its note has it, to be changed there:
+  written with ⌘S, on choosing another row and as the window closes, in the place of what the
+  table showed, where that stands in the note now; a note changed meanwhile so that the card
+  is no longer there as shown is not written over (ADR 0035). Return, or a double click,
+  opens the card's note at the card. The table follows the vault while it shows.
+  Made to stay light with a hundred thousand cards: the index gives every card's row in one
+  query (18 ms for 100 000, measured), the rows are drawn by the view itself, those in sight
+  only, and a card's question is read from its note when its row first shows (the notes read
+  are kept, two hundred at most). `knotes_app::CardTable` sorts and finds the rows,
+  `replace_block` changes a card's text; the window draws and asks. Under it, the card chosen
+  shows as its note shows it (a note's own view and its live preview), and is typed in so.
+  Over the table, a search keeps the cards whose own text holds every word typed, any case,
+  and those of a deck named so; the title says «7 з 120». The vault's index says which notes
+  hold the words and only those are read for their cards (two thousand notes at most), after
+  a pause in the typing. Not done: several cards chosen at once, a card deleted or moved to
+  another deck from there.

@@ -3,7 +3,7 @@
 
 use knotes_app::ReviewSession;
 use knotes_cards::{DeckSettings, Grade, asks, card_id, give_id, make_card, review_line, taken_back_line};
-use knotes_core::{CardIndex, CardState, DueCard};
+use knotes_core::{CardIndex, CardRow, CardState, DueCard};
 
 use super::*;
 use crate::review_view::{Asked, Shown};
@@ -261,16 +261,107 @@ impl VaultWindow {
             Asked::Link(knotes_cards::CardLink::Web(address)) => super::links::open_url(&address),
             Asked::OpenNote => {
                 let at = self.review.borrow().as_ref().and_then(|r| r.current()).map(|c| (c.card.path.clone(), c.card.start as usize));
-                if let Some((path, start)) = at
-                    && self.open_note(&path, true)
-                {
-                    let text = self.note_text.string().to_string();
-                    let offset = knotes_editor::utf16_offsets(&text, &[start.min(text.len())])[0];
-                    self.note_text.setSelectedRange(NSRange::new(offset, 0));
-                    self.scroll_note_to(offset);
+                if let Some((path, start)) = at {
+                    self.open_card(&path, start);
                 }
             }
         }
+    }
+
+    /// The note at `path` opened with the cursor at the card written at `start` of it (bytes).
+    fn open_card(&self, path: &str, start: usize) {
+        if self.open_note(path, true) {
+            let text = self.note_text.string().to_string();
+            let offset = knotes_editor::utf16_offsets(&text, &[start.min(text.len())])[0];
+            self.note_text.setSelectedRange(NSRange::new(offset, 0));
+            self.scroll_note_to(offset);
+        }
+    }
+
+    /// A deck's menu → «Таблиця карток» (ADR 0037): the cards of `deck` and those under it (of
+    /// every deck, for `""`), in a window of their own, each to be read and changed there.
+    pub(super) fn show_deck_table(&self, deck: &str) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        // What is typed in the note open is written first: the table reads the notes' files.
+        let _ = self.write_all();
+        if self.card_table.borrow().is_none() {
+            let table = crate::card_table_window::CardTableWindow::new(mtm);
+            let (reads, saves, opens, finds) = (self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone(), self.this.borrow().clone());
+            table.on(
+                move |path| reads.upgrade().and_then(|window| window.vault()).and_then(|vault| FsVault::new(&vault).read_utf8(path).ok()),
+                move |row, was, typed| saves.upgrade().map_or(Err(String::new()), |window| window.save_card(row, was, typed)),
+                move |row| {
+                    if let Some(window) = opens.upgrade() {
+                        window.open_card(&row.path, row.start as usize);
+                        window.window.makeKeyAndOrderFront(None);
+                    }
+                },
+                move |query| finds.upgrade().map(|window| window.notes_holding(query)).unwrap_or_default(),
+            );
+            *self.card_table.borrow_mut() = Some(table);
+        }
+        let rows = {
+            let mut state = self.state.borrow_mut();
+            self.ensure_reader(&mut state);
+            state.card_rows(deck)
+        };
+        if let Some(table) = self.card_table.borrow().as_ref() {
+            table.show(&deck_named(deck), rows);
+        }
+        *self.card_table_deck.borrow_mut() = Some(deck.to_owned());
+    }
+
+    /// The notes the vault's index finds `query`'s words in, as the vault's search finds text
+    /// (a word by its start, in any form). For the table's search, which reads them for the
+    /// cards holding the words.
+    fn notes_holding(&self, query: &str) -> Vec<String> {
+        use knotes_core::{ContentQuery, ContentSearch, Within};
+        // shortcut: the first 2 000 notes found are read; a word in more notes than that shows
+        // the cards of those. Keep the cards' text in the index when someone meets it.
+        const MOST: usize = 2_000;
+        let mut state = self.state.borrow_mut();
+        self.ensure_reader(&mut state);
+        let hits = state.reader.as_ref().and_then(|reader| reader.search(&ContentQuery { text: query, within: Within::Note, prefixes: true, scope: None, limit: MOST }).ok()).unwrap_or_default();
+        let mut notes: Vec<String> = hits.into_iter().map(|hit| hit.path).collect();
+        notes.sort();
+        notes.dedup();
+        notes
+    }
+
+    /// The table's cards as the vault has them now, while its window shows.
+    pub(super) fn reload_deck_table(&self) {
+        let Some(deck) = self.card_table_deck.borrow().clone() else { return };
+        let table = self.card_table.borrow();
+        let Some(table) = table.as_ref().filter(|table| table.shown().is_some()) else { return };
+        let rows = {
+            let mut state = self.state.borrow_mut();
+            self.ensure_reader(&mut state);
+            state.card_rows(&deck)
+        };
+        table.reload(rows);
+    }
+
+    /// A card's text changed in the table: written in its note, in the place of what the table
+    /// showed (`was`), where that stands now. Not written over a note that changed meanwhile
+    /// so that the card is no longer there as shown (ADR 0035). Says a failure, and gives it.
+    fn save_card(&self, row: &CardRow, was: &str, typed: &str) -> Result<(), String> {
+        let Some(vault) = self.vault() else { return Err(String::new()) };
+        let files = FsVault::new(&vault);
+        // What is typed in that note here is written first, not written over.
+        let _ = self.write_all();
+        let written = files.read_utf8(&row.path).map_err(|e| e.to_string()).and_then(|text| {
+            let changed = knotes_app::replace_block(&text, row.start as usize, was, typed).ok_or_else(|| strings::CARD_CHANGED_MEANWHILE.to_owned())?;
+            files.write_note(&row.path, &changed).map_err(|e| e.to_string())
+        });
+        if let Err(e) = &written {
+            self.tell_failed(strings::CARD_NOT_SAVED, e);
+        }
+        written
+    }
+
+    /// The table's window, for the probe.
+    pub fn deck_table(&self) -> std::cell::Ref<'_, Option<crate::card_table_window::CardTableWindow>> {
+        self.card_table.borrow()
     }
 
     /// The next card of the review that is still written where the index found it; none left,

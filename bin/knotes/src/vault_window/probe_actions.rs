@@ -29,6 +29,28 @@ impl VaultWindow {
         {
             self.set_deck(&deck);
         }
+        // `KNOTES_PROBE_DECK_TABLE=мови` (`""`: all the decks): the deck's menu → «Таблиця
+        // карток»; `KNOTES_PROBE_DECK_TABLE_SORT=due,due`: clicks on columns' names;
+        // `KNOTES_PROBE_DECK_TABLE_EDIT=1=new text`: that row chosen, its card's text typed
+        // over and ⌘S.
+        if let Ok(deck) = std::env::var("KNOTES_PROBE_DECK_TABLE") {
+            self.show_deck_table(&deck);
+            if let Some(table) = self.deck_table().as_ref() {
+                // `KNOTES_PROBE_DECK_TABLE_FIND=cat`: typed in the table's search.
+                if let Ok(query) = std::env::var("KNOTES_PROBE_DECK_TABLE_FIND") {
+                    table.probe_find(&query);
+                }
+                for column in std::env::var("KNOTES_PROBE_DECK_TABLE_SORT").unwrap_or_default().split(',').filter(|c| !c.is_empty()) {
+                    table.probe_sort(column);
+                }
+                println!("deck-table: {}", table.describe());
+                if let Some((row, text)) = std::env::var("KNOTES_PROBE_DECK_TABLE_EDIT").ok().as_deref().and_then(|spec| spec.split_once('=')) {
+                    let written = table.probe_edit(row.parse().unwrap_or(0), &text.replace("\\n", "\n"));
+                    println!("deck-table-edit: {}", if written { "written" } else { "not written" });
+                    println!("deck-table-after: {}", table.describe());
+                }
+            }
+        }
         // `KNOTES_PROBE_REVIEW=start,show,3`: clicks in a deck's review (ADR 0037).
         if let Ok(clicks) = std::env::var("KNOTES_PROBE_REVIEW") {
             self.probe_review(&clicks);

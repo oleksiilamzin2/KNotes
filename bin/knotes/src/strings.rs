@@ -329,6 +329,28 @@ pub const CLOSE_TAB: &str = "Закрити вкладку";
 pub const NEXT_TAB: &str = "Наступна вкладка";
 pub const PREVIOUS_TAB: &str = "Попередня вкладка";
 pub const REOPEN_TAB: &str = "Відкрити закриту вкладку";
+/// A deck's menu: its cards as a table, in a window of its own (ADR 0037).
+pub const DECK_TABLE: &str = "Таблиця карток";
+pub const CARD_COLUMNS: [&str; 6] = ["Питання", "Колода", "Коли", "Інтервал", "Повторів", "Забуто"];
+pub const CARD_NEW: &str = "нова";
+pub const CARD_NOW: &str = "зараз";
+pub const CARD_LEARNING: &str = "вивчається";
+pub const CARD_SAVE: &str = "Зберегти";
+/// When a card comes: "через 3 д".
+pub fn card_in(wait: &str) -> String {
+    format!("через {wait}")
+}
+/// Where the card chosen is written: "Мови · мови/англійська".
+pub fn card_place(note: &str, deck: &str) -> String {
+    format!("{note} · {deck}")
+}
+/// The table's window: "Картки: мови — 120"; while a search shows a part, "… — 7 з 120".
+pub fn cards_table_title(deck: &str, shown: usize, cards: usize) -> String {
+    if shown == cards { format!("Картки: {deck} — {cards}") } else { format!("Картки: {deck} — {shown} з {cards}") }
+}
+pub const CARD_SEARCH_HINT: &str = "Слова з картки або назва колоди";
+pub const CARD_NOT_SAVED: &str = "Не вдалося записати картку";
+pub const CARD_CHANGED_MEANWHILE: &str = "нотатка змінилась, і картки в ній уже немає такою, як її показано; закрийте й відкрийте таблицю знову";
 /// The decks' first row, and its review's name: every deck together.
 pub const ALL_DECKS: &str = "Усі колоди";
 /// "Вкладка 3".

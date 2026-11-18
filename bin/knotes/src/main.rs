@@ -3,6 +3,7 @@
 mod ai_mark;
 mod app_delegate;
 mod chat_bubble;
+mod card_table_window;
 mod chat_panel;
 mod collapse_observer;
 mod connections_panel;

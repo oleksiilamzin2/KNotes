@@ -304,6 +304,16 @@ impl<R: CardIndex, L> VaultState<R, L> {
         Some(rows)
     }
 
+    /// Every card of `deck` and the decks under it (of all the decks, for `""`), by note and in
+    /// the note's order; in a space, those of its notes. With where each stands: a deck's table.
+    pub fn card_rows(&self, deck: &str) -> Vec<CardRow> {
+        let mut rows = self.reader.as_ref().and_then(|r| r.card_rows((!deck.is_empty()).then_some(deck), None).ok()).unwrap_or_default();
+        if let Some(id) = &self.space {
+            rows.retain(|row| self.spaces.holds(&row.path, id));
+        }
+        rows
+    }
+
     /// The cards `deck` asks now, `limit` at most: those due, and of the new as many as it
     /// still asks today by its settings (what its settings allow a day, less those first
     /// reviewed today in it and under it). Asked of the index, not as the last snapshot had it:

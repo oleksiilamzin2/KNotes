@@ -890,6 +890,10 @@ pub fn schedule(with_sidebar: bool) {
                         render_png(&search, &path.to_string_lossy());
                     }
                 }
+                // A deck's table: its picture when asked.
+                if let (Some(path), Some(table)) = (std::env::var_os("KNOTES_PROBE_DECK_TABLE_PNG"), window.deck_table().as_ref().and_then(|table| table.window())) {
+                    render_png(&table, &path.to_string_lossy());
+                }
                 if let (Some(path), Some(settings)) = (std::env::var_os("KNOTES_PROBE_SETTINGS_PNG"), crate::settings_window::probe_window()) {
                     render_png(&settings, &path.to_string_lossy());
                 }

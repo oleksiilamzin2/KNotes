@@ -179,6 +179,15 @@ fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Resul
     rows.push(measure(&of("Review: the cards ahead"), MS(50), &decks, |deck| index.cards_ahead(deck, now, 200).map_or(0, |c| c.len())));
     rows.push(measure(&of("Statistics"), MS(100), &decks, |deck| index.deck_stats(deck, today, &|_| true).map_or(0, |s| s.cards)));
     rows.push(measure(&of("The deck's notes"), MS(50), &decks, |deck| index.deck_notes(deck).map_or(0, |n| n.len())));
+    // A deck's table (ADR 0037): every card's row read, and sorted by a column. Its rows are
+    // drawn as they show, so its opening is these two.
+    let every = [String::new()];
+    rows.push(measure(&format!("Cards' table: every card's row ({} cards)", all.len()), MS(300), &every, |_| index.card_rows(None, None).map_or(0, |rows| rows.len())));
+    let mut table = knotes_app::CardTable::new(all.clone());
+    rows.push(measure("Cards' table: sorted by a column", MS(100), &every, |_| {
+        table.sort_by(knotes_app::CardColumn::Due);
+        table.rows().len()
+    }));
 
     // A space's part: the cards of the notes in the first half of the top folders.
     let mut folders: Vec<&str> = all.iter().filter_map(|row| row.path.split_once('/').map(|(folder, _)| folder)).collect();

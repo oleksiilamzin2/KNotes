@@ -53,18 +53,18 @@ pub enum Kind {
     Meaning,
 }
 
-fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
+pub(crate) fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
 }
 
-fn attributes(font: &NSFont, colour: &NSColor) -> Retained<NSDictionary<NSString, AnyObject>> {
+pub(crate) fn attributes(font: &NSFont, colour: &NSColor) -> Retained<NSDictionary<NSString, AnyObject>> {
     // SAFETY: AppKit's attribute name constants live for the whole process.
     let keys = unsafe { [NSFontAttributeName, NSForegroundColorAttributeName] };
     NSDictionary::from_slices(&keys, &[font.as_ref() as &AnyObject, colour.as_ref()])
 }
 
 /// `text` cut with «…» to `room` points in `font`.
-fn fitted(text: &str, font: &NSFont, room: f64) -> String {
+pub(crate) fn fitted(text: &str, font: &NSFont, room: f64) -> String {
     let width = |text: &str| unsafe { NSString::from_str(text).sizeWithAttributes(Some(&attributes(font, &NSColor::labelColor()))) }.width;
     if width(text) <= room {
         return text.to_owned();

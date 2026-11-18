@@ -4218,6 +4218,45 @@ fn review_line_of(out: &str) -> &str {
 }
 
 #[test]
+fn a_deck_s_cards_show_as_a_table_and_a_card_s_text_is_changed_there() {
+    let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{name}: {out}")).to_owned();
+    // A deck's menu → «Таблиця карток»: its cards and those under it, as their notes have
+    // them, the first chosen with its text below.
+    let (vault, out) = probe_notes(&CARD_NOTES, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_DECK_TABLE", "мови")]);
+    assert_eq!(
+        line(&out, "deck-table: "),
+        "Картки: мови — 2 (2 cards, as written): [cat · мови/англійська · нова] | dog · мови/англійська · нова ~ #@мови/англійська cat::кіт ^c-1",
+        "{out}"
+    );
+    // All the decks together, sorted by their decks; the second card's text typed over and
+    // written: its note has it, the rest of the note as it was, and the row says the new
+    // question. The card after it in the note is still found (it has no id: by its place).
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_DECK_TABLE", ""), ("KNOTES_PROBE_DECK_TABLE_SORT", "deck"), ("KNOTES_PROBE_DECK_TABLE_EDIT", "1=#@мови/англійська кішка::cat ^c-1")]);
+    assert!(line(&out, "deck-table: ").starts_with("Картки: Усі колоди — 3 (3 cards, Deck up): [Коли була битва? · історія · нова] | cat · мови/англійська · нова | dog · "), "{out}");
+    assert_eq!(line(&out, "deck-table-edit: "), "written", "{out}");
+    assert!(line(&out, "deck-table-after: ").contains("| [кішка · мови/англійська · нова] | dog · мови/англійська · нова ~ #@мови/англійська кішка::cat ^c-1"), "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Мови.md")).unwrap(), "Слова.\n\n#@мови/англійська кішка::cat ^c-1\n\n#@мови/англійська dog::пес\n");
+    // A reviewed card says when it comes and how it stands; sorted by its reviews, it is first
+    // and the new ones after it.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
+    assert!(review_line_of(&out).starts_with("question мови 1/1 | dog"), "{out}");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_DECK_TABLE", "мови"), ("KNOTES_PROBE_DECK_TABLE_SORT", "reviews")]);
+    let table = line(&out, "deck-table: ");
+    assert!(table.contains("Reviews up): [кішка · мови/англійська · через ") && table.contains(" · 1 · 0] | dog · мови/англійська · нова"), "{table}");
+    // The search over the table: the cards whose own text holds the words (the other card of
+    // the same note does not), or of a deck named so; the title says how many of how many.
+    let find = |query: &str| line(&probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_DECK_TABLE", ""), ("KNOTES_PROBE_DECK_TABLE_FIND", query)]), "deck-table: ");
+    assert!(find("пес").starts_with("Картки: Усі колоди — 1 з 3 (1 cards, as written): [dog · мови/англійська · нова] ~ #@мови/англійська dog::пес"), "{}", find("пес"));
+    assert!(find("ІСТОР").starts_with("Картки: Усі колоди — 1 з 3 (1 cards, as written): [Коли була битва? · історія · "), "a deck by its name, any case: {}", find("ІСТОР"));
+    assert!(find("битва 1659").contains("— 1 з 3 "), "every word, anywhere in the card: {}", find("битва 1659"));
+    assert_eq!(find("zzz"), "Картки: Усі колоди — 0 з 3 (0 cards, as written):  ~ ");
+    // A deck with no cards under that name: an empty table, nothing to change.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_DECK_TABLE", "немає"), ("KNOTES_PROBE_DECK_TABLE_EDIT", "0=x")]);
+    assert_eq!(line(&out, "deck-table: "), "Картки: немає — 0 (0 cards, as written):  ~ ", "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("Мови.md")).unwrap().matches("кішка").count(), 1);
+}
+
+#[test]
 fn the_decks_first_row_reviews_all_of_them_together() {
     // Above the decks, «Усі колоди», with what they ask between them; chosen, its review takes
     // every deck's cards, in a tab of that name.

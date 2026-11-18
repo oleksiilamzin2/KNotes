@@ -192,6 +192,10 @@ pub struct VaultWindow {
     search_worker: RefCell<Option<SearchWorker>>,
     /// The vault's search window, made when first asked for.
     search_window: RefCell<Option<crate::search_window::SearchWindow>>,
+    /// A deck's cards as a table, in a window of its own (ADR 0037): made when first asked for.
+    card_table: RefCell<Option<crate::card_table_window::CardTableWindow>>,
+    /// The deck whose cards the table shows.
+    card_table_deck: RefCell<Option<String>>,
     search_generation: Cell<u64>,
     search_results: RefCell<Option<SearchResponse>>,
     /// The paths a search of the shown list covers (`None`: all notes).
@@ -398,6 +402,8 @@ impl VaultWindow {
             accepting: Cell::new(false),
             search_worker: RefCell::new(None),
             search_window: RefCell::new(None),
+            card_table: RefCell::new(None),
+            card_table_deck: RefCell::new(None),
             search_generation: Cell::new(0),
             search_results: RefCell::new(None),
             search_scope: RefCell::new(None),
@@ -614,6 +620,12 @@ impl VaultWindow {
         this.list.on_ai(move |path| {
             if let Some(window) = weak_ai.upgrade() {
                 window.toggle_ai(&path);
+            }
+        });
+        let weak_table: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_deck_table(move |deck| {
+            if let Some(window) = weak_table.upgrade() {
+                window.show_deck_table(&deck);
             }
         });
         let weak_deck: Weak<Self> = Rc::downgrade(&this);
@@ -1008,6 +1020,8 @@ impl VaultWindow {
         }
         self.show_tabs();
         self.rebuild_sidebar();
+        // A deck's table, while it shows, follows the vault.
+        self.reload_deck_table();
         if !self.tabs_restored.replace(true) {
             self.restore_tabs();
         }
