@@ -78,7 +78,13 @@ pub fn scan_cards(text: &str) -> Vec<Card> {
             close(text, &mut open, &mut cards);
             open.push(range);
         } else if !open.is_empty() {
-            open.push(range);
+            if ends_card(&text[open[0].clone()], content) {
+                // The next item of the list, or a heading: no line of the card's (it was taken
+                // into its answer, and the card's id written at that line's end).
+                close(text, &mut open, &mut cards);
+            } else {
+                open.push(range);
+            }
         }
     }
     close(text, &mut open, &mut cards);
@@ -157,6 +163,18 @@ fn parts_of(text: &str, card: &Card) -> Option<CardParts> {
         marks.push(within(brace..brace + 1));
     }
     Some(CardParts { span: card.span.clone(), deck: within(mark..deck_end), question: question.map(within), marks })
+}
+
+/// Whether `line` ends the card that `first` (its first line) opened, with no blank line
+/// between: a heading does; so does a list item, when the card is one itself, at its depth or
+/// above (a list inside a card's answer is the answer's, as is an item nested under the card's).
+fn ends_card(first: &str, line: &str) -> bool {
+    let indent = |text: &str| text.len() - text.trim_start().len();
+    let item = |text: &str| after_marker(text).len() != text.trim_start().len();
+    let trimmed = line.trim_start();
+    let hashes = trimmed.bytes().take_while(|b| *b == b'#').count();
+    let heading = (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ');
+    heading || item(first) && item(line) && indent(line) <= indent(first)
 }
 
 /// Where the frontmatter ends (0 without one): the `---` lines the text starts with.

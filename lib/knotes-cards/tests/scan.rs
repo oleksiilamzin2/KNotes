@@ -64,3 +64,23 @@ fn a_card_in_braces_holds_several_paragraphs() {
     let two: Vec<String> = scan_cards("#@a{\nq\n?\na\n}\n#@b q2::a2").into_iter().map(|c| c.deck).collect();
     assert_eq!(two, ["a", "b"]);
 }
+
+#[test]
+fn a_list_item_s_card_ends_at_the_next_item_and_any_card_at_a_heading() {
+    // The item after a card's is not its answer.
+    let cards = scan_cards("- #@a q::a\n- plain item\n- another");
+    assert_eq!(cards.len(), 1);
+    assert_eq!((cards[0].back.as_str(), cards[0].span.clone()), ("a", 0..10), "it ends with its own line");
+    // Its own lines stay its: the answer under a `?`, an item nested under it.
+    let cards = scan_cards("- #@a Що це?\n  ?\n  Відповідь.\n  - вкладений пункт\n- інший пункт");
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].back, "Відповідь.\n  - вкладений пункт");
+    // A card that is no list item keeps a list in its answer.
+    let cards = scan_cards("#@a Назвіть два:\n?\n- перший\n- другий\n\nдалі");
+    assert_eq!(cards[0].back, "- перший\n- другий");
+    // A heading right under a card is no line of it; a `#tag` and a `#@deck` are no headings.
+    let cards = scan_cards("#@a q::a\n## Розділ\nтекст");
+    assert_eq!((cards.len(), cards[0].back.as_str()), (1, "a"));
+    let cards = scan_cards("#@a Питання\n?\nвідповідь\n#тег у відповіді\n#@b q2::a2");
+    assert_eq!((cards.len(), cards[0].back.as_str()), (2, "відповідь\n#тег у відповіді"));
+}

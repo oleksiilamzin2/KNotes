@@ -340,3 +340,9 @@ test missed, each of them relaunching the app after a grade:
   It says so now and writes nothing (`DeckSettings::read`: none for a damaged text; the
   schedule still goes on by the defaults, `parse`), and the file is written as a note is, on
   the disk before it takes the old one's place (ADR 0035).
+- **A list item's card took the next item into its answer** (finding 9): every line after a
+  card, up to a blank one, was the card's, so `- #@a q::a` over `- plain item` answered with
+  both, and the card's id was written at the plain item's end. A card that is a list item
+  ends now at the next item of its depth or above, and any card at a heading (`ends_card`). A
+  list inside the answer of a card that is no item, and an item nested under a card's, stay
+  the card's.

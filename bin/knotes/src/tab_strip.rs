@@ -142,12 +142,16 @@ define_class!(
 
         #[unsafe(method(closeTab:))]
         fn close_tab(&self, item: &NSMenuItem) {
-            self.close(item.tag() as usize);
+            if let Some(tab) = self.menu_tab(item) {
+                self.close(tab);
+            }
         }
 
         #[unsafe(method(closeOtherTabs:))]
         fn close_other_tabs(&self, item: &NSMenuItem) {
-            self.close_others(item.tag() as usize);
+            if let Some(tab) = self.menu_tab(item) {
+                self.close_others(tab);
+            }
         }
     }
 );
@@ -235,12 +239,23 @@ impl TabStrip {
         for (title, action) in [(strings::CLOSE_TAB, sel!(closeTab:)), (strings::CLOSE_OTHER_TABS, sel!(closeOtherTabs:))] {
             // SAFETY: the strip outlives its menu and takes the action.
             let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(self.mtm()), &NSString::from_str(title), Some(action), ns_string!("")) };
-            // SAFETY: as above.
-            unsafe { item.setTarget(Some(self)) };
-            item.setTag(tab as isize);
+            // The tab by its document, not its number: the tabs may change while the menu is
+            // open (a file gone, ⌘W), and the number would then be another tab's.
+            let path = self.ivars().tabs.borrow().get(tab).map(|t| NSString::from_str(&t.path));
+            // SAFETY: as above; a string is a represented object.
+            unsafe {
+                item.setTarget(Some(self));
+                item.setRepresentedObject(path.as_deref().map(|p| p.as_ref()));
+            }
             menu.addItem(&item);
         }
         Some(menu)
+    }
+
+    /// The tab a menu's item was made for, where it is now; none when it is gone.
+    fn menu_tab(&self, item: &NSMenuItem) -> Option<usize> {
+        let path = item.representedObject()?.downcast::<NSString>().ok()?.to_string();
+        self.tab_of(&path)
     }
 
     /// Called with the tab clicked, the tab closed, and the tab all others close for.
@@ -260,6 +275,12 @@ impl TabStrip {
     pub fn set(&self, tabs: Vec<Tab>, current: Option<usize>) {
         if *self.ivars().tabs.borrow() == tabs && self.ivars().current.get() == current {
             return;
+        }
+        // Other tabs: a press or a drag under way was of a tab by its number, which may be
+        // another's now. It is dropped (a tab let go after that moved the wrong one).
+        if *self.ivars().tabs.borrow() != tabs {
+            self.ivars().pressed.set(None);
+            self.ivars().dragged.set(None);
         }
         *self.ivars().tabs.borrow_mut() = tabs;
         self.ivars().current.set(current);
