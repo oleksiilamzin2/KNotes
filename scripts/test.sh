@@ -33,7 +33,7 @@ if [ "${1:-}" = all ]; then
     [ "$status" -ne 0 ] || passed > target/test-all.count
     # What failed and why, then each test binary's time (the window's is the long one).
     grep -E ' \.\.\. FAILED$|panicked|left:|right:|^error' "$log" || true
-    grep -E '^test result' "$log" | sed -E 's/.*finished in ([0-9.]+)s/\1/' | sort -rn | head -3 | sed 's/^/longest test binaries, s: /' | paste -s -d' ' -
+    grep -E '^test result' "$log" | sed -E 's/.*finished in ([0-9.]+)s/\1/' | sort -rn | head -3 | paste -s -d' ' - | sed 's/^/longest test binaries, s: /'
     echo "passed $(passed), failed $(failed), $(grep '^took ' "$log")"
     exit "$status"
 fi
