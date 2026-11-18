@@ -28,6 +28,7 @@ serde_json = "1.0.154"
 knotes-search = { path = "lib/knotes-search" }
 knotes-indexer = { path = "lib/knotes-indexer" }
 knotes-app = { path = "lib/knotes-app" }
+knotes-assistant = { path = "lib/knotes-assistant" }
 knotes-session = { path = "lib/knotes-session" }
 knotes-editor = { path = "lib/knotes-editor" }
 knotes-pdf = { path = "lib/knotes-pdf" }

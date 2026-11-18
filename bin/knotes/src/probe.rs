@@ -1050,11 +1050,11 @@ fn tabs_requested(window: &VaultWindow) {
         let n: Vec<usize> = m.split('/').filter_map(|p| p.parse().ok()).collect();
         (n.len() == 3).then(|| (n[0], n[1], n[2]))
     }) {
-        crate::meaning::report(std::path::Path::new("/probe"), knotes_vectors::Progress { done, total, passages });
+        knotes_assistant::meaning::report(std::path::Path::new("/probe"), knotes_vectors::Progress { done, total, passages });
     }
     // `KNOTES_PROBE_MEANING_FAILING=why`: search by meaning's last request failed for that.
     if let Ok(why) = std::env::var("KNOTES_PROBE_MEANING_FAILING") {
-        crate::meaning::probe_fail(&why);
+        knotes_assistant::meaning::probe_fail(&why);
     }
     // `KNOTES_PROBE_SETTINGS=1`: the settings window shown; `KNOTES_PROBE_SETTINGS_MEANING=off`
     // (or a model's key): that chosen for search by meaning, as a click in its menu would.

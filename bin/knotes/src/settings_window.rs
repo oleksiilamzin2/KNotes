@@ -106,7 +106,7 @@ pub fn show(mtm: MainThreadMarker, vault: Option<PathBuf>) {
         let settings = shown.get_or_insert_with(|| make(mtm));
         settings.spaces.set_vault(vault.clone());
         settings.trash.set_vault(vault);
-        let tag = crate::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
+        let tag = knotes_assistant::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
         settings.popup.selectItemWithTag(tag);
         refresh(settings);
         settings.window.makeKeyAndOrderFront(None);
@@ -165,9 +165,9 @@ fn tick() {
 
 /// Each model's stored vectors as they are on disk now, and those being made.
 fn refresh(settings: &Settings) {
-    let in_use = crate::meaning::model();
+    let in_use = knotes_assistant::meaning::model();
     for CacheRow { model, size, clear, regenerate } in &settings.caches {
-        let bytes = crate::meaning::cache_size(*model);
+        let bytes = knotes_assistant::meaning::cache_size(*model);
         size.setStringValue(&NSString::from_str(&if bytes == 0 { strings::SETTINGS_CACHE_NONE.to_string() } else { strings::file_size(bytes) }));
         // The model in use is made again rather than cleared (cleared, it would be anyway): its
         // row shows «Перегенерувати», the others «Очистити».
@@ -176,9 +176,9 @@ fn refresh(settings: &Settings) {
         clear.setEnabled(bytes > 0);
         regenerate.setHidden(!used);
     }
-    match (in_use, crate::meaning::making()) {
+    match (in_use, knotes_assistant::meaning::making()) {
         // A pass under way works; one that failed said so in its place.
-        (Some(_), None) if let Some(why) = crate::meaning::failing() => {
+        (Some(_), None) if let Some(why) = knotes_assistant::meaning::failing() => {
             settings.status.setStringValue(&NSString::from_str(&strings::settings_meaning_failing(&why)));
             settings.progress.setHidden(true);
         }
@@ -202,8 +202,8 @@ fn refresh(settings: &Settings) {
 /// `model`'s stored vectors removed; the windows open fresh stores when it is the one in use
 /// (its vectors are embedded again in the background: «Перегенерувати»).
 fn cleared(model: MeaningModel) {
-    crate::meaning::clear_cache(model);
-    if crate::meaning::model() == Some(model) {
+    knotes_assistant::meaning::clear_cache(model);
+    if knotes_assistant::meaning::model() == Some(model) {
         ON_MEANING.with(|c| {
             if let Some(callback) = c.borrow().as_ref() {
                 callback();
@@ -219,10 +219,10 @@ fn cleared(model: MeaningModel) {
 
 fn chosen(tag: isize) {
     let model = if tag == OFF_TAG { None } else { usize::try_from(tag).ok().and_then(|i| MeaningModel::ALL.get(i).copied()) };
-    if model == crate::meaning::model() {
+    if model == knotes_assistant::meaning::model() {
         return;
     }
-    crate::meaning::choose(model);
+    knotes_assistant::meaning::choose(model);
     ON_MEANING.with(|c| {
         if let Some(callback) = c.borrow().as_ref() {
             callback();

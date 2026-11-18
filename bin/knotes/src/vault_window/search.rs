@@ -131,7 +131,7 @@ impl VaultWindow {
         };
         // Search by meaning asked: its model loads while the query is still being typed.
         if mode == knotes_app::SearchMode::Meaning
-            && let Some(embedder) = crate::meaning::embedder()
+            && let Some(embedder) = knotes_assistant::meaning::embedder()
         {
             embedder.warm();
         }
@@ -151,7 +151,7 @@ impl VaultWindow {
             *self.search_worker.borrow_mut() = Some(worker);
         }
         if let Some(worker) = self.search_worker.borrow().as_ref() {
-            let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
+            let closeness = knotes_assistant::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
             let (scope, space) = scope;
             worker.request(SearchRequest { generation, mode, query, scope, titles, closeness, space, ignore_case: self.search_bar.ignore_case(), names_too: false, refine: Default::default(), spaces: None });
         }

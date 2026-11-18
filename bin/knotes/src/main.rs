@@ -3,9 +3,7 @@
 mod ai_mark;
 mod app_delegate;
 mod chat_bubble;
-mod chat_eval;
 mod chat_panel;
-mod chat_worker;
 mod collapse_observer;
 mod connections_panel;
 mod connections_worker;
@@ -17,7 +15,6 @@ mod preview_fragment;
 mod list_menu;
 mod live_preview;
 mod main_menu;
-mod meaning;
 mod note_embeds;
 mod note_list_view;
 mod note_view;

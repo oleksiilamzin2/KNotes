@@ -389,7 +389,7 @@ impl VaultWindow {
         let list_menu = ListMenu::new(mtm);
         let toolbar = ToolbarDelegate::new(mtm, split.splitView(), list_menu.menu.clone());
         search_bar.set_target(toolbar.as_ref());
-        search_bar.set_meaning_on(crate::meaning::model().is_some());
+        search_bar.set_meaning_on(knotes_assistant::meaning::model().is_some());
         let tab_strip = crate::tab_strip::TabStrip::new(mtm);
         toolbar::install(&window, &toolbar, &search_bar.field, &tab_strip);
         let state = State {
@@ -919,7 +919,7 @@ impl VaultWindow {
     /// (by file names, when search by meaning is off).
     pub fn meaning_changed(&self) {
         self.chat.meaning_changed();
-        let on = crate::meaning::model().is_some();
+        let on = knotes_assistant::meaning::model().is_some();
         self.search_bar.set_meaning_on(on);
         let query = self.search_bar.field.stringValue().to_string();
         if parse_search(&query).0 == SearchMode::Meaning {

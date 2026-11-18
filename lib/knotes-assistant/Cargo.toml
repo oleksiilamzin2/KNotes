@@ -1,0 +1,23 @@
+[package]
+name = "knotes-assistant"
+description = "The chat's turns and the vault's vectors off the main thread, and the model chosen for search by meaning (ADR 0027, 0028, 0029)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knotes-chat.workspace = true
+knotes-core.workspace = true
+knotes-embed.workspace = true
+knotes-index.workspace = true
+knotes-pdf.workspace = true
+knotes-session.workspace = true
+knotes-tools.workspace = true
+knotes-vault.workspace = true
+knotes-vectors.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+knotes-md.workspace = true
+tempfile.workspace = true

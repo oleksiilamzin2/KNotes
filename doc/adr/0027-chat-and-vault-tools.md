@@ -341,3 +341,8 @@ plan usage for open-source and local apps) on 2026-11-14:
 - The window test of the chat's check (`KNOTES_CHAT_EVAL`) reported after a fixed 2.5 s and
   failed once on a busy Mac, the answers not yet written (finding 18): the probe's report
   waits now for the check's «Готово» (half a minute at most).
+- **The chat's thread is outside the app's binary** (2026-11-18): `knotes-assistant` holds the
+  thread that runs the turns, the thread that keeps the vault's vectors up to its index, the
+  model chosen for search by meaning with its helper (ADR 0028, 0029), and the run of the
+  test questions. None of it draws or asks AppKit anything: the app gives it the system's
+  time zone and takes back the events of a turn. The app's binary is the windows.

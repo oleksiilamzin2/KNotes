@@ -567,6 +567,7 @@ dependencies = [
  "dispatch2",
  "knotes-alloc",
  "knotes-app",
+ "knotes-assistant",
  "knotes-cards",
  "knotes-chat",
  "knotes-core",
@@ -579,7 +580,6 @@ dependencies = [
  "knotes-session",
  "knotes-spaces",
  "knotes-synth",
- "knotes-tools",
  "knotes-vault",
  "knotes-vectors",
  "objc2",
@@ -609,6 +609,24 @@ dependencies = [
  "knotes-search",
  "knotes-spaces",
  "knotes-tools",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "knotes-assistant"
+version = "0.1.0"
+dependencies = [
+ "knotes-chat",
+ "knotes-core",
+ "knotes-embed",
+ "knotes-index",
+ "knotes-md",
+ "knotes-pdf",
+ "knotes-session",
+ "knotes-tools",
+ "knotes-vault",
+ "knotes-vectors",
  "serde_json",
  "tempfile",
 ]

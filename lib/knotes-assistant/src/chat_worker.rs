@@ -68,7 +68,9 @@ pub struct ChatWorker {
 }
 
 impl ChatWorker {
-    pub fn new(account: Arc<Account>) -> Self {
+    /// `utc_offset` says the system's time zone now (seconds east of UTC): asked at each turn,
+    /// as the zone changes under a running app.
+    pub fn new(account: Arc<Account>, utc_offset: fn() -> i64) -> Self {
         let (jobs, receiver) = mpsc::channel::<Job>();
         let vectors_wake: Arc<Mutex<Option<mpsc::Sender<()>>>> = Arc::default();
         let wake = Arc::clone(&vectors_wake);
@@ -130,9 +132,9 @@ impl ChatWorker {
                                 Some(tools) => {
                                     // The window's space: its finds first, and the model told (ADR 0030).
                                     tools.set_space(turn.space.as_ref().map(|(id, _)| id.clone()));
-                                    tools.set_utc_offset(i64::try_from(objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT()).unwrap_or(0));
+                                    tools.set_utc_offset(utc_offset());
                                     let space = turn.space.as_ref().map(|(_, name)| name.clone());
-                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today(), effort: turn.effort.clone(), space };
+                                    let chat = Chat { transport: account.transport(), token: &*account, model: turn.model.clone(), cache_key: turn.cache_key.clone(), retry_after: RETRY_AFTER.to_vec(), compact_at: turn.compact_at, today: local_today(utc_offset()), effort: turn.effort.clone(), space };
                                     chat.send(&mut items, &mut memory, &turn.text, turn.open.as_deref(), tools, &turn.cancel, &mut *turn.on_event)
                                 }
                             };
@@ -270,9 +272,9 @@ impl Embedder for Paced {
     }
 }
 
-/// The local day for the model, from the system's time zone: "Saturday, 2026-11-14 (UTC+02:00)".
-pub fn local_today() -> String {
-    let offset = i64::try_from(objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT()).unwrap_or(0);
+/// The local day for the model, in the time zone `offset` seconds east of UTC: "Saturday,
+/// 2026-11-14 (UTC+02:00)".
+pub fn local_today(offset: i64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64) + offset;
     // 1 January 1970 was a Thursday.
     let weekday = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"][now.div_euclid(86_400).rem_euclid(7) as usize];
@@ -415,12 +417,13 @@ mod tests {
 
     #[test]
     fn the_local_day_names_its_weekday_date_and_offset() {
-        let today = super::local_today();
+        let today = super::local_today(7_200);
         let (weekday, rest) = today.split_once(", ").unwrap();
         assert!(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].contains(&weekday), "{today}");
         let (date, zone) = rest.split_once(' ').unwrap();
         assert_eq!(date.len(), 10, "{today}");
-        assert!(zone.starts_with("(UTC+") || zone.starts_with("(UTC-"), "{today}");
+        assert_eq!(zone, "(UTC+02:00)", "{today}");
+        assert!(super::local_today(-12_600).ends_with("(UTC-03:30)"));
         println!("{today}");
     }
 }

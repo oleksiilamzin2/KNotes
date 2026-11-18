@@ -25,7 +25,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSAttributedString, NSDictionary, NSMutableAttributedString, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger, NSURL, ns_string};
 
 use crate::chat_bubble::{CARD_INDENT, CODE, Card, ChatBubble, QUESTION, card_of};
-use crate::chat_worker::{Account, ChatWorker, ScriptTransport, Turn};
+use knotes_assistant::chat_worker::{Account, ChatWorker, ScriptTransport, Turn};
 use crate::strings;
 
 /// Where a link in the conversation goes, as its attribute keeps it.
@@ -480,7 +480,7 @@ impl ChatPanel {
             sign_in: None,
             sign_in_words: String::new(),
         };
-        let worker = ChatWorker::new(Arc::clone(&account));
+        let worker = ChatWorker::new(Arc::clone(&account), || i64::try_from(objc2_foundation::NSTimeZone::localTimeZone().secondsFromGMT()).unwrap_or(0));
         let panel = Rc::new(Self {
             view,
             signed_out,
@@ -559,7 +559,7 @@ impl ChatPanel {
         let compact_at = compact_at_for(&state.models, &state.model);
         let effort = effort_for(&state.models, &state.model, state.effort.as_ref());
         let effort_name = shown_effort(&state.models, &state.model, effort.as_deref());
-        match crate::chat_eval::turns(crate::chat_eval::questions(std::path::Path::new(&questions)), &state.model, &name, effort, &effort_name, compact_at, std::path::Path::new(&out)) {
+        match knotes_assistant::chat_eval::turns(knotes_assistant::chat_eval::questions(std::path::Path::new(&questions)), &state.model, &name, effort, &effort_name, compact_at, std::path::Path::new(&out)) {
             Ok(turns) => turns.into_iter().for_each(|turn| self.worker.send(turn)),
             Err(e) => eprintln!("knotes: cannot start the test questions: {e}"),
         }

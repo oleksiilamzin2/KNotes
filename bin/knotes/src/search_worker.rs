@@ -38,9 +38,9 @@ impl SearchWorker {
                         reader = SqliteIndex::open_reader(&index_dir).ok();
                     }
                     // Made at the first search by meaning, and again in a later generation.
-                    let generation = crate::meaning::generation();
+                    let generation = knotes_assistant::meaning::generation();
                     if request.mode == SearchMode::Meaning && meaning.as_ref().is_none_or(|(made_in, _)| *made_in != generation) {
-                        meaning = crate::meaning::model().zip(crate::meaning::embedder()).and_then(|(model, embedder)| {
+                        meaning = knotes_assistant::meaning::model().zip(knotes_assistant::meaning::embedder()).and_then(|(model, embedder)| {
                             VectorStore::open_reader(&index_dir, &model.store_file()).ok().map(|store| (generation, MeaningIndex::over_store(embedder as Arc<dyn Embedder>, store)))
                         });
                     }

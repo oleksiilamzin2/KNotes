@@ -54,16 +54,22 @@ pub fn failing() -> Option<String> {
     failed.or_else(|| with(|chosen| chosen.missing.clone()))
 }
 
+/// Why there is no helper, as the settings say it.
+pub const HELPER_MISSING: &str = "поруч із застосунком немає knotes-embed";
+fn model_missing(file: &str) -> String {
+    format!("немає файлу моделі «{file}» (його завантажує scripts/setup.sh)")
+}
+
 /// Why the helper for `model` cannot be made, the app being in `exe_dir`: the helper is not
 /// beside it, or the model's file is not there (git does not keep it: `scripts/setup.sh`
 /// fetches it); none when both are.
 fn missing(exe_dir: Option<&std::path::Path>, model: MeaningModel) -> Option<String> {
     let helper = exe_dir.map(|dir| dir.join("knotes-embed"));
     if !helper.as_ref().is_some_and(|h| h.is_file()) {
-        return Some(crate::strings::MEANING_HELPER_MISSING.to_owned());
+        return Some(HELPER_MISSING.to_owned());
     }
     let exe = exe_dir?.join("knotes");
-    knotes_session::embedder_files(&exe, model.file()).is_none().then(|| crate::strings::meaning_model_missing(model.file()))
+    knotes_session::embedder_files(&exe, model.file()).is_none().then(|| model_missing(model.file()))
 }
 
 /// Probe: search by meaning failing for `why` (`KNOTES_PROBE_MEANING_FAILING`), the probe
@@ -110,7 +116,9 @@ pub fn choose(model: Option<MeaningModel>) {
 }
 
 fn chosen(model: Option<MeaningModel>) -> Chosen {
-    if crate::probe::enabled() {
+    // The app driven by its tests (`KNOTES_PROBE`) starts no helper: hundreds of launches,
+    // none of them asking a model.
+    if std::env::var_os("KNOTES_PROBE").is_some() {
         return Chosen { model, embedder: None, missing: None };
     }
     let exe = std::env::current_exe().ok();
@@ -218,7 +226,7 @@ mod tests {
         std::fs::create_dir_all(&app).unwrap();
         std::fs::create_dir_all(&resources).unwrap();
         let model = MeaningModel::E5Large;
-        assert_eq!(super::missing(Some(&app), model).as_deref(), Some(crate::strings::MEANING_HELPER_MISSING), "no helper beside the app");
+        assert_eq!(super::missing(Some(&app), model).as_deref(), Some(super::HELPER_MISSING), "no helper beside the app");
         std::fs::write(app.join("knotes-embed"), "").unwrap();
         std::fs::write(resources.join(model.file()), "").unwrap();
         assert_eq!(super::missing(Some(&app), model), None);

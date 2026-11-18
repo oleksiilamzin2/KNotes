@@ -364,7 +364,7 @@ impl Controller {
             self.list(Vec::new());
             return;
         }
-        let closeness = crate::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
+        let closeness = knotes_assistant::meaning::model().unwrap_or(knotes_vectors::MeaningModel::DEFAULT).closeness();
         let request = crate::search_worker::SearchRequest {
             generation: self.ivars().asked.get(),
             mode: match kind {
@@ -392,7 +392,7 @@ impl Controller {
             // The list waits for the model's answer empty, not with another kind's finds.
             self.list(Vec::new());
             // The model loads while the answer is waited for.
-            if let Some(embedder) = crate::meaning::embedder() {
+            if let Some(embedder) = knotes_assistant::meaning::embedder() {
                 embedder.warm();
             }
         }
