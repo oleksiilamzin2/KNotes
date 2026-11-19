@@ -5,7 +5,12 @@ use std::time::{Duration, Instant};
 use knotes_session::{Event, Snapshot, VaultSession, index_dir};
 
 fn wait_for(events: &Receiver<Event>, mut done: impl FnMut(&Snapshot) -> bool) -> Snapshot {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // A minute, not the ten seconds it was: these tests run together, a dozen sessions in one
+    // process, and their changes are then seen one after another, half a second each (measured:
+    // 0.6 s for a wait alone, up to 7 s together). On a busy Mac the last ones ran out of
+    // their ten seconds, and a run failed by chance. Waiting longer costs nothing when the
+    // snapshot comes.
+    let deadline = Instant::now() + Duration::from_secs(60);
     while let Ok(event) = events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         match event {
             Event::Snapshot(s) if done(&s) => return s,
