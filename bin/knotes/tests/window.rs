@@ -221,7 +221,7 @@ fn the_chat_asks_to_sign_in_with_chatgpt_first() {
 fn main_menu_has_the_standard_menus() {
     let out = probe();
     assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
-    assert!(out.contains("file-menu: Нова нотатка ⌘N | Нова тека ⇧⌘N | Відкрити базу… ⌘O | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
+    assert!(out.contains("file-menu: Нова нотатка ⌘N | Нова тека ⇧⌘N | Відкрити базу… ⌘O | Бази… ⇧⌘O | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
 }
 
 #[test]
@@ -4701,4 +4701,27 @@ fn a_card_shows_its_deck_on_a_plate_its_question_strong_and_its_marks_muted() {
     // A list item's card keeps its item's look, and a quote its own bar.
     let (_vault, out) = probe_notes(&[("n.md", "- #@мови cat::кіт\n\n> цитата\n\nкінець")], &[("KNOTES_PROBE_OPEN", "n.md"), ("KNOTES_PROBE_CURSOR", "end")]);
     assert!(editor_runs(&out).contains("[card-deck]#@мови|") && !out.contains("decoration: card ") && out.matches("decoration: quote ").count() == 1, "{out}");
+}
+
+#[test]
+fn the_vaults_window_lists_the_vaults_opened_and_opens_or_forgets_one() {
+    let home = tempfile::tempdir().unwrap();
+    let name = |vault: &tempfile::TempDir| vault.path().file_name().unwrap().to_string_lossy().into_owned();
+    let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{name}: {out}")).to_owned();
+    // Two vaults opened one after the other: both are known, the last opened first and marked
+    // as the one a window shows.
+    let (first, _) = probe_notes_at_home(&[("a.md", "a")], &[], home.path());
+    let (second, out) = probe_notes_at_home(&[("b.md", "b")], &[("KNOTES_PROBE_VAULTS", "1")], home.path());
+    let listed = line(&out, "vaults: ");
+    let rows: Vec<&str> = listed.split(" | ").collect();
+    assert!(rows.len() == 2 && rows[0].starts_with(&format!("{} (open) — ", name(&second))) && rows[1].starts_with(&format!("{} — ", name(&first))), "{listed}");
+    // A click on the other one opens it in a window of its own: it is the first now.
+    let out = probe_env(&[second.path()], Some(home.path()), &[("KNOTES_PROBE_VAULTS", "open:1")]);
+    let acted = line(&out, "vaults-acted: ");
+    assert!(acted.starts_with(&format!("{} (open) — ", name(&first))) && acted.contains(&format!(" | {} (open) — ", name(&second))) && acted.ends_with("| windows: 2"), "{acted}");
+    // Taken off the list, a vault is listed no more; its folder stays.
+    let out = probe_env(&[second.path()], Some(home.path()), &[("KNOTES_PROBE_VAULTS", "forget:1")]);
+    let acted = line(&out, "vaults-acted: ");
+    assert!(acted.starts_with(&format!("{} (open) — ", name(&second))) && !acted.contains(&name(&first)) && acted.ends_with("| windows: 1"), "{acted}");
+    assert!(first.path().join("a.md").is_file());
 }

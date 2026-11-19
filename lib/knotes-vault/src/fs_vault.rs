@@ -338,3 +338,19 @@ fn sync(file: &fs::File) -> io::Result<()> {
 fn sync(file: &fs::File) -> io::Result<()> {
     file.sync_data()
 }
+
+/// A folder made a vault to start in: the folder itself if it is not there, and in an empty
+/// one (a Finder's `.DS_Store` aside) Knotes' own folder `.knotes` and the folder `inbox` new
+/// notes go to. A folder with anything in it is a vault as it is, and is left so. Says
+/// whether it was empty.
+pub fn start_vault(root: &Path, inbox: &str) -> io::Result<bool> {
+    fs::create_dir_all(root)?;
+    for entry in fs::read_dir(root)? {
+        if entry?.file_name() != ".DS_Store" {
+            return Ok(false);
+        }
+    }
+    fs::create_dir_all(root.join(".knotes"))?;
+    fs::create_dir_all(root.join(inbox))?;
+    Ok(true)
+}

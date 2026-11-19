@@ -14,6 +14,8 @@ pub const SETTINGS_FILE: &str = "settings-v2.json";
 pub struct AppSettings {
     /// Vault reopened when the app starts without one.
     pub last_vault: Option<PathBuf>,
+    /// The vaults opened on this Mac, the last opened first: the vaults' window lists them.
+    pub vaults: Vec<PathBuf>,
     /// The AI or the outline in the right panel.
     pub panel_mode: PanelMode,
     /// Where the window was and how big (x, y, width, height in screen points), to open it
@@ -35,8 +37,14 @@ impl AppSettings {
     pub fn load(app_data: &Path) -> Self {
         let Ok(text) = fs::read_to_string(app_data.join(SETTINGS_FILE)) else { return Self::default() };
         let Ok(value) = serde_json::from_str::<Value>(&text) else { return Self::default() };
+        let last_vault = value.get("lastVault").and_then(Value::as_str).map(PathBuf::from);
         Self {
-            last_vault: value.get("lastVault").and_then(Value::as_str).map(PathBuf::from),
+            // Settings written before the list was kept: the last vault is the one known.
+            vaults: match value.get("vaults").and_then(Value::as_array) {
+                Some(vaults) => vaults.iter().filter_map(Value::as_str).map(PathBuf::from).collect(),
+                None => last_vault.iter().cloned().collect(),
+            },
+            last_vault,
             panel_mode: value.get("panel").and_then(Value::as_str).and_then(PanelMode::from_key).unwrap_or_default(),
             window_frame: value.get("windowFrame").and_then(Value::as_array).and_then(|v| {
                 let n: Vec<i64> = v.iter().filter_map(Value::as_i64).collect();
@@ -46,6 +54,23 @@ impl AppSettings {
             chat_effort: value.get("chatEffort").and_then(Value::as_str).map(str::to_string),
             meaning_model: value.get("meaningModel").and_then(Value::as_str).map(str::to_string),
             device: value.get("device").and_then(Value::as_str).filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).map(str::to_string),
+        }
+    }
+
+    /// The vault at `path` was opened: the first of the vaults known, and the one the next
+    /// launch opens.
+    pub fn remember_vault(&mut self, path: &Path) {
+        self.vaults.retain(|vault| vault != path);
+        self.vaults.insert(0, path.to_path_buf());
+        self.last_vault = Some(path.to_path_buf());
+    }
+
+    /// The vault at `path` is listed no more (its folder is not touched); it was the one to
+    /// open at the next launch, the first still listed is.
+    pub fn forget_vault(&mut self, path: &Path) {
+        self.vaults.retain(|vault| vault != path);
+        if self.last_vault.as_deref() == Some(path) {
+            self.last_vault = self.vaults.first().cloned();
         }
     }
 
@@ -69,6 +94,7 @@ impl AppSettings {
         fs::create_dir_all(app_data)?;
         let value = json!({
             "lastVault": self.last_vault.as_ref().map(|p| p.to_string_lossy()),
+            "vaults": self.vaults.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
             "panel": self.panel_mode.key(),
             "windowFrame": self.window_frame,
             "chatModel": self.chat_model,

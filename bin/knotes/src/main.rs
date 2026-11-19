@@ -40,6 +40,7 @@ mod tab_strip;
 mod strings;
 mod text_paint;
 mod toolbar;
+mod vault_manager;
 mod vault_window;
 mod window;
 

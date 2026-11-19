@@ -27,6 +27,8 @@ pub struct Ivars {
     vaults: RefCell<Vec<OpenVault>>,
     /// Window shown when no vault could be opened (probe mode and first launch).
     empty: RefCell<Option<Rc<VaultWindow>>>,
+    /// The vaults' window, made when first asked for.
+    manager: RefCell<Option<crate::vault_manager::VaultManager>>,
 }
 
 define_class!(
@@ -55,7 +57,25 @@ define_class!(
                 .map(PathBuf::from)
                 .or_else(|| AppSettings::load(&app_data()).last_vault.filter(|p| p.is_dir()));
             match start {
-                Some(vault) => self.open_vault(&vault),
+                Some(vault) => {
+                    self.open_vault(&vault);
+                    // `KNOTES_PROBE_VAULTS=1`: the vaults' window; `forget:0` takes a row off,
+                    // `open:1` clicks one.
+                    if let Some(spec) = std::env::var("KNOTES_PROBE_VAULTS").ok().filter(|_| probe::enabled()) {
+                        self.show_vaults();
+                        let describe = || self.ivars().manager.borrow().as_ref().map(|m| m.describe()).unwrap_or_default();
+                        println!("vaults: {}", describe());
+                        let act = spec.split_once(':').and_then(|(act, row)| Some((act, row.parse::<usize>().ok()?)));
+                        if let Some((act, row)) = act {
+                            // Not borrowed while it acts: what it asks shows the list anew.
+                            match act {
+                                "forget" => self.with_manager(|m| m.probe_forget(row)),
+                                _ => self.with_manager(|m| m.probe_open(row)),
+                            }
+                            println!("vaults-acted: {} | windows: {}", describe(), self.ivars().vaults.borrow().len());
+                        }
+                    }
+                }
                 None if probe::enabled() => {
                     let window = VaultWindow::new(mtm);
                     window.window.makeKeyAndOrderFront(None);
@@ -63,7 +83,7 @@ define_class!(
                     probe::schedule(false);
                     *self.ivars().empty.borrow_mut() = Some(window);
                 }
-                None => self.ask_for_vault(),
+                None => self.show_vaults(),
             }
             if !probe::enabled() {
                 app.activate();
@@ -76,7 +96,7 @@ define_class!(
             if !has_visible_windows {
                 match AppSettings::load(&app_data()).last_vault.filter(|p| p.is_dir()) {
                     Some(vault) => self.open_vault(&vault),
-                    None => self.ask_for_vault(),
+                    None => self.show_vaults(),
                 }
             }
             true
@@ -145,6 +165,12 @@ define_class!(
         #[unsafe(method(openVault:))]
         fn open_vault_action(&self, _sender: Option<&AnyObject>) {
             self.ask_for_vault();
+        }
+
+        /// File → Vaults…, and the button beside the spaces: the vaults' window.
+        #[unsafe(method(showVaults:))]
+        fn show_vaults_action(&self, _sender: Option<&AnyObject>) {
+            self.show_vaults();
         }
 
         /// File → New Note: in the window in front.
@@ -291,6 +317,65 @@ impl AppDelegate {
         }
     }
 
+    /// The vaults known, each with whether a window shows it.
+    fn known_vaults(&self) -> Vec<crate::vault_manager::Known> {
+        let open = self.ivars().vaults.borrow();
+        AppSettings::load(&app_data()).vaults.into_iter().map(|path| crate::vault_manager::Known { open: open.iter().any(|v| v.path == path), path }).collect()
+    }
+
+    /// Something done with the vaults' window, if it was made. It is not borrowed meanwhile:
+    /// what it asks of the app shows its list anew.
+    fn with_manager(&self, act: impl FnOnce(&crate::vault_manager::VaultManager)) {
+        let manager = self.ivars().manager.borrow_mut().take();
+        if let Some(manager) = manager {
+            act(&manager);
+            manager.set_vaults(self.known_vaults());
+            *self.ivars().manager.borrow_mut() = Some(manager);
+        }
+    }
+
+    /// The vaults' window: those known on the left; a new one made and a folder opened on the
+    /// right. A vault opened from it, the window goes.
+    fn show_vaults(&self) {
+        if self.ivars().manager.borrow().is_none() {
+            let (opens, starts, forgets) = (objc2::Message::retain(self), objc2::Message::retain(self), objc2::Message::retain(self));
+            let asks = crate::vault_manager::Asks {
+                open: Box::new(move |path| {
+                    if path.is_dir() {
+                        opens.open_vault(path);
+                    } else {
+                        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                        crate::rename_dialog::tell_failure(opens.mtm(), None, &strings::open_failed(&name), strings::VAULT_GONE);
+                    }
+                }),
+                // A folder made a vault: an empty one is given Knotes' folders first.
+                start: Box::new(move |path| match knotes_vault::start_vault(path, strings::NEW_NOTES_FOLDER) {
+                    Ok(_) => starts.open_vault(path),
+                    Err(e) => {
+                        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                        crate::rename_dialog::tell_failure(starts.mtm(), None, &strings::open_failed(&name), &e.to_string());
+                    }
+                }),
+                forget: Box::new(move |path| {
+                    let mut settings = AppSettings::load(&app_data());
+                    settings.forget_vault(path);
+                    if let Err(e) = settings.save(&app_data()) {
+                        eprintln!("knotes: cannot save settings: {e}");
+                    }
+                    let known = forgets.known_vaults();
+                    if let Ok(Some(manager)) = forgets.ivars().manager.try_borrow().as_deref() {
+                        manager.set_vaults(known);
+                    }
+                }),
+            };
+            *self.ivars().manager.borrow_mut() = Some(crate::vault_manager::VaultManager::new(self.mtm(), asks));
+        }
+        let known = self.known_vaults();
+        if let Some(manager) = self.ivars().manager.borrow().as_ref() {
+            manager.show(known);
+        }
+    }
+
     fn ask_for_vault(&self) {
         let panel = NSOpenPanel::openPanel(self.mtm());
         panel.setCanChooseDirectories(true);
@@ -353,11 +438,15 @@ impl AppDelegate {
             }
         });
         forward(events, &window, mtm);
-        settings.last_vault = Some(path.clone());
+        settings.remember_vault(&path);
         if let Err(e) = settings.save(&app_data()) {
             eprintln!("knotes: cannot save settings: {e}");
         }
         self.ivars().vaults.borrow_mut().push(OpenVault { path, window, _session: session });
+        // Opened from the vaults' window, that window goes.
+        if let Ok(Some(manager)) = self.ivars().manager.try_borrow().as_deref() {
+            manager.hide();
+        }
     }
 }
 

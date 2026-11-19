@@ -1,18 +1,21 @@
 //! The space switcher (ADR 0030): a pop-up at the foot of the sidebar offering the whole vault,
-//! the spaces with their dots and the spaces' settings. Hidden while the vault has no space,
-//! the folder tree then reaching down to the bottom.
+//! the spaces with their dots and the spaces' settings; hidden while the vault has no space.
+//! Right of it, always, the button of the vaults' window.
 
 use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSImage, NSLayoutConstraint, NSMenuItem, NSPopUpButton, NSScrollView, NSView};
+use objc2_app_kit::{NSButton, NSImage, NSLayoutConstraint, NSMenuItem, NSPopUpButton, NSScrollView, NSView};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 
 use knotes_spaces::Space;
 
 use crate::strings;
+
+/// The sign of the vaults' window: a database.
+const VAULTS_SYMBOL: &str = "cylinder.split.1x2";
 
 type OnSpace = Box<dyn Fn(Option<String>)>;
 type OnSettings = Box<dyn Fn()>;
@@ -23,9 +26,6 @@ pub struct Ivars {
     spaces: RefCell<(Vec<Space>, Option<String>)>,
     on_space: RefCell<Option<OnSpace>>,
     on_settings: RefCell<Option<OnSettings>>,
-    /// The folder tree's bottom: on the pop-up while it shows, on the column's foot else.
-    above: RefCell<Option<Retained<NSLayoutConstraint>>>,
-    alone: RefCell<Option<Retained<NSLayoutConstraint>>>,
 }
 
 define_class!(
@@ -72,8 +72,6 @@ impl SpaceSwitcher {
                 spaces: RefCell::new((Vec::new(), None)),
                 on_space: RefCell::new(None),
                 on_settings: RefCell::new(None),
-                above: RefCell::new(None),
-                alone: RefCell::new(None),
             });
             unsafe { msg_send![super(this), init] }
         };
@@ -85,24 +83,35 @@ impl SpaceSwitcher {
             popup.setTarget(Some(&this));
             popup.setAction(Some(sel!(chooseSpace:)));
         }
-        for view in [tree as &NSView, &popup] {
+        // The vaults' window (a database's sign): asked of the app, which keeps the vaults.
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(VAULTS_SYMBOL), Some(&NSString::from_str(strings::VAULTS)));
+        // SAFETY: no target: the action goes up the responders to the app's delegate.
+        let vaults = match image {
+            Some(image) => unsafe { NSButton::buttonWithImage_target_action(&image, None, Some(sel!(showVaults:)), mtm) },
+            None => unsafe { NSButton::buttonWithTitle_target_action(&NSString::from_str(strings::VAULTS), None, Some(sel!(showVaults:)), mtm) },
+        };
+        vaults.setBordered(false);
+        // The pop-up gives way to the button: the column is no wider for it than it was.
+        popup.setContentCompressionResistancePriority_forOrientation(250.0, objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
+        vaults.setToolTip(Some(&NSString::from_str(strings::VAULTS)));
+        for view in [tree as &NSView, &popup, &vaults] {
             view.setTranslatesAutoresizingMaskIntoConstraints(false);
             column.addSubview(view);
         }
-        let above = tree.bottomAnchor().constraintEqualToAnchor_constant(&popup.topAnchor(), -6.0);
-        let alone = tree.bottomAnchor().constraintEqualToAnchor(&column.bottomAnchor());
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
             tree.topAnchor().constraintEqualToAnchor(&column.topAnchor()),
             tree.leadingAnchor().constraintEqualToAnchor(&column.leadingAnchor()),
             tree.trailingAnchor().constraintEqualToAnchor(&column.trailingAnchor()),
             popup.leadingAnchor().constraintEqualToAnchor_constant(&column.leadingAnchor(), 10.0),
-            popup.trailingAnchor().constraintEqualToAnchor_constant(&column.trailingAnchor(), -10.0),
+            popup.trailingAnchor().constraintEqualToAnchor_constant(&vaults.leadingAnchor(), -6.0),
             popup.bottomAnchor().constraintEqualToAnchor_constant(&column.safeAreaLayoutGuide().bottomAnchor(), -10.0),
-            alone.clone(),
+            vaults.trailingAnchor().constraintEqualToAnchor_constant(&column.trailingAnchor(), -10.0),
+            vaults.centerYAnchor().constraintEqualToAnchor(&popup.centerYAnchor()),
+            vaults.widthAnchor().constraintEqualToConstant(24.0),
+            // The tree ends over the row, whether the pop-up shows in it or the button alone.
+            tree.bottomAnchor().constraintEqualToAnchor_constant(&popup.topAnchor(), -6.0),
         ]));
         *this.ivars().popup.borrow_mut() = Some(popup);
-        *this.ivars().above.borrow_mut() = Some(above);
-        *this.ivars().alone.borrow_mut() = Some(alone);
         this.show();
         (this, column)
     }
@@ -122,7 +131,7 @@ impl SpaceSwitcher {
     }
 
     /// The pop-up's items (the whole vault, the spaces with their dots, the settings), the
-    /// window's space selected; hidden, and the tree to the bottom, while there are no spaces.
+    /// window's space selected; hidden while there are no spaces.
     fn show(&self) {
         let Some(popup) = self.ivars().popup.borrow().clone() else { return };
         let mtm = self.mtm();
@@ -156,16 +165,6 @@ impl SpaceSwitcher {
         popup.selectItemAtIndex(selected);
         let hidden = spaces.is_empty();
         popup.setHidden(hidden);
-        if let (Some(above), Some(alone)) = (self.ivars().above.borrow().as_ref(), self.ivars().alone.borrow().as_ref()) {
-            // Off first, so the two never hold at once.
-            if hidden {
-                above.setActive(false);
-                alone.setActive(true);
-            } else {
-                alone.setActive(false);
-                above.setActive(true);
-            }
-        }
     }
 
     /// The switcher for the probe: "Уся база | ✓ Робота | Дім | — | Налаштувати простори…" (the

@@ -449,6 +449,20 @@ pub const HIDE_OTHERS: &str = "Сховати інші";
 pub const SHOW_ALL: &str = "Показати всі";
 pub const QUIT: &str = "Завершити Knotes";
 pub const OPEN_VAULT: &str = "Відкрити базу…";
+pub const VAULTS: &str = "Бази";
+pub const VAULTS_MENU: &str = "Бази…";
+pub const VAULT_CREATE: &str = "Створити нову базу";
+pub const VAULT_CREATE_DETAILS: &str = "Нова тека з усім, що потрібно Knotes.";
+pub const VAULT_CREATE_BUTTON: &str = "Створити";
+pub const VAULT_NEW_NAME: &str = "Нова база";
+pub const VAULT_OPEN_FOLDER: &str = "Відкрити теку як базу";
+pub const VAULT_OPEN_FOLDER_DETAILS: &str = "Тека з нотатками Markdown; у порожній буде створено структуру Knotes.";
+pub const VAULT_REVEAL: &str = "Показати у Finder";
+pub const VAULT_FORGET: &str = "Прибрати зі списку";
+pub const VAULT_GONE: &str = "Теки цієї бази немає на місці. Якщо її перенесено, відкрийте її як теку.";
+pub fn version(version: &str) -> String {
+    format!("Версія {version}")
+}
 pub const CLOSE_WINDOW: &str = "Закрити вікно";
 pub const UNDO: &str = "Скасувати";
 pub const REDO: &str = "Повторити";
