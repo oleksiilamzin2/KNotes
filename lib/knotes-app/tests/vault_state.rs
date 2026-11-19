@@ -237,6 +237,18 @@ fn a_deck_asks_its_due_cards_and_the_day_s_new_ones_and_in_a_space_those_of_its_
     assert!(state.deck_stats("en/verbs", DAY_START).is_none(), "no card of that deck in this space");
     // No deck at all: no row for all of them.
     assert!(!State::default().exists(&SidebarItem::Deck(String::new()), INBOX));
+    // A deck's reviews a day: of its due cards whose days have begun, no more than its day
+    // still takes. cat (c-1) is due in five days' time; with none a day it is not asked.
+    state.space = None;
+    let later = NOW + 30 * 86_400;
+    assert_eq!(ids(state.due_cards("en", &all, later, later - 3_600, 200)), "c-1 c-2 c-3 c-4");
+    let rest = DeckSettings::parse(r#"{"en": {"reviews_a_day": 0, "new_a_day": 0}}"#);
+    assert_eq!(ids(state.due_cards("en", &rest, later, later - 3_600, 200)), "", "the deck rests today");
+    assert_eq!(tree(&state, &rest), "de 1, en 0", "and says so");
+    let one = DeckSettings::parse(r#"{"en": {"reviews_a_day": 1, "new_a_day": 0}}"#);
+    assert_eq!(ids(state.due_cards("en", &one, later, later - 3_600, 200)), "c-1");
+    state.space = Some("home".into());
+    assert_eq!(ids(state.due_cards("en", &rest, later, later - 3_600, 200)), "", "in a space as in the vault");
     // Before the index is open: nothing, and nothing broken.
     let empty = State::default();
     assert!(empty.due_cards("en", &all, NOW, DAY_START, 200).is_empty() && empty.cards_ahead("en", NOW, 200).is_empty() && empty.deck_stats("en", DAY_START).is_none());

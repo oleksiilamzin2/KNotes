@@ -142,26 +142,43 @@ impl CardIndex for SqliteIndex {
     fn deck_counts(&self, until: i64) -> Result<Vec<DeckCount>, BoxError> {
         let mut st = self.conn.prepare_cached(
             // A card paused is the deck's, but neither due nor new: it does not wait.
-            "SELECT c.deck, COUNT(*), COUNT(CASE WHEN s.due <= ?1 AND COALESCE(p.paused, 0) = 0 THEN 1 END), COUNT(CASE WHEN s.card_id IS NULL AND COALESCE(p.paused, 0) = 0 THEN 1 END)
+            "SELECT c.deck, COUNT(*), COUNT(CASE WHEN s.due <= ?1 AND COALESCE(p.paused, 0) = 0 THEN 1 END), COUNT(CASE WHEN s.card_id IS NULL AND COALESCE(p.paused, 0) = 0 THEN 1 END),
+                    COUNT(CASE WHEN s.due <= ?1 AND s.step IS NOT NULL AND COALESCE(p.paused, 0) = 0 THEN 1 END)
              FROM cards c LEFT JOIN card_states s ON s.card_id = c.card_id LEFT JOIN card_pauses p ON p.card_id = c.card_id GROUP BY c.deck ORDER BY c.deck",
         )?;
         let rows = st.query_map([until], |r| {
-            Ok(DeckCount { deck: r.get(0)?, cards: r.get::<_, i64>(1)? as usize, due: r.get::<_, i64>(2)? as usize, fresh: r.get::<_, i64>(3)? as usize })
+            Ok(DeckCount { deck: r.get(0)?, cards: r.get::<_, i64>(1)? as usize, due: r.get::<_, i64>(2)? as usize, fresh: r.get::<_, i64>(3)? as usize, learning: r.get::<_, i64>(4)? as usize })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize) -> Result<Vec<DueCard>, BoxError> {
+    fn reviewed(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError> {
+        let mut st = self.conn.prepare_cached(
+            // The day's reviews first, then their cards, as `introduced` reads them.
+            "SELECT c.deck, COUNT(*) FROM card_states s CROSS JOIN cards c ON c.card_id = s.card_id WHERE s.last >= ?1 AND s.first < ?1 AND s.step IS NULL GROUP BY c.deck ORDER BY c.deck",
+        )?;
+        let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize, reviews: usize) -> Result<Vec<DueCard>, BoxError> {
         // A deck and those under it: `deck` itself, and the range [deck + '/', deck + '0').
         let (own, (from, to)) = (deck.unwrap_or_default().to_owned(), under(deck.unwrap_or_default()));
         let card = |r: &rusqlite::Row| Ok(DueCard { path: r.get(0)?, start: r.get(1)?, end: r.get(2)?, deck: r.get(3)?, id: r.get(4)?, due: r.get(5)? });
         let mut st = self.conn.prepare_cached(
             "SELECT f.path, c.start, c.end, c.deck, c.card_id, s.due
              FROM cards c JOIN files f ON f.id = c.file_id JOIN card_states s ON s.card_id = c.card_id
-             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due <= ?4 AND NOT EXISTS (SELECT 1 FROM card_pauses p WHERE p.card_id = c.card_id AND p.paused = 1)
+             WHERE (c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3)) AND s.due <= ?4 AND (s.step IS NOT NULL) = ?6 AND NOT EXISTS (SELECT 1 FROM card_pauses p WHERE p.card_id = c.card_id AND p.paused = 1)
              ORDER BY s.due, f.path, c.ord LIMIT ?5",
         )?;
-        let mut cards: Vec<DueCard> = st.query_map(params![own, from, to, until, limit as i64], card)?.collect::<Result<_, _>>()?;
+        // Those still at a step, all; those whose days have begun, what the day still takes.
+        let mut cards: Vec<DueCard> = st.query_map(params![own, from, to, until, limit as i64, true], card)?.collect::<Result<_, _>>()?;
+        for row in st.query_map(params![own, from, to, until, reviews.min(limit) as i64, false], card)? {
+            cards.push(row?);
+        }
+        // The longest due first, whichever they are.
+        cards.sort_by_key(|card| card.due);
+        cards.truncate(limit);
         let new = new.min(limit - cards.len());
         if new > 0 {
             let mut st = self.conn.prepare_cached(

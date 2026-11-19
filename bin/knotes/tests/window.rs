@@ -12,13 +12,18 @@ fn probe_with(args: &[&std::path::Path], home: Option<&std::path::Path>) -> Stri
     probe_env(args, home, &[])
 }
 
+/// The time every launch of this run takes for now (seconds since 1970): when the run began.
+fn run_now() -> i64 {
+    static NOW: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *NOW.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64)
+}
+
 fn probe_env(args: &[&std::path::Path], home: Option<&std::path::Path>, env: &[(&str, &str)]) -> String {
     let scratch_home = tempfile::tempdir().unwrap();
     // One time for every launch of the run: a card graded in one launch is due «in ten
     // minutes» in the next, whatever the Mac's clock did between them (a run that slept
     // found such cards due and failed).
-    static NOW: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    let now = NOW.get_or_init(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string());
+    let now = &run_now().to_string();
     let mut child = Command::new(env!("CARGO_BIN_EXE_knotes"))
         .args(args)
         .env("KNOTES_PROBE_NOW", now)
@@ -4292,6 +4297,31 @@ fn a_card_is_paused_put_in_another_deck_and_deleted_from_its_row_s_menu() {
     assert!(line(&out, "deck-table-acted: ").contains("[dog · мови/англійська · нова]"), "{out}");
     let out = probe_env(&[vault.path()], None, &table);
     assert!(out.contains("| мови (1) | "), "{out}");
+}
+
+#[test]
+fn a_deck_s_reviews_a_day_limit_the_due_cards_it_asks() {
+    // cat was graded Easy a month ago on another Mac: due for two weeks now. dog is new.
+    let (vault, _) = probe_notes(&CARD_NOTES, &[]);
+    std::fs::create_dir_all(vault.path().join(".knotes/reviews")).unwrap();
+    std::fs::write(vault.path().join(".knotes/reviews/other.tsv"), format!("{}\tc-1\t4\n", run_now() - 30 * 86_400)).unwrap();
+    let open = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_SELECT", "d:мови")];
+    let out = probe_env(&[vault.path()], None, &open);
+    assert!(out.contains("sidebar: Усі колоди (3) | історія (1) | мови (2)\n"), "the due one and the new one: {out}");
+    assert_eq!(review_line_of(&out), "waiting мови 2", "{out}");
+    // The deck's settings: no reviews a day (the fourth field). The due card waits for
+    // another day; the new one is still asked. The deck says so at once, and the next time.
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "|||0")]);
+    assert!(out.contains("sidebar: Усі колоди (2) | історія (1) | мови (1)\n"), "counted again at once: {out}");
+    let settings = std::fs::read_to_string(vault.path().join(".knotes/decks.json")).unwrap();
+    assert!(settings.contains("\"reviews_a_day\": 0"), "{settings}");
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_REVIEW", "start")]);
+    assert_eq!(review_line_of(&out), "question мови 0/1 | dog (list hidden)", "the new card alone: {out}");
+    // One a day: the due card is asked again; an empty field takes the limit away.
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "|||1"), ("KNOTES_PROBE_REVIEW", "start")]);
+    assert_eq!(review_line_of(&out), "question мови 0/2 | cat (list hidden)", "{out}");
+    let out = probe_env(&[vault.path()], None, &[open[0], open[1], ("KNOTES_PROBE_DECK_SETTINGS", "|||")]);
+    assert!(out.contains("| мови (2)\n") && !std::fs::read_to_string(vault.path().join(".knotes/decks.json")).unwrap().contains("reviews_a_day"), "{out}");
 }
 
 #[test]

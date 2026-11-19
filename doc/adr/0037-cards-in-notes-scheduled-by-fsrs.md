@@ -422,3 +422,14 @@ test missed, each of them relaunching the app after a grade:
   Moved, a card's mark in its note names the other deck (`in_deck`); deleted, its text goes
   from its note (asked first) and its reviews stay in the log. Both are written as a card's
   text is, not over a note changed meanwhile. Not done: several cards chosen at once.
+- **Reviews a day** (2026-11-19). A deck's settings have a fourth: how many of its due cards
+  it asks a day (`"reviews_a_day"` in `.knotes/decks.json`; its own, or the nearest deck's
+  above; none while no deck says, and then all that are due are asked, as before). After days
+  away a deck does not ask its whole backlog at once: what is over waits for the next day,
+  the longest due asked first. Counted against the day: the cards reviewed since it began
+  whose days had begun before it and that are at no step now. Not counted, and asked
+  whatever the day takes: the cards still at a step (learned today, or forgotten and learned
+  again), a card begun being finished; and the new cards, which have their own number a day.
+  The deck's row, «Усі колоди» and the agent's `list_decks` count the same. A deck under one
+  with a number cannot ask for all: it can only name a number of its own. The agent's tools
+  also stopped counting a paused card among those that wait.

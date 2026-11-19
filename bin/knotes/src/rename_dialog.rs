@@ -128,33 +128,33 @@ pub fn ask_card(mtm: MainThreadMarker, decks: &[String], last: &str, need_questi
 }
 
 /// A deck's settings as typed: its chance of recall in percent («85», «85,5», or «0.85»), its
-/// new cards a day, and its learning steps' minutes («1 10»; «0»: none); an empty field, or one
-/// that says nothing, is none (as the deck above).
-pub fn typed_deck_setting(retention: &str, new_a_day: &str, steps: &str) -> knotes_cards::DeckSetting {
+/// new cards a day, its learning steps' minutes («1 10»; «0»: none), and its reviews a day; an
+/// empty field, or one that says nothing, is none (as the deck above).
+pub fn typed_deck_setting(retention: &str, new_a_day: &str, steps: &str, reviews_a_day: &str) -> knotes_cards::DeckSetting {
     let (low, high) = knotes_cards::RETENTION_RANGE;
     let retention = retention.trim().trim_end_matches('%').trim().replace(',', ".").parse::<f64>().ok().filter(|r| r.is_finite() && *r > 0.0);
     let retention = retention.map(|r| if r <= 1.0 { r } else { r / 100.0 }).map(|r| ((r * 1000.0).round() / 1000.0).clamp(low, high));
     let minutes: Vec<&str> = steps.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';')).filter(|m| !m.is_empty()).collect();
     let steps = minutes.iter().map(|m| m.parse::<u32>().ok()).collect::<Option<Vec<u32>>>().filter(|_| !minutes.is_empty()).map(|steps| steps.into_iter().filter(|m| *m > 0).collect());
-    knotes_cards::DeckSetting { retention, new_a_day: new_a_day.trim().parse().ok(), steps }
+    knotes_cards::DeckSetting { retention, new_a_day: new_a_day.trim().parse().ok(), steps, reviews_a_day: reviews_a_day.trim().parse().ok() }
 }
 
 /// Asks `deck`'s settings: its own in the fields, what the deck above gives (`inherited`: the
-/// chance of recall, the new cards a day, the steps' minutes) as their placeholders; none when
-/// cancelled. In probe mode `KNOTES_PROBE_DECK_SETTINGS=85|10|1 10`.
-pub fn ask_deck_settings(mtm: MainThreadMarker, deck: &str, own: knotes_cards::DeckSetting, inherited: (f64, u32, Vec<u32>)) -> Option<knotes_cards::DeckSetting> {
+/// chance of recall, the new cards a day, the steps' minutes, the reviews a day) as their
+/// placeholders; none when cancelled. In probe mode `KNOTES_PROBE_DECK_SETTINGS=85|10|1 10|100`.
+pub fn ask_deck_settings(mtm: MainThreadMarker, deck: &str, own: knotes_cards::DeckSetting, inherited: (f64, u32, Vec<u32>, Option<u32>)) -> Option<knotes_cards::DeckSetting> {
     if probe::enabled() {
         let asked = std::env::var("KNOTES_PROBE_DECK_SETTINGS").ok()?;
-        let mut fields = asked.splitn(3, '|');
+        let mut fields = asked.splitn(4, '|');
         let mut field = || fields.next().unwrap_or("");
-        return Some(typed_deck_setting(field(), field(), field()));
+        return Some(typed_deck_setting(field(), field(), field(), field()));
     }
     let percent = |r: f64| format!("{}", (r * 1000.0).round() / 10.0).replace('.', ",");
     let minutes = |steps: &[u32]| if steps.is_empty() { "0".to_owned() } else { steps.iter().map(u32::to_string).collect::<Vec<_>>().join(" ") };
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str(&strings::deck_settings_of(deck)));
     alert.setInformativeText(&NSString::from_str(strings::DECK_SETTINGS_DETAILS));
-    let fields = objc2_app_kit::NSView::initWithFrame(objc2_app_kit::NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 92.0)));
+    let fields = objc2_app_kit::NSView::initWithFrame(objc2_app_kit::NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 124.0)));
     let row = |y: f64, label: &str, value: Option<String>, placeholder: String| {
         let name = NSTextField::labelWithString(&NSString::from_str(label), mtm);
         name.setFrame(NSRect::new(NSPoint::new(0.0, y + 3.0), NSSize::new(210.0, 18.0)));
@@ -165,20 +165,22 @@ pub fn ask_deck_settings(mtm: MainThreadMarker, deck: &str, own: knotes_cards::D
         fields.addSubview(&field);
         field
     };
-    let retention = row(66.0, strings::DECK_RETENTION, own.retention.map(percent), percent(inherited.0));
-    let new = row(34.0, strings::DECK_NEW_A_DAY, own.new_a_day.map(|n| n.to_string()), inherited.1.to_string());
+    let retention = row(98.0, strings::DECK_RETENTION, own.retention.map(percent), percent(inherited.0));
+    let new = row(66.0, strings::DECK_NEW_A_DAY, own.new_a_day.map(|n| n.to_string()), inherited.1.to_string());
+    let reviews = row(34.0, strings::DECK_REVIEWS_A_DAY, own.reviews_a_day.map(|n| n.to_string()), inherited.3.map_or(strings::DECK_REVIEWS_ALL.to_owned(), |n| n.to_string()));
     let steps = row(2.0, strings::DECK_STEPS, own.steps.as_deref().map(minutes), minutes(&inherited.2));
     alert.setAccessoryView(Some(&fields));
     alert.window().setInitialFirstResponder(Some(&retention));
     // SAFETY: the fields live in the alert's accessory view.
     unsafe {
         retention.setNextKeyView(Some(&new));
-        new.setNextKeyView(Some(&steps));
+        new.setNextKeyView(Some(&reviews));
+        reviews.setNextKeyView(Some(&steps));
     }
     for title in [strings::SAVE, strings::CANCEL] {
         alert.addButtonWithTitle(&NSString::from_str(title));
     }
-    (alert.runModal() == NSAlertFirstButtonReturn).then(|| typed_deck_setting(&retention.stringValue().to_string(), &new.stringValue().to_string(), &steps.stringValue().to_string()))
+    (alert.runModal() == NSAlertFirstButtonReturn).then(|| typed_deck_setting(&retention.stringValue().to_string(), &new.stringValue().to_string(), &steps.stringValue().to_string(), &reviews.stringValue().to_string()))
 }
 
 /// A typed folder as a vault path: no slashes at its ends, `/` the root.

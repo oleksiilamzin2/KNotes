@@ -21,13 +21,16 @@ fn due_card(row: &CardRow) -> DueCard {
 pub fn deck_counts(rows: &[CardRow], until: i64) -> Vec<DeckCount> {
     let mut decks: BTreeMap<&str, DeckCount> = BTreeMap::new();
     for row in rows {
-        let count = decks.entry(&row.deck).or_insert_with(|| DeckCount { deck: row.deck.clone(), cards: 0, due: 0, fresh: 0 });
+        let count = decks.entry(&row.deck).or_insert_with(|| DeckCount { deck: row.deck.clone(), cards: 0, due: 0, fresh: 0, learning: 0 });
         count.cards += 1;
         match row.reviewed {
             // A card paused is the deck's, but neither due nor new: it does not wait.
             _ if row.paused => {}
             None => count.fresh += 1,
-            Some(s) if s.due <= until => count.due += 1,
+            Some(s) if s.due <= until => {
+                count.due += 1;
+                count.learning += usize::from(s.state.step.is_some());
+            }
             Some(_) => {}
         }
     }
@@ -44,13 +47,30 @@ pub fn introduced(rows: &[CardRow], since: i64) -> Vec<(String, usize)> {
     decks.into_iter().map(|(deck, n)| (deck.to_owned(), n)).collect()
 }
 
+/// The decks of `rows` with cards reviewed at `since` or later that were first reviewed before
+/// it and are at no step, each with how many of its own (as `CardIndex::reviewed`).
+pub fn reviewed(rows: &[CardRow], since: i64) -> Vec<(String, usize)> {
+    let mut decks: BTreeMap<&str, usize> = BTreeMap::new();
+    for row in rows.iter().filter(|row| row.reviewed.is_some_and(|s| s.state.last >= since && s.first < since && s.state.step.is_none())) {
+        *decks.entry(&row.deck).or_default() += 1;
+    }
+    decks.into_iter().map(|(deck, n)| (deck.to_owned(), n)).collect()
+}
+
 /// The cards of `rows` to review by `until` in `deck` and the decks under it: those due, the
-/// longest due first, then those never reviewed in their notes' order, `new` of them at most;
-/// `limit` at most in all (as `CardIndex::due_cards`).
-pub fn due_cards(rows: &[CardRow], deck: &str, until: i64, limit: usize, new: usize) -> Vec<DueCard> {
+/// longest due first (of those whose days have begun, `reviews` at most; those at a step all),
+/// then those never reviewed in their notes' order, `new` of them at most; `limit` at most in
+/// all (as `CardIndex::due_cards`).
+pub fn due_cards(rows: &[CardRow], deck: &str, until: i64, limit: usize, new: usize, reviews: usize) -> Vec<DueCard> {
     let mut due: Vec<&CardRow> = rows.iter().filter(|row| under(row, deck) && !row.paused && row.reviewed.is_some_and(|s| s.due <= until)).collect();
     // Stable: the rows come by note, in the note's order.
     due.sort_by_key(|row| row.reviewed.map(|s| s.due));
+    let mut taken = 0;
+    due.retain(|row| {
+        let at_step = row.reviewed.is_some_and(|s| s.state.step.is_some());
+        taken += usize::from(!at_step);
+        at_step || taken <= reviews
+    });
     due.truncate(limit);
     let room = new.min(limit - due.len());
     let fresh = rows.iter().filter(|row| under(row, deck) && !row.paused && row.reviewed.is_none()).take(room);

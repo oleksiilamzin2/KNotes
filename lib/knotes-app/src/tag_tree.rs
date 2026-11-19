@@ -40,10 +40,13 @@ pub fn tag_tree(counts: &[(String, usize)]) -> Vec<TagNode> {
 /// parent a path names, with the cards to review in it and under it: those due, and of those
 /// never reviewed as many as the deck still asks today. `decks`: each deck's own (`DeckCount`),
 /// in any order; `introduced`: each deck's own new cards first reviewed today; `new_a_day`: how
-/// many new cards a day a deck asks.
-pub fn deck_tree(decks: &[knotes_core::DeckCount], introduced: &[(String, usize)], new_a_day: &dyn Fn(&str) -> usize) -> Vec<TagNode> {
-    // Of a deck with those under it: the due, the never reviewed, today's new.
-    let mut counts: std::collections::BTreeMap<String, [usize; 3]> = std::collections::BTreeMap::new();
+/// many new cards a day a deck asks. Of the due whose days have begun, what the deck's day
+/// still takes: `reviewed`, each deck's own reviewed today; `reviews_a_day`, how many a day a
+/// deck asks (none: all). Those still at a step are all counted.
+pub fn deck_tree(decks: &[knotes_core::DeckCount], introduced: &[(String, usize)], new_a_day: &dyn Fn(&str) -> usize, reviewed: &[(String, usize)], reviews_a_day: &dyn Fn(&str) -> Option<usize>) -> Vec<TagNode> {
+    // Of a deck with those under it: the due, the never reviewed, today's new, the due still at
+    // a step, today's reviews.
+    let mut counts: std::collections::BTreeMap<String, [usize; 5]> = std::collections::BTreeMap::new();
     let mut add = |deck: &str, which: usize, n: usize| {
         for at in deck.match_indices('/').map(|(i, _)| i).chain([deck.len()]) {
             counts.entry(deck[..at].to_owned()).or_default()[which] += n;
@@ -52,16 +55,25 @@ pub fn deck_tree(decks: &[knotes_core::DeckCount], introduced: &[(String, usize)
     for deck in decks {
         add(&deck.deck, 0, deck.due);
         add(&deck.deck, 1, deck.fresh);
+        add(&deck.deck, 3, deck.learning);
+    }
+    for (deck, n) in reviewed.iter().filter(|(deck, _)| decks.iter().any(|d| d.deck == *deck)) {
+        add(deck, 4, *n);
     }
     // A deck whose cards are gone has none to count.
     for (deck, n) in introduced.iter().filter(|(deck, _)| decks.iter().any(|d| d.deck == *deck)) {
         add(deck, 2, *n);
     }
     // Every parent before its children, as `tag_tree` takes them.
-    let counts: Vec<(String, usize)> = counts.into_iter().map(|(deck, [due, fresh, today])| {
-            let waiting = due + fresh.min(new_a_day(&deck).saturating_sub(today));
+    let counts: Vec<(String, usize)> = counts
+        .into_iter()
+        .map(|(deck, [due, fresh, today, learning, reviewed])| {
+            let begun = due - learning;
+            let asked = reviews_a_day(&deck).map_or(begun, |a_day| begun.min(a_day.saturating_sub(reviewed)));
+            let waiting = learning + asked + fresh.min(new_a_day(&deck).saturating_sub(today));
             (deck, waiting)
-        }).collect();
+        })
+        .collect();
     tag_tree(&counts)
 }
 

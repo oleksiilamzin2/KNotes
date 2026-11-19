@@ -659,37 +659,46 @@ impl<I: ToolIndex, F: VaultReader + FolderRulesStore, D: DocumentPages> VaultToo
         // As the app reads them; none set, or a file that cannot be read: the defaults.
         let settings = knotes_cards::DeckSettings::parse(&self.files.read_text(DECK_SETTINGS).unwrap_or_default());
         // Of a deck with those under it: its cards, the due, the new, the young, the mature,
-        // and the new cards today has taken.
-        let mut decks: BTreeMap<String, [usize; 6]> = BTreeMap::new();
-        let mut all = [0; 6];
+        // the new cards today has taken, the due still at a step, and the reviews today has
+        // taken (of cards whose days had begun before today).
+        let mut decks: BTreeMap<String, [usize; 8]> = BTreeMap::new();
+        let mut all = [0; 8];
         let rows = self.index.card_rows(None, None).map_err(failed)?;
         for row in rows.iter().filter(|r| !kept.holds(&r.path)) {
             let mature = row.reviewed.is_some_and(|s| s.due - s.state.last >= knotes_core::MATURE_DAYS * DAY);
             let counted = [
                 1,
                 usize::from(standing(row, now) == "due"),
-                usize::from(row.reviewed.is_none()),
+                usize::from(standing(row, now) == "new"),
                 usize::from(row.reviewed.is_some() && !mature),
                 usize::from(mature),
                 usize::from(row.reviewed.is_some_and(|s| s.first >= today)),
+                usize::from(standing(row, now) == "due" && row.reviewed.is_some_and(|s| s.state.step.is_some())),
+                usize::from(row.reviewed.is_some_and(|s| s.state.last >= today && s.first < today && s.state.step.is_none())),
             ];
             let parents = row.deck.match_indices('/').map(|(i, _)| &row.deck[..i]);
             for deck in parents.chain([row.deck.as_str()]) {
                 let counts = decks.entry(deck.to_owned()).or_default();
-                (0..6).for_each(|i| counts[i] += counted[i]);
+                (0..8).for_each(|i| counts[i] += counted[i]);
             }
-            (0..6).for_each(|i| all[i] += counted[i]);
+            (0..8).for_each(|i| all[i] += counted[i]);
         }
-        // What the app asks now: the due, and of the new what the deck's day still takes.
-        let asks = |deck: &str, counts: &[usize; 6]| counts[1] + counts[2].min((settings.new_a_day(deck) as usize).saturating_sub(counts[5]));
+        // What the app asks now: the due (of those whose days have begun, what the deck's day
+        // still takes; those at a step all), and of the new what the deck's day still takes.
+        let asks = |deck: &str, counts: &[usize; 8]| {
+            let begun = counts[1] - counts[6];
+            let reviews = settings.reviews_a_day(deck).map_or(begun, |a_day| begun.min((a_day as usize).saturating_sub(counts[7])));
+            counts[6] + reviews + counts[2].min((settings.new_a_day(deck) as usize).saturating_sub(counts[5]))
+        };
         let to_review: usize = decks.iter().filter(|(deck, _)| !deck.contains('/')).map(|(deck, counts)| asks(deck, counts)).sum();
         let listed: Vec<Value> = decks
             .iter()
             .map(|(deck, counts)| {
-                let [cards, due, new, young, mature, new_today] = *counts;
+                let [cards, due, new, young, mature, new_today, _, reviewed_today] = *counts;
                 json!({
                     "deck": deck, "cards": cards, "new": new, "young": young, "mature": mature, "due": due, "to_review": asks(deck, counts),
                     "new_a_day": settings.new_a_day(deck), "new_today": new_today, "retention": settings.retention(deck), "learning_steps_minutes": settings.step_minutes(deck),
+                    "reviews_a_day": settings.reviews_a_day(deck), "reviewed_today": reviewed_today,
                 })
             })
             .collect();
@@ -1047,9 +1056,11 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// Where a card stands at `now`: `new` (never reviewed), `due`, or `later`.
+/// Where a card stands at `now`: `paused` (asked no more until resumed), `new` (never
+/// reviewed), `due`, or `later`.
 fn standing(card: &knotes_core::CardRow, now: i64) -> &'static str {
     match card.reviewed {
+        _ if card.paused => "paused",
         None => "new",
         Some(s) if s.due <= now => "due",
         Some(_) => "later",

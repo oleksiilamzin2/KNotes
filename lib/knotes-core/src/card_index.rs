@@ -8,6 +8,9 @@ pub struct DeckCount {
     pub cards: usize,
     /// Reviewed before and due again.
     pub due: usize,
+    /// Of those due, the cards still at a step (learned today, or forgotten and learned
+    /// again): asked whatever the deck's reviews a day, a card begun being finished.
+    pub learning: usize,
     /// Never reviewed.
     pub fresh: usize,
 }
@@ -98,8 +101,13 @@ pub trait CardIndex {
     fn deck_counts(&self, until: i64) -> Result<Vec<DeckCount>, BoxError>;
     /// The cards to review by `until` in `deck` and the decks under it (every deck for none):
     /// those due, the longest due first, then those never reviewed in their notes' order;
-    /// `limit` at most, and of those never reviewed `new` at most (the day's new cards).
-    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize) -> Result<Vec<DueCard>, BoxError>;
+    /// `limit` at most, and of those never reviewed `new` at most (the day's new cards). Of
+    /// the due whose days have begun, `reviews` at most (what the deck's day still takes;
+    /// `usize::MAX` for all); those still at a step are all given.
+    fn due_cards(&self, deck: Option<&str>, until: i64, limit: usize, new: usize, reviews: usize) -> Result<Vec<DueCard>, BoxError>;
+    /// The decks with cards reviewed at `since` or later that were first reviewed before it and
+    /// are at no step, each with how many of its own: the reviews a day has taken already.
+    fn reviewed(&self, since: i64) -> Result<Vec<(String, usize)>, BoxError>;
     /// The reviewed cards of `deck` and the decks under it not due by `after` yet, the soonest
     /// due first, `limit` at most: what a review ahead of the schedule asks.
     fn cards_ahead(&self, deck: &str, after: i64, limit: usize) -> Result<Vec<DueCard>, BoxError>;

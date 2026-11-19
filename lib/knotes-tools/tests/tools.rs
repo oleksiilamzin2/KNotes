@@ -638,7 +638,7 @@ fn card_vault() -> Vault {
 fn list_decks_counts_each_deck_with_those_under_it_as_the_app_does() {
     let v = card_vault();
     let deck = |deck: &str, cards: usize, new: usize, due: usize, to_review: usize| {
-        json!({"deck": deck, "cards": cards, "new": new, "young": cards - new, "mature": 0, "due": due, "to_review": to_review, "new_a_day": 20, "new_today": 1, "retention": 0.9, "learning_steps_minutes": [1, 10]})
+        json!({"deck": deck, "cards": cards, "new": new, "young": cards - new, "mature": 0, "due": due, "to_review": to_review, "new_a_day": 20, "new_today": 1, "retention": 0.9, "learning_steps_minutes": [1, 10], "reviews_a_day": null, "reviewed_today": 0})
     };
     assert_eq!(
         call(&v, "list_decks", json!({})),

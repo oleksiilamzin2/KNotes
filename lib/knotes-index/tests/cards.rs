@@ -19,7 +19,7 @@ fn put(index: &mut SqliteIndex, path: &str, text: &str) {
 }
 
 fn count(deck: &str, cards: usize, due: usize, fresh: usize) -> DeckCount {
-    DeckCount { deck: deck.into(), cards, due, fresh }
+    DeckCount { deck: deck.into(), cards, due, fresh, learning: 0 }
 }
 
 #[test]
@@ -56,12 +56,12 @@ fn reviews_taken_from_the_logs_schedule_the_cards() {
     assert_eq!(decks(now + 3 * DAY)[1], count("мови/англійська", 2, 2, 0));
     // What to review in a deck and those under it: the due first (the longest due first), then
     // the new, in the note's order.
-    let due: Vec<(Option<String>, Option<i64>)> = index.due_cards(Some("мови"), now + 3 * DAY, 10, 100).unwrap().into_iter().map(|c| (c.id, c.due)).collect();
+    let due: Vec<(Option<String>, Option<i64>)> = index.due_cards(Some("мови"), now + 3 * DAY, 10, 100, usize::MAX).unwrap().into_iter().map(|c| (c.id, c.due)).collect();
     assert_eq!(due, [(Some("c-2".into()), Some(now + DAY)), (Some("c-1".into()), Some(now + 3 * DAY)), (Some("c-3".into()), None), (None, None)]);
-    let english: Vec<Option<String>> = index.due_cards(Some("мови/англійська"), now + DAY, 10, 100).unwrap().into_iter().map(|c| c.id).collect();
+    let english: Vec<Option<String>> = index.due_cards(Some("мови/англійська"), now + DAY, 10, 100, usize::MAX).unwrap().into_iter().map(|c| c.id).collect();
     assert_eq!(english, [Some("c-2".to_owned())], "its own, and only the due");
-    assert_eq!(index.due_cards(None, now + DAY, 2, 100).unwrap().len(), 2, "every deck, the limit kept");
-    let card = &index.due_cards(Some("мови/англійська"), now + DAY, 1, 100).unwrap()[0];
+    assert_eq!(index.due_cards(None, now + DAY, 2, 100, usize::MAX).unwrap().len(), 2, "every deck, the limit kept");
+    let card = &index.due_cards(Some("мови/англійська"), now + DAY, 1, 100, usize::MAX).unwrap()[0];
     assert_eq!((card.path.as_str(), card.start, card.deck.as_str()), ("a.md", 50, "мови/англійська"), "where it is written");
 }
 
@@ -73,15 +73,15 @@ fn a_second_log_s_earlier_reviews_are_worked_in_in_time_s_order() {
     let fsrs = Fsrs::default();
     let now = 1_000_000;
     index.take_reviews("mac.tsv", 0, &review_line(now, "c-1", Grade::Good), &fsrs, &no_steps()).unwrap();
-    let alone = index.due_cards(None, i64::MAX, 1, 100).unwrap()[0].due.unwrap();
+    let alone = index.due_cards(None, i64::MAX, 1, 100, usize::MAX).unwrap()[0].due.unwrap();
     // Another Mac reviewed it three days before; its log arrives later.
     index.take_reviews("other.tsv", 0, &review_line(now - 3 * DAY, "c-1", Grade::Good), &fsrs, &no_steps()).unwrap();
-    let both = index.due_cards(None, i64::MAX, 1, 100).unwrap()[0].due.unwrap();
+    let both = index.due_cards(None, i64::MAX, 1, 100, usize::MAX).unwrap()[0].due.unwrap();
     assert!(both > alone, "a second review, not a first: due later ({alone} then {both})");
     // More of the first log, read from where it was.
     let read = index.reviews_read("mac.tsv").unwrap();
     index.take_reviews("mac.tsv", read, &review_line(both, "c-1", Grade::Easy), &fsrs, &no_steps()).unwrap();
-    assert!(index.due_cards(None, i64::MAX, 1, 100).unwrap()[0].due.unwrap() > both);
+    assert!(index.due_cards(None, i64::MAX, 1, 100, usize::MAX).unwrap()[0].due.unwrap() > both);
 }
 
 #[test]
@@ -126,11 +126,11 @@ fn a_deck_s_settings_move_when_its_cards_are_due_and_limit_its_new_cards() {
     assert_eq!(index.introduced(now).unwrap(), [("мови/англійська".to_owned(), 1), ("історія".to_owned(), 1)]);
     assert_eq!(index.introduced(now + 1).unwrap(), []);
     // Of the never reviewed, as many as asked; the due all the same.
-    let ids = |new| -> Vec<Option<String>> { index.due_cards(Some("мови"), now + 30 * DAY, 10, new).unwrap().into_iter().map(|c| c.id).collect() };
+    let ids = |new| -> Vec<Option<String>> { index.due_cards(Some("мови"), now + 30 * DAY, 10, new, usize::MAX).unwrap().into_iter().map(|c| c.id).collect() };
     assert_eq!(ids(0), [Some("c-1".to_owned())]);
     assert_eq!(ids(2), [Some("c-1".to_owned()), Some("c-2".into()), Some("c-3".into())]);
     assert_eq!(ids(9).len(), 4);
-    assert_eq!(index.due_cards(Some("мови"), now + 30 * DAY, 2, 9).unwrap().len(), 2, "the limit of all kept");
+    assert_eq!(index.due_cards(Some("мови"), now + 30 * DAY, 2, 9, usize::MAX).unwrap().len(), 2, "the limit of all kept");
     // Ahead of the schedule: the reviewed ones not due yet, the deck's and those under it.
     let ahead = |deck, after| -> Vec<Option<String>> { index.cards_ahead(deck, after, 10).unwrap().into_iter().map(|c| c.id).collect() };
     assert_eq!((ahead("мови", now), ahead("мови", now + 2 * DAY), ahead("історія", now)), (vec![Some("c-1".to_owned())], vec![], vec![Some("c-4".to_owned())]));
@@ -240,19 +240,19 @@ fn a_card_paused_is_asked_no_more_until_it_is_resumed() {
     index.take_reviews("mac.tsv", 0, &log, &fsrs, &no_steps()).unwrap();
     assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 3, 1, 1));
     let ids = |cards: Vec<knotes_core::DueCard>| cards.into_iter().map(|c| c.id.unwrap_or_default()).collect::<Vec<_>>().join(" ");
-    assert_eq!((ids(index.due_cards(Some("мови"), now, 10, 10).unwrap()), ids(index.cards_ahead("мови", now, 10).unwrap())), ("c-1 c-3".to_owned(), "c-2".to_owned()));
+    assert_eq!((ids(index.due_cards(Some("мови"), now, 10, 10, usize::MAX).unwrap()), ids(index.cards_ahead("мови", now, 10).unwrap())), ("c-1 c-3".to_owned(), "c-2".to_owned()));
     // All three paused: they are the deck's still, but none waits, is asked or comes ahead.
     let paused: String = ["c-1", "c-2", "c-3"].iter().map(|id| paused_line(now + 1, id, true)).collect();
     assert_eq!(index.take_reviews("mac.tsv", log.len() as u64, &paused, &fsrs, &no_steps()).unwrap(), 3);
     assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 3, 0, 0));
-    assert_eq!((ids(index.due_cards(Some("мови"), now, 10, 10).unwrap()), ids(index.due_cards(None, now, 10, 10).unwrap()), ids(index.cards_ahead("мови", now, 10).unwrap())), (String::new(), String::new(), String::new()));
+    assert_eq!((ids(index.due_cards(Some("мови"), now, 10, 10, usize::MAX).unwrap()), ids(index.due_cards(None, now, 10, 10, usize::MAX).unwrap()), ids(index.cards_ahead("мови", now, 10).unwrap())), (String::new(), String::new(), String::new()));
     let rows = index.card_rows(None, None).unwrap();
     assert!(rows.iter().all(|row| row.paused) && rows[0].reviewed.is_some(), "its schedule is kept while it is paused");
     // Resumed, it stands as it stood.
     let resumed = paused_line(now + 2, "c-1", false) + &paused_line(now + 2, "c-3", false);
     index.take_reviews("mac.tsv", (log.len() + paused.len()) as u64, &resumed, &fsrs, &no_steps()).unwrap();
     assert_eq!(index.deck_counts(now).unwrap()[0], count("мови", 3, 1, 1));
-    assert_eq!(ids(index.due_cards(Some("мови"), now, 10, 10).unwrap()), "c-1 c-3");
+    assert_eq!(ids(index.due_cards(Some("мови"), now, 10, 10, usize::MAX).unwrap()), "c-1 c-3");
     assert_eq!(index.card_rows(None, None).unwrap().iter().map(|row| row.paused).collect::<Vec<_>>(), [false, true, false]);
     // Another Mac's log arrives late with an older pause of cat: the newer line stands. Its
     // newer pause of fox takes.
@@ -275,5 +275,33 @@ fn a_card_paused_is_asked_no_more_until_it_is_resumed() {
     }
     // A card with no review at all can be paused: it is not new to ask.
     assert_eq!(index.card_state("c-3").unwrap(), None);
+}
+
+#[test]
+fn of_the_cards_due_a_day_s_reviews_are_given_and_those_at_a_step_besides() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови a::1 ^c-1\n\n#@мови b::2 ^c-2\n\n#@мови c::3 ^c-3\n\n#@мови d::4 ^c-4\n\n#@мови e::5 ^c-5\n");
+    let (fsrs, settings) = (Fsrs::default(), DeckSettings::default());
+    let now = 100 * DAY;
+    // Three cards whose days have begun, due for two weeks (Easy a month ago); one still at
+    // its step, due in ten minutes (Good a minute ago); one new.
+    let log = review_line(now - 30 * DAY, "c-1", Grade::Easy) + &review_line(now - 30 * DAY + 1, "c-2", Grade::Easy) + &review_line(now - 30 * DAY + 2, "c-3", Grade::Easy) + &review_line(now - 60, "c-4", Grade::Good);
+    index.take_reviews("mac.tsv", 0, &log, &fsrs, &settings).unwrap();
+    let soon = now + 600;
+    assert_eq!(index.deck_counts(soon).unwrap()[0], DeckCount { deck: "мови".into(), cards: 5, due: 4, fresh: 1, learning: 1 });
+    let ids = |cards: Vec<knotes_core::DueCard>| cards.into_iter().map(|c| c.id.unwrap_or_default()).collect::<Vec<_>>().join(" ");
+    assert_eq!(ids(index.due_cards(Some("мови"), soon, 10, 10, usize::MAX).unwrap()), "c-1 c-2 c-3 c-4 c-5", "no limit: all, the longest due first, the new one last");
+    assert_eq!(ids(index.due_cards(Some("мови"), soon, 10, 10, 2).unwrap()), "c-1 c-2 c-4 c-5", "two of the three whose days have begun; the one at its step besides");
+    assert_eq!(ids(index.due_cards(Some("мови"), soon, 10, 0, 0).unwrap()), "c-4", "the day's reviews taken: a card begun is still finished");
+    assert_eq!(ids(index.due_cards(Some("мови"), soon, 2, 10, 5).unwrap()), "c-1 c-2", "no more than asked for at once");
+    // What today has taken: the cards reviewed since it began whose days had begun before
+    // (not the one first learned today), once they are at no step.
+    let today = now - 3_600;
+    assert!(index.reviewed(today).unwrap().is_empty(), "the card at its step was first reviewed today");
+    let more = review_line(now, "c-1", Grade::Good) + &review_line(now, "c-2", Grade::Again);
+    index.take_reviews("mac.tsv", log.len() as u64, &more, &fsrs, &settings).unwrap();
+    assert_eq!(index.reviewed(today).unwrap(), [("мови".to_owned(), 1)], "c-1 is done; c-2, forgotten, is at a step again and comes back whatever the day takes");
+    assert_eq!(ids(index.due_cards(Some("мови"), soon, 10, 0, 0).unwrap()), "c-4 c-2", "both at a step, the sooner due first");
 }
 

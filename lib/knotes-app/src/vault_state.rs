@@ -337,9 +337,19 @@ impl<R: CardIndex, L> VaultState<R, L> {
         let under = format!("{deck}/");
         let today: usize = introduced.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
         let new = (settings.new_a_day(deck) as usize).saturating_sub(today);
+        // Of the due whose days have begun, what the deck's day still takes (all, when no
+        // deck says how many a day).
+        let reviews = settings.reviews_a_day(deck).map_or(usize::MAX, |a_day| {
+            let reviewed = match &rows {
+                Some(rows) => deck_rows::reviewed(rows, day_start),
+                None => reader.reviewed(day_start).unwrap_or_default(),
+            };
+            let today: usize = reviewed.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
+            (a_day as usize).saturating_sub(today)
+        });
         match &rows {
-            Some(rows) => deck_rows::due_cards(rows, deck, now, limit, new),
-            None => reader.due_cards(Some(deck), now, limit, new).unwrap_or_default(),
+            Some(rows) => deck_rows::due_cards(rows, deck, now, limit, new, reviews),
+            None => reader.due_cards(Some(deck), now, limit, new, reviews).unwrap_or_default(),
         }
     }
 
@@ -357,9 +367,15 @@ impl<R: CardIndex, L> VaultState<R, L> {
     /// its notes' cards are counted here instead).
     pub fn deck_tree(&self, counts: &[DeckCount], settings: &DeckSettings, now: i64, day_start: i64) -> Vec<TagNode> {
         let new_a_day = |deck: &str| settings.new_a_day(deck) as usize;
+        let reviews_a_day = |deck: &str| settings.reviews_a_day(deck).map(|a_day| a_day as usize);
         match self.space_rows() {
-            Some(rows) => deck_tree(&deck_rows::deck_counts(&rows, now), &deck_rows::introduced(&rows, day_start), &new_a_day),
-            None => deck_tree(counts, &self.reader.as_ref().and_then(|r| r.introduced(day_start).ok()).unwrap_or_default(), &new_a_day),
+            Some(rows) => deck_tree(&deck_rows::deck_counts(&rows, now), &deck_rows::introduced(&rows, day_start), &new_a_day, &deck_rows::reviewed(&rows, day_start), &reviews_a_day),
+            None => {
+                let reader = self.reader.as_ref();
+                let introduced = reader.and_then(|r| r.introduced(day_start).ok()).unwrap_or_default();
+                let reviewed = reader.and_then(|r| r.reviewed(day_start).ok()).unwrap_or_default();
+                deck_tree(counts, &introduced, &new_a_day, &reviewed, &reviews_a_day)
+            }
         }
     }
 

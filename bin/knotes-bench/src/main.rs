@@ -175,7 +175,7 @@ fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Resul
     rows.push(measure(&name("Sidebar: every deck's counts"), MS(50), &decks, |_| index.deck_counts(now).map_or(0, |c| c.len())));
     rows.push(measure(&name("Sidebar: today's new cards by deck"), MS(50), &decks, |_| index.introduced(today).map_or(0, |c| c.len())));
     let of = |what: &str| format!("{what}, the largest deck ({cards_in} cards)");
-    rows.push(measure(&of("Review: the cards due"), MS(50), &decks, |deck| index.due_cards(Some(deck), now, 200, 20).map_or(0, |c| c.len())));
+    rows.push(measure(&of("Review: the cards due"), MS(50), &decks, |deck| index.due_cards(Some(deck), now, 200, 20, usize::MAX).map_or(0, |c| c.len())));
     rows.push(measure(&of("Review: the cards ahead"), MS(50), &decks, |deck| index.cards_ahead(deck, now, 200).map_or(0, |c| c.len())));
     rows.push(measure(&of("Statistics"), MS(100), &decks, |deck| index.deck_stats(deck, today, &|_| true).map_or(0, |s| s.cards)));
     rows.push(measure(&of("The deck's notes"), MS(50), &decks, |deck| index.deck_notes(deck).map_or(0, |n| n.len())));
@@ -205,7 +205,7 @@ fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Resul
     rows.push(measure(&within("the largest deck's cards due"), MS(50), &decks, |deck| {
         let mut rows = index.card_rows(None, None).unwrap_or_default();
         rows.retain(|row| holds(&row.path));
-        deck_rows::due_cards(&rows, deck, now, 200, 20).len()
+        deck_rows::due_cards(&rows, deck, now, 200, 20, usize::MAX).len()
     }));
     rows.push(measure(&within("the largest deck's statistics"), MS(100), &decks, |deck| index.deck_stats(deck, today, &holds).map_or(0, |s| s.cards)));
     Ok(())

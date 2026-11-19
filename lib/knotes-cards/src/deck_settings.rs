@@ -23,10 +23,12 @@ pub struct DeckSetting {
     pub new_a_day: Option<u32>,
     /// The minutes of the steps a new card is learned in (empty: none, its days begin at once).
     pub steps: Option<Vec<u32>>,
+    /// How many of the cards due a day are asked; the rest wait for the next day.
+    pub reviews_a_day: Option<u32>,
 }
 
 /// Every deck's settings, as `.knotes/decks.json` holds them:
-/// `{"мови": {"retention": 0.85, "new_a_day": 10, "steps": [1, 10]}}`. The deck `""` is above
+/// `{"мови": {"retention": 0.85, "new_a_day": 10, "steps": [1, 10], "reviews_a_day": 100}}`. The deck `""` is above
 /// every deck: what it sets, all take.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeckSettings {
@@ -57,7 +59,8 @@ impl DeckSettings {
             let retention = value.remove("retention").and_then(|v| v.as_f64()).map(|r| r.clamp(RETENTION_RANGE.0, RETENTION_RANGE.1));
             let new_a_day = value.remove("new_a_day").and_then(|v| v.as_u64()).map(|n| n.min(u64::from(u32::MAX)) as u32);
             let steps = value.remove("steps").and_then(|v| v.as_array().map(|steps| steps.iter().filter_map(|m| m.as_u64()).filter(|m| *m > 0).map(|m| m.min(STEP_MAX) as u32).collect()));
-            settings.decks.insert(deck.clone(), DeckSetting { retention, new_a_day, steps });
+            let reviews_a_day = value.remove("reviews_a_day").and_then(|v| v.as_u64()).map(|n| n.min(u64::from(u32::MAX)) as u32);
+            settings.decks.insert(deck.clone(), DeckSetting { retention, new_a_day, steps, reviews_a_day });
             settings.other.insert(deck, value);
         }
         Some(settings)
@@ -76,6 +79,9 @@ impl DeckSettings {
             }
             if let Some(steps) = &setting.steps {
                 value.insert("steps".into(), json!(steps));
+            }
+            if let Some(reviews) = setting.reviews_a_day {
+                value.insert("reviews_a_day".into(), json!(reviews));
             }
             if !value.is_empty() {
                 decks.insert(deck.clone(), Value::Object(value));
@@ -104,6 +110,15 @@ impl DeckSettings {
         self.nearest(deck, |s| s.new_a_day).unwrap_or(NEW_A_DAY)
     }
 
+    /// How many of the cards due `deck` asks a day (its own with those of the decks under it):
+    /// its own setting, or the nearest deck's above; none while no deck says, and then all
+    /// that are due are asked. After days away a deck does not ask its whole backlog at once.
+    /// Cards still at a step (learned today, or forgotten and learned again) are asked
+    /// besides: a card begun is finished.
+    pub fn reviews_a_day(&self, deck: &str) -> Option<u32> {
+        self.nearest(deck, |s| s.reviews_a_day)
+    }
+
     /// The minutes of the steps a new card of `deck` is learned in.
     pub fn step_minutes(&self, deck: &str) -> Vec<u32> {
         self.nearest(deck, |s| s.steps.clone()).unwrap_or_else(|| STEPS.to_vec())
@@ -115,10 +130,10 @@ impl DeckSettings {
     }
 
     /// What the deck above `deck` gives it: what `deck` has when it sets nothing itself (the
-    /// chance of recall, the new cards a day, the steps' minutes).
-    pub fn inherited(&self, deck: &str) -> (f64, u32, Vec<u32>) {
+    /// chance of recall, the new cards a day, the steps' minutes, the reviews a day).
+    pub fn inherited(&self, deck: &str) -> (f64, u32, Vec<u32>, Option<u32>) {
         let above = deck.rsplit_once('/').map_or("", |(above, _)| above);
-        (self.retention(above), self.new_a_day(above), self.step_minutes(above))
+        (self.retention(above), self.new_a_day(above), self.step_minutes(above), self.reviews_a_day(above))
     }
 
     fn nearest<T>(&self, deck: &str, of: impl Fn(&DeckSetting) -> Option<T>) -> Option<T> {
