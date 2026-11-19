@@ -187,9 +187,11 @@ fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Resul
     // «Усі колоди»: each top deck's cards due (its own settings), all the decks' cards ahead
     // and their statistics: what choosing that row reads.
     let top_decks: Vec<String> = tops.keys().cloned().collect();
-    rows.push(measure(&format!("All decks: each top deck's cards due ({} decks)", top_decks.len()), MS(100), &every_deck(), |_| {
+    rows.push(measure(&format!("All decks: each top deck's cards due, when a deck limits its reviews ({} decks)", top_decks.len()), MS(100), &every_deck(), |_| {
         top_decks.iter().map(|deck| index.due_cards(Some(deck), now, 200, 20, usize::MAX).map_or(0, |c| c.len())).sum()
     }));
+    // Read at once, when no deck says how many reviews a day (as it is until one does).
+    rows.push(measure("All decks: the cards due, read at once", MS(50), &every_deck(), |_| index.due_cards(None, now, 200, 0, usize::MAX).map_or(0, |c| c.len())));
     rows.push(measure("All decks: the cards ahead", MS(50), &every_deck(), |deck| index.cards_ahead(deck, now, 200).map_or(0, |c| c.len())));
     rows.push(measure("All decks: statistics", MS(100), &every_deck(), |deck| index.deck_stats(deck, today, &|_| true).map_or(0, |s| s.cards)));
     // A deck's table (ADR 0037): every card's row read, and sorted by a column. Its rows are

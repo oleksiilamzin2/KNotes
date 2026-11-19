@@ -305,3 +305,45 @@ fn of_the_cards_due_a_day_s_reviews_are_given_and_those_at_a_step_besides() {
     assert_eq!(ids(index.due_cards(Some("мови"), soon, 10, 0, 0).unwrap()), "c-4 c-2", "both at a step, the sooner due first");
 }
 
+#[test]
+fn every_deck_together_is_read_as_its_decks_are_one_by_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = SqliteIndex::open(dir.path()).unwrap();
+    put(&mut index, "a.md", "#@мови a::1 ^c-1\n\n#@мови/англійська b::2 ^c-2\n\n#@історія c::3 ^c-3\n");
+    put(&mut index, "b.md", "#@історія d::4 ^c-4\n\n#@історія e::5 ^c-5\n\n#@мови f::6\n");
+    let (fsrs, settings) = (Fsrs::default(), DeckSettings::default());
+    let now = 100 * DAY;
+    // c-3 due the longest, then c-1, then c-2; c-4 at a step, due soon; c-5 reviewed and not
+    // due for long; the last card new.
+    let log = review_line(now - 40 * DAY, "c-3", Grade::Easy) + &review_line(now - 35 * DAY, "c-1", Grade::Easy) + &review_line(now - 30 * DAY, "c-2", Grade::Easy) + &review_line(now - 60, "c-4", Grade::Good) + &review_line(now - DAY, "c-5", Grade::Easy);
+    index.take_reviews("mac.tsv", 0, &log, &fsrs, &settings).unwrap();
+    let ids = |cards: Vec<knotes_core::DueCard>| cards.into_iter().map(|c| c.id.unwrap_or_else(|| "new".into())).collect::<Vec<_>>().join(" ");
+    let soon = now + 600;
+    // Every deck's due cards, the longest due first, whichever deck they are of; none asked for
+    // and the deck `""` are the same.
+    assert_eq!(ids(index.due_cards(None, soon, 10, 0, usize::MAX).unwrap()), "c-3 c-1 c-2 c-4");
+    assert_eq!(ids(index.due_cards(Some(""), soon, 10, 0, usize::MAX).unwrap()), "c-3 c-1 c-2 c-4");
+    assert_eq!(ids(index.due_cards(None, soon, 2, 0, usize::MAX).unwrap()), "c-3 c-1", "as far as the limit");
+    assert_eq!(ids(index.due_cards(None, soon, 10, 0, 1).unwrap()), "c-3 c-4", "a day's reviews, and the one at its step besides");
+    assert_eq!(ids(index.due_cards(None, soon, 10, 5, usize::MAX).unwrap()), "c-3 c-1 c-2 c-4 new");
+    assert_eq!(ids(index.due_cards(Some("історія"), i64::MIN, 10, 5, 0).unwrap()), "", "a deck's new cards alone, when it has none");
+    assert_eq!(ids(index.due_cards(Some("мови"), i64::MIN, 10, 5, 0).unwrap()), "new");
+    // Those not due yet, the soonest first.
+    assert_eq!(ids(index.cards_ahead("", soon, 10).unwrap()), "c-5");
+    assert_eq!(ids(index.cards_ahead("", now - 50 * DAY, 2).unwrap()), "c-3 c-1");
+    // Paused, a card is in neither.
+    index.take_reviews("mac.tsv", log.len() as u64, &knotes_cards::paused_line(now, "c-3", true), &fsrs, &settings).unwrap();
+    assert_eq!(ids(index.due_cards(None, soon, 10, 0, usize::MAX).unwrap()), "c-1 c-2 c-4");
+    assert_eq!(ids(index.cards_ahead("", now - 50 * DAY, 2).unwrap()), "c-1 c-2");
+    // The statistics of every deck together are those of its decks added up.
+    let (all, a, b) = (index.deck_stats("", now, &|_| true).unwrap(), index.deck_stats("мови", now, &|_| true).unwrap(), index.deck_stats("історія", now, &|_| true).unwrap());
+    assert_eq!((all.cards, all.fresh, all.young, all.mature), (a.cards + b.cards, a.fresh + b.fresh, a.young + b.young, a.mature + b.mature));
+    assert_eq!(all.cards, 6);
+    let added = |one: &[usize], other: &[usize]| one.iter().zip(other).map(|(x, y)| x + y).collect::<Vec<_>>();
+    assert_eq!(all.due_by_day, added(&a.due_by_day, &b.due_by_day));
+    assert_eq!(all.grades.to_vec(), added(&a.grades, &b.grades));
+    assert_eq!(all.reviews_by_day.iter().map(|d| d.0).sum::<usize>(), 2, "the reviews of the last thirty days: the one at a step and yesterday's");
+    // A part of the notes (a space's): the statistics of those.
+    assert_eq!(index.deck_stats("", now, &|path| path == "b.md").unwrap().cards, 3);
+}
+

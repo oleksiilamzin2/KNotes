@@ -433,3 +433,14 @@ test missed, each of them relaunching the app after a grade:
   The deck's row, «Усі колоди» and the agent's `list_decks` count the same. A deck under one
   with a number cannot ask for all: it can only name a number of its own. The agent's tools
   also stopped counting a paused card among those that wait.
+- **«Усі колоди» with a hundred thousand cards** (2026-11-19, measured on a vault of 100 000
+  cards in twenty decks, 60 000 of them due). Choosing the row took 214 ms; it takes 77 ms.
+  The decks' due cards were queued deck by deck (66 ms): while no deck says how many reviews a
+  day, every deck's due cards are all asked, so the longest due of them all are read at once,
+  in the order of their schedules, and the decks' new cards only when those do not fill the
+  queue; a deck that limits its reviews brings back the deck-by-deck way. The cards ahead of
+  the schedule are read the same way (29 ms became 0.05 ms). The statistics are counted by
+  SQLite a note at a time, not read a card at a time, and for every deck with no deck looked
+  up for each card (82 ms became 40 ms); which notes count is still the caller's to say, a
+  space's. One deck of 5 000 cards is chosen in 17 ms; the table of all the cards opens in
+  54 ms. `KNOTES_PROBE_TIMES` has the app's probe say how long its steps took.

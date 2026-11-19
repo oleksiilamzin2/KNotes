@@ -354,6 +354,25 @@ impl<R: CardIndex, L> VaultState<R, L> {
         // All the decks together (`""`): what each of the top ones asks, by its own settings (a
         // day's new cards are a deck's, not shared out among them): those due first, the
         // longest due first, then the new ones, deck by deck.
+        // The whole vault, and no deck saying how many reviews a day (as it is until one
+        // does): every deck's due cards are all asked, so the longest due of them all are read
+        // at once, and the decks' new cards only when those do not fill the queue. (Deck by
+        // deck, twenty decks of a hundred thousand cards took 66 ms.)
+        if rows.is_none() && self.decks.iter().all(|top| settings.reviews_a_day(&top.tag).is_none()) {
+            let mut all = reader.due_cards(None, now, limit, 0, usize::MAX).unwrap_or_default();
+            for top in self.decks.iter() {
+                if all.len() >= limit {
+                    break;
+                }
+                let under = format!("{}/", top.tag);
+                let today: usize = introduced.iter().filter(|(d, _)| *d == top.tag || d.starts_with(&under)).map(|(_, n)| n).sum();
+                let new = (settings.new_a_day(&top.tag) as usize).saturating_sub(today);
+                // The deck's new cards alone: none is due before time began.
+                all.extend(reader.due_cards(Some(&top.tag), i64::MIN, limit, new, 0).unwrap_or_default());
+            }
+            all.truncate(limit);
+            return all;
+        }
         let mut all: Vec<DueCard> = self.decks.iter().flat_map(|top| of(&top.tag)).collect();
         all.sort_by_key(|card| (card.due.is_none(), card.due));
         all.truncate(limit);
