@@ -238,6 +238,28 @@ pub fn in_deck(block: &str, deck: &str) -> Option<String> {
     (!deck.is_empty() && end > 0 && !deck.contains(|c: char| c.is_whitespace() || c == '{')).then(|| format!("#@{deck}{}", &rest[end..]))
 }
 
+/// What goes from the note's `text` with the card's block at `block` deleted: the block, and
+/// where it is a line of its own that line's end, and of a blank line on each side of it one
+/// (at the note's end, the one before it). A card inside a line takes one of the two spaces
+/// around it. So a deleted card leaves no gap where it was.
+pub fn block_to_delete(text: &str, block: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let (Some(before), Some(after)) = (text.get(..block.start), text.get(block.end..)) else { return block };
+    let (mut start, mut end) = (block.start, block.end);
+    if (before.is_empty() || before.ends_with('\n')) && (after.is_empty() || after.starts_with('\n')) {
+        end += usize::from(!after.is_empty());
+        if before.is_empty() || before.ends_with("\n\n") {
+            if text[end..].starts_with('\n') {
+                end += 1;
+            } else if end == text.len() && !before.is_empty() {
+                start -= 1;
+            }
+        }
+    } else if before.ends_with(' ') && after.starts_with(' ') {
+        end += 1;
+    }
+    start..end
+}
+
 /// The note's `text` with the card's block `old` (found at `start` when the table was filled)
 /// replaced by `new`. The note may have changed since: the block is taken where it stands now
 /// (at `start`, else where the note holds it, if it holds it once). None when it is not there

@@ -205,7 +205,9 @@ impl DeckCharts {
 
         // The cards: one bar, a part a kind, and what each part is under it.
         draw_text(strings::CHART_CARDS, 0.0, CARDS_TOP, &title, &ink, Align::Left);
-        draw_text(&strings::chart_cards(stats.cards), width, CARDS_TOP + 2.0, &small, &quiet, Align::Right);
+        draw_text(&strings::chart_cards(stats.cards, stats.paused), width, CARDS_TOP + 2.0, &small, &quiet, Align::Right);
+        // The bar and the shares: of the cards not paused (those are said beside the count).
+        let active = stats.cards - stats.paused;
         let kinds = [(strings::CHART_NEW, stats.fresh), (strings::CHART_YOUNG, stats.young), (strings::CHART_MATURE, stats.mature)];
         let bar = rect(0.0, CARDS_TOP + 26.0, width, 12.0);
         NSGraphicsContext::saveGraphicsState_class();
@@ -215,7 +217,7 @@ impl DeckCharts {
         let room = width - 2.0 * shown.len().saturating_sub(1) as f64;
         let mut x = 0.0;
         for &i in &shown {
-            let part = room * kinds[i].1 as f64 / stats.cards.max(1) as f64;
+            let part = room * kinds[i].1 as f64 / active.max(1) as f64;
             colours[i].setFill();
             NSBezierPath::fillRect(rect(x, bar.origin.y, part, bar.size.height));
             x += part + 2.0;
@@ -223,7 +225,7 @@ impl DeckCharts {
         NSGraphicsContext::restoreGraphicsState_class();
         let mut x = 0.0;
         for (i, (name, cards)) in kinds.iter().enumerate() {
-            x = self.legend(x, CARDS_TOP + 48.0, &colours[i], &format!("{name} {cards} · {} %", share(*cards, stats.cards).unwrap_or(0)), &small, &quiet) + 18.0;
+            x = self.legend(x, CARDS_TOP + 48.0, &colours[i], &format!("{name} {cards} · {} %", share(*cards, active).unwrap_or(0)), &small, &quiet) + 18.0;
         }
 
         // What comes due: a bar a day, today first.

@@ -79,6 +79,8 @@ pub struct DeckStats {
     /// Reviewed, and due again within `MATURE_DAYS` of the last review; the rest are mature.
     pub young: usize,
     pub mature: usize,
+    /// Paused (of `cards`): of none of the three kinds, and not coming due.
+    pub paused: usize,
     /// The reviewed cards due each day from today on (`FORECAST_DAYS` and today): today's with
     /// those overdue first.
     pub due_by_day: Vec<usize>,

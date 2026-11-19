@@ -563,14 +563,23 @@ impl Controller {
         if !ivars.asks.borrow().as_ref().is_some_and(|(_, _, delete)| delete(&row)) {
             return;
         }
-        if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&row, &block, "").is_err()) {
+        // With the block goes the gap it would leave (its line's end, a blank line of two): what
+        // the note has there is taken with it, where the note is as the table read it.
+        let (mut gone, mut block) = (row.clone(), block);
+        let start = row.start as usize;
+        if let Some(text) = ivars.model.note(&row.path).map(|note| note.0.clone()).filter(|text| text.get(start..).is_some_and(|rest| rest.starts_with(&block))) {
+            let wider = knotes_app::block_to_delete(&text, start..start + block.len());
+            gone.start = wider.start as u32;
+            block = text[wider].to_owned();
+        }
+        if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&gone, &block, "").is_err()) {
             return;
         }
         let at = ivars.model.chosen.get().unwrap_or(0);
         {
             let mut table = ivars.model.table.borrow_mut();
-            table.block_changed(&row.path, row.start, block.len(), 0);
             table.remove(&row);
+            table.block_changed(&row.path, gone.start, block.len(), 0);
         }
         ivars.model.notes.borrow_mut().remove(&row.path);
         *ivars.editing.borrow_mut() = None;

@@ -338,7 +338,9 @@ fn every_deck_together_is_read_as_its_decks_are_one_by_one() {
     // The statistics of every deck together are those of its decks added up.
     let (all, a, b) = (index.deck_stats("", now, &|_| true).unwrap(), index.deck_stats("мови", now, &|_| true).unwrap(), index.deck_stats("історія", now, &|_| true).unwrap());
     assert_eq!((all.cards, all.fresh, all.young, all.mature), (a.cards + b.cards, a.fresh + b.fresh, a.young + b.young, a.mature + b.mature));
-    assert_eq!(all.cards, 6);
+    assert_eq!((all.cards, all.paused, a.paused + b.paused), (6, 1, 1), "the paused one is counted, of no kind");
+    assert_eq!(all.fresh + all.young + all.mature + all.paused, all.cards);
+    assert_eq!(all.due_by_day.iter().sum::<usize>(), all.young + all.mature, "and does not come due");
     let added = |one: &[usize], other: &[usize]| one.iter().zip(other).map(|(x, y)| x + y).collect::<Vec<_>>();
     assert_eq!(all.due_by_day, added(&a.due_by_day, &b.due_by_day));
     assert_eq!(all.grades.to_vec(), added(&a.grades, &b.grades));

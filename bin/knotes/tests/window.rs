@@ -4280,7 +4280,7 @@ fn a_card_is_paused_put_in_another_deck_and_deleted_from_its_row_s_menu() {
     // the rest as it was.
     let note = std::fs::read_to_string(vault.path().join("Мови.md")).unwrap();
     let id = note.split("dog::пес ^").nth(1).and_then(|rest| rest.split('\n').next()).unwrap_or_else(|| panic!("{note}")).to_owned();
-    assert_eq!(note, format!("Слова.\n\n#@тварини cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^{id}\n\n\n"), "{out}");
+    assert_eq!(note, format!("Слова.\n\n#@тварини cat::кіт ^c-1\n\n#@мови/англійська dog::пес ^{id}\n"), "no gap where Hund was: {out}");
     // The log says the pause, by the card's id.
     let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
     let log = std::fs::read_to_string(logs[0].path()).unwrap();

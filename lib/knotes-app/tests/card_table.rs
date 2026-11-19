@@ -1,4 +1,4 @@
-use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, in_deck, replace_block, standing};
+use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, in_deck, block_to_delete, replace_block, standing};
 use knotes_cards::scan_cards;
 use knotes_core::{CardRow, CardState, Reviewed};
 
@@ -163,3 +163,21 @@ fn a_card_is_paused_moved_to_another_deck_and_removed_in_its_row_at_once() {
     assert_eq!((in_deck("cat::кіт", "x"), in_deck("#@en a::b", " "), in_deck("#@en a::b", "two words"), in_deck("#@ a::b", "x")), (None, None, None, None));
 }
 
+
+#[test]
+fn a_deleted_card_leaves_no_gap_where_it_was() {
+    let without = |text: &str, block: &str| {
+        let at = text.find(block).unwrap();
+        let gone = block_to_delete(text, at..at + block.len());
+        format!("{}{}", &text[..gone.start], &text[gone.end..])
+    };
+    assert_eq!(without("Intro\n\n#@en a::b\n\nEnd\n", "#@en a::b"), "Intro\n\nEnd\n", "of the two blank lines one stays");
+    assert_eq!(without("Intro\n\n#@en a::b\n", "#@en a::b"), "Intro\n", "the last line: no blank line ends the note");
+    assert_eq!(without("Intro\n\n#@en a::b", "#@en a::b"), "Intro\n");
+    assert_eq!(without("#@en a::b\n\nEnd\n", "#@en a::b"), "End\n", "the first line");
+    assert_eq!(without("#@en a::b\n", "#@en a::b"), "");
+    assert_eq!(without("Intro\n#@en a::b\nEnd\n", "#@en a::b"), "Intro\nEnd\n", "a line among lines: it alone");
+    assert_eq!(without("Intro\n\n#@en a::b\nEnd\n", "#@en a::b"), "Intro\n\nEnd\n", "the blank line before stays, with none after");
+    assert_eq!(without("A word #@en {gap} more.\n", "#@en {gap}"), "A word more.\n", "inside a line: one space of the two");
+    assert_eq!(block_to_delete("abc", 2..9), 2..9, "a place outside the text: as given");
+}

@@ -277,17 +277,22 @@ impl CardIndex for SqliteIndex {
         let of_deck = if deck.is_empty() { "(?1 || ?2 || ?3) IS NOT NULL" } else { "(c.deck = ?1 OR (c.deck >= ?2 AND c.deck < ?3))" };
         let mut st = self.conn.prepare_cached(&format!(
             "SELECT f.path, CASE WHEN s.card_id IS NULL THEN -1 WHEN s.due < ?4 THEN 0 ELSE (s.due - ?4) / 86400 END AS day, COUNT(*),
-                    COUNT(CASE WHEN s.due - s.last >= ?5 THEN 1 END)
-             FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id
-             WHERE {of_deck} GROUP BY c.file_id, day"
+                    COUNT(CASE WHEN s.due - s.last >= ?5 THEN 1 END), COALESCE(p.paused, 0) AS paused
+             FROM cards c JOIN files f ON f.id = c.file_id LEFT JOIN card_states s ON s.card_id = c.card_id LEFT JOIN card_pauses p ON p.card_id = c.card_id
+             WHERE {of_deck} GROUP BY c.file_id, day, paused"
         ))?;
-        let rows = st.query_map(params![deck, from, to, day_start, MATURE_DAYS * DAY], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)? as usize, r.get::<_, i64>(3)? as usize)))?;
+        let rows = st.query_map(params![deck, from, to, day_start, MATURE_DAYS * DAY], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)? as usize, r.get::<_, i64>(3)? as usize, r.get::<_, bool>(4)?)))?;
         for row in rows {
-            let (path, day, cards, mature) = row?;
+            let (path, day, cards, mature, paused) = row?;
             if !holds(&path) {
                 continue;
             }
             stats.cards += cards;
+            // Paused, a card is the deck's still, but of no kind and not coming due.
+            if paused {
+                stats.paused += cards;
+                continue;
+            }
             if day < 0 {
                 stats.fresh += cards;
                 continue;

@@ -64,7 +64,7 @@ pub fn deck_stats(stats: &knotes_core::DeckStats) -> String {
     let due = &stats.due_by_day;
     let coming = |days: usize| due.iter().skip(1).take(days).sum::<usize>();
     let mut lines = vec![
-        format!("Карток: {} — нових {}, молодих {}, зрілих {}", stats.cards, stats.fresh, stats.young, stats.mature),
+        format!("Карток: {} — нових {}, молодих {}, зрілих {}{}", stats.cards, stats.fresh, stats.young, stats.mature, if stats.paused > 0 { format!(", на паузі {}", stats.paused) } else { String::new() }),
         String::new(),
         format!("Сьогодні: {}", reviews(&past[past.len().saturating_sub(1)..])),
         format!("За {} днів: {}", past.len(), reviews(past)),
@@ -104,8 +104,9 @@ fn reviews_word(n: usize) -> &'static str {
 }
 
 /// "120 карток".
-pub fn chart_cards(cards: usize) -> String {
-    format!("{cards} {}", cards_word(cards))
+pub fn chart_cards(cards: usize, paused: usize) -> String {
+    let paused = if paused > 0 { format!(" · {paused} на паузі") } else { String::new() };
+    format!("{cards} {}{paused}", cards_word(cards))
 }
 
 /// The bar pointed at: "через 5 дн.: 12 карток".
