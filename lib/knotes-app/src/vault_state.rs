@@ -319,38 +319,45 @@ impl<R: CardIndex, L> VaultState<R, L> {
     /// reviewed today in it and under it). Asked of the index, not as the last snapshot had it:
     /// a review just done counts.
     pub fn due_cards(&self, deck: &str, settings: &DeckSettings, now: i64, day_start: i64, limit: usize) -> Vec<DueCard> {
-        // All the decks together (`""`): what each of the top ones asks, by its own settings (a
-        // day's new cards are a deck's, not shared out among them): those due first, the
-        // longest due first, then the new ones, deck by deck.
-        if deck.is_empty() {
-            let mut all: Vec<DueCard> = self.decks.iter().flat_map(|top| self.due_cards(&top.tag, settings, now, day_start, limit)).collect();
-            all.sort_by_key(|card| (card.due.is_none(), card.due));
-            all.truncate(limit);
-            return all;
-        }
         let Some(reader) = self.reader.as_ref() else { return Vec::new() };
+        // What every deck asked for is told from, read once: a space's cards, and what today
+        // has taken of new cards and of reviews. (Read for each deck of «Усі колоди» in turn,
+        // a hundred thousand cards took a fifth of a second to queue, and far more in a space.)
         let rows = self.space_rows();
         let introduced = match &rows {
             Some(rows) => deck_rows::introduced(rows, day_start),
             None => reader.introduced(day_start).unwrap_or_default(),
         };
-        let under = format!("{deck}/");
-        let today: usize = introduced.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
-        let new = (settings.new_a_day(deck) as usize).saturating_sub(today);
-        // Of the due whose days have begun, what the deck's day still takes (all, when no
-        // deck says how many a day).
-        let reviews = settings.reviews_a_day(deck).map_or(usize::MAX, |a_day| {
-            let reviewed = match &rows {
+        // Only when a deck says how many reviews a day.
+        let reviewed = std::cell::OnceCell::new();
+        let reviewed = || {
+            reviewed.get_or_init(|| match &rows {
                 Some(rows) => deck_rows::reviewed(rows, day_start),
                 None => reader.reviewed(day_start).unwrap_or_default(),
-            };
-            let today: usize = reviewed.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum();
-            (a_day as usize).saturating_sub(today)
-        });
-        match &rows {
-            Some(rows) => deck_rows::due_cards(rows, deck, now, limit, new, reviews),
-            None => reader.due_cards(Some(deck), now, limit, new, reviews).unwrap_or_default(),
+            })
+        };
+        let of = |deck: &str| {
+            let under = format!("{deck}/");
+            let today = |taken: &[(String, usize)]| taken.iter().filter(|(d, _)| d == deck || d.starts_with(&under)).map(|(_, n)| n).sum::<usize>();
+            let new = (settings.new_a_day(deck) as usize).saturating_sub(today(&introduced));
+            // Of the due whose days have begun, what the deck's day still takes (all, when no
+            // deck says how many a day).
+            let reviews = settings.reviews_a_day(deck).map_or(usize::MAX, |a_day| (a_day as usize).saturating_sub(today(reviewed())));
+            match &rows {
+                Some(rows) => deck_rows::due_cards(rows, deck, now, limit, new, reviews),
+                None => reader.due_cards(Some(deck), now, limit, new, reviews).unwrap_or_default(),
+            }
+        };
+        if !deck.is_empty() {
+            return of(deck);
         }
+        // All the decks together (`""`): what each of the top ones asks, by its own settings (a
+        // day's new cards are a deck's, not shared out among them): those due first, the
+        // longest due first, then the new ones, deck by deck.
+        let mut all: Vec<DueCard> = self.decks.iter().flat_map(|top| of(&top.tag)).collect();
+        all.sort_by_key(|card| (card.due.is_none(), card.due));
+        all.truncate(limit);
+        all
     }
 
     /// `deck`'s reviewed cards not due yet, the soonest due first, `limit` at most: what a

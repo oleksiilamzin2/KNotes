@@ -140,6 +140,11 @@ fn run(vault: PathBuf, factor: f64) -> Result<String, Box<dyn std::error::Error 
 
 /// The notes' cards (ADR 0037), when the vault has any: taking the review logs in, what the
 /// sidebar counts at each snapshot, what a deck chosen asks of the index, and a space's part.
+/// The deck that is every deck (`""`), as a list of one for `measure`.
+fn every_deck() -> [String; 1] {
+    [String::new()]
+}
+
 fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use knotes_app::deck_rows;
     use knotes_cards::{DeckSettings, Fsrs};
@@ -179,6 +184,14 @@ fn cards(index: &mut SqliteIndex, files: &FsVault, rows: &mut Vec<Row>) -> Resul
     rows.push(measure(&of("Review: the cards ahead"), MS(50), &decks, |deck| index.cards_ahead(deck, now, 200).map_or(0, |c| c.len())));
     rows.push(measure(&of("Statistics"), MS(100), &decks, |deck| index.deck_stats(deck, today, &|_| true).map_or(0, |s| s.cards)));
     rows.push(measure(&of("The deck's notes"), MS(50), &decks, |deck| index.deck_notes(deck).map_or(0, |n| n.len())));
+    // «Усі колоди»: each top deck's cards due (its own settings), all the decks' cards ahead
+    // and their statistics: what choosing that row reads.
+    let top_decks: Vec<String> = tops.keys().cloned().collect();
+    rows.push(measure(&format!("All decks: each top deck's cards due ({} decks)", top_decks.len()), MS(100), &every_deck(), |_| {
+        top_decks.iter().map(|deck| index.due_cards(Some(deck), now, 200, 20, usize::MAX).map_or(0, |c| c.len())).sum()
+    }));
+    rows.push(measure("All decks: the cards ahead", MS(50), &every_deck(), |deck| index.cards_ahead(deck, now, 200).map_or(0, |c| c.len())));
+    rows.push(measure("All decks: statistics", MS(100), &every_deck(), |deck| index.deck_stats(deck, today, &|_| true).map_or(0, |s| s.cards)));
     // A deck's table (ADR 0037): every card's row read, and sorted by a column. Its rows are
     // drawn as they show, so its opening is these two.
     let every = [String::new()];

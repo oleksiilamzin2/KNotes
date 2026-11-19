@@ -18,9 +18,18 @@ impl VaultWindow {
             // Through the switcher, as a click.
             self.space_switcher.probe_choose(space.as_deref());
         }
+        // How long a step took, said when `KNOTES_PROBE_TIMES` is set: to measure the app on a
+        // large vault.
+        let timed = |what: &str, began: std::time::Instant| {
+            if std::env::var_os("KNOTES_PROBE_TIMES").is_some() {
+                println!("took: {what} {:.1} ms", began.elapsed().as_secs_f64() * 1000.0);
+            }
+        };
         if let Some(item) = probe::requested_selection() {
+            let began = std::time::Instant::now();
             self.highlight(&item);
             self.select(item);
+            timed("a row chosen", began);
         }
         // `KNOTES_PROBE_DECK_SETTINGS=85|10`: the chosen deck's menu → its settings, so typed.
         let chosen = self.review_deck.borrow().clone();
@@ -34,14 +43,20 @@ impl VaultWindow {
         // `KNOTES_PROBE_DECK_TABLE_EDIT=1=new text`: that row chosen, its card's text typed
         // over and ⌘S.
         if let Ok(deck) = std::env::var("KNOTES_PROBE_DECK_TABLE") {
+            let began = std::time::Instant::now();
             self.show_deck_table(&deck);
+            timed("the table shown", began);
             if let Some(table) = self.deck_table().as_ref() {
                 // `KNOTES_PROBE_DECK_TABLE_FIND=cat`: typed in the table's search.
                 if let Ok(query) = std::env::var("KNOTES_PROBE_DECK_TABLE_FIND") {
+                    let began = std::time::Instant::now();
                     table.probe_find(&query);
+                    timed("the table searched", began);
                 }
                 for column in std::env::var("KNOTES_PROBE_DECK_TABLE_SORT").unwrap_or_default().split(',').filter(|c| !c.is_empty()) {
+                    let began = std::time::Instant::now();
                     table.probe_sort(column);
+                    timed("the table sorted", began);
                 }
                 println!("deck-table: {}", table.describe());
                 // `KNOTES_PROBE_DECK_TABLE_ACT=1=pause;0=deck;2=delete`: rows' menu items in turn
@@ -61,7 +76,9 @@ impl VaultWindow {
         }
         // `KNOTES_PROBE_REVIEW=start,show,3`: clicks in a deck's review (ADR 0037).
         if let Ok(clicks) = std::env::var("KNOTES_PROBE_REVIEW") {
+            let began = std::time::Instant::now();
             self.probe_review(&clicks);
+            timed("the review's clicks", began);
         }
         if let Some(option) = probe::requested_option() {
             self.choose(option);
