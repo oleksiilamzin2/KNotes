@@ -164,9 +164,18 @@ define_class!(
             // SAFETY: the superclass draws the text, as it would without this override.
             let _: () = unsafe { msg_send![super(self), drawAtPoint: point, inContext: context] };
             if clip.is_some() {
-                // Shadows where columns go on past the cut, then the handles, outside it.
+                // A row's formulas are cut where its text is (drawn after the cut was lifted, one
+                // in a column out of sight showed beside the table). Then the shadows where
+                // columns go on past the cut, then the handles, outside it.
                 let previous = NSGraphicsContext::currentContext();
                 NSGraphicsContext::setCurrentContext(Some(&graphics));
+                for (mark, image) in &self.ivars().marks {
+                    if let (Mark::Formula { .. }, Some(image), Some(rect)) = (mark, image, self.mark_rect(mark)) {
+                        let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
+                        // SAFETY: a valid image drawn into the current context.
+                        unsafe { image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None) };
+                    }
+                }
                 for (mark, _) in &self.ivars().marks {
                     if let (Mark::TableRow { columns, scrolled, .. }, Some(rect), Some(clip)) = (mark, self.mark_rect(mark), clip) {
                         let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
@@ -182,6 +191,8 @@ define_class!(
                 let Some(rect) = self.mark_rect(mark) else { continue };
                 let rect = NSRect::new(NSPoint::new(point.x + rect.origin.x, point.y + rect.origin.y), rect.size);
                 match (mark, image) {
+                    // In a table's row they are drawn already, within its cut.
+                    (Mark::Formula { .. }, Some(_)) if clip.is_some() => {}
                     // SAFETY: a valid image drawn into the current context.
                     (Mark::Formula { .. }, Some(image)) => unsafe {
                         image.drawInRect_fromRect_operation_fraction_respectFlipped_hints(rect, NSZeroRect, NSCompositingOperation::SourceOver, 1.0, true, None)
