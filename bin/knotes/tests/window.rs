@@ -3363,11 +3363,11 @@ fn a_space_keeps_the_sidebar_and_the_list_to_its_folders_and_is_remembered() {
 }
 
 #[test]
-fn a_vault_without_spaces_shows_no_space_switcher() {
+fn a_vault_without_spaces_offers_itself_whole_and_the_spaces_settings() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::write(vault.path().join("a.md"), "a").unwrap();
     let out = probe_with(&[vault.path()], None);
-    assert!(out.contains("space-menu: (hidden)"), "{out}");
+    assert!(out.contains("space-menu: ✓ Уся база | Налаштувати простори…\n"), "{out}");
     assert!(out.contains("space: — | spaces: \n") || out.lines().any(|l| l == "space: — | spaces: "), "{out}");
 }
 

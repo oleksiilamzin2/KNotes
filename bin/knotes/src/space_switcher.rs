@@ -1,6 +1,7 @@
 //! The space switcher (ADR 0030): a pop-up at the foot of the sidebar offering the whole vault,
-//! the spaces with their dots and the spaces' settings; hidden while the vault has no space.
-//! Right of it, always, the button of the vaults' window.
+//! the spaces with their dots and the spaces' settings (a vault with no space yet offers itself
+//! whole and the settings, where its first space is made). Right of it, the button of the
+//! vaults' window.
 
 use std::cell::RefCell;
 
@@ -131,7 +132,7 @@ impl SpaceSwitcher {
     }
 
     /// The pop-up's items (the whole vault, the spaces with their dots, the settings), the
-    /// window's space selected; hidden while there are no spaces.
+    /// window's space selected.
     fn show(&self) {
         let Some(popup) = self.ivars().popup.borrow().clone() else { return };
         let mtm = self.mtm();
@@ -160,20 +161,18 @@ impl SpaceSwitcher {
             }
             menu.addItem(&item);
         }
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        // With no space yet, one line between the whole vault and the settings.
+        if !spaces.is_empty() {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
         menu.addItem(&entry(strings::SPACE_SETTINGS, "settings"));
         popup.selectItemAtIndex(selected);
-        let hidden = spaces.is_empty();
-        popup.setHidden(hidden);
     }
 
     /// The switcher for the probe: "Уся база | ✓ Робота | Дім | — | Налаштувати простори…" (the
-    /// selected item ticked), or "(hidden)".
+    /// selected item ticked).
     pub fn probe_menu(&self) -> String {
         let Some(popup) = self.ivars().popup.borrow().clone() else { return String::new() };
-        if popup.isHidden() {
-            return "(hidden)".into();
-        }
         let selected = popup.indexOfSelectedItem();
         let items: Vec<String> = (0..popup.numberOfItems())
             .filter_map(|i| popup.itemAtIndex(i).map(|item| (i, item)))
