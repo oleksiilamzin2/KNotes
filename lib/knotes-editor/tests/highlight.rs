@@ -289,6 +289,23 @@ fn tables_know_their_rows_cells_alignment_and_delimiter() {
 }
 
 #[test]
+fn a_line_with_no_pipe_under_a_table_is_not_its_row() {
+    let src = "| a | b |\n|---|---|\n| 1 | 2 |\na sentence **typed** under it\n3 | 4\n\nafter\n";
+    let h = highlight(src);
+    let t = &h.tables[0];
+    assert_eq!(&src[t.range.clone()], "| a | b |\n|---|---|\n| 1 | 2 |\n", "the table ends before the sentence");
+    assert_eq!(t.rows.iter().map(|r| &src[r.range.clone()]).collect::<Vec<_>>(), ["| a | b |", "| 1 | 2 |"], "and what follows the sentence is not a row either");
+    assert!(h.runs.iter().any(|r| r.style == Style::Strong && src[r.range.clone()].contains("typed")), "the sentence is text as it reads: {:?}", h.runs);
+    // Right under the header: a table of its header alone.
+    let src = "| a | b |\n|---|---|\ntext\n";
+    let t = &highlight(src).tables[0];
+    assert_eq!((&src[t.range.clone()], t.rows.len()), ("| a | b |\n|---|---|\n", 1));
+    // A row without outer pipes is a row still.
+    let src = "a | b\n---|---\n1 | 2\n";
+    assert_eq!(highlight(src).tables[0].rows.len(), 2);
+}
+
+#[test]
 fn a_table_without_outer_pipes_and_with_empty_cells() {
     let src = "a | b\n--|:-:\nx | y\n| | 2 |\n";
     let t = &highlight(src).tables[0];

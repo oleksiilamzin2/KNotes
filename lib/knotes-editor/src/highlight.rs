@@ -334,6 +334,18 @@ pub fn highlight(source: &str) -> Highlight {
                     table.delimiter = start..start + source[start..end].trim_end_matches('\r').len();
                 }
             }
+            // A line with no `|` in it under a table is not the table's (the parser, as GFM
+            // says, takes every line up to a blank one for a row): the table ends before it,
+            // and it is text again, as it reads. Typed under a table, a sentence stays one.
+            Event::End(TagEnd::Table) => {
+                if let Some(table) = h.tables.last_mut()
+                    && let Some(kept) = table.rows.iter().skip(1).position(|row| !source[row.range.clone()].contains('|')).map(|at| at + 1)
+                {
+                    table.rows.truncate(kept);
+                    let end = table.rows[kept - 1].range.end.max(table.delimiter.end);
+                    table.range.end = end + usize::from(source[end..].starts_with('\r')) + usize::from(source[end..].trim_start_matches('\r').starts_with('\n'));
+                }
+            }
             Event::End(TagEnd::TableCell) => {
                 if let Some(row) = h.tables.last_mut().and_then(|t| t.rows.last_mut())
                     // A cell the row lacks comes at its end.
