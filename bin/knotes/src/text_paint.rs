@@ -121,6 +121,12 @@ impl<'a> Palette<'a> {
         })
     }
 
+    /// Look `id` in the colour `color` under the name `name`: its font and its line kept.
+    pub fn muted(&mut self, id: u16, color: &'a NSColor, name: &'static str) -> u16 {
+        let (font, _, _) = self.looks[usize::from(id & LOOK)];
+        self.look(font, color, name) | (id & !LOOK)
+    }
+
     /// Look `id` with colour `color` instead of `from` (others unchanged), keeping its line.
     pub fn recolor(&mut self, id: u16, from: &NSColor, color: &'a NSColor) -> u16 {
         let (font, old, name) = self.looks[usize::from(id & LOOK)];

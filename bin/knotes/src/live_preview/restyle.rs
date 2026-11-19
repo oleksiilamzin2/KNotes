@@ -73,6 +73,13 @@ impl LivePreview {
             let id = palette.look(font, color, name);
             canvas.paint(run.range.clone(), |p| p.look = id);
         }
+        // A paused card (ADR 0037): all of it muted, each part in its own font. Before the
+        // markup, whose hidden signs stay hidden.
+        let paused = self.ivars().paused_cards.borrow();
+        for (card, _) in styled.card_ids.iter().filter(|(card, id)| meets(card) && paused.contains(id)) {
+            let palette = std::cell::RefCell::new(&mut palette);
+            canvas.paint(card.clone(), |p| p.look = palette.borrow_mut().muted(p.look, &look.muted, "card-paused"));
+        }
         // After all runs (one inside would replace it), before the markup (which drops it).
         for run in styled.runs.iter().filter(|r| matches!(r.style, Style::Strike | Style::Done) && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= STRUCK);

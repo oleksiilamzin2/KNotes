@@ -180,6 +180,8 @@ pub struct Ivars {
     on_command: RefCell<Option<OnCommand>>,
     /// Resolves the note's links, to dim those to missing notes.
     links: RefCell<Option<Arc<dyn LinkResolver>>>,
+    /// The ids of the shown note's paused cards (ADR 0037): those show muted.
+    paused_cards: RefCell<std::collections::HashSet<String>>,
     /// Vault path of the shown note: relative links start from its folder.
     path: RefCell<String>,
     /// Typeset formulas, by source (ADR 0017); layout fragments draw them.
@@ -465,6 +467,7 @@ impl LivePreview {
             on_scroll: RefCell::new(None),
             on_command: RefCell::new(None),
             links: RefCell::new(None),
+            paused_cards: RefCell::default(),
             path: RefCell::new(String::new()),
             formula_cache: RefCell::new(FormulaCache::default()),
             dark: Cell::new(false),
@@ -647,6 +650,17 @@ impl LivePreview {
 
     pub fn on_link(&self, callback: impl Fn(&Link) + 'static) {
         *self.ivars().on_link.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The shown note's paused cards, by id: they show muted. Restyles when they changed.
+    pub fn set_paused_cards(&self, view: &NSTextView, ids: std::collections::HashSet<String>) {
+        if *self.ivars().paused_cards.borrow() == ids {
+            return;
+        }
+        *self.ivars().paused_cards.borrow_mut() = ids;
+        if let Some(storage) = unsafe { view.textStorage() } {
+            self.restyle(&storage, (0, storage.length()));
+        }
     }
 
     /// New link resolution (files came or went): restyle the note's links.

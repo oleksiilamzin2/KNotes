@@ -127,6 +127,9 @@ pub struct Highlight {
     /// The cards that stand as blocks of their own (ADR 0037; a list item's does not), each
     /// from its deck's mark to its end, sorted by start.
     pub cards: Vec<Range<usize>>,
+    /// Every card with an id (in a list item too), whole, and its id: what is known of a card
+    /// by its id (that it is paused) is shown on it.
+    pub card_ids: Vec<(Range<usize>, String)>,
     /// Image embeds alone on their line (ADR 0020), sorted by start.
     pub images: Vec<ImageRun>,
     /// Markdown tables (ADR 0021), sorted by start.
@@ -229,6 +232,7 @@ impl Highlight {
             .chain(self.callouts.iter().flat_map(|c| [c.range.start, c.range.end, c.marker.start, c.marker.end, c.title.start, c.title.end]))
             .chain(self.images.iter().flat_map(|i| [i.range.start, i.range.end]))
             .chain(self.cards.iter().flat_map(|c| [c.start, c.end]))
+            .chain(self.card_ids.iter().flat_map(|(c, _)| [c.start, c.end]))
             .chain(self.footnotes.iter().flat_map(|f| [f.range.start, f.range.end]))
             .chain(self.embeds.iter().flat_map(|e| [e.range.start, e.range.end]))
             .chain(self.tables.iter().flat_map(|t| {
@@ -252,6 +256,7 @@ impl Highlight {
                 .collect(),
             code_blocks: self.code_blocks.iter().map(|c| map(c.start)..map(c.end)).collect(),
             cards: self.cards.iter().map(|c| map(c.start)..map(c.end)).collect(),
+            card_ids: self.card_ids.iter().map(|(c, id)| (map(c.start)..map(c.end), id.clone())).collect(),
             code_langs: self
                 .code_langs
                 .iter()
@@ -465,6 +470,7 @@ pub fn highlight(source: &str) -> Highlight {
         for card in knotes_cards::scan_cards(source) {
             if let Some(id) = &card.id {
                 h.runs.push(Run { range: card.span.end - id.len() - 1..card.span.end, style: Style::CardId });
+                h.card_ids.push((card.span.clone(), id.clone()));
             }
         }
     }

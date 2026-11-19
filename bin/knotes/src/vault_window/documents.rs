@@ -126,6 +126,7 @@ impl VaultWindow {
         *self.editing.borrow_mut() = Some(Editing { path: path.to_owned(), document: Document::open(&text), read_only });
         self.show_note_column();
         self.live_preview.show(&self.note_text, path, &text);
+        self.mark_paused_cards();
         match failed {
             Some(e) => self.tell_unreadable(path, &e),
             None if read_only => self.tell_not_utf8(path),

@@ -4290,6 +4290,11 @@ fn a_card_is_paused_put_in_another_deck_and_deleted_from_its_row_s_menu() {
     let out = probe_env(&[vault.path()], None, &table);
     assert!(out.contains("sidebar: Усі колоди (1) | мови (0) | тварини (1)\n"), "{out}");
     assert!(line(&out, "deck-table: ").contains("| dog · мови/англійська · призупинено ~ "), "{out}");
+    // In its note the paused card shows muted, all of it; the other as a card does.
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Мови.md"), ("KNOTES_PROBE_CURSOR", "0")]);
+    let runs = editor_runs(&out);
+    assert!(runs.contains(&format!("[card-paused]#@мови/англійська dog::пес ^{id}|")), "{runs}");
+    assert!(runs.contains("[card-deck]#@тварини|") && runs.contains("[card-question]cat|"), "{runs}");
     let out = probe_env(&[vault.path()], None, &[table[0], ("KNOTES_PROBE_SELECT", "d:"), ("KNOTES_PROBE_REVIEW", "start,show,4")]);
     assert_eq!(review_line_of(&out), "done Усі колоди 1", "cat alone was asked: {out}");
     // Resumed from the same menu: it waits again.

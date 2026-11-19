@@ -304,6 +304,12 @@ impl<R: CardIndex, L> VaultState<R, L> {
         Some(rows)
     }
 
+    /// The ids of the paused cards of the note `path`: its editor shows them muted.
+    pub fn paused_cards(&self, path: &str) -> std::collections::HashSet<String> {
+        let rows = self.reader.as_ref().and_then(|r| r.card_rows(None, Some(path)).ok()).unwrap_or_default();
+        rows.into_iter().filter(|row| row.paused).filter_map(|row| row.id).collect()
+    }
+
     /// Every card of `deck` and the decks under it (of all the decks, for `""`), by note and in
     /// the note's order; in a space, those of its notes. With where each stands: a deck's table.
     pub fn card_rows(&self, deck: &str) -> Vec<CardRow> {

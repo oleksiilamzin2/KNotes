@@ -445,6 +445,17 @@ impl VaultWindow {
         Ok((id, at, mark.len()))
     }
 
+    /// The open note's paused cards shown muted in it, as the index has them now.
+    pub(super) fn mark_paused_cards(&self) {
+        let Some(path) = self.editing.borrow().as_ref().map(|e| e.path.clone()) else { return };
+        let paused = {
+            let mut state = self.state.borrow_mut();
+            self.ensure_reader(&mut state);
+            state.paused_cards(&path)
+        };
+        self.live_preview.set_paused_cards(&self.note_text, paused);
+    }
+
     /// A card paused in the table, or resumed (ADR 0037): a line in this Mac's review log says
     /// so, by the card's id, which it is given in its note if it has none. Gives the id and how
     /// many bytes the card's text grew by for it. Says a failure, and gives it.

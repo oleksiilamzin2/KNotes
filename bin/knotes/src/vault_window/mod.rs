@@ -1022,6 +1022,7 @@ impl VaultWindow {
         self.rebuild_sidebar();
         // A deck's table, while it shows, follows the vault.
         self.reload_deck_table();
+        self.mark_paused_cards();
         if !self.tabs_restored.replace(true) {
             self.restore_tabs();
         }
