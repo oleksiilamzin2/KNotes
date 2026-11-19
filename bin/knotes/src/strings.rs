@@ -349,6 +349,10 @@ pub const CARD_DELETE: &str = "Видалити картку…";
 pub fn card_delete_question(question: &str) -> String {
     format!("Видалити картку «{question}»?")
 }
+pub fn cards_delete_question(cards: usize) -> String {
+    format!("Видалити {cards} {}?", cards_word(cards))
+}
+pub const CARDS_DELETE_DETAILS: &str = "Їхній текст буде прибрано з нотаток; решта нотаток залишиться. Історія їхніх повторень залишиться в журналі.";
 pub const CARD_DELETE_DETAILS: &str = "Її текст буде прибрано з нотатки; решта нотатки залишиться. Історія її повторень залишиться в журналі.";
 pub const CARD_NOT_PAUSED: &str = "Не вдалося призупинити картку";
 /// When a card comes: "через 3 д".

@@ -214,6 +214,72 @@ impl CardTable {
     }
 }
 
+/// The table's rows chosen together (a click with ⌘ or ⇧, ⇧ with an arrow, ⌘A), beside the
+/// one whose card shows below: by their places, so they last until the rows are put anew (a
+/// sort, a search, the vault changed). Empty while one row alone is chosen.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MarkedRows {
+    rows: std::collections::BTreeSet<usize>,
+    /// Where ⇧ with an arrow goes on from.
+    lead: Option<usize>,
+}
+
+impl MarkedRows {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn holds(&self, row: usize) -> bool {
+        self.rows.contains(&row)
+    }
+
+    /// Every row chosen, the one at `chosen` among them, from the top.
+    pub fn with(&self, chosen: Option<usize>) -> Vec<usize> {
+        if self.rows.is_empty() { chosen.into_iter().collect() } else { self.rows.iter().copied().collect() }
+    }
+
+    /// A click with ⌘ on `row`: chosen too, or no more if it was (the last one stays). Gives
+    /// the row whose card shows now: the one clicked, or with it gone the first still chosen.
+    pub fn toggle(&mut self, chosen: Option<usize>, row: usize) -> usize {
+        let Some(chosen) = chosen else { return row };
+        self.rows.insert(chosen);
+        self.lead = None;
+        let shown = if !self.rows.insert(row) {
+            if self.rows.len() > 1 {
+                self.rows.remove(&row);
+            }
+            if row == chosen { self.rows.first().copied().unwrap_or(row) } else { chosen }
+        } else {
+            row
+        };
+        if self.rows.len() < 2 {
+            self.rows.clear();
+        }
+        shown
+    }
+
+    /// A click with ⇧ on `row`: every row from the one at `chosen` to it.
+    pub fn extend(&mut self, chosen: usize, row: usize) {
+        self.rows = if row == chosen { Default::default() } else { (chosen.min(row)..=chosen.max(row)).collect() };
+        self.lead = Some(row);
+    }
+
+    /// ⇧ with an arrow: the rows chosen reach a row further down (or up) from `chosen`, of
+    /// `len` rows. Gives the row reached.
+    pub fn step(&mut self, chosen: usize, down: bool, len: usize) -> usize {
+        let lead = self.lead.unwrap_or(chosen);
+        let to = if down { (lead + 1).min(len.saturating_sub(1)) } else { lead.saturating_sub(1) };
+        self.extend(chosen, to);
+        to
+    }
+
+    /// ⌘A: all `len` rows.
+    pub fn all(&mut self, len: usize) {
+        self.rows = if len > 1 { (0..len).collect() } else { Default::default() };
+        self.lead = None;
+    }
+}
+
 /// The card of `row` among its note's `cards` (as `scan_cards` gives them): by its id (of two
 /// with it, the one where the index found it), or with none by its place.
 pub fn card_of<'a>(cards: &'a [Card], row: &CardRow) -> Option<&'a Card> {

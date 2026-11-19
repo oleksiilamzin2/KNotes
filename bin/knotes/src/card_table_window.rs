@@ -52,6 +52,8 @@ type ReadNote = Box<dyn Fn(&str) -> Option<String>>;
 struct Model {
     table: RefCell<CardTable>,
     chosen: Cell<Option<usize>>,
+    /// The rows chosen with it (⌘ or ⇧ held, ⌘A): what a row's menu does, it does to all.
+    marked: RefCell<knotes_app::MarkedRows>,
     /// Each note read: its text and its cards.
     notes: RefCell<HashMap<String, Rc<(String, Vec<Card>)>>>,
     read: RefCell<Option<ReadNote>>,
@@ -112,9 +114,19 @@ fn now() -> i64 {
 
 type OnRow = Box<dyn Fn(usize)>;
 
+/// How the rows chosen change: a row clicked (or come to by an arrow), clicked with ⌘, with ⇧,
+/// ⇧ with an arrow (down, or up), ⌘A.
+enum Pick {
+    Row(usize),
+    Toggle(usize),
+    Extend(usize),
+    Step(bool),
+    All,
+}
+
 pub struct ListIvars {
     model: Rc<Model>,
-    on_choose: RefCell<Option<OnRow>>,
+    on_choose: RefCell<Option<Box<dyn Fn(Pick)>>>,
     on_open: RefCell<Option<OnRow>>,
     /// Called with the row a secondary click was on, and the click: its menu.
     on_menu: RefCell<Option<Box<dyn Fn(usize, &NSEvent)>>>,
@@ -154,9 +166,30 @@ define_class!(
             if let Some(window) = self.window() {
                 window.makeFirstResponder(Some(self));
             }
-            let callback = if event.clickCount() >= 2 { &self.ivars().on_open } else { &self.ivars().on_choose };
-            if let Some(callback) = callback.borrow().as_ref() {
-                callback(row);
+            if event.clickCount() >= 2 {
+                if let Some(callback) = self.ivars().on_open.borrow().as_ref() {
+                    callback(row);
+                }
+                return;
+            }
+            let held = event.modifierFlags();
+            let pick = if held.contains(objc2_app_kit::NSEventModifierFlags::Command) {
+                Pick::Toggle(row)
+            } else if held.contains(objc2_app_kit::NSEventModifierFlags::Shift) {
+                Pick::Extend(row)
+            } else {
+                Pick::Row(row)
+            };
+            if let Some(callback) = self.ivars().on_choose.borrow().as_ref() {
+                callback(pick);
+            }
+        }
+
+        /// ⌘A: every row.
+        #[unsafe(method(selectAll:))]
+        fn select_all(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_choose.borrow().as_ref() {
+                callback(Pick::All);
             }
         }
 
@@ -174,9 +207,16 @@ define_class!(
             }
         }
 
-        /// Up and Down choose the row before and the next; Return opens the card's note.
+        /// Up and Down choose the row before and the next (with ⇧, that one too); Return opens
+        /// the card's note.
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
+            if matches!(event.keyCode(), 125 | 126) && event.modifierFlags().contains(objc2_app_kit::NSEventModifierFlags::Shift) {
+                if let Some(callback) = self.ivars().on_choose.borrow().as_ref() {
+                    callback(Pick::Step(event.keyCode() == 125));
+                }
+                return;
+            }
             let (chosen, rows) = (self.ivars().model.chosen.get(), self.ivars().model.table.borrow().rows().len());
             let to = match (event.keyCode(), chosen) {
                 (125, Some(row)) if row + 1 < rows => Some(row + 1),
@@ -191,7 +231,7 @@ define_class!(
                 _ => None,
             };
             if let (Some(row), Some(callback)) = (to, self.ivars().on_choose.borrow().as_ref()) {
-                callback(row);
+                callback(Pick::Row(row));
             }
         }
     }
@@ -228,7 +268,7 @@ impl CardList {
         for row in first..last {
             let Some(line) = model.line(row, now) else { continue };
             let top = row as f64 * ROW;
-            let chosen = model.chosen.get() == Some(row);
+            let chosen = model.chosen.get() == Some(row) || model.marked.borrow().holds(row);
             if chosen {
                 NSColor::selectedContentBackgroundColor().setFill();
                 NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect(6.0, top + 1.0, width - 12.0, ROW - 2.0), 5.0, 5.0).fill();
@@ -321,8 +361,8 @@ pub struct Asks {
     pub pause: Box<dyn Fn(&CardRow, bool) -> Result<(String, usize), String>>,
     /// The deck to put a card in, asked of the user; none when called off.
     pub deck: Box<dyn Fn(&CardRow) -> Option<String>>,
-    /// Whether the user means to delete a card.
-    pub delete: Box<dyn Fn(&CardRow) -> bool>,
+    /// Whether the user means to delete a card, or so many cards with it.
+    pub delete: Box<dyn Fn(&CardRow, usize) -> bool>,
 }
 
 pub struct ControllerIvars {
@@ -347,7 +387,7 @@ pub struct ControllerIvars {
     on_save: RefCell<Option<OnSave>>,
     on_open: RefCell<Option<OnOpen>>,
     /// A card paused or resumed, the deck asked for, a delete meant (`Asks`).
-    asks: RefCell<Option<(Box<dyn Fn(&CardRow, bool) -> Result<(String, usize), String>>, Box<dyn Fn(&CardRow) -> Option<String>>, Box<dyn Fn(&CardRow) -> bool>)>>,
+    asks: RefCell<Option<(Box<dyn Fn(&CardRow, bool) -> Result<(String, usize), String>>, Box<dyn Fn(&CardRow) -> Option<String>>, Box<dyn Fn(&CardRow, usize) -> bool>)>>,
 }
 
 define_class!(
@@ -485,27 +525,74 @@ impl Controller {
         }
     }
 
-    /// The card chosen and its text as its note has it, what was typed in it written first.
-    /// None when nothing is chosen, or what was typed could not be written.
-    fn chosen_card(&self) -> Option<(CardRow, String)> {
-        if !self.save() {
-            return None;
-        }
+    /// The rows chosen changed by a click or a key.
+    fn pick(&self, pick: Pick) {
         let ivars = self.ivars();
-        let (_, block) = ivars.editing.borrow().clone()?;
-        // The row as the table has it now (its id, its deck, whether paused), not as it was
-        // when it was chosen.
-        let row = ivars.model.chosen.get().and_then(|at| ivars.model.table.borrow().rows().get(at).cloned())?;
+        let model = &ivars.model;
+        let rows = model.table.borrow().rows().len();
+        match (pick, model.chosen.get()) {
+            (Pick::Row(row), _) | (Pick::Extend(row), None) => {
+                model.marked.borrow_mut().clear();
+                self.choose(row);
+            }
+            (Pick::Toggle(row), chosen) => {
+                let shown = model.marked.borrow_mut().toggle(chosen, row);
+                self.choose(shown);
+            }
+            (Pick::Extend(row), Some(chosen)) => {
+                model.marked.borrow_mut().extend(chosen, row);
+                ivars.list.show_row(row);
+            }
+            (Pick::Step(down), Some(chosen)) => {
+                let to = model.marked.borrow_mut().step(chosen, down, rows);
+                ivars.list.show_row(to);
+            }
+            (Pick::All, _) => model.marked.borrow_mut().all(rows),
+            (Pick::Step(_), None) => {}
+        }
+        ivars.list.setNeedsDisplay(true);
+    }
+
+    /// The rows chosen, the last first (a card deleted moves those after it), what was typed
+    /// in the card shown written first. None when that could not be written.
+    fn targets(&self) -> Vec<usize> {
+        if !self.save() {
+            return Vec::new();
+        }
+        let model = &self.ivars().model;
+        let mut rows = model.marked.borrow().with(model.chosen.get());
+        rows.reverse();
+        rows
+    }
+
+    /// The card of the row at `at` as the table has it now, and its text as its note has it.
+    fn card_at(&self, at: usize) -> Option<(CardRow, String)> {
+        let model = &self.ivars().model;
+        let row = model.table.borrow().rows().get(at).cloned()?;
+        let block = model.card(&row)?.0;
         Some((row, block))
     }
 
-    /// A secondary click on `row`: it is chosen, and its menu shows.
+    /// The card shown below read again after its row's menu changed it (or others with it).
+    fn show_acted(&self) {
+        *self.ivars().editing.borrow_mut() = None;
+        self.show_chosen();
+        self.ivars().list.setNeedsDisplay(true);
+    }
+
+    /// A secondary click on `row`: it is chosen (among the rows chosen together, they stay
+    /// so), and its menu shows; what the menu does, it does to every row chosen.
     fn show_menu(&self, row: usize, event: &NSEvent) {
-        self.choose(row);
-        let Some((card, _)) = self.chosen_card() else { return };
+        if !self.ivars().model.marked.borrow().holds(row) {
+            self.pick(Pick::Row(row));
+        }
+        let cards: Vec<CardRow> = self.targets().into_iter().filter_map(|at| self.card_at(at)).map(|(card, _)| card).collect();
+        if cards.is_empty() {
+            return;
+        }
         let mtm = self.mtm();
         let menu = objc2_app_kit::NSMenu::new(mtm);
-        let pause = if card.paused { strings::CARD_RESUME } else { strings::CARD_PAUSE };
+        let pause = if cards.iter().all(|card| card.paused) { strings::CARD_RESUME } else { strings::CARD_PAUSE };
         for (title, action) in [(pause, sel!(pauseCard:)), (strings::CARD_MOVE, sel!(moveCard:)), (strings::CARD_DELETE, sel!(deleteCard:))] {
             // SAFETY: the controller outlives its menu and takes the action.
             let item = unsafe { objc2_app_kit::NSMenuItem::initWithTitle_action_keyEquivalent(objc2_app_kit::NSMenuItem::alloc(mtm), &NSString::from_str(title), Some(action), &NSString::new()) };
@@ -516,76 +603,79 @@ impl Controller {
         objc2_app_kit::NSMenu::popUpContextMenu_withEvent_forView(&menu, event, &self.ivars().list);
     }
 
-    /// The card chosen paused, or resumed if it is paused: said in the review log (and the card
-    /// given an id in its note, if it had none), and in its row at once.
+    /// The cards chosen paused, or resumed if every one is paused: said in the review log (and
+    /// a card given an id in its note, if it had none), and in their rows at once.
     fn pause_chosen(&self) {
-        let Some((row, block)) = self.chosen_card() else { return };
         let ivars = self.ivars();
-        let paused = !row.paused;
-        let done = ivars.asks.borrow().as_ref().map(|(pause, _, _)| pause(&row, paused));
-        let Some(Ok((id, grew))) = done else { return };
-        {
+        let cards: Vec<(CardRow, String)> = self.targets().into_iter().filter_map(|at| self.card_at(at)).collect();
+        let paused = !cards.iter().all(|(row, _)| row.paused);
+        // Each read again in its turn: one given an id moves those after it in its note.
+        for at in self.targets() {
+            let Some((row, block)) = self.card_at(at).filter(|(row, _)| row.paused != paused) else { continue };
+            let done = ivars.asks.borrow().as_ref().map(|(pause, _, _)| pause(&row, paused));
+            let Some(Ok((id, grew))) = done else { break };
             let mut table = ivars.model.table.borrow_mut();
             table.block_changed(&row.path, row.start, block.len(), block.len() + grew);
             table.set_paused(&row, &id, paused);
+            ivars.model.notes.borrow_mut().remove(&row.path);
         }
-        ivars.model.notes.borrow_mut().remove(&row.path);
-        *ivars.editing.borrow_mut() = None;
-        self.show_chosen();
-        ivars.list.setNeedsDisplay(true);
+        self.show_acted();
     }
 
-    /// The card chosen put in the deck the user names: its mark in its note says the deck.
+    /// The cards chosen put in the deck the user names: their marks in their notes say it.
     fn move_chosen(&self) {
-        let Some((row, block)) = self.chosen_card() else { return };
         let ivars = self.ivars();
-        let Some(deck) = ivars.asks.borrow().as_ref().and_then(|(_, deck, _)| deck(&row)) else { return };
-        let Some(moved) = in_deck(&block, &deck).filter(|moved| *moved != block) else { return };
-        if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&row, &block, &moved).is_err()) {
-            return;
-        }
-        {
+        let targets = self.targets();
+        // Asked once, the deck of the card shown offered.
+        let Some(shown) = ivars.model.chosen.get().or(targets.first().copied()).and_then(|at| self.card_at(at)) else { return };
+        let Some(deck) = ivars.asks.borrow().as_ref().and_then(|(_, deck, _)| deck(&shown.0)) else { return };
+        for at in targets {
+            let Some((row, block)) = self.card_at(at) else { continue };
+            let Some(moved) = in_deck(&block, &deck).filter(|moved| *moved != block) else { continue };
+            if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&row, &block, &moved).is_err()) {
+                break;
+            }
             let mut table = ivars.model.table.borrow_mut();
             table.block_changed(&row.path, row.start, block.len(), moved.len());
             table.set_deck(&row, deck.trim().trim_matches('/'));
+            ivars.model.notes.borrow_mut().remove(&row.path);
         }
-        ivars.model.notes.borrow_mut().remove(&row.path);
-        *ivars.editing.borrow_mut() = None;
-        self.show_chosen();
-        ivars.list.setNeedsDisplay(true);
+        self.show_acted();
     }
 
-    /// The card chosen deleted from its note, once the user says so: its text goes, the rest of
-    /// the note stays; the row after it is chosen.
+    /// The cards chosen deleted from their notes, once the user says so: their text goes, the
+    /// rest of the notes stays; the row after them is chosen.
     fn delete_chosen(&self) {
-        let Some((row, block)) = self.chosen_card() else { return };
         let ivars = self.ivars();
-        if !ivars.asks.borrow().as_ref().is_some_and(|(_, _, delete)| delete(&row)) {
+        let targets = self.targets();
+        let Some(shown) = ivars.model.chosen.get().or(targets.first().copied()).and_then(|at| self.card_at(at)) else { return };
+        if !ivars.asks.borrow().as_ref().is_some_and(|(_, _, delete)| delete(&shown.0, targets.len())) {
             return;
         }
-        // With the block goes the gap it would leave (its line's end, a blank line of two): what
-        // the note has there is taken with it, where the note is as the table read it.
-        let (mut gone, mut block) = (row.clone(), block);
-        let start = row.start as usize;
-        if let Some(text) = ivars.model.note(&row.path).map(|note| note.0.clone()).filter(|text| text.get(start..).is_some_and(|rest| rest.starts_with(&block))) {
-            let wider = knotes_app::block_to_delete(&text, start..start + block.len());
-            gone.start = wider.start as u32;
-            block = text[wider].to_owned();
-        }
-        if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&gone, &block, "").is_err()) {
-            return;
-        }
-        let at = ivars.model.chosen.get().unwrap_or(0);
-        {
+        let first = targets.last().copied().unwrap_or(0);
+        for at in targets {
+            let Some((row, block)) = self.card_at(at) else { continue };
+            // With the block goes the gap it would leave (its line's end, a blank line of two):
+            // what the note has there is taken with it, where the note is as the table read it.
+            let (mut gone, mut block) = (row.clone(), block);
+            let start = row.start as usize;
+            if let Some(text) = ivars.model.note(&row.path).map(|note| note.0.clone()).filter(|text| text.get(start..).is_some_and(|rest| rest.starts_with(&block))) {
+                let wider = knotes_app::block_to_delete(&text, start..start + block.len());
+                gone.start = wider.start as u32;
+                block = text[wider].to_owned();
+            }
+            if ivars.on_save.borrow().as_ref().is_none_or(|save| save(&gone, &block, "").is_err()) {
+                break;
+            }
             let mut table = ivars.model.table.borrow_mut();
             table.remove(&row);
             table.block_changed(&row.path, gone.start, block.len(), 0);
+            ivars.model.notes.borrow_mut().remove(&row.path);
         }
-        ivars.model.notes.borrow_mut().remove(&row.path);
         *ivars.editing.borrow_mut() = None;
         self.keep_chosen(None);
         let rows = ivars.model.table.borrow().rows().len();
-        if rows == 0 { self.show_chosen() } else { self.choose(at.min(rows - 1)) }
+        if rows == 0 { self.show_chosen() } else { self.choose(first.min(rows - 1)) }
     }
 
     fn open_chosen(&self) {
@@ -611,6 +701,8 @@ impl Controller {
         let ivars = self.ivars();
         let at = chosen.and_then(|chosen| ivars.model.table.borrow().position(chosen));
         ivars.model.chosen.set(at);
+        // The rows are put anew: those chosen together were so by their places.
+        ivars.model.marked.borrow_mut().clear();
         ivars.list.fit(ivars.list_scroll.contentSize().width);
         if let Some(at) = at {
             ivars.list.show_row(at);
@@ -636,7 +728,7 @@ impl CardTableWindow {
         field.setPlaceholderString(Some(&NSString::from_str(strings::CARD_SEARCH_HINT)));
         // After a short pause in the typing, not at each letter: a search reads the notes found.
         field.setSendsWholeSearchString(false);
-        let model = Rc::new(Model { table: RefCell::new(CardTable::default()), chosen: Cell::new(None), notes: RefCell::new(HashMap::new()), read: RefCell::new(None) });
+        let model = Rc::new(Model { table: RefCell::new(CardTable::default()), chosen: Cell::new(None), marked: RefCell::default(), notes: RefCell::new(HashMap::new()), read: RefCell::new(None) });
         let header = CardHeader::new(mtm, Rc::clone(&model));
         let list = CardList::new(mtm, Rc::clone(&model));
         let list_scroll = NSScrollView::new(mtm);
@@ -749,15 +841,15 @@ impl CardTableWindow {
         }
         controller.ivars().window.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
         let weak = objc2::rc::Weak::from_retained(&controller);
-        *controller.ivars().list.ivars().on_choose.borrow_mut() = Some(Box::new(move |row| {
+        *controller.ivars().list.ivars().on_choose.borrow_mut() = Some(Box::new(move |pick| {
             if let Some(controller) = weak.load() {
-                controller.choose(row);
+                controller.pick(pick);
             }
         }));
         let weak = objc2::rc::Weak::from_retained(&controller);
         *controller.ivars().list.ivars().on_open.borrow_mut() = Some(Box::new(move |row| {
             if let Some(controller) = weak.load() {
-                controller.choose(row);
+                controller.pick(Pick::Row(row));
                 controller.open_chosen();
             }
         }));
@@ -854,7 +946,13 @@ impl CardTableWindow {
             .enumerate()
             .map(|(at, line)| {
                 let said = line.iter().filter(|cell| !cell.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
-                if ivars.model.chosen.get() == Some(at) { format!("[{said}]") } else { said }
+                if ivars.model.chosen.get() == Some(at) {
+                    format!("[{said}]")
+                } else if ivars.model.marked.borrow().holds(at) {
+                    format!("({said})")
+                } else {
+                    said
+                }
             })
             .collect();
         format!("{} ({count} cards, {sorted}): {} ~ {}", ivars.window.title(), rows.join(" | "), ivars.editor.string().to_string().replace('\n', "⏎"))
@@ -866,10 +964,13 @@ impl CardTableWindow {
         self.controller.search();
     }
 
-    /// The row at `row` chosen and an item of its menu: `pause` (or resume, when paused),
-    /// `deck` (the deck asked for), `delete` (probe mode).
-    pub fn probe_act(&self, row: usize, act: &str) {
-        self.controller.choose(row);
+    /// The rows at `rows` chosen (the first clicked, the rest with ⌘) and an item of their
+    /// menu: `pause` (or resume, when all are paused), `deck` (the deck asked for), `delete`;
+    /// `choose` leaves them chosen (probe mode).
+    pub fn probe_act(&self, rows: &[usize], act: &str) {
+        for (i, &row) in rows.iter().enumerate() {
+            self.controller.pick(if i == 0 { Pick::Row(row) } else { Pick::Toggle(row) });
+        }
         match act {
             "pause" => self.controller.pause_chosen(),
             "deck" => self.controller.move_chosen(),

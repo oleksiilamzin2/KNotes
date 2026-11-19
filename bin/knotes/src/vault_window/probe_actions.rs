@@ -63,7 +63,9 @@ impl VaultWindow {
                 // (`deck` takes `KNOTES_PROBE_CARD=name|`).
                 if let Ok(acts) = std::env::var("KNOTES_PROBE_DECK_TABLE_ACT") {
                     for (row, act) in acts.split(';').filter_map(|act| act.split_once('=')) {
-                        table.probe_act(row.parse().unwrap_or(0), act);
+                        // `0+2=pause`: the rows chosen together.
+                        let rows: Vec<usize> = row.split('+').filter_map(|row| row.parse().ok()).collect();
+                        table.probe_act(&rows, act);
                     }
                     println!("deck-table-acted: {}", table.describe());
                 }

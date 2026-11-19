@@ -1,4 +1,4 @@
-use knotes_app::{CardColumn, CardSearch, CardTable, Standing, card_of, in_deck, block_to_delete, replace_block, standing};
+use knotes_app::{CardColumn, CardSearch, CardTable, MarkedRows, Standing, card_of, in_deck, block_to_delete, replace_block, standing};
 use knotes_cards::scan_cards;
 use knotes_core::{CardRow, CardState, Reviewed};
 
@@ -180,4 +180,40 @@ fn a_deleted_card_leaves_no_gap_where_it_was() {
     assert_eq!(without("Intro\n\n#@en a::b\nEnd\n", "#@en a::b"), "Intro\n\nEnd\n", "the blank line before stays, with none after");
     assert_eq!(without("A word #@en {gap} more.\n", "#@en {gap}"), "A word more.\n", "inside a line: one space of the two");
     assert_eq!(block_to_delete("abc", 2..9), 2..9, "a place outside the text: as given");
+}
+
+#[test]
+fn rows_are_chosen_together_by_clicks_with_a_key_held_and_by_arrows() {
+    let mut marked = MarkedRows::default();
+    assert_eq!(marked.with(Some(2)), [2], "one row alone");
+    assert_eq!(marked.with(None), [] as [usize; 0]);
+    // ⌘: one more, shown; clicked again, it goes and the first still chosen shows.
+    assert_eq!(marked.toggle(Some(2), 5), 5);
+    assert_eq!((marked.with(Some(5)), marked.holds(2), marked.holds(3)), (vec![2, 5], true, false));
+    assert_eq!(marked.toggle(Some(5), 0), 0);
+    assert_eq!(marked.toggle(Some(0), 0), 2, "the one shown, clicked off");
+    assert_eq!(marked.with(Some(2)), [2, 5]);
+    assert_eq!(marked.toggle(Some(2), 5), 2, "another, clicked off: the one shown stays");
+    assert_eq!((marked.with(Some(2)), marked.holds(2)), (vec![2], false), "one alone again");
+    assert_eq!(marked.toggle(Some(2), 2), 2, "the last one stays chosen");
+    assert_eq!(marked.toggle(None, 4), 4);
+    // ⇧: from the one shown to the one clicked, either way; on itself, it alone.
+    marked.extend(4, 1);
+    assert_eq!(marked.with(Some(4)), [1, 2, 3, 4]);
+    marked.extend(4, 6);
+    assert_eq!(marked.with(Some(4)), [4, 5, 6], "anew from the one shown");
+    marked.extend(4, 4);
+    assert_eq!(marked.with(Some(4)), [4]);
+    // ⇧ with arrows: on from where the last went, back through the one shown, not past an end.
+    assert_eq!((marked.step(4, true, 6), marked.step(4, true, 6), marked.step(4, true, 6)), (5, 5, 5));
+    assert_eq!(marked.with(Some(4)), [4, 5]);
+    assert_eq!((marked.step(4, false, 6), marked.step(4, false, 6)), (4, 3));
+    assert_eq!(marked.with(Some(4)), [3, 4]);
+    marked.clear();
+    assert_eq!((marked.step(0, false, 6), marked.with(Some(0))), (0, vec![0]));
+    // ⌘A.
+    marked.all(3);
+    assert_eq!(marked.with(Some(1)), [0, 1, 2]);
+    marked.all(1);
+    assert_eq!(marked.with(Some(0)), [0]);
 }

@@ -4268,6 +4268,25 @@ fn a_deck_s_cards_show_as_a_table_and_a_card_s_text_is_changed_there() {
 }
 
 #[test]
+fn rows_chosen_together_are_paused_put_in_a_deck_and_deleted_together() {
+    let notes = [("A.md", "#@en cat::кіт ^c-1\n\n#@en dog::пес ^c-2\n\n#@en cow::корова ^c-3\n"), ("B.md", "#@de Hund::пес ^c-4\n")];
+    let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{name}: {out}")).to_owned();
+    let table = [("KNOTES_PROBE_SIDEBAR", "cards"), ("KNOTES_PROBE_DECK_TABLE", "")];
+    // A row clicked, another with ⌘: both chosen, the last one's card shown.
+    let (_vault, out) = probe_notes(&notes, &[table[0], table[1], ("KNOTES_PROBE_DECK_TABLE_ACT", "0+2=choose")]);
+    assert!(line(&out, "deck-table-acted: ").contains("(cat · en · нова) | dog · en · нова | [cow · en · нова] | Hund · de · нова ~ #@en cow::корова ^c-3"), "{out}");
+    // cat and cow paused, dog and Hund (of two notes) put in a deck, cat and dog deleted.
+    let (vault, out) = probe_notes(&notes, &[table[0], table[1], ("KNOTES_PROBE_DECK_TABLE_ACT", "0+2=pause;1+3=deck;0+1=delete"), ("KNOTES_PROBE_CARD", "zoo|")]);
+    let acted = line(&out, "deck-table-acted: ");
+    assert!(acted.contains("(2 cards, as written): [cow · en · призупинено] | Hund · zoo · нова ~ #@en cow::корова ^c-3"), "{acted}");
+    let read = |name: &str| std::fs::read_to_string(vault.path().join(name)).unwrap();
+    assert_eq!((read("A.md").as_str(), read("B.md").as_str()), ("#@en cow::корова ^c-3\n", "#@zoo Hund::пес ^c-4\n"), "{out}");
+    let logs: Vec<_> = std::fs::read_dir(vault.path().join(".knotes/reviews")).unwrap().flatten().collect();
+    let log = std::fs::read_to_string(logs[0].path()).unwrap();
+    assert!(log.lines().count() == 2 && log.contains("\tc-1\tP\n") && log.contains("\tc-3\tP\n"), "{log}");
+}
+
+#[test]
 fn a_card_is_paused_put_in_another_deck_and_deleted_from_its_row_s_menu() {
     let notes = [("Мови.md", "Слова.\n\n#@мови/англійська cat::кіт ^c-1\n\n#@мови/англійська dog::пес\n\n#@мови/німецька Hund::пес ^c-3\n")];
     let line = |out: &str, name: &str| out.lines().find_map(|l| l.strip_prefix(name)).unwrap_or_else(|| panic!("{name}: {out}")).to_owned();

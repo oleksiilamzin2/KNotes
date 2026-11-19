@@ -306,15 +306,16 @@ impl VaultWindow {
                     let known = deck_paths(&window.state.borrow().decks);
                     rename_dialog::ask_card(mtm, &known, &row.deck, false).map(|(deck, _)| deck)
                 }),
-                delete: Box::new(move |row| {
+                delete: Box::new(move |row, cards| {
                     if probe::enabled() {
                         return true;
                     }
                     let Some(window) = deletes.upgrade() else { return false };
                     let question = window.vault().and_then(|vault| FsVault::new(&vault).read_utf8(&row.path).ok()).and_then(|text| knotes_app::card_of(&knotes_cards::scan_cards(&text), row).map(|card| card.front.lines().next().unwrap_or_default().trim().to_owned())).unwrap_or_default();
                     let alert = NSAlert::new(mtm);
-                    alert.setMessageText(&NSString::from_str(&strings::card_delete_question(&question)));
-                    alert.setInformativeText(&NSString::from_str(strings::CARD_DELETE_DETAILS));
+                    let (asked, details) = if cards > 1 { (strings::cards_delete_question(cards), strings::CARDS_DELETE_DETAILS) } else { (strings::card_delete_question(&question), strings::CARD_DELETE_DETAILS) };
+                    alert.setMessageText(&NSString::from_str(&asked));
+                    alert.setInformativeText(&NSString::from_str(details));
                     for title in [strings::DELETE, strings::CANCEL] {
                         alert.addButtonWithTitle(&NSString::from_str(title));
                     }
