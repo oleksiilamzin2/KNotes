@@ -388,3 +388,24 @@ fn notes_embedded_alone_on_their_line_are_listed_for_their_frames() {
     let embeds: Vec<(&str, &str, Option<&str>)> = found.embeds.iter().map(|e| (&src[e.range.clone()], e.link.target.as_str(), e.link.subpath.as_deref())).collect();
     assert_eq!(embeds, [("![[Other note]]", "Other note", None), ("![[Doc#Part|Alias]]", "Doc", Some("Part"))], "not inline, not images or PDFs");
 }
+
+#[test]
+fn a_markup_s_run_is_the_smallest_inline_run_holding_it() {
+    let src = "# Head\n\n**bold *it* more** and [[b|link]] `c`\n";
+    let h = highlight(src);
+    let para = src.find("**bold").unwrap();
+    let owner = |sign: &str, nth: usize| {
+        let at = src.match_indices(sign).nth(nth).unwrap().0;
+        let m = h.markup.iter().find(|m| m.start == at).unwrap_or_else(|| panic!("{sign} {nth}: {:?}", h.markup));
+        h.inline_owner(m, para).map(|run| &src[run])
+    };
+    assert_eq!(owner("**", 0), Some("**bold *it* more**"));
+    assert_eq!(owner("*it", 0), Some("*it*"), "the inner run's sign is the inner run's");
+    assert_eq!(owner("[[b|", 0), Some("[[b|link]]"));
+    assert_eq!(owner("`", 0), Some("`c`"));
+    assert_eq!(h.inline_owner(&h.markup[0], 0), None, "a heading's sign is its line's");
+    assert_eq!(h.inline_runs(para, src.len()).map(|run| &src[run.clone()]).collect::<Vec<_>>(), ["**bold *it* more**", "*it*", "[[b|link]]", "`c`"]);
+    // In a run or at an end of it, a cursor reaches it.
+    assert!(knotes_editor::reaches(&(4..8), (4, 4)) && knotes_editor::reaches(&(4..8), (8, 8)) && knotes_editor::reaches(&(4..8), (0, 5)));
+    assert!(!knotes_editor::reaches(&(4..8), (3, 3)) && !knotes_editor::reaches(&(4..8), (9, 12)));
+}

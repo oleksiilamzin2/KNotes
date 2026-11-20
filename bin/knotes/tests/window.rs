@@ -471,12 +471,16 @@ fn clicking_a_link_outside_the_cursor_line_opens_its_note() {
 }
 
 #[test]
-fn a_plain_click_in_the_cursor_line_places_the_cursor_and_cmd_click_opens() {
+fn a_plain_click_in_the_link_the_cursor_is_in_places_the_cursor_and_cmd_click_opens() {
     let notes = [("a.md", "see [[b]] here"), ("b.md", "target")];
-    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "6")]);
+    // The cursor in the link: its source shows, and a click there is a click in text.
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "5"), ("KNOTES_PROBE_CLICK", "6")]);
     assert!(out.contains("note: a.md"), "{out}");
     assert!(out.contains("cursor: 6") || out.contains("cursor: 7"), "{out}");
-    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CLICK", "6:cmd")]);
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "5"), ("KNOTES_PROBE_CLICK", "6:cmd")]);
+    assert!(out.contains("note: b.md | target"), "{out}");
+    // The cursor elsewhere in the line: the link reads as a link, and a click follows it.
+    let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "0"), ("KNOTES_PROBE_CLICK", "6")]);
     assert!(out.contains("note: b.md | target"), "{out}");
 }
 
@@ -1167,7 +1171,8 @@ fn links_and_task_circles_show_a_hand_where_a_click_acts() {
         out.lines().find_map(|l| l.strip_prefix("hover: ")).unwrap_or_else(|| panic!("{out}")).to_owned()
     };
     assert_eq!(hover("9", "end"), "hand", "a link away from the cursor");
-    assert_eq!(hover("9", "3"), "text", "in the cursor's line a plain click places the cursor");
+    assert_eq!(hover("9", "3"), "hand", "in the cursor's line too, the cursor outside the link");
+    assert_eq!(hover("9", "8"), "text", "in the link the cursor is in a plain click places the cursor");
     assert_eq!(hover("20", "end"), "hand", "a task circle");
     assert_eq!(hover("30", "end"), "text");
 }
@@ -1396,7 +1401,9 @@ fn links_to_websites_are_marked_with_an_arrow_and_links_inside_the_vault_are_not
     let arrows = decorations(&out, "external");
     assert_eq!(arrows.len(), 1, "{out}");
     let (_vault, out) = probe_notes(&[("a.md", note), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "5")]);
-    assert!(decorations(&out, "external").is_empty(), "the source shows in the cursor's line: {out}");
+    assert_eq!(decorations(&out, "external").len(), 1, "in the cursor's line too, the cursor outside the link: {out}");
+    let (_vault, out) = probe_notes(&[("a.md", note), ("b.md", "b")], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", "10")]);
+    assert!(decorations(&out, "external").is_empty(), "the source of the link the cursor is in shows: {out}");
 }
 
 #[test]
@@ -4724,4 +4731,30 @@ fn the_vaults_window_lists_the_vaults_opened_and_opens_or_forgets_one() {
     let acted = line(&out, "vaults-acted: ");
     assert!(acted.starts_with(&format!("{} (open) — ", name(&second))) && !acted.contains(&name(&first)) && acted.ends_with("| windows: 1"), "{acted}");
     assert!(first.path().join("a.md").is_file());
+}
+
+#[test]
+fn an_inline_run_shows_its_signs_only_with_the_cursor_in_it() {
+    let note = "# Заголовок\n\nПерше **жирне** і *курсив*, формула $x^2$ і `код`.\n\nкінець";
+    let at = |find: &str| note.chars().take(note.char_indices().position(|(i, _)| i == note.find(find).unwrap()).unwrap()).map(char::len_utf16).sum::<usize>();
+    let runs = |cursor: usize| {
+        let (_vault, out) = probe_notes(&[("a.md", note)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_CURSOR", &cursor.to_string())]);
+        (editor_runs(&out), out)
+    };
+    // The cursor in the line, in none of its runs: the line reads as it will.
+    let (line, _) = runs(at("Перше"));
+    assert!(line.contains("|[hidden]**|[strong]жирне|[hidden]**|") && line.contains("|[hidden]*|[emphasis]курсив|[hidden]*|") && line.contains("|[hidden]`|[code]код|[hidden]`|"), "{line}");
+    // In the bold run, or at an end of it: its signs, and no other run's.
+    for cursor in [at("**жирне"), at("жирне") + 2, at("жирне") + 7] {
+        let (line, _) = runs(cursor);
+        assert!(line.contains("|[markup]**|[strong]жирне|[markup]**|") && line.contains("|[hidden]*|[emphasis]курсив|[hidden]*|"), "{cursor}: {line}");
+    }
+    // A formula in the line: typeset until the cursor is in it.
+    let (_, out) = runs(at("Перше"));
+    assert_eq!(out.lines().filter(|l| l.starts_with("formula-image: ")).count(), 1, "{out}");
+    let (_, out) = runs(at("$x^2$") + 2);
+    assert_eq!(out.lines().filter(|l| l.starts_with("formula-image: ")).count(), 0, "its source shows: {out}");
+    // A heading's sign is its line's: it shows with the cursor anywhere in the line.
+    let (line, _) = runs(4);
+    assert!(line.starts_with("[markup]# |"), "{line}");
 }

@@ -99,14 +99,19 @@ impl LivePreview {
         for run in styled.runs.iter().filter(|r| r.style == Style::FootnoteRef && meets(&r.range)) {
             canvas.paint(run.range.clone(), |p| p.look |= RAISED);
         }
+        // Markup shows in the cursor's paragraph; an inline run's signs (`**`, a link's
+        // brackets) only with the cursor in that run, as Obsidian has it: the rest of the line
+        // reads as it will.
+        let selection = self.ivars().selection.get();
         for (m, font) in styled.markup.iter().zip(fonts.iter()).filter(|(m, _)| meets(m)) {
-            let id = if overlaps(m, revealed) { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
+            let shown = overlaps(m, revealed) && styled.inline_owner(m, revealed.0).is_none_or(|run| knotes_editor::reaches(&run, selection));
+            let id = if shown { palette.look(font, &look.muted, "markup") } else { palette.look(&look.hidden, &look.clear, "hidden") };
             canvas.paint(m.clone(), |p| p.look = id);
         }
         // A link to a website keeps room after its text for the arrow the fragment draws, while
         // its `](url)` is hidden.
         let arrow = palette.kern(EXTERNAL_ROOM);
-        for end in external_link_ends(&styled, region, revealed) {
+        for end in external_link_ends(&styled, region, revealed, selection) {
             canvas.paint(end.kern_at..end.kern_at + 1, |p| p.kern = arrow);
         }
         // A done task's text, and a comment, are muted, bold or italic inside too (links keep
@@ -156,7 +161,7 @@ impl LivePreview {
             self.paint_list_marker(&mut canvas, &mut palette, storage, run);
         }
         for f in styled.formulas.iter().filter(|f| meets(&f.range)) {
-            self.paint_formula(&mut canvas, &mut palette, storage, f, overlaps(&f.range, revealed));
+            self.paint_formula(&mut canvas, &mut palette, storage, f, self.formula_shown(f));
         }
         for image in styled.images.iter().filter(|i| meets(&i.range)) {
             self.paint_image(&mut canvas, &mut palette, storage, image, overlaps(&image.range, revealed));
@@ -172,7 +177,7 @@ impl LivePreview {
         for (t, table) in styled.tables.iter().enumerate().filter(|(_, t)| meets(&t.range)) {
             self.paint_table(&mut canvas, &mut palette, storage, t, table);
         }
-        self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region, revealed);
+        self.paint_formula_lines(&mut canvas, &mut palette, storage, &styled, region);
         let applied = if self.ivars().tables_changed.get() { region } else { asked };
         // A table scrolling sideways sets only its rows in view; the rest catch up after.
         let applied = self.ivars().apply_within.get().map_or(applied, |w| (applied.0.max(w.0), applied.1.min(w.1).max(applied.0.max(w.0))));
@@ -210,15 +215,27 @@ impl LivePreview {
             return;
         }
         let Some(storage) = (unsafe { view.textStorage() }) else { return };
-        let mut regions = self.markers_touched_anew(span(view.selectedRange()));
+        let (was, now) = (self.ivars().selection.get(), span(view.selectedRange()));
+        let mut regions = self.markers_touched_anew(now);
         let new = self.cursor_paragraph(&storage, view);
         let old = self.ivars().revealed.replace(new);
         if old != new {
             regions.extend([old, new].into_iter().filter(|&p| self.reveals_in_paragraph(p)));
-            // Formulas and code blocks show their source while the cursor is anywhere in them.
+            // Formulas of their own lines and code blocks show their source while the cursor is
+            // anywhere in them.
             let styled = self.ivars().styled.borrow();
-            let blocks = styled.formulas.iter().map(|f| &f.range).chain(&styled.code_blocks);
+            let blocks = styled.formulas.iter().filter(|f| f.display).map(|f| &f.range).chain(&styled.code_blocks);
             regions.extend(blocks.filter(|b| overlaps(b, old) != overlaps(b, new)).map(|b| (b.start, b.end)));
+        }
+        if (old, was) != (new, now) {
+            // The inline runs and formulas the cursor came into or left: their signs show or go.
+            let styled = self.ivars().styled.borrow();
+            let changed = |range: &Range<usize>| super::shown_inline(range, old, was) != super::shown_inline(range, new, now);
+            for para in [old, new].into_iter().filter(|&para| para != super::NOWHERE) {
+                regions.extend(styled.inline_runs(para.0, para.1).filter(|run| changed(run)).map(|run| (run.start, run.end)));
+                let first = styled.formulas.partition_point(|f| f.range.end <= para.0);
+                regions.extend(styled.formulas[first..].iter().take_while(|f| f.range.start < para.1).filter(|f| !f.display && changed(&f.range)).map(|f| (f.range.start, f.range.end)));
+            }
         }
         regions.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::new();
@@ -353,14 +370,14 @@ pub(super) struct ArrowRoom {
     pub(super) bare: bool,
 }
 
-/// The arrow rooms of the links to websites meeting `region`, outside the `revealed`
-/// paragraph (whose source shows).
-pub(super) fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usize, usize)) -> Vec<ArrowRoom> {
+/// The arrow rooms of the links to websites meeting `region`, but of the one the cursor is in
+/// (in the `revealed` paragraph, `selection` there): its source shows.
+pub(super) fn external_link_ends(styled: &Highlight, region: (usize, usize), revealed: (usize, usize), selection: (usize, usize)) -> Vec<ArrowRoom> {
     let first = styled.links.partition_point(|l| l.range.end <= region.0);
     styled.links[first..]
         .iter()
         .take_while(|l| l.range.start < region.1)
-        .filter(|l| l.link.kind == LinkKind::External && !overlaps(&l.range, revealed))
+        .filter(|l| l.link.kind == LinkKind::External && !super::shown_inline(&l.range, revealed, selection))
         .filter_map(|l| {
             let after = styled.markup.partition_point(|m| m.start <= l.range.start);
             let close = styled.markup[after..].iter().take_while(|m| m.start < l.range.end).find(|m| m.end == l.range.end);

@@ -660,6 +660,41 @@ fn formula(h: &mut Highlight, r: Range<usize>, tex: &str, display: bool) {
     h.formulas.push(FormulaRun { range: r, tex: tex.trim().to_owned(), display });
 }
 
+impl Highlight {
+    /// The inline run (bold, italics, struck, code, a link, a highlight, a comment, a footnote's
+    /// reference) whose signs the markup `m` is: the smallest that holds it, looked for from
+    /// `floor` on (its paragraph's start). None for a block's markup (a heading's `#`): that
+    /// shows with the cursor anywhere in its paragraph, an inline run's only with the cursor
+    /// in the run.
+    pub fn inline_owner(&self, m: &Range<usize>, floor: usize) -> Option<Range<usize>> {
+        let upto = self.runs.partition_point(|r| r.range.start <= m.start);
+        self.runs[..upto]
+            .iter()
+            .rev()
+            .take_while(|r| r.range.start >= floor)
+            .filter(|r| r.range.end >= m.end && is_inline(r.style))
+            .min_by_key(|r| r.range.len())
+            .map(|r| r.range.clone())
+    }
+
+    /// Every inline run from `from` up to `to`: those a selection there may show the source of.
+    pub fn inline_runs(&self, from: usize, to: usize) -> impl Iterator<Item = &Range<usize>> {
+        let first = self.runs.partition_point(|r| r.range.start < from);
+        self.runs[first..].iter().take_while(move |r| r.range.start < to).filter(|r| is_inline(r.style)).map(|r| &r.range)
+    }
+}
+
+/// Whether a run of `style` is inline text between its own signs.
+fn is_inline(style: Style) -> bool {
+    matches!(style, Style::Strong | Style::Emphasis | Style::Strike | Style::Code | Style::Link | Style::WikiLink | Style::Mark | Style::Comment | Style::FootnoteRef)
+}
+
+/// Whether the selection `selection` (a cursor: both ends the same) is in `range` or at an end
+/// of it: an inline run shows its source then.
+pub fn reaches(range: &Range<usize>, selection: (usize, usize)) -> bool {
+    selection.0 <= range.end && selection.1 >= range.start
+}
+
 /// A run whose first and last `n` bytes are its delimiters.
 fn delimited(h: &mut Highlight, r: Range<usize>, style: Style, n: usize) {
     h.runs.push(Run { range: r.clone(), style });

@@ -12,9 +12,14 @@ not saved or indexed yet, on every restyle and click. The owner chose the behavi
 
 Click, as in Obsidian:
 
-- Where the markup is hidden (any line but the cursor's), a plain click on a link follows
-  it. In the cursor line a plain click places the cursor; Cmd+click follows the link
-  anywhere.
+- Where a link's markup is hidden, a plain click on it follows it. In the link the cursor is
+  in (its source shows) a plain click places the cursor; Cmd+click follows the link anywhere.
+- Inline markup shows by the run, not by the line (owner's request, as Obsidian has it): the
+  signs of bold, italics, struck text, code, a highlight, a link, a footnote's reference, and
+  the source of a formula in a line of text, show only with the cursor in that run or at an
+  end of it; the rest of the cursor's line reads as it will. A block's markup (a heading's
+  `#`, a quote's `>`, a formula of its own lines, a code block's fences) shows with the
+  cursor anywhere in its paragraph, as before.
 - `[[Note]]` and `[x](note.md)` open the note in the same window, through the history
   (Back returns). `#Heading` scrolls to that heading, `^id` to that block. External URLs
   open in the default app.

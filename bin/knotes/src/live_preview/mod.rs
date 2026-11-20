@@ -305,6 +305,7 @@ define_class!(
     }
 
     impl LivePreview {
+
         /// The text view was resized: keep the text at most `READABLE_WIDTH` wide, centered.
         /// "Відкрити в новій вкладці" in a link's context menu.
         #[unsafe(method(openLinkInNewTab:))]
@@ -752,6 +753,21 @@ pub fn first_line_bottom(fragment: &NSTextLayoutFragment) -> Option<f64> {
 
 /// A paragraph no range meets: nothing revealed.
 const NOWHERE: (usize, usize) = (usize::MAX, usize::MAX);
+
+impl LivePreview {
+    /// Whether the formula `f` shows its source: one of its own lines with the cursor in its
+    /// paragraph, one in a line of text with the cursor in it.
+    pub(super) fn formula_shown(&self, f: &FormulaRun) -> bool {
+        let revealed = self.ivars().revealed.get();
+        if f.display { overlaps(&f.range, revealed) } else { shown_inline(&f.range, revealed, self.ivars().selection.get()) }
+    }
+}
+
+/// Whether an inline thing at `range` (bold text, a link, a formula in a line) shows its source:
+/// the cursor is in it or at an end of it, in the paragraph `para` whose markup shows.
+fn shown_inline(range: &Range<usize>, para: (usize, usize), selection: (usize, usize)) -> bool {
+    overlaps(range, para) && knotes_editor::reaches(range, selection)
+}
 
 fn overlaps(m: &Range<usize>, para: (usize, usize)) -> bool {
     m.start < para.1 && m.end > para.0 || (m.start == para.1 && para.0 == para.1)

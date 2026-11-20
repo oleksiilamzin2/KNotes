@@ -91,10 +91,13 @@ impl LivePreview {
     pub(super) fn footnote_target(&self, index: usize, cmd: bool) -> Option<usize> {
         let styled = self.ivars().styled.borrow();
         let revealed = self.ivars().revealed.get();
-        if !cmd && index >= revealed.0 && index < revealed.1 {
+        let clicked = styled.footnotes.iter().find(|f| f.range.contains(&index))?;
+        // Its source shows (a click there puts the cursor in it): a definition's with the
+        // cursor in its paragraph, a reference's with the cursor in the reference.
+        let shown = if clicked.definition { index >= revealed.0 && index < revealed.1 } else { super::shown_inline(&clicked.range, revealed, self.ivars().selection.get()) };
+        if !cmd && shown {
             return None;
         }
-        let clicked = styled.footnotes.iter().find(|f| f.range.contains(&index))?;
         let other = styled.footnotes.iter().find(|f| f.definition != clicked.definition && f.label.eq_ignore_ascii_case(&clicked.label))?;
         Some(other.range.end)
     }
@@ -103,11 +106,11 @@ impl LivePreview {
     /// with Cmd.
     pub(super) fn followed_link(&self, index: usize, cmd: bool) -> Option<Link> {
         let styled = self.ivars().styled.borrow();
-        let revealed = self.ivars().revealed.get();
-        let in_cursor_line = index >= revealed.0 && index < revealed.1;
-        // An image is no link to follow: a click puts the cursor in its source.
+        let (revealed, selection) = (self.ivars().revealed.get(), self.ivars().selection.get());
+        // An image is no link to follow: a click puts the cursor in its source. Nor is the link
+        // the cursor is in, whose source shows.
         let image = |l: &&LinkRun| styled.images.iter().any(|i| i.range == l.range);
-        link_at(&styled, index).filter(|l| (cmd || !in_cursor_line) && !image(l)).map(|link| link.link.clone())
+        link_at(&styled, index).filter(|l| (cmd || !super::shown_inline(&l.range, revealed, selection)) && !image(l)).map(|link| link.link.clone())
     }
 }
 

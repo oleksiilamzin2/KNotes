@@ -151,7 +151,7 @@ impl LivePreview {
         let mut marks = Vec::new();
         for f in styled.formulas[first..].iter().take_while(|f| f.range.start < to) {
             let block = f.display && is_block(&storage, f);
-            let (anchor, at) = match (overlaps(&f.range, revealed), block) {
+            let (anchor, at) = match (self.formula_shown(f), block) {
                 (false, true) => (Anchor::Line, f.range.start),
                 (false, false) => (Anchor::Inline, f.range.start),
                 (true, true) => (Anchor::Below, f.range.end.saturating_sub(1)),
@@ -188,7 +188,7 @@ impl LivePreview {
         }
         let centre_x = self.ivars().look.body.xHeight() / 2.0;
         let text = storage.string();
-        for end in external_link_ends(&styled, (from, to), self.ivars().revealed.get()) {
+        for end in external_link_ends(&styled, (from, to), self.ivars().revealed.get(), self.ivars().selection.get()) {
             // At the hidden `]`, whose own room follows it; or where a bare address ends, whose
             // location sits halfway into the room kerned after the address's last character
             // (where a caret would go) — unless the line ends there and the kerning is dropped.

@@ -94,7 +94,6 @@ impl LivePreview {
         storage: &NSTextStorage,
         styled: &Highlight,
         region: (usize, usize),
-        revealed: (usize, usize),
     ) {
         let font = &self.ivars().look.body;
         let (ascent, descent) = (font.ascender(), -font.descender());
@@ -107,7 +106,7 @@ impl LivePreview {
                 continue;
             }
             let (mut above, mut below) = (ascent, descent);
-            for f in styled.formulas.iter().filter(in_paragraph).filter(|f| !overlaps(&f.range, revealed)) {
+            for f in styled.formulas.iter().filter(in_paragraph).filter(|f| !self.formula_shown(f)) {
                 if let Ok(image) = self.formula_image(f) {
                     above = above.max(image.baseline_pt);
                     below = below.max(image.height_pt - image.baseline_pt);
