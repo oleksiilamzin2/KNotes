@@ -236,10 +236,15 @@ define_class!(
             }
         }
 
-        /// The find bar is the window's: the text view's own find items would be off.
+        /// The find bar is the window's: the text view's own find items would be off. A paste
+        /// of an image is the window's too.
         #[unsafe(method(validateUserInterfaceItem:))]
         fn validate_item(&self, item: &ProtocolObject<dyn NSValidatedUserInterfaceItem>) -> bool {
             if item.action() == Some(sel!(performTextFinderAction:)) {
+                true
+            } else if item.action() == Some(sel!(paste:)) && self.isEditable() && holds_image(&NSPasteboard::generalPasteboard()) {
+                // A text view of plain text takes no picture: Edit → Paste (Cmd+V) was off with
+                // an image alone copied (a screenshot), and `paste:` never came.
                 true
             } else {
                 // SAFETY: the superclass validates its other actions.
@@ -621,4 +626,11 @@ pub fn embed_view(mtm: MainThreadMarker) -> Retained<NoteTextView> {
     text.setContinuousSpellCheckingEnabled(true);
     text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
     text
+}
+
+/// Whether the pasteboard brings a picture or a file (the window takes those of a paste).
+fn holds_image(pasteboard: &NSPasteboard) -> bool {
+    // SAFETY: AppKit's pasteboard type constants live for the whole process.
+    let types = unsafe { [objc2_app_kit::NSPasteboardTypePNG, objc2_app_kit::NSPasteboardTypeTIFF, objc2_app_kit::NSPasteboardTypeFileURL] };
+    pasteboard.availableTypeFromArray(&objc2_foundation::NSArray::from_slice(&types)).is_some()
 }
