@@ -450,6 +450,10 @@ impl VaultWindow {
         if let Some(vault) = &vault {
             self.path_bar.show(vault, document.as_ref().map(|(path, name)| (path.as_str(), name.as_str())));
         }
+        // Zen mode shows no path under the note.
+        if self.zen.get().is_some() {
+            self.path_bar.view.setHidden(true);
+        }
         match (self.open_path(), self.pdf_path.borrow().as_deref()) {
             (Some(note), _) => self.toolbar_delegate.set_note_title(knotes_app::title_of(&note), true, changed(vault.map(|v| v.join(&note)))),
             (None, Some(pdf)) => {

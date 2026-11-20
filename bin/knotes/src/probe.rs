@@ -981,9 +981,12 @@ fn report_toolbar(window: &NSWindow) {
     println!("toolbar: {}", names.join(", "));
     if let Some(field) = note_title_field(window) {
         println!("note-title: {}", field.stringValue());
+        // How far the name's middle is from the window's (zen mode has it in the middle).
+        let frame = field.convertRect_toView(field.bounds(), None);
+        println!("note-title-off-middle: {:.0}", (frame.origin.x + frame.size.width / 2.0 - window.frame().size.width / 2.0).abs());
     }
     if let Some(date) = note_title_line(window, 1) {
-        println!("note-date: {}", date.stringValue());
+        println!("note-date: {}", if date.isHidden() && !date.stringValue().is_empty() { "hidden".to_owned() } else { date.stringValue().to_string() });
     }
     if let Some(field) = note_title_field(window) {
         println!("note-title-focus: {}", if field.currentEditor().is_some() { "editing" } else { "no" });
@@ -1346,6 +1349,8 @@ fn report(window: &NSWindow) {
         let widths: Vec<String> =
             split.splitViewItems().iter().map(|item| format!("{:.0}", item.viewController(window.mtm()).view().frame().size.width)).collect();
         println!("widths: {}", widths.join(" "));
+        let folded: Vec<&str> = split.splitViewItems().iter().map(|item| if item.isCollapsed() { "folded" } else { "shown" }).collect();
+        println!("folded: {}{}", folded.join(" "), if window.toolbar().is_some_and(|t| !t.isVisible()) { ", no toolbar" } else { "" });
     }
 }
 
@@ -1541,9 +1546,9 @@ fn report_note(window: &VaultWindow) {
     let view = &window.note_text;
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);
-    println!("path-bar: {}", window.path_bar.describe());
+    println!("path-bar: {}", if window.path_bar.view.isHidden() { "hidden".to_owned() } else { window.path_bar.describe() });
     // The tabs along the toolbar, the one shown, their crosses, and how wide the strip is.
-    println!("tabs: {}", window.tab_strip.names().join(" | "));
+    println!("tabs: {}{}", window.tab_strip.names().join(" | "), if window.tab_strip.isHidden() { " (hidden)" } else { "" });
     println!("tab-shown: {}", window.tab_strip.shown().unwrap_or_else(|| "none".to_owned()));
     println!("tab-crosses: {}", window.tab_strip.crosses());
     println!("tab-marks: {}", window.tab_strip.marks());

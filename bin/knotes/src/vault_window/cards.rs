@@ -402,7 +402,8 @@ impl VaultWindow {
     /// The list's column hidden while a card is shown (owner's request: a card alone beside the
     /// decks), and back with the review's end.
     fn show_list_column(&self, shown: bool) {
-        if self.list_item.isCollapsed() == shown {
+        // In zen mode the list stays away.
+        if self.zen.get().is_none() && self.list_item.isCollapsed() == shown {
             self.list_item.setCollapsed(!shown);
         }
     }

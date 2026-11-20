@@ -265,6 +265,14 @@ define_class!(
             }
         }
 
+        /// View → Zen Mode (⌃⌥Z): the note alone in the window, and back.
+        #[unsafe(method(toggleZen:))]
+        fn toggle_zen(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.toggle_zen();
+            }
+        }
+
         /// View → Ask the AI: the chat shown, its question field focused.
         #[unsafe(method(askAI:))]
         fn ask_ai(&self, _sender: Option<&AnyObject>) {

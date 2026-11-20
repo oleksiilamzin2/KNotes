@@ -249,6 +249,51 @@ impl VaultWindow {
         format!("{}, shows {shows}", self.panel_mode.get().key())
     }
 
+    /// Zen mode (View → Zen Mode, the toolbar's button): the note alone, the sidebar, the list
+    /// and the panel folded away; again, and each is as it was before.
+    pub fn toggle_zen(&self) {
+        let mtm = MainThreadMarker::new().expect("the window lives on the main thread");
+        let items = [&self.sidebar_item, &self.list_item, &self.panel_item];
+        match self.zen.take() {
+            None => {
+                let width = |item: &NSSplitViewItem| item.viewController(mtm).view().frame().size.width;
+                self.zen.set(Some((items.map(|item| item.isCollapsed()), [width(items[0]), width(items[1])])));
+                items.iter().for_each(|item| item.setCollapsed(true));
+            }
+            Some((before, widths)) => {
+                (0..3).for_each(|i| items[i].setCollapsed(before[i]));
+                // Folded together, the sidebar and the list come back at their narrowest: each
+                // gets its width again, once both are in place.
+                if let Some(split) = self.window.contentViewController().and_then(|c| c.downcast::<objc2_app_kit::NSSplitViewController>().ok()).map(|c| c.splitView()) {
+                    let split = MainThreadBound::new(split, mtm);
+                    DispatchQueue::main().exec_async(move || {
+                        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                        let split = split.get(mtm);
+                        let sidebar = if before[0] { 0.0 } else { widths[0] };
+                        if !before[0] {
+                            split.setPosition_ofDividerAtIndex(sidebar, 0);
+                        }
+                        if !before[1] {
+                            split.setPosition_ofDividerAtIndex(sidebar + widths[1], 1);
+                        }
+                    });
+                }
+            }
+        }
+        let on = self.zen.get().is_some();
+        // The toolbar's buttons go too (⌃⌥Z brings them back): the note's name alone on top.
+        if let Some(toolbar) = self.window.toolbar() {
+            toolbar.setVisible(!on);
+        }
+        self.toolbar_delegate.set_zen(on);
+        // The keys go to the note: a folded column that had them left them with the window,
+        // from where the sidebar's and the panel's buttons reach nothing.
+        self.window.makeFirstResponder(Some(&self.note_text));
+        // Nor the path under the note.
+        self.find_bar.set_bottom(if on { 0.0 } else { crate::path_bar::HEIGHT });
+        self.update_navigation();
+    }
+
     /// Called when the user flips the AI/outline switch (the app saves the choice).
     /// The right panel shown (unfolded if folded away) with the chat, its question field
     /// focused (View → Ask the AI, Cmd+L).

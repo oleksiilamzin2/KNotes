@@ -30,6 +30,8 @@ pub const TABS: &str = "knotes.tabs";
 /// «+» for a new tab, which was there first).
 pub const TOOLBAR_SEARCH: &str = "knotes.toolbar-search";
 pub const TOOLBAR_NEW_NOTE: &str = "knotes.toolbar-new-note";
+/// Zen mode: the note alone in the window.
+pub const TOOLBAR_ZEN: &str = "knotes.toolbar-zen";
 pub const SEARCH: &str = "knotes.search";
 /// The list's search field, in the place of the list's name while the search shows.
 pub const SEARCH_FIELD: &str = "knotes.search-field";
@@ -65,6 +67,9 @@ pub struct Ivars {
     on_search: RefCell<Option<OnSearch>>,
     on_toggle_search: RefCell<Option<OnToggleSearch>>,
     on_search_vault: RefCell<Option<OnToggleSearch>>,
+    on_zen: RefCell<Option<OnToggleSearch>>,
+    /// Zen mode's button, once made: its picture says which way a click goes.
+    zen: RefCell<Option<Retained<NSToolbarItem>>>,
     on_search_mode: RefCell<Option<OnSearchMode>>,
     /// Called with the name typed over the open note's.
     on_note_title: RefCell<Option<OnSearch>>,
@@ -189,6 +194,13 @@ define_class!(
             }
         }
 
+        #[unsafe(method(toggleZen:))]
+        fn toggle_zen(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_zen.borrow().as_ref() {
+                callback();
+            }
+        }
+
         #[unsafe(method(toggleSearch:))]
         fn toggle_search(&self, _sender: Option<&AnyObject>) {
             if let Some(callback) = self.ivars().on_toggle_search.borrow().as_ref() {
@@ -289,6 +301,8 @@ impl ToolbarDelegate {
             on_search: RefCell::new(None),
             on_toggle_search: RefCell::new(None),
             on_search_vault: RefCell::new(None),
+            on_zen: RefCell::new(None),
+            zen: RefCell::new(None),
             on_search_mode: RefCell::new(None),
             on_note_title: RefCell::new(None),
             on_title_done: RefCell::new(None),
@@ -317,6 +331,33 @@ impl ToolbarDelegate {
 
     pub fn on_search_vault(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_search_vault.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_zen(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_zen.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// Zen mode: the tabs hidden, and the zen button's picture: arrows out to enter, arrows in to leave.
+    pub fn set_zen(&self, on: bool) {
+        // The tabs go too: the note alone.
+        if let Some(tabs) = self.ivars().tabs.borrow().as_ref() {
+            tabs.setHidden(on);
+        }
+        // And of the row below only the note's name stays.
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.back.setHidden(on);
+            row.forward.setHidden(on);
+            // One off before the other on: the two together cannot hold.
+            let (off, now) = if on { (&row.title_left, &row.title_middle) } else { (&row.title_middle, &row.title_left) };
+            off.setActive(false);
+            now.setActive(true);
+        }
+        if let Some(date) = self.ivars().note_date.borrow().as_ref() {
+            date.setHidden(on || self.ivars().note_date_state.borrow().is_empty());
+        }
+        if let Some(item) = self.ivars().zen.borrow().as_ref() {
+            item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(zen_symbol(on)), Some(&NSString::from_str(strings::ZEN))).as_deref());
+        }
     }
 
     pub fn on_toggle_search(&self, callback: impl Fn() + 'static) {
@@ -401,7 +442,9 @@ impl ToolbarDelegate {
         *self.ivars().note_date_state.borrow_mut() = date.clone();
         if let Some(field) = self.ivars().note_date.borrow().as_ref() {
             field.setStringValue(&NSString::from_str(&date));
-            field.setHidden(date.is_empty());
+            // Zen mode (the tabs hidden) shows no date.
+            let zen = self.ivars().tabs.borrow().as_ref().is_some_and(|tabs| tabs.isHidden());
+            field.setHidden(date.is_empty() || zen);
         }
     }
 
@@ -600,11 +643,14 @@ impl ToolbarDelegate {
             // (A new note's button stood first here; it is in the toolbar now, after the tabs.)
             back.leadingAnchor().constraintEqualToAnchor_constant(&over_note.leadingAnchor(), 12.0),
             forward.leadingAnchor().constraintEqualToAnchor_constant(&back.trailingAnchor(), 12.0),
-            title.leadingAnchor().constraintEqualToAnchor_constant(&forward.trailingAnchor(), 12.0),
             date.leadingAnchor().constraintEqualToAnchor_constant(&title.trailingAnchor(), 8.0),
             date.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&over_note.trailingAnchor(), -12.0),
         ];
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&constraints));
+        // The name after the arrows; in zen mode in the middle (`set_zen`).
+        let title_left = title.leadingAnchor().constraintEqualToAnchor_constant(&forward.trailingAnchor(), 12.0);
+        let title_middle = title.centerXAnchor().constraintEqualToAnchor(&over_note.centerXAnchor());
+        title_left.setActive(true);
         let (can_back, can_forward) = self.ivars().history_state.get();
         back.setEnabled(can_back);
         forward.setEnabled(can_forward);
@@ -615,7 +661,7 @@ impl ToolbarDelegate {
         date.setStringValue(&NSString::from_str(&self.ivars().note_date_state.borrow()));
         *self.ivars().note_title.borrow_mut() = Some(title);
         *self.ivars().note_date.borrow_mut() = Some(date);
-        *self.ivars().row.borrow_mut() = Some(Row { view: row.clone(), over_sidebar, modes, over_panel, panels, over_list, over_note, list_title, list_count, back, forward });
+        *self.ivars().row.borrow_mut() = Some(Row { view: row.clone(), over_sidebar, modes, over_panel, panels, over_list, over_note, list_title, list_count, back, forward, title_left, title_middle });
         // SAFETY: the delegate lives as long as the window; the selector takes a notification.
         unsafe {
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(target, sel!(columnsResized:), Some(NSSplitViewDidResizeSubviewsNotification), Some(self.ivars().split_view.as_ref()));
@@ -676,6 +722,16 @@ impl ToolbarDelegate {
                     item.setTarget(Some(self));
                     item.setAction(Some(action));
                 }
+                Some(item)
+            }
+            TOOLBAR_ZEN => {
+                let item = button(mtm, id, zen_symbol(false), strings::ZEN);
+                // SAFETY: the delegate outlives its toolbar's items and takes the action.
+                unsafe {
+                    item.setTarget(Some(self));
+                    item.setAction(Some(sel!(toggleZen:)));
+                }
+                *self.ivars().zen.borrow_mut() = Some(item.clone());
                 Some(item)
             }
             PANEL => {
@@ -758,6 +814,10 @@ fn end_editing(field: &NSControl) {
     }
 }
 
+fn zen_symbol(on: bool) -> &'static str {
+    if on { "arrow.down.right.and.arrow.up.left" } else { "arrow.up.left.and.arrow.down.right" }
+}
+
 pub fn identifiers() -> Retained<NSArray<NSString>> {
     // SAFETY: AppKit's identifier constants are immutable strings for the process lifetime.
     let system = unsafe {
@@ -783,6 +843,7 @@ pub fn identifiers() -> Retained<NSArray<NSString>> {
         space.copy(),
         custom(TOOLBAR_SEARCH),
         custom(TOOLBAR_NEW_NOTE),
+        custom(TOOLBAR_ZEN),
         space.copy(),
         custom(PANEL),
     ])
@@ -829,6 +890,9 @@ struct Row {
     list_count: Retained<NSTextField>,
     back: Retained<NSButton>,
     forward: Retained<NSButton>,
+    /// Where the note's name stands: after the arrows, or in the middle (zen mode).
+    title_left: Retained<NSLayoutConstraint>,
+    title_middle: Retained<NSLayoutConstraint>,
 }
 
 /// The button `index` on and in the accent colour, the others off and grey.

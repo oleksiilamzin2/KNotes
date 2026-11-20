@@ -210,6 +210,9 @@ pub struct VaultWindow {
     /// The right panel's split view item, watched to hide the AI/outline switch with it.
     panel_item: Retained<NSSplitViewItem>,
     panel_observer: RefCell<Option<Retained<CollapseObserver>>>,
+    /// In zen mode: which of the sidebar, the list and the panel were folded before it.
+    /// And how wide the sidebar and the list were.
+    zen: Cell<Option<([bool; 3], [f64; 2])>>,
 }
 
 impl Drop for VaultWindow {
@@ -413,6 +416,7 @@ impl VaultWindow {
             collapse_observer: RefCell::new(None),
             panel_item: split.splitViewItems().objectAtIndex(3),
             panel_observer: RefCell::new(None),
+            zen: Cell::new(None),
         });
         let toolbar = this.toolbar_delegate.clone();
         let list_item = split.splitViewItems().objectAtIndex(1);
@@ -752,6 +756,12 @@ impl VaultWindow {
         this.toolbar_delegate.on_new_note(move || {
             if let Some(window) = weak.upgrade() {
                 window.new_note();
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_zen(move || {
+            if let Some(window) = weak.upgrade() {
+                window.toggle_zen();
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);

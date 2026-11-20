@@ -14,6 +14,22 @@ impl VaultWindow {
         }
         probe::toggle_sidebar_requested(&self.window);
         probe::panel_requested(&self.window);
+        // `KNOTES_PROBE_ACTION=zen`: the zen button; `zen-twice`: and back once it has gone.
+        let action = std::env::var("KNOTES_PROBE_ACTION").unwrap_or_default();
+        if action == "zen" || action == "zen-twice" {
+            self.toggle_zen();
+            if action == "zen-twice" {
+                let weak = self.this.borrow().clone();
+                let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_millis(700)).expect("short delay");
+                let weak = dispatch2::MainThreadBound::new(weak, objc2::MainThreadOnly::mtm(&*self.window));
+                let _ = dispatch2::DispatchQueue::main().after(when, move || {
+                    let mtm = objc2::MainThreadMarker::new().expect("main queue runs on the main thread");
+                    if let Some(window) = weak.get(mtm).upgrade() {
+                        window.toggle_zen();
+                    }
+                });
+            }
+        }
         if let Some(space) = probe::requested_space() {
             // Through the switcher, as a click.
             self.space_switcher.probe_choose(space.as_deref());

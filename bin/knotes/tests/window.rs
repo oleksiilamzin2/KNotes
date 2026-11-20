@@ -129,7 +129,7 @@ fn toolbar_has_v1_buttons_and_columns_have_room() {
     let toolbar = out.lines().find_map(|l| l.strip_prefix("toolbar: ")).unwrap_or_else(|| panic!("{out}"));
     assert_eq!(
         toolbar,
-        "toggle-sidebar, space, tabs, space, toolbar-search, toolbar-new-note, space, panel",
+        "toggle-sidebar, space, tabs, space, toolbar-search, toolbar-new-note, toolbar-zen, space, panel",
         "the sidebar's button, the tabs, the search and a new note together, the panel's button"
     );
     // What belongs to the list and the note is in the row under the toolbar, each part over its
@@ -1467,6 +1467,29 @@ fn the_list_gets_its_width_back_when_the_sidebar_comes_back() {
     let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "toggle-sidebar-twice"), ("KNOTES_PROBE_DELAY_MS", "2500")]);
     let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
     assert!((widths[1] - 282.0).abs() < 2.0, "the list as wide as before the sidebar went: {widths:?}");
+}
+
+/// Zen mode folds all but the note away; again, and each column is as it was (the panel
+/// folded before it stays folded).
+#[test]
+fn zen_mode_leaves_the_note_alone_and_gives_the_columns_back() {
+    let folded = |action: &str| {
+        let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", action), ("KNOTES_PROBE_DELAY_MS", "2500")]);
+        let widths: Vec<f64> = out.lines().find_map(|l| l.strip_prefix("widths: ")).unwrap().split(' ').map(|w| w.parse().unwrap()).collect();
+        let tabs_hidden = out.lines().any(|l| l.starts_with("tabs: ") && l.ends_with(" (hidden)"));
+        (format!("{}{}", out.lines().find_map(|l| l.strip_prefix("folded: ")).unwrap(), if tabs_hidden { ", no tabs" } else { "" }), widths)
+    };
+    let (before, widths_before) = folded("none");
+    assert_eq!(folded("zen").0, "folded folded shown folded, no toolbar, no tabs");
+    // A note opened in zen mode brings no column back, and only its name is over it.
+    let (_vault, out) = probe_notes(&[("a.md", "a")], &[("KNOTES_PROBE_ACTION", "zen"), ("KNOTES_PROBE_OPEN", "a.md")]);
+    assert!(out.contains("folded: folded folded shown folded, no toolbar"), "{out}");
+    assert!(out.contains("note-title: a\n") && out.contains("note-date: hidden") && out.contains("path-bar: hidden"), "{out}");
+    let off: f64 = out.lines().find_map(|l| l.strip_prefix("note-title-off-middle: ")).unwrap().parse().unwrap();
+    assert!(off <= 1.0, "the name in the middle of the window: {out}");
+    let (after, widths) = folded("zen-twice");
+    assert_eq!(after, before);
+    assert!((widths[1] - widths_before[1]).abs() < 2.0, "the list as wide as before: {widths:?} {widths_before:?}");
 }
 
 const PIC: &[u8] = include_bytes!("fixtures/pic-120x80.png");

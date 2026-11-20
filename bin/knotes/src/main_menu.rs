@@ -88,6 +88,7 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     submenu(mtm, &bar, s::MENU_VIEW, &[
         Some(item(mtm, s::TOGGLE_SIDEBAR, sel!(toggleSidebar:), "s", cmd(NSEventModifierFlags::Control))),
         Some(item(mtm, s::TOGGLE_PANEL, sel!(toggleInspector:), "i", cmd(NSEventModifierFlags::Option))),
+        Some(item(mtm, s::ZEN, sel!(toggleZen:), "z", NSEventModifierFlags::Control | NSEventModifierFlags::Option)),
         Some(item(mtm, s::ASK_AI, sel!(askAI:), "l", cmd(none))),
         None,
         // A PDF's zoom (the viewer takes them when it has the focus).
