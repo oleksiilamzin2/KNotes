@@ -437,7 +437,7 @@ impl LivePreview {
             text: NSColor::labelColor(),
             muted: NSColor::tertiaryLabelColor(),
             accent: NSColor::linkColor(),
-            missing: NSColor::linkColor().colorWithAlphaComponent(0.45),
+            missing: NSColor::linkColor().colorWithAlphaComponent(0.7),
             error: NSColor::systemRedColor(),
             callouts: vec![
                 NSColor::systemBlueColor(),
@@ -755,6 +755,19 @@ pub fn first_line_bottom(fragment: &NSTextLayoutFragment) -> Option<f64> {
 const NOWHERE: (usize, usize) = (usize::MAX, usize::MAX);
 
 impl LivePreview {
+    /// The `[[links]]`, the formulas and the image embeds: not prose, the spelling checker
+    /// leaves them alone.
+    pub(super) fn unspelled(styled: &Highlight) -> impl Iterator<Item = &Range<usize>> {
+        let wiki = styled.links.iter().filter(|l| l.link.kind == knotes_core::LinkKind::Wiki).map(|l| &l.range);
+        wiki.chain(styled.formulas.iter().map(|f| &f.range)).chain(styled.images.iter().map(|i| &i.range))
+    }
+
+    /// Whether `range` of the text may be marked misspelled.
+    pub fn spelled(&self, range: NSRange) -> bool {
+        let (start, end) = span(range);
+        !Self::unspelled(&self.ivars().styled.borrow()).any(|r| r.start < end && r.end > start)
+    }
+
     /// Whether the formula `f` shows its source: one of its own lines with the cursor in its
     /// paragraph, one in a line of text with the cursor in it.
     pub(super) fn formula_shown(&self, f: &FormulaRun) -> bool {

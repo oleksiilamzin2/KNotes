@@ -63,6 +63,8 @@ pub struct Ivars {
     on_layout: RefCell<Option<Box<dyn Fn()>>>,
     /// Called when the view takes the keys (true) or gives them up.
     on_focus: RefCell<Option<OnFocus>>,
+    /// Asked whether a range of the text may be marked misspelled.
+    spelled: RefCell<Option<Box<dyn Fn(NSRange) -> bool>>>,
     /// The tracking area that reports mouse moves over the view.
     moves: RefCell<Option<Retained<NSTrackingArea>>>,
     /// Called with the find action (`NSTextFinderAction`) Edit → Find… and its neighbours ask
@@ -107,6 +109,16 @@ define_class!(
                 let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), NSRect::ZERO, options, Some(self), None) };
                 self.addTrackingArea(&area);
                 *self.ivars().moves.borrow_mut() = Some(area);
+            }
+        }
+
+        /// The spelling checker's marks: none in what is not prose (`on_spelling`).
+        #[unsafe(method(setSpellingState:range:))]
+        fn set_spelling_state(&self, state: isize, range: NSRange) {
+            let refused = state != 0 && self.ivars().spelled.borrow().as_ref().is_some_and(|spelled| !spelled(range));
+            if !refused {
+                // SAFETY: the same arguments, to the superclass.
+                let _: () = unsafe { msg_send![super(self), setSpellingState: state, range: range] };
             }
         }
 
@@ -314,6 +326,12 @@ pub fn finder_tag(sender: Option<&AnyObject>) -> isize {
 }
 
 impl NoteTextView {
+    /// `spelled(range)`: whether the range may be marked misspelled (a `[[link]]`'s name and a
+    /// formula's source are not prose).
+    pub fn on_spelling(&self, spelled: impl Fn(NSRange) -> bool + 'static) {
+        *self.ivars().spelled.borrow_mut() = Some(Box::new(spelled));
+    }
+
     /// Called when the view takes the keys (true) or gives them up.
     pub fn on_focus(&self, callback: impl Fn(bool) + 'static) {
         *self.ivars().on_focus.borrow_mut() = Some(Box::new(callback));

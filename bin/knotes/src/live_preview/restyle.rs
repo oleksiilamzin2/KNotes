@@ -41,11 +41,11 @@ impl LivePreview {
         self.restyle(&storage, region.unwrap_or((0, total)));
         // A word marked misspelled before it became a formula (`$Y` is a word until its second
         // `$` is typed) keeps its mark, which on the formula's hidden glyphs is a stray red
-        // dot: the marks of what was restyled go from its formulas and image embeds.
+        // dot: the marks of what was restyled go from its formulas, image embeds and `[[links]]`.
         if let Some(region) = region {
             let styled = self.ivars().styled.borrow();
             let within = |r: &Range<usize>| r.start < region.1 && r.end > region.0;
-            for range in styled.formulas.iter().map(|f| &f.range).chain(styled.images.iter().map(|i| &i.range)).filter(|r| within(r)) {
+            for range in Self::unspelled(&styled).filter(|r| within(r)) {
                 view.setSpellingState_range(0, ns(range));
             }
         }

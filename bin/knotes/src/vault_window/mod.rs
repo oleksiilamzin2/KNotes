@@ -244,6 +244,8 @@ impl VaultWindow {
         let live_preview = LivePreview::new(mtm);
         note_text.setDelegate(Some(ProtocolObject::from_ref(&*live_preview)));
         live_preview.attach(&note_text);
+        let spelling = live_preview.clone();
+        note_text.on_spelling(move |range| spelling.spelled(range));
         let clicks = live_preview.clone();
         note_text.on_click(move |view, index, cmd| clicks.click(view, index, cmd));
         let hovers = live_preview.clone();
