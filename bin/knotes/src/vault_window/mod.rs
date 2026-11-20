@@ -662,6 +662,12 @@ impl VaultWindow {
                 window.purge(None);
             }
         });
+        let weak_empty: Weak<Self> = Rc::downgrade(&this);
+        this.toolbar_delegate.on_empty_deleted(move || {
+            if let Some(window) = weak_empty.upgrade() {
+                window.purge(None);
+            }
+        });
         let weak_rename_end: Weak<Self> = Rc::downgrade(&this);
         this.sidebar.on_rename_end(move || {
             if let Some(window) = weak_rename_end.upgrade() {

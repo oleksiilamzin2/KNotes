@@ -979,6 +979,8 @@ fn report_toolbar(window: &NSWindow) {
         })
         .collect();
     println!("toolbar: {}", names.join(", "));
+    let empty = crate::toolbar::row_control(window, crate::toolbar::EMPTY_DELETED);
+    println!("empty-deleted: {}", if empty.is_some_and(|b| !b.isHidden()) { "shown" } else { "hidden" });
     if let Some(field) = note_title_field(window) {
         println!("note-title: {}", field.stringValue());
         // How far the name's middle is from the window's (zen mode has it in the middle).

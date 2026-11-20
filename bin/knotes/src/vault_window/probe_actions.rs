@@ -47,6 +47,12 @@ impl VaultWindow {
             self.select(item);
             timed("a row chosen", began);
         }
+        // `KNOTES_PROBE_ACTION=empty-button`: a click on the button over the recently deleted.
+        let empty = toolbar::row_control(&self.window, toolbar::EMPTY_DELETED).and_then(|v| v.downcast::<objc2_app_kit::NSButton>().ok());
+        if let Some(button) = empty.filter(|b| !b.isHidden() && std::env::var("KNOTES_PROBE_ACTION").as_deref() == Ok("empty-button")) {
+            // SAFETY: a click on a button, as the user's.
+            unsafe { button.performClick(None) };
+        }
         // `KNOTES_PROBE_DECK_SETTINGS=85|10`: the chosen deck's menu → its settings, so typed.
         let chosen = self.review_deck.borrow().clone();
         if std::env::var_os("KNOTES_PROBE_DECK_SETTINGS").is_some()

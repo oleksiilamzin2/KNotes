@@ -36,6 +36,8 @@ pub const SEARCH: &str = "knotes.search";
 /// The list's search field, in the place of the list's name while the search shows.
 pub const SEARCH_FIELD: &str = "knotes.search-field";
 pub const LIST_OPTIONS: &str = "knotes.list-options";
+/// Empties the recently deleted, over their list.
+pub const EMPTY_DELETED: &str = "knotes.empty-deleted";
 pub const HISTORY_BACK: &str = "knotes.history-back";
 pub const HISTORY_FORWARD: &str = "knotes.history-forward";
 /// The list's name and its count of notes, in the row under the toolbar.
@@ -68,6 +70,9 @@ pub struct Ivars {
     on_toggle_search: RefCell<Option<OnToggleSearch>>,
     on_search_vault: RefCell<Option<OnToggleSearch>>,
     on_zen: RefCell<Option<OnToggleSearch>>,
+    on_empty_deleted: RefCell<Option<OnToggleSearch>>,
+    /// The recently deleted are listed and there are some: their button shows.
+    empty_shown: Cell<bool>,
     /// Zen mode's button, once made: its picture says which way a click goes.
     zen: RefCell<Option<Retained<NSToolbarItem>>>,
     on_search_mode: RefCell<Option<OnSearchMode>>,
@@ -194,6 +199,13 @@ define_class!(
             }
         }
 
+        #[unsafe(method(emptyDeleted:))]
+        fn empty_deleted(&self, _sender: Option<&AnyObject>) {
+            if let Some(callback) = self.ivars().on_empty_deleted.borrow().as_ref() {
+                callback();
+            }
+        }
+
         #[unsafe(method(toggleZen:))]
         fn toggle_zen(&self, _sender: Option<&AnyObject>) {
             if let Some(callback) = self.ivars().on_zen.borrow().as_ref() {
@@ -302,6 +314,8 @@ impl ToolbarDelegate {
             on_toggle_search: RefCell::new(None),
             on_search_vault: RefCell::new(None),
             on_zen: RefCell::new(None),
+            on_empty_deleted: RefCell::new(None),
+            empty_shown: Cell::new(false),
             zen: RefCell::new(None),
             on_search_mode: RefCell::new(None),
             on_note_title: RefCell::new(None),
@@ -331,6 +345,18 @@ impl ToolbarDelegate {
 
     pub fn on_search_vault(&self, callback: impl Fn() + 'static) {
         *self.ivars().on_search_vault.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn on_empty_deleted(&self, callback: impl Fn() + 'static) {
+        *self.ivars().on_empty_deleted.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The button emptying the recently deleted, shown over their list while it has entries.
+    pub fn set_empty_shown(&self, shown: bool) {
+        self.ivars().empty_shown.set(shown);
+        if let Some(row) = self.ivars().row.borrow().as_ref() {
+            row.empty.setHidden(!shown);
+        }
     }
 
     pub fn on_zen(&self, callback: impl Fn() + 'static) {
@@ -534,6 +560,8 @@ impl ToolbarDelegate {
         let (list_title, list_count) = (label(LIST_TITLE, true), label(LIST_COUNT, false));
         search_field.setIdentifier(Some(&NSString::from_str(SEARCH_FIELD)));
         let search = button(SEARCH, "magnifyingglass", strings::SEARCH, sel!(toggleSearch:));
+        let empty = button(EMPTY_DELETED, "trash.slash", strings::EMPTY_DELETED, sel!(emptyDeleted:));
+        empty.setHidden(!self.ivars().empty_shown.get());
         let options = button(LIST_OPTIONS, "ellipsis", strings::LIST_OPTIONS, sel!(listOptions:));
         let back = button(HISTORY_BACK, "chevron.left", strings::BACK, sel!(navigateBack:));
         let forward = button(HISTORY_FORWARD, "chevron.right", strings::FORWARD, sel!(navigateForward:));
@@ -621,7 +649,7 @@ impl ToolbarDelegate {
         row.addSubview(&over_sidebar);
         row.addSubview(&over_list);
         row.addSubview(&over_note);
-        for (part, views) in [(&over_list, [&*list_title as &NSView, &list_count, search_field, &search, &options].as_slice()), (&over_note, [&*back as &NSView, &forward, &title, &date].as_slice())] {
+        for (part, views) in [(&over_list, [&*list_title as &NSView, &list_count, search_field, &empty, &search, &options].as_slice()), (&over_note, [&*back as &NSView, &forward, &title, &date].as_slice())] {
             for view in views {
                 view.setTranslatesAutoresizingMaskIntoConstraints(false);
                 part.addSubview(view);
@@ -635,7 +663,8 @@ impl ToolbarDelegate {
         let constraints = [
             list_title.leadingAnchor().constraintEqualToAnchor_constant(&over_list.leadingAnchor(), 12.0),
             list_count.leadingAnchor().constraintEqualToAnchor_constant(&list_title.trailingAnchor(), 6.0),
-            list_count.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&search.leadingAnchor(), -6.0),
+            list_count.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&empty.leadingAnchor(), -6.0),
+            empty.trailingAnchor().constraintEqualToAnchor_constant(&search.leadingAnchor(), -10.0),
             search_field.leadingAnchor().constraintEqualToAnchor_constant(&over_list.leadingAnchor(), 12.0),
             search_field.trailingAnchor().constraintEqualToAnchor_constant(&search.leadingAnchor(), -8.0),
             search.trailingAnchor().constraintEqualToAnchor_constant(&options.leadingAnchor(), -10.0),
@@ -661,7 +690,7 @@ impl ToolbarDelegate {
         date.setStringValue(&NSString::from_str(&self.ivars().note_date_state.borrow()));
         *self.ivars().note_title.borrow_mut() = Some(title);
         *self.ivars().note_date.borrow_mut() = Some(date);
-        *self.ivars().row.borrow_mut() = Some(Row { view: row.clone(), over_sidebar, modes, over_panel, panels, over_list, over_note, list_title, list_count, back, forward, title_left, title_middle });
+        *self.ivars().row.borrow_mut() = Some(Row { view: row.clone(), over_sidebar, modes, over_panel, panels, over_list, over_note, list_title, list_count, empty, back, forward, title_left, title_middle });
         // SAFETY: the delegate lives as long as the window; the selector takes a notification.
         unsafe {
             NSNotificationCenter::defaultCenter().addObserver_selector_name_object(target, sel!(columnsResized:), Some(NSSplitViewDidResizeSubviewsNotification), Some(self.ivars().split_view.as_ref()));
@@ -888,6 +917,8 @@ struct Row {
     over_note: Retained<NSView>,
     list_title: Retained<NSTextField>,
     list_count: Retained<NSTextField>,
+    /// Empties the recently deleted.
+    empty: Retained<NSButton>,
     back: Retained<NSButton>,
     forward: Retained<NSButton>,
     /// Where the note's name stands: after the arrows, or in the middle (zen mode).

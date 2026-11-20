@@ -3584,6 +3584,19 @@ fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_empt
     assert_eq!(deleted_entries(vault.path()), 0, "gone for good");
 }
 
+/// Over the recently deleted, while there are some, a button empties them; over another list
+/// and over none deleted there is no such button.
+#[test]
+fn a_button_over_the_recently_deleted_empties_them() {
+    let vault = spaced_vault();
+    probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);
+    assert_eq!(deleted_entries(vault.path()), 1);
+    assert!(probe_env(&[vault.path()], None, &[]).contains("empty-deleted: hidden"), "not over the notes");
+    let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "empty-button")]);
+    assert_eq!(deleted_entries(vault.path()), 0, "gone for good: {out}");
+    assert!(out.contains("empty-deleted: hidden"), "nothing left to empty: {out}");
+}
+
 #[test]
 fn a_deleted_note_pdf_or_folder_chosen_in_recently_deleted_shows_as_it_was_and_is_not_edited() {
     let vault = spaced_vault();

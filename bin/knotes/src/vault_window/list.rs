@@ -54,6 +54,12 @@ impl VaultWindow {
         if gone {
             self.show_nothing();
         }
+        // Over the recently deleted, while there are some, the button that empties them.
+        let to_empty = {
+            let state = self.state.borrow();
+            state.selection == SidebarItem::Deleted && !state.trash.is_empty()
+        };
+        self.toolbar_delegate.set_empty_shown(to_empty);
         // The recently deleted: their entries, the newest first (ADR 0032).
         if self.state.borrow().selection == SidebarItem::Deleted {
             let (rows, trash) = {
