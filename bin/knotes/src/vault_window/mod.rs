@@ -11,6 +11,7 @@ mod completion;
 mod links;
 mod embeds;
 mod trash;
+mod attachments;
 mod spaces;
 mod probe_actions;
 mod ai;
@@ -194,6 +195,8 @@ pub struct VaultWindow {
     search_window: RefCell<Option<crate::search_window::SearchWindow>>,
     /// A deck's cards as a table, in a window of its own (ADR 0037): made when first asked for.
     card_table: RefCell<Option<crate::card_table_window::CardTableWindow>>,
+    /// The attachments' window, once asked for.
+    attachments: RefCell<Option<crate::attachments_window::AttachmentsWindow>>,
     /// The deck whose cards the table shows.
     card_table_deck: RefCell<Option<String>>,
     search_generation: Cell<u64>,
@@ -408,6 +411,7 @@ impl VaultWindow {
             search_worker: RefCell::new(None),
             search_window: RefCell::new(None),
             card_table: RefCell::new(None),
+            attachments: RefCell::new(None),
             card_table_deck: RefCell::new(None),
             search_generation: Cell::new(0),
             search_results: RefCell::new(None),
@@ -1040,6 +1044,7 @@ impl VaultWindow {
         self.rebuild_sidebar();
         // A deck's table, while it shows, follows the vault.
         self.reload_deck_table();
+        self.reload_attachments();
         self.mark_paused_cards();
         if !self.tabs_restored.replace(true) {
             self.restore_tabs();

@@ -265,6 +265,14 @@ define_class!(
             }
         }
 
+        /// File → Attachments…: the vault's attachments, in a window of their own.
+        #[unsafe(method(showAttachments:))]
+        fn show_attachments(&self, _sender: Option<&AnyObject>) {
+            if let Some(window) = self.front_window() {
+                window.show_attachments();
+            }
+        }
+
         /// View → Zen Mode (⌃⌥Z): the note alone in the window, and back.
         #[unsafe(method(toggleZen:))]
         fn toggle_zen(&self, _sender: Option<&AnyObject>) {

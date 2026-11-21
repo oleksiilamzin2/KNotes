@@ -60,6 +60,7 @@ pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
         Some(item(mtm, s::NEW_FOLDER, sel!(newFolder:), "n", cmd(NSEventModifierFlags::Shift))),
         Some(item(mtm, s::OPEN_VAULT, sel!(openVault:), "o", cmd(none))),
         Some(item(mtm, s::VAULTS_MENU, sel!(showVaults:), "o", cmd(NSEventModifierFlags::Shift))),
+        Some(item(mtm, s::ATTACHMENTS_MENU, sel!(showAttachments:), "", none)),
         Some(item(mtm, s::SAVE, sel!(saveDocument:), "s", cmd(none))),
         // Cmd+W closes the tab shown (the window when no tab is left, ADR 0024).
         Some(item(mtm, s::CLOSE_TAB, sel!(closeTab:), "w", cmd(none))),
@@ -150,6 +151,10 @@ fn shortcuts(menu: &NSMenu) -> String {
         .filter(|i| !i.isSeparatorItem())
         .map(|i| {
             let shift = if i.keyEquivalentModifierMask().contains(NSEventModifierFlags::Shift) { "⇧" } else { "" };
+            // One with no key is its title alone.
+            if i.keyEquivalent().length() == 0 {
+                return i.title().to_string();
+            }
             format!("{} {shift}⌘{}", i.title(), i.keyEquivalent().to_string().to_uppercase())
         })
         .collect::<Vec<_>>()

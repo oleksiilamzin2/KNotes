@@ -1,4 +1,4 @@
-use knotes_app::{Moves, plan_relinks};
+use knotes_app::{Moves, plan_relinks, plan_unlinks};
 use knotes_core::{BackLink, BoxError, LinkGraph, LinkResolver, NoteParser, OutLink};
 use knotes_index::LinkTargets;
 use knotes_md::MarkdownParser;
@@ -83,4 +83,24 @@ fn nothing_to_edit_when_no_link_changes() {
     let vault = Vault(vec![("a.md", "[[Other]]"), ("Old.md", "x"), ("Other.md", "y")]);
     let plan = plan(&vault, &[("Old.md", "New.md")]);
     assert!(plan.edits.is_empty() && plan.links == 0);
+}
+
+#[test]
+fn links_to_deleted_files_go_from_the_notes_a_line_of_its_own_with_its_line() {
+    let vault = Vault(vec![
+        ("pic.png", ""),
+        ("keep.png", ""),
+        ("a.md", "Before\n\n![[pic.png]]\n\nAfter ![[keep.png]]"),
+        ("b.md", "See ![[pic.png|30]] here and [again](pic.png).\n![[pic.png]]"),
+        ("c.md", "Nothing of it: ![[keep.png]]"),
+    ]);
+    let plan = plan_unlinks(&["pic.png".to_owned()], &vault, &|p| vault.read(p), &MarkdownParser::new(), &vault.targets(), &[]).unwrap();
+    assert_eq!(plan.links, 4);
+    assert_eq!(
+        plan.edits,
+        [
+            ("a.md".to_owned(), "Before\n\nAfter ![[keep.png]]".to_owned()),
+            ("b.md".to_owned(), "See here and .\n".to_owned()),
+        ]
+    );
 }

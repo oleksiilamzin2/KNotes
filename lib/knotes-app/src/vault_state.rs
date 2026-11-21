@@ -295,6 +295,15 @@ impl<R: TagIndex + CardIndex, L> VaultState<R, L> {
 /// notes' cards, counted and reviewed from them (owner's request: decks follow the spaces by
 /// their files); for the whole vault the index counts itself. Times are seconds since 1970:
 /// `now`, and `day_start`, when today began (a day's new cards count from it).
+impl<R: knotes_core::AttachmentIndex, L> VaultState<R, L> {
+    /// The vault's attachments with the links to each, and its links to images and PDFs that
+    /// are not there (the whole vault's, whatever the space).
+    pub fn attachments(&self) -> (Vec<knotes_core::Attachment>, Vec<knotes_core::MissingAttachment>) {
+        let reader = self.reader.as_ref();
+        (reader.and_then(|r| r.attachments().ok()).unwrap_or_default(), reader.and_then(|r| r.missing_attachments().ok()).unwrap_or_default())
+    }
+}
+
 impl<R: CardIndex, L> VaultState<R, L> {
     /// In a space, the cards written in its notes; none for the whole vault.
     fn space_rows(&self) -> Option<Vec<CardRow>> {

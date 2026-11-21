@@ -33,7 +33,7 @@ mod vault_file;
 mod vault_reader;
 mod vault_scanner;
 
-pub use attachment_store::AttachmentStore;
+pub use attachment_store::{Attachment, AttachmentIndex, AttachmentStore, MissingAttachment};
 pub use change_feed::ChangeFeed;
 pub use closeness::Closeness;
 pub use content_scan::{CaseMode, ContentScan, ScanHit, ScanQuery, TextCorpus};

@@ -1,4 +1,4 @@
-use knotes_core::{BackLink, BoxError, CatalogEntry, FileKind, FileState, FileStates, NoteRow, NoteRows, Heading, Link, LinkGraph, NoteCatalog, NoteOutline, NoteText, OutLink, Span, TagIndex};
+use knotes_core::{Attachment, AttachmentIndex, MissingAttachment, BackLink, BoxError, CatalogEntry, FileKind, FileState, FileStates, NoteRow, NoteRows, Heading, Link, LinkGraph, NoteCatalog, NoteOutline, NoteText, OutLink, Span, TagIndex};
 use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::OptionalExtension;
@@ -58,6 +58,29 @@ impl LinkGraph for SqliteIndex {
         ))?;
         let rows = st.query_map([path], |r| Ok(BackLink { link: link_at(r)?, source: r.get(7)? }))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
+
+impl AttachmentIndex for SqliteIndex {
+    fn attachments(&self) -> Result<Vec<Attachment>, BoxError> {
+        let kinds = [FileKind::Pdf, FileKind::Image, FileKind::Other].map(file_kind_code);
+        let mut st = self.conn.prepare_cached(
+            "SELECT f.path, f.size, (SELECT COUNT(*) FROM links l WHERE l.target_id = f.id) FROM files f
+             WHERE f.kind IN (?1, ?2, ?3) ORDER BY f.path",
+        )?;
+        let rows = st.query_map(kinds, |r| Ok(Attachment { path: r.get(0)?, size: r.get::<_, i64>(1)? as u64, links: r.get(2)? }))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    fn missing_attachments(&self) -> Result<Vec<MissingAttachment>, BoxError> {
+        // Links within the vault (a target key) that resolve to no file.
+        let mut st = self.conn.prepare_cached(
+            "SELECT DISTINCT l.target, s.path FROM links l JOIN files s ON s.id = l.file_id
+             WHERE l.target_id IS NULL AND l.target_key IS NOT NULL ORDER BY l.target, s.path",
+        )?;
+        let rows = st.query_map([], |r| Ok(MissingAttachment { target: r.get(0)?, source: r.get(1)? }))?;
+        let all: Vec<MissingAttachment> = rows.collect::<Result<_, _>>()?;
+        Ok(all.into_iter().filter(|m| matches!(FileKind::from_path(&m.target), FileKind::Image | FileKind::Pdf)).collect())
     }
 }
 

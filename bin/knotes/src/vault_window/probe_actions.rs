@@ -14,6 +14,25 @@ impl VaultWindow {
         }
         probe::toggle_sidebar_requested(&self.window);
         probe::panel_requested(&self.window);
+        // `KNOTES_PROBE_ATTACHMENTS=all|unlinked|missing`: the attachments' window with that
+        // filter; `KNOTES_PROBE_ATTACHMENTS_ACT=0,2`: those rows chosen, the right button clicked.
+        if let Ok(filter) = std::env::var("KNOTES_PROBE_ATTACHMENTS") {
+            self.show_attachments();
+            if let Some(window) = self.attachments.borrow().as_ref() {
+                window.probe_filter(match filter.as_str() {
+                    "unlinked" => knotes_app::AttachmentFilter::Unlinked,
+                    "missing" => knotes_app::AttachmentFilter::Missing,
+                    _ => knotes_app::AttachmentFilter::All,
+                });
+                // `KNOTES_PROBE_ATTACHMENTS_HOVER=0`: the pointer over that row.
+                if let Some(row) = std::env::var("KNOTES_PROBE_ATTACHMENTS_HOVER").ok().and_then(|row| row.parse().ok()) {
+                    println!("attachment-preview: {}", window.probe_hover(row));
+                }
+                if let Ok(rows) = std::env::var("KNOTES_PROBE_ATTACHMENTS_ACT") {
+                    window.probe_act(&rows.split(',').filter_map(|row| row.parse().ok()).collect::<Vec<usize>>());
+                }
+            }
+        }
         // `KNOTES_PROBE_ACTION=zen`: the zen button; `zen-twice`: and back once it has gone.
         let action = std::env::var("KNOTES_PROBE_ACTION").unwrap_or_default();
         if action == "zen" || action == "zen-twice" {

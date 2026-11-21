@@ -221,7 +221,7 @@ fn the_chat_asks_to_sign_in_with_chatgpt_first() {
 fn main_menu_has_the_standard_menus() {
     let out = probe();
     assert!(out.contains("menu: Knotes | Файл | Редагування | Вигляд | Вікно"), "{out}");
-    assert!(out.contains("file-menu: Нова нотатка ⌘N | Нова тека ⇧⌘N | Відкрити базу… ⌘O | Бази… ⇧⌘O | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
+    assert!(out.contains("file-menu: Нова нотатка ⌘N | Нова тека ⇧⌘N | Відкрити базу… ⌘O | Бази… ⇧⌘O | Вкладення… | Зберегти ⌘S | Закрити вкладку ⌘W | Закрити вікно ⇧⌘W"), "{out}");
 }
 
 #[test]
@@ -3582,6 +3582,50 @@ fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_empt
     assert!(list.starts_with("Home ~ ") && list.contains("тека · 1 нотатка"), "{list}");
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-empty")]);
     assert_eq!(deleted_entries(vault.path()), 0, "gone for good");
+}
+
+/// The attachments' window lists the vault's files that are no notes with the links to each,
+/// those with no link, and the links to images that are not there; files chosen there are
+/// deleted into the recently deleted.
+#[test]
+fn the_attachments_window_lists_files_unlinked_ones_and_missing_ones_and_deletes() {
+    let notes = [("a.md", "![[pic.png]] and ![[gone.png]]"), ("Dir/b.md", "![[pic.png]]")];
+    let files: [(&str, &[u8]); 3] = [("pic.png", PIC), ("Dir/lone.png", PIC), ("extra.png", PIC)];
+    let line = |out: &str| out.lines().find_map(|l| l.strip_prefix("attachments: ")).unwrap_or_else(|| panic!("{out}")).to_owned();
+    let (_vault, out) = probe_images(&notes, &files, &[("KNOTES_PROBE_ATTACHMENTS", "all")]);
+    let all = line(&out);
+    assert!(all.starts_with("Усі · 3 | Без посилань · 2 | Немає файлу · 1 || "), "{all}");
+    assert!(all.contains("lone.png — Dir · ") && all.contains("немає посилань | extra.png — корінь бази"), "by path, each with its folder: {all}");
+    assert!(all.contains("pic.png — корінь бази · ") && all.contains(" · 2 посилання || 3 вкладення · "), "{all}");
+    let (_vault, out) = probe_images(&notes, &files, &[("KNOTES_PROBE_ATTACHMENTS", "missing")]);
+    assert!(line(&out).contains("|| gone.png — посилання в нотатці «a» || 1 посилання без файлу"), "{}", line(&out));
+    // The two with no link, chosen and deleted: off the list, kept in the recently deleted.
+    let (vault, out) = probe_images(&notes, &files, &[("KNOTES_PROBE_ATTACHMENTS", "unlinked"), ("KNOTES_PROBE_ATTACHMENTS_ACT", "0,1")]);
+    assert!(line(&out).starts_with("Усі · 1 | Без посилань · 0 | Немає файлу · 1 ||  || 0 вкладень"), "{}", line(&out));
+    assert!(!vault.path().join("Dir/lone.png").exists() && !vault.path().join("extra.png").exists() && vault.path().join("pic.png").exists(), "{out}");
+    assert_eq!(deleted_entries(vault.path()), 2);
+}
+
+/// The pointer over an image's row shows its picture; a file deleted with its links leaves the
+/// notes without them (the one open too), a link alone on its line with its line.
+#[test]
+fn an_attachment_is_previewed_under_the_pointer_and_deleted_with_its_links() {
+    let notes = [("a.md", "Before\n\n![[pic.png]]\n\nAfter"), ("b.md", "See ![[pic.png]] here")];
+    let files: [(&str, &[u8]); 1] = [("pic.png", PIC)];
+    let env = [("KNOTES_PROBE_ATTACHMENTS", "all"), ("KNOTES_PROBE_ATTACHMENTS_HOVER", "0"), ("KNOTES_PROBE_OPEN", "a.md")];
+    let (vault, out) = probe_images(&notes, &files, &env);
+    assert!(out.contains("attachment-preview: pic.png 120x80"), "{out}");
+    assert!(vault.path().join("pic.png").exists());
+    let env = [("KNOTES_PROBE_ATTACHMENTS", "all"), ("KNOTES_PROBE_ATTACHMENTS_ACT", "0"), ("KNOTES_PROBE_ATTACHMENTS_LINKS", "1"), ("KNOTES_PROBE_OPEN", "a.md")];
+    let (vault, out) = probe_images(&notes, &files, &env);
+    assert!(!vault.path().join("pic.png").exists() && deleted_entries(vault.path()) == 1, "{out}");
+    assert_eq!(std::fs::read_to_string(vault.path().join("a.md")).unwrap(), "Before\n\nAfter");
+    assert_eq!(std::fs::read_to_string(vault.path().join("b.md")).unwrap(), "See here");
+    assert!(out.contains("note: a.md | Before⏎⏎After"), "the note open shows it: {out}");
+    // Without the links asked for, the notes stay as they were.
+    let env = [("KNOTES_PROBE_ATTACHMENTS", "all"), ("KNOTES_PROBE_ATTACHMENTS_ACT", "0")];
+    let (vault, _) = probe_images(&notes, &files, &env);
+    assert_eq!(std::fs::read_to_string(vault.path().join("b.md")).unwrap(), "See ![[pic.png]] here");
 }
 
 /// Over the recently deleted, while there are some, a button empties them; over another list

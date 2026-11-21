@@ -904,6 +904,12 @@ pub fn schedule(with_sidebar: bool) {
                 {
                     render_png(&vaults, &path.to_string_lossy());
                 }
+                // The attachments' window: its picture when asked.
+                if let Some(path) = std::env::var_os("KNOTES_PROBE_ATTACHMENTS_PNG")
+                    && let Some(attachments) = objc2_app_kit::NSApplication::sharedApplication(mtm).windows().iter().find(|w| w.title().to_string() == crate::strings::ATTACHMENTS)
+                {
+                    render_png(&attachments, &path.to_string_lossy());
+                }
                 if let (Some(path), Some(settings)) = (std::env::var_os("KNOTES_PROBE_SETTINGS_PNG"), crate::settings_window::probe_window()) {
                     render_png(&settings, &path.to_string_lossy());
                 }
@@ -1550,6 +1556,9 @@ fn report_note(window: &VaultWindow) {
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);
     println!("path-bar: {}", if window.path_bar.view.isHidden() { "hidden".to_owned() } else { window.path_bar.describe() });
     // The tabs along the toolbar, the one shown, their crosses, and how wide the strip is.
+    if let Some(attachments) = window.attachments_window().as_ref() {
+        println!("attachments: {}", attachments.describe());
+    }
     println!("tabs: {}{}", window.tab_strip.names().join(" | "), if window.tab_strip.isHidden() { " (hidden)" } else { "" });
     println!("tab-shown: {}", window.tab_strip.shown().unwrap_or_else(|| "none".to_owned()));
     println!("tab-crosses: {}", window.tab_strip.crosses());

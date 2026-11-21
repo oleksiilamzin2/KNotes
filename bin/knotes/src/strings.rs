@@ -451,6 +451,58 @@ pub const QUIT: &str = "Завершити Knotes";
 pub const OPEN_VAULT: &str = "Відкрити базу…";
 pub const VAULTS: &str = "Бази";
 pub const VAULTS_MENU: &str = "Бази…";
+/// The attachments' window: the vault's files that are no notes, and links to missing ones.
+pub const ATTACHMENTS: &str = "Вкладення";
+pub const ATTACHMENTS_MENU: &str = "Вкладення…";
+pub const ATTACHMENTS_ALL: &str = "Усі";
+pub const ATTACHMENTS_UNLINKED: &str = "Без посилань";
+pub const ATTACHMENTS_MISSING: &str = "Немає файлу";
+pub const ATTACHMENT_DELETE: &str = "Видалити…";
+pub const ATTACHMENT_OPEN_NOTE: &str = "Відкрити нотатку";
+pub const ATTACHMENTS_DELETE_FAILED: &str = "Не вдалося видалити вкладення";
+
+fn links_count(links: usize) -> String {
+    format!("{links} {}", knotes_app::plural_uk(links as u64, "посилання", "посилання", "посилань"))
+}
+
+fn attachments_count(n: usize) -> String {
+    format!("{n} {}", knotes_app::plural_uk(n as u64, "вкладення", "вкладення", "вкладень"))
+}
+
+/// A file's second line: "Теки/Фото · 3,4 МБ · 2 посилання".
+pub fn attachment_details(folder: &str, size: u64, links: u32) -> String {
+    let folder = if folder.is_empty() { "корінь бази" } else { folder };
+    let links = if links == 0 { "немає посилань".to_owned() } else { links_count(links as usize) };
+    format!("{folder} · {} · {links}", file_size(size))
+}
+
+/// A missing file's second line: the note that links to it.
+pub fn attachment_missing_in(note: &str) -> String {
+    format!("посилання в нотатці «{note}»")
+}
+
+/// "12 вкладень · 3,4 МБ"
+pub fn attachments_summary(n: usize, bytes: u64) -> String {
+    format!("{} · {}", attachments_count(n), file_size(bytes))
+}
+
+pub fn attachments_missing_summary(n: usize) -> String {
+    format!("{} без файлу", links_count(n))
+}
+
+/// "Видалити 3 вкладення?"
+pub fn attachments_delete_question(n: usize, name: &str) -> String {
+    if n == 1 { format!("Видалити «{name}»?") } else { format!("Видалити {}?", attachments_count(n)) }
+}
+
+/// Under the question: the links to them and what each button does with those, then where the
+/// files go.
+pub fn attachments_delete_details(linked: usize, days: u32) -> String {
+    let kept = delete_kept_note(days);
+    if linked == 0 { kept } else { format!("На {linked} з них є посилання в нотатках. «{ATTACHMENTS_DELETE_WITH_LINKS}» прибере ці посилання з нотаток; інакше вони залишаться без файлу. {kept}") }
+}
+pub const ATTACHMENTS_DELETE_WITH_LINKS: &str = "Видалити з посиланнями";
+pub const ATTACHMENTS_DELETE_FILES: &str = "Видалити лише файли";
 pub const VAULT_CREATE: &str = "Створити нову базу";
 pub const VAULT_CREATE_DETAILS: &str = "Нова тека з усім, що потрібно Knotes.";
 pub const VAULT_CREATE_BUTTON: &str = "Створити";
