@@ -3184,6 +3184,15 @@ fn radar_answers() -> Vec<serde_json::Value> {
 }
 
 #[test]
+fn an_answers_formulas_are_typeset_in_the_chat() {
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &[chat_reply(&[chat_message(r"For \(x\ne a\) it is $2a$, not \(\nosuch{1}\).")])]);
+    let (_vault, out) = probe_notes(&[("Boris.md", "# Boris")], &[("KNOTES_PROBE_OPEN", "Boris.md"), ("KNOTES_PROBE_CHAT", &script), ("KNOTES_PROBE_CHAT_SEND", "How?"), ("KNOTES_PROBE_DELAY_MS", "2000")]);
+    assert!(out.contains("chat transcript: How?⏎⏎For \u{fffc} it is \u{fffc}, not \\nosuch{1}.\n"), "a picture for each formula, the source of one that does not typeset: {out}");
+    assert!(out.contains("chat copied: How?⏎⏎For $x\\ne a$ it is $2a$, not \\nosuch{1}.\n"), "copied, a formula is its source: {out}");
+}
+
+#[test]
 fn a_question_streams_its_answer_with_the_tools_it_used_and_note_links() {
     let script_dir = tempfile::tempdir().unwrap();
     let script = chat_script(script_dir.path(), &radar_answers());

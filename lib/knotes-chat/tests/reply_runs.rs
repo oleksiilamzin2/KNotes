@@ -55,3 +55,17 @@ fn a_link_of_another_scheme_than_the_web_stays_text() {
     assert_eq!(run(&runs, "site").link, Some(RunLink::Web("HTTPS://example.org".into())));
     assert_eq!(run(&runs, "Radar").link, Some(RunLink::Note("Radar".into())));
 }
+
+#[test]
+fn formulas_in_dollars_or_latex_brackets_become_runs_of_their_source() {
+    let runs = reply_runs(r"For \(x\ne a\) the slope $\frac{f(x)-f(a)}{x-a}$ and `\(code\)`, $5 and $6.");
+    let formulas: Vec<&str> = runs.iter().filter(|r| r.style.math).map(|r| r.text.as_str()).collect();
+    assert_eq!(formulas, [r"x\ne a", r"\frac{f(x)-f(a)}{x-a}"]);
+    assert!(runs.iter().all(|r| !r.style.display));
+    assert!(run(&runs, r"\(code\)").style.code, "code keeps its brackets: {runs:?}");
+    assert!(text(&runs).ends_with(", $5 and $6."), "prices are no formula: {runs:?}");
+
+    let runs = reply_runs("So:\n\n\\[\nf'(a)=2a\n\\]\n\nand $$x^2$$$y$");
+    let formulas: Vec<(&str, bool)> = runs.iter().filter(|r| r.style.math).map(|r| (r.text.as_str(), r.style.display)).collect();
+    assert_eq!(formulas, [("f'(a)=2a", true), ("x^2", true), ("y", false)]);
+}

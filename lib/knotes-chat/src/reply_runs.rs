@@ -11,6 +11,10 @@ pub struct RunStyle {
     /// 1–6 in a heading, 0 outside.
     pub heading: u8,
     pub quote: bool,
+    /// A formula: the run's text is its LaTeX, without the marks around it.
+    pub math: bool,
+    /// A formula of display style (`$$…$$`, `\[…\]`).
+    pub display: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +35,8 @@ pub fn reply_runs(markdown: &str) -> Vec<Run> {
     let mut out = Runs::default();
     let (mut bold, mut italic) = (0, 0);
     let mut lists: Vec<Option<u64>> = Vec::new();
-    for event in Parser::new_ext(markdown, Options::ENABLE_WIKILINKS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS) {
+    let markdown = dollars(markdown);
+    for event in Parser::new_ext(&markdown, Options::ENABLE_WIKILINKS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_MATH) {
         match event {
             Event::Start(Tag::Paragraph) => out.block(),
             Event::End(TagEnd::Paragraph) => out.end_block(if lists.is_empty() { 2 } else { 1 }),
@@ -103,6 +108,8 @@ pub fn reply_runs(markdown: &str) -> Vec<Run> {
                 let style = RunStyle { code: true, bold: bold > 0, italic: italic > 0, ..out.style };
                 out.push(&text, style, out.link.clone());
             }
+            Event::InlineMath(tex) => out.formula(&tex, false),
+            Event::DisplayMath(tex) => out.formula(&tex, true),
             Event::SoftBreak => out.push(" ", out.style, out.link.clone()),
             Event::HardBreak => out.push("\n", out.style, None),
             Event::Rule => {
@@ -115,6 +122,36 @@ pub fn reply_runs(markdown: &str) -> Vec<Run> {
         }
     }
     out.runs
+}
+
+/// `markdown` with LaTeX's `\(…\)` and `\[…\]` (the models' way) as `$…$` and `$$…$$`, outside
+/// code: Markdown takes the backslash for an escape and leaves the brackets alone.
+// shortcut: an escaped bracket of plain text (`\[not a link\]`) turns into a formula's mark;
+// pair them up if a reply ever shows one.
+fn dollars(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut code = false;
+    let mut chars = markdown.chars().peekable();
+    while let Some(c) = chars.next() {
+        code ^= c == '`';
+        match (c, chars.peek()) {
+            ('\\', Some('(' | ')')) if !code => {
+                chars.next();
+                out.push('$');
+            }
+            ('\\', Some('[' | ']')) if !code => {
+                chars.next();
+                out.push_str("$$");
+            }
+            // An escaped backslash stays one (`\\(` is no formula).
+            ('\\', Some('\\')) => {
+                chars.next();
+                out.push_str("\\\\");
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[derive(Default)]
@@ -155,6 +192,11 @@ impl Runs {
         }
     }
 
+    /// A formula is a run of its own: two in a row stay two.
+    fn formula(&mut self, tex: &str, display: bool) {
+        self.runs.push(Run { text: tex.trim().to_string(), style: RunStyle { math: true, display, ..self.style }, link: None });
+    }
+
     fn push(&mut self, text: &str, style: RunStyle, link: Option<RunLink>) {
         if text.is_empty() {
             return;
@@ -162,6 +204,7 @@ impl Runs {
         if let Some(last) = self.runs.last_mut()
             && last.style == style
             && last.link == link
+            && !style.math
         {
             last.text.push_str(text);
             return;

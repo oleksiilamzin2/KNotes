@@ -198,6 +198,52 @@ define_class!(
     }
 );
 
+/// The attribute of a formula's picture in the conversation: its source, in dollars.
+const FORMULA: &str = "KnotesFormula";
+
+define_class!(
+    /// The conversation's text: copied, a formula's picture is its source.
+    #[unsafe(super(NSTextView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KnotesTranscript"]
+    pub struct Transcript;
+
+    impl Transcript {
+        #[unsafe(method(copy:))]
+        fn copy(&self, _sender: Option<&AnyObject>) {
+            let text = copied(self, self.selectedRange());
+            if text.is_empty() {
+                return;
+            }
+            let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            // SAFETY: AppKit's own type name.
+            pasteboard.setString_forType(&NSString::from_str(&text), unsafe { objc2_app_kit::NSPasteboardTypeString });
+        }
+    }
+);
+
+/// `range` of the conversation as plain text, each formula as its source.
+fn copied(view: &NSTextView, range: NSRange) -> String {
+    // SAFETY: the view's own storage.
+    let Some(storage) = (unsafe { view.textStorage() }) else { return String::new() };
+    let (mut at, end) = (range.location, (range.location + range.length).min(storage.length()));
+    let key = NSString::from_str(FORMULA);
+    let mut out = String::new();
+    while at < end {
+        let mut run = NSRange::new(0, 0);
+        // SAFETY: an index inside the string, and a range to fill.
+        let value = unsafe { storage.attribute_atIndex_effectiveRange(&key, at, &mut run) };
+        let stop = (run.location + run.length).min(end).max(at + 1);
+        match value.and_then(|v| v.downcast::<NSString>().ok()) {
+            Some(source) => out.push_str(&source.to_string()),
+            None => out.push_str(&storage.string().substringWithRange(NSRange::new(at, stop - at)).to_string()),
+        }
+        at = stop;
+    }
+    out
+}
+
 impl ComposerFrame {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         // SAFETY: NSView's init.
@@ -299,7 +345,8 @@ impl ChatPanel {
         }
         let new_button = symbol_button("square.and.pencil", strings::CHAT_NEW, &target, sel!(newConversation:), mtm);
         let more_button = symbol_button("ellipsis.circle", "", &target, sel!(showMore:), mtm);
-        let transcript_scroll = NSTextView::scrollableTextView(mtm);
+        // SAFETY: NSTextView's class method, on the conversation's own class: its text view is one.
+        let transcript_scroll: Retained<objc2_app_kit::NSScrollView> = unsafe { msg_send![Transcript::class(), scrollableTextView] };
         transcript_scroll.setDrawsBackground(false);
         let transcript = transcript_scroll.documentView().and_then(|v| v.downcast::<NSTextView>().ok()).expect("a scrollable text view holds a text view");
         transcript.setEditable(false);
@@ -937,6 +984,8 @@ impl ChatPanel {
 
     fn render(&self) {
         self.render_due.set(false);
+        // Formulas are typeset in the text's colour.
+        let dark = objc2_app_kit::NSAppearanceCustomization::effectiveAppearance(&*self.transcript).name().to_string().contains("Dark");
         let text = NSMutableAttributedString::new();
         let state = self.state.borrow();
         let mut blocks: Vec<(Retained<NSAttributedString>, Block)> = Vec::new();
@@ -948,7 +997,7 @@ impl ChatPanel {
             }
             blocks.push(match shown {
                 Shown::User(question) => (question_text(&question), Block::Question),
-                Shown::Assistant(answer) => (answer_text(&answer), Block::Other),
+                Shown::Assistant(answer) => (answer_text(&answer, dark), Block::Other),
                 Shown::Tool { name, arguments } => (tool_text(&strings::chat_tool(&name, &arguments)), Block::Tool),
             });
         }
@@ -960,7 +1009,7 @@ impl ChatPanel {
             for (name, arguments) in &turn.tools {
                 blocks.push((tool_text(&strings::chat_tool(name, arguments)), Block::Tool));
             }
-            blocks.push(if turn.reply.is_empty() { (tool_text(strings::CHAT_THINKING), Block::Tool) } else { (answer_text(&turn.reply), Block::Other) });
+            blocks.push(if turn.reply.is_empty() { (tool_text(strings::CHAT_THINKING), Block::Tool) } else { (answer_text(&turn.reply, dark), Block::Other) });
         }
         if let Some(error) = &state.error {
             blocks.push((error_text(error), Block::Other));
@@ -1009,6 +1058,10 @@ impl ChatPanel {
         // SAFETY: the transcript's own storage.
         let shown = unsafe { self.transcript.textStorage() }.map(|s| s.string().to_string()).unwrap_or_default();
         lines.push(format!("chat transcript: {}", shown.replace('\n', "⏎")));
+        let copy = copied(&self.transcript, NSRange::new(0, usize::MAX / 2));
+        if copy != shown {
+            lines.push(format!("chat copied: {}", copy.replace('\n', "⏎")));
+        }
         let cards = crate::chat_bubble::cards(&self.transcript);
         let questions: Vec<&String> = cards.iter().filter(|(card, _)| *card == Card::Question).map(|(_, text)| text).collect();
         lines.push(format!("chat bubbles: {}{}", questions.len(), questions.iter().map(|c| format!(" | {c}")).collect::<String>()));
@@ -1235,17 +1288,51 @@ fn tool_text(words: &str) -> Retained<NSAttributedString> {
     piece(words, &NSFont::systemFontOfSize(NSFont::smallSystemFontSize()), &NSColor::tertiaryLabelColor(), None)
 }
 
-fn answer_text(markdown: &str) -> Retained<NSAttributedString> {
+fn answer_text(markdown: &str, dark: bool) -> Retained<NSAttributedString> {
     let text = NSMutableAttributedString::new();
     for run in reply_runs(markdown) {
-        text.appendAttributedString(&run_text(&run));
+        text.appendAttributedString(&run_text(&run, dark));
     }
     Retained::into_super(text)
 }
 
-fn run_text(run: &Run) -> Retained<NSAttributedString> {
+thread_local! {
+    /// The formulas typeset so far: an answer is set again with each piece of it that comes.
+    static FORMULAS: RefCell<knotes_editor::FormulaCache> = RefCell::default();
+}
+
+/// A formula typeset (ADR 0017) as a picture in the line, its baseline on the text's; one that
+/// does not typeset is `None`.
+fn formula_text(tex: &str, display: bool, dark: bool) -> Option<Retained<NSAttributedString>> {
+    let rgb = if dark { [235, 235, 235] } else { [29, 29, 31] };
+    let style = knotes_editor::FormulaStyle { display, size_pt: NSFont::systemFontSize() + 1.0, rgb, scale: 2.0 };
+    let formula = FORMULAS.with_borrow_mut(|cache| cache.get(tex, &style)).ok()?;
+    let image = NSImage::initWithData(NSImage::alloc(), &objc2_foundation::NSData::with_bytes(&formula.png))?;
+    image.setSize(NSSize::new(formula.width_pt, formula.height_pt));
+    let attachment = objc2_app_kit::NSTextAttachment::new();
+    attachment.setImage(Some(&image));
+    // Sunk under the baseline by its depth.
+    attachment.setBounds(NSRect::new(NSPoint::new(0.0, formula.baseline_pt - formula.height_pt), NSSize::new(formula.width_pt, formula.height_pt)));
+    let text = NSMutableAttributedString::new();
+    text.appendAttributedString(&piece("\u{fffc}", &body_font(), &NSColor::labelColor(), None));
+    // SAFETY: AppKit's attribute name with a value of its kind, over the one character.
+    unsafe { text.addAttribute_value_range(objc2_app_kit::NSAttachmentAttributeName, &attachment, NSRange::new(0, 1)) };
+    let marks = if display { "$$" } else { "$" };
+    // SAFETY: the formula's own attribute, its value a string.
+    unsafe { text.addAttribute_value_range(&NSString::from_str(FORMULA), &NSString::from_str(&format!("{marks}{tex}{marks}")), NSRange::new(0, 1)) };
+    Some(Retained::into_super(text))
+}
+
+fn run_text(run: &Run, dark: bool) -> Retained<NSAttributedString> {
     let size = NSFont::systemFontSize();
-    let style = run.style;
+    let mut style = run.style;
+    if style.math {
+        if let Some(formula) = formula_text(&run.text, style.display, dark) {
+            return formula;
+        }
+        // One that does not typeset: its source, as code.
+        style.code = true;
+    }
     let font = if style.code || style.code_block {
         // SAFETY: a font weight constant.
         NSFont::monospacedSystemFontOfSize_weight(size - 1.0, unsafe { NSFontWeightRegular })
