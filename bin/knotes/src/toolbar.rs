@@ -571,7 +571,7 @@ impl ToolbarDelegate {
         // No focus ring while it is edited: it grew in as an animation, which stuttered while a new
         // note was being made (owner's report); the cursor and the grey «Без назви» say enough.
         title.setFocusRingType(NSFocusRingType::None);
-        title.setFont(Some(&NSFont::boldSystemFontOfSize(small)));
+        title.setFont(Some(&NSFont::boldSystemFontOfSize(small + 1.0)));
         title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         title.setIdentifier(Some(&NSString::from_str(NOTE_TITLE)));
         if let Some(cell) = title.cell() {
