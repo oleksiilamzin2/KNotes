@@ -389,6 +389,20 @@ pub const CLOSE_OTHER_TABS: &str = "Закрити інші вкладки";
 pub const OPEN_IN_NEW_TAB: &str = "Відкрити в новій вкладці";
 pub const OUTLINE: &str = "Зміст";
 pub const CONNECTIONS: &str = "Зв'язки";
+pub const CALENDAR: &str = "Календар";
+/// The folder a day's note is made in when the vault names none.
+pub const DAILY_FOLDER: &str = "Щоденник";
+pub const CALENDAR_BEFORE: &str = "Попередній місяць";
+pub const CALENDAR_AFTER: &str = "Наступний місяць";
+pub const CALENDAR_HAS_NOTE: &str = "Є нотатка цього дня";
+pub const WEEKDAYS: [&str; 7] = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
+const MONTHS: [&str; 12] = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"];
+
+/// A month over its days: «Листопад 2026».
+pub fn month_of(year: i32, month: u8) -> String {
+    format!("{} {year}", MONTHS[usize::from(month.clamp(1, 12)) - 1])
+}
+
 pub const STARS: &str = "Зірочки";
 pub const STAR: &str = "Додати зірочку";
 pub const UNSTAR: &str = "Прибрати зірочку";

@@ -12,9 +12,13 @@ impl VaultWindow {
         let (Some(layout), Some(scroll)) = (view.textLayoutManager(), view.enclosingScrollView()) else { return };
         let Some(content) = layout.textContentManager() else { return };
         let Some(fragment) = content.locationFromLocation_withOffset(&content.documentRange().location(), offset as isize).and_then(|at| layout.textLayoutFragmentForLocation(&at)) else { return };
-        let y = fragment.layoutFragmentFrame().origin.y + view.textContainerOrigin().y;
+        // The note's first line is shown with the margin over it: the note's very start.
+        let top = fragment.layoutFragmentFrame().origin.y;
+        let y = if top <= 0.0 { 0.0 } else { top + view.textContainerOrigin().y };
         let clip = scroll.contentView();
-        clip.scrollToPoint(NSPoint::new(clip.bounds().origin.x, y - scroll.contentInsets().top));
+        // No further than the note goes: a short one stays where it starts.
+        let to = clip.constrainBoundsRect(objc2_foundation::NSRect::new(NSPoint::new(clip.bounds().origin.x, y - scroll.contentInsets().top), clip.bounds().size));
+        clip.scrollToPoint(to.origin);
         scroll.reflectScrolledClipView(&clip);
         layout.textViewportLayoutController().layoutViewport();
     }

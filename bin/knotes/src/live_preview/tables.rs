@@ -81,7 +81,7 @@ impl LivePreview {
             }
             // Padding above as a taller line (spacing before the document's first paragraph is
             // dropped), below as spacing.
-            let para = palette.para(Para { first_indent, unwrapped: true, min_line: self.font_height() + TABLE_VPAD, spacing_after: TABLE_VPAD, ..Para::default() });
+            let para = palette.para(Para { first_indent, unwrapped: true, min_line: self.line_height() + TABLE_VPAD, spacing_after: TABLE_VPAD, ..Para::default() });
             canvas.paint(row.range.start..row.range.end + 1, |p| p.para = para);
         }
         canvas.paint(table.delimiter.clone(), |p| {

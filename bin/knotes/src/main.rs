@@ -4,6 +4,7 @@ mod ai_mark;
 mod app_delegate;
 mod attachments_window;
 mod chat_bubble;
+mod calendar_panel;
 mod card_table_window;
 mod chat_panel;
 mod collapse_observer;

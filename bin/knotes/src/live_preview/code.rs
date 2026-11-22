@@ -20,7 +20,7 @@ impl LivePreview {
         // Room for the line numbers left of the code (ADR 0025).
         let lines = self.code_lines(storage, styled, block);
         let inset = base.first_indent + CODE_INSET + self.code_gutter(lines.len());
-        let code = palette.para(Para { first_indent: inset, head_indent: inset, ..base });
+        let code = palette.para(Para { first_indent: inset, head_indent: inset, tight: true, ..base });
         canvas.paint(paragraphs.0..paragraphs.1, |p| p.para = code);
         let first = styled.runs.partition_point(|r| r.range.start < block.start);
         for fence in styled.runs[first..].iter().take_while(|r| r.range.start < block.end).filter(|r| r.style == Style::Fence) {

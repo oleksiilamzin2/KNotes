@@ -43,11 +43,12 @@ pub enum Mark {
     Image { offset: usize, image: Rc<DeferredImage>, size: NSSize, anchor: Anchor, handle: bool, caption: Option<String> },
     /// A list bullet in the room of a hidden `- `, its centre `centre` above the baseline.
     Bullet { offset: usize, centre: f64 },
-    /// A task's circle in the room of a hidden `- [ ] `, ticked for `- [x] `.
-    Task { offset: usize, centre: f64, checked: bool },
+    /// A task's circle in the room of a hidden `- [ ] `, in the middle of its line's height (the
+    /// caret's), ticked for `- [x] `.
+    Task { offset: usize, checked: bool },
     /// A quote level's bar down the whole paragraph, `x` from the text column's start.
     /// `card`: a card's bar (ADR 0037), in the cards' colour, not the accent.
-    QuoteBar { x: f64, card: Option<Retained<NSColor>> },
+    QuoteBar { x: f64, top: bool, card: Option<Retained<NSColor>> },
     /// A thematic break (`---`): a line across the column in the middle of its paragraph.
     Rule,
     /// A code block's background across the column behind the paragraph, its corners rounded
@@ -320,11 +321,18 @@ impl PreviewFragment {
         })
     }
 
+    /// The room over this paragraph's first line: what the settings' «Текст» tab puts between
+    /// lines lies over each. A block's box or bar starts under it, at its first line.
+    fn room_over(&self) -> f64 {
+        self.textLineFragments().firstObject().map_or(0.0, |line| line.typographicBounds().origin.y.max(0.0))
+    }
+
     /// Where `mark` is drawn, in this fragment's coordinates, once it is laid out.
     fn mark_rect(&self, mark: &Mark) -> Option<NSRect> {
-        if let Mark::QuoteBar { x, .. } = mark {
+        if let Mark::QuoteBar { x, top, .. } = mark {
             let frame = self.layoutFragmentFrame();
-            return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, 0.0), NSSize::new(QUOTE_BAR, frame.size.height)));
+            let over = if *top { self.room_over() } else { 0.0 };
+            return Some(NSRect::new(NSPoint::new(x + 1.0 - frame.origin.x, over), NSSize::new(QUOTE_BAR, frame.size.height - over)));
         }
         if let Mark::TableRow { columns, .. } = mark {
             let frame = self.layoutFragmentFrame();
@@ -348,17 +356,19 @@ impl PreviewFragment {
             let top = if *below { crate::live_preview::first_line_bottom(self)? + PREVIEW_GAP } else { PREVIEW_GAP };
             return Some(NSRect::new(NSPoint::new(-frame.origin.x, top), NSSize::new(column, *height)));
         }
-        if let Mark::CodeBackground { .. } | Mark::CalloutBox { .. } = mark {
+        if let Mark::CodeBackground { top, .. } | Mark::CalloutBox { top, .. } = mark {
             let frame = self.layoutFragmentFrame();
             let column = self.textLayoutManager().and_then(|l| l.textContainer()).map_or(frame.size.width, |c| c.size().width);
-            return Some(NSRect::new(NSPoint::new(-frame.origin.x, 0.0), NSSize::new(column, frame.size.height)));
+            let over = if *top { self.room_over() } else { 0.0 };
+            return Some(NSRect::new(NSPoint::new(-frame.origin.x, over), NSSize::new(column, frame.size.height - over)));
         }
         if let Mark::Rule = mark {
             // Across the text column, within its padding.
             let frame = self.layoutFragmentFrame();
             let container = self.textLayoutManager().and_then(|l| l.textContainer());
             let (column, padding) = container.map_or((frame.size.width, 0.0), |c| (c.size().width, c.lineFragmentPadding()));
-            return Some(NSRect::new(NSPoint::new(padding - frame.origin.x, 0.0), NSSize::new(column - 2.0 * padding, frame.size.height)));
+            let over = self.room_over();
+            return Some(NSRect::new(NSPoint::new(padding - frame.origin.x, over), NSSize::new(column - 2.0 * padding, frame.size.height - over)));
         }
         let lines = self.textLineFragments();
         let (offset, below) = match mark {
@@ -400,8 +410,8 @@ impl PreviewFragment {
                 let half = BULLET_SIZE / 2.0;
                 NSRect::new(NSPoint::new(x + BULLET_X - half, baseline - centre - half), NSSize::new(BULLET_SIZE, BULLET_SIZE))
             }
-            Mark::Task { centre, .. } => {
-                NSRect::new(NSPoint::new(x + 1.0, baseline - centre - TASK_BOX / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
+            Mark::Task { .. } => {
+                NSRect::new(NSPoint::new(x + 1.0, bounds.origin.y + (bounds.size.height - TASK_BOX) / 2.0), NSSize::new(TASK_BOX, TASK_BOX))
             }
             Mark::External { centre, shift, .. } => {
                 let half = EXTERNAL_ARROW / 2.0;

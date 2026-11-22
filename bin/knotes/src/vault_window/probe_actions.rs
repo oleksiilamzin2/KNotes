@@ -302,6 +302,14 @@ impl VaultWindow {
             self.window.displayIfNeeded();
             self.stars_panel.click(&name);
         }
+        // `KNOTES_PROBE_CALENDAR="before; day=5"`: clicks in the calendar, one after another:
+        // `before`, `after` or `today` (its head's buttons), `day=5` (that day of the month shown).
+        if let Ok(clicks) = std::env::var("KNOTES_PROBE_CALENDAR") {
+            self.window.displayIfNeeded();
+            for click in clicks.split(';') {
+                self.calendar_panel.click(click.trim());
+            }
+        }
         // `KNOTES_PROBE_STAR_BUTTON=name`: a click on the star at that row's end.
         if let Ok(name) = std::env::var("KNOTES_PROBE_STAR_BUTTON") {
             self.window.displayIfNeeded();

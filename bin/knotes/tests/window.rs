@@ -1062,11 +1062,34 @@ fn an_empty_list_item_or_quote_line_sits_on_the_same_baseline_as_its_neighbours(
 }
 
 #[test]
-fn a_task_circle_is_centred_on_capital_letters_higher_than_a_bullet_dot() {
-    let (_vault, out) = probe_notes(&[("c.md", "- [ ] Task\n- Bullet\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")]);
-    let (task, dot) = (decorations(&out, "task")[0], decorations(&out, "bullet")[0]);
-    let (task_centre, dot_centre_a_line_up) = (task.1 + task.3 / 2.0, dot.1 + dot.3 / 2.0 - 18.0);
-    assert!(dot_centre_a_line_up - task_centre > 1.0, "the circle sits higher in its line: {task:?} {dot:?}");
+fn a_task_circle_is_in_the_middle_of_its_line_whatever_the_room_between_lines() {
+    // On the capitals' middle it sat lower than the caret's, with more room over it than under.
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    for settings in ["{}", r#"{"noteText": {"line": 150}}"#] {
+        std::fs::write(data.join("settings-v2.json"), settings).unwrap();
+        let (_vault, out) = probe_notes_at_home(&[("c.md", "- [ ] Task\n- Bullet\n\nend")], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")], home.path());
+        let task = decorations(&out, "task")[0];
+        // The first line: 18 points under the note's top margin of 24.
+        assert_eq!(task.1 + task.3 / 2.0, 24.0 + 18.0 / 2.0, "{settings}: {task:?}");
+    }
+}
+
+#[test]
+fn room_between_lines_stays_out_of_code_and_over_a_quote_s_bar() {
+    // The room lies over each line: a quote's bar starts at its first line, under that room,
+    // and goes on through the room over its next; code's lines keep their own height.
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"noteText": {"line": 200}}"#).unwrap();
+    let note = "text\n\n> one\n> two\n\n```\na\nb\n```\n\nend";
+    let (_vault, out) = probe_notes_at_home(&[("c.md", note)], &[("KNOTES_PROBE_OPEN", "c.md"), ("KNOTES_PROBE_CURSOR", "end")], home.path());
+    let (bars, code) = (decorations(&out, "quote"), decorations(&out, "code"));
+    assert_eq!((bars[0].3, bars[1].1), (18.0, bars[0].1 + 18.0), "a line tall, the next bar right under it: {bars:?}");
+    assert!(bars[1].3 > 30.0, "through the room over the second line: {bars:?}");
+    assert_eq!(code.iter().map(|c| c.3).collect::<Vec<_>>(), [8.0, 17.0, 17.0, 8.0], "{code:?}");
 }
 
 const RENAME_VAULT: [(&str, &str); 3] = [("Old.md", "# Old\n\ntext"), ("a.md", "see [[Old]] and [[Old#Part|p]]"), ("b.md", "[x](Old.md)")];
@@ -3673,6 +3696,56 @@ fn a_deleted_note_pdf_or_folder_chosen_in_recently_deleted_shows_as_it_was_and_i
 }
 
 #[test]
+fn a_note_come_back_to_at_its_start_keeps_the_margin_over_its_first_line() {
+    // Put back where it was, its first line went to the view's very top, the margin over it
+    // scrolled away; a short note has nowhere to scroll at all.
+    let home = tempfile::tempdir().unwrap();
+    let notes = [("a.md", "one\ntwo\nthree\n"), ("b.md", "b")];
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_OPEN", "a.md,b.md,a.md")], home.path());
+    assert!(out.contains("note-visible: 0.0 "), "back from another note: {out}");
+}
+
+#[test]
+fn typing_at_a_note_s_start_keeps_the_margin_over_its_first_line() {
+    // AppKit scrolled the line typed in to the view's very top: the margin over it was gone.
+    for (text, typed_at) in [("", "0,0"), ("one\ntwo\n", "0,0"), ("one\ntwo\n", "8,0")] {
+        let (_vault, out) = probe_notes(&[("a.md", text)], &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "x"), ("KNOTES_PROBE_RANGE", typed_at)]);
+        assert!(out.contains("note-visible: 0.0 "), "{text:?} typed in at {typed_at}: {out}");
+    }
+}
+
+#[test]
+fn the_calendar_marks_the_days_with_a_note_and_a_click_on_a_day_opens_its_note_or_makes_it() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault.path().join("Old")).unwrap();
+    for (path, text) in [("Old/2026-11-03.md", "third"), ("2026-11-21.md", "x"), ("2026-10-31.md", "oct"), ("a.md", "a")] {
+        std::fs::write(vault.path().join(path), text).unwrap();
+    }
+    // A HOME whose settings show the calendar in the right panel.
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"panel": "calendar"}"#).unwrap();
+    // Noon of 22 November 2026 in Greenwich: that day in every time zone but the farthest.
+    let probe = |clicks: &str| probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_NOW", "1795348800"), ("KNOTES_PROBE_CALENDAR", clicks)]);
+    let out = probe("");
+    assert!(out.contains("panel: calendar, shows calendar\n") && out.contains("calendar: Листопад 2026 | today 22 | notes 3 21\n"), "the notes named by a day, wherever they lie: {out}");
+    let out = probe("day=3");
+    assert!(out.contains("path-bar: 📕 › Old › 2026-11-03\n"), "the day's note opened: {out}");
+    let out = probe("day=22");
+    assert!(out.contains("path-bar: 📕 › Щоденник › 2026-11-22\n"), "made in the folder of daily notes: {out}");
+    assert_eq!(read(vault.path(), "Щоденник/2026-11-22.md"), "");
+    let out = probe("before");
+    assert!(out.contains("calendar: Жовтень 2026 | today — | notes 31\n"), "{out}");
+    let out = probe("before; before; today");
+    assert!(out.contains("calendar: Листопад 2026 | today 22 | notes 3 21 22\n"), "back to this month, the new note in it: {out}");
+    // The folder the vault's root names instead.
+    std::fs::write(vault.path().join(".knotes.json"), r#"{"daily": {"folder": "Journal"}}"#).unwrap();
+    let out = probe("after; after; day=1");
+    assert!(out.contains("calendar: Січень 2027 |") && out.contains("path-bar: 📕 › Journal › 2027-01-01\n"), "{out}");
+}
+
+#[test]
 fn a_folder_and_a_note_are_starred_from_their_menus_and_listed_in_the_right_panel() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(vault.path().join("Projects")).unwrap();
@@ -3729,14 +3802,16 @@ fn the_settings_text_tab_sets_the_font_the_size_and_the_line_height_of_a_note_an
     let shown = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_SETTINGS", "text"), ("KNOTES_PROBE_CHAT", script.as_str()), ("KNOTES_PROBE_CHAT_SEND", "When?"), ("KNOTES_PROBE_DELAY_MS", "2000")];
     let (_vault, out) = probe_notes_at_home(&notes, &shown, home.path());
     assert!(out.contains("settings: Текст |") && out.contains("settings-text: Системний 15 1,0 | Системний 14 1,0\n"), "the app's own: {out}");
-    assert!(out.contains("note-font: .AppleSystemUIFont 15 ×1\n") && out.contains("chat-font: .AppleSystemUIFont 14 ×1\n"), "{out}");
+    assert!(out.contains("note-font: .AppleSystemUIFont 15 +0.0\n") && out.contains("chat-font: .AppleSystemUIFont 14 +1.5\n"), "{out}");
     // Set while the note and the conversation are shown: both take it at once.
     let set = [shown.as_slice(), &[("KNOTES_PROBE_SETTINGS_TEXT", "note font Georgia; note size 18; note line 150; chat font Menlo; chat size 12; chat line 130")]].concat();
     let (_vault, out) = probe_notes_at_home(&notes, &set, home.path());
     assert!(out.contains("settings-text: Georgia 18 1,5 | Menlo 12 1,3\n"), "{out}");
-    assert!(out.contains("note-font: Georgia 18 ×1.5\n") && out.contains("chat-font: Menlo 12 ×1.3\n"), "{out}");
+    assert!(out.contains("note-font: Georgia 18 +10.2\n") && out.contains("chat-font: Menlo 12 +5.7\n"), "{out}");
+    // The room is between the lines, not in them: the caret stays as tall as the text.
+    assert!(out.contains("note-caret: 21.0\n"), "Georgia's own height at 18 points, not half as tall again: {out}");
     let (_vault, out) = probe_notes_at_home(&notes, &shown, home.path());
-    assert!(out.contains("settings-text: Georgia 18 1,5 | Menlo 12 1,3\n") && out.contains("note-font: Georgia 18 ×1.5\n") && out.contains("chat-font: Menlo 12 ×1.3\n"), "kept: {out}");
+    assert!(out.contains("settings-text: Georgia 18 1,5 | Menlo 12 1,3\n") && out.contains("note-font: Georgia 18 +10.2\n") && out.contains("chat-font: Menlo 12 +5.7\n"), "kept: {out}");
     // A size out of range is brought into it; words are no size.
     let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS", "text"), ("KNOTES_PROBE_SETTINGS_TEXT", "note size 400; chat size big; note font Системний")], home.path());
     assert!(out.contains("settings-text: Системний 36 1,5 | Menlo 12 1,3\n"), "{out}");

@@ -192,6 +192,15 @@ define_class!(
             }
         }
 
+        /// A place shown at the note's start is shown with the margin over the first line: AppKit
+        /// puts the line typed in at the view's very top, the margin scrolled away.
+        #[unsafe(method(scrollRangeToVisible:))]
+        fn scroll_range_to_visible(&self, range: NSRange) {
+            // SAFETY: forwarding the same range to the superclass implementation.
+            let _: () = unsafe { msg_send![super(self), scrollRangeToVisible: range] };
+            self.keep_top_margin(range);
+        }
+
         /// A sideways scroll over a wide table scrolls the table; the rest scrolls the note.
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
@@ -540,6 +549,29 @@ impl NoteTextView {
 }
 
 impl NoteTextView {
+    /// Scrolled into its top margin and no further to show `range`, the note goes back to its
+    /// start when the range shows from there too: the margin is the first line's.
+    fn keep_top_margin(&self, range: NSRange) {
+        let (Some(scroll), Some(window)) = (self.enclosingScrollView(), self.window()) else { return };
+        let clip = scroll.contentView();
+        let at = clip.bounds().origin;
+        // Where the note's start shows: as far up as the clip view lets the note go, which is
+        // above zero under what lies over the scroll view (the toolbar, the note's name).
+        let start = clip.constrainBoundsRect(NSRect::new(NSPoint::new(at.x, -1.0e6), clip.bounds().size)).origin.y;
+        if at.y <= start || at.y > start + self.textContainerInset().height {
+            return;
+        }
+        let range = NSRange::new(range.location.min(self.string().length()), 0);
+        // SAFETY: the range lies inside the text; a null actual range is allowed.
+        let on_screen = unsafe { self.firstRectForCharacterRange_actualRange(range, std::ptr::null_mut()) };
+        let line = self.convertRect_fromView(window.convertRectFromScreen(on_screen), None);
+        // A line at the first screen's bottom was scrolled up into view: it stays so.
+        if line.origin.y + line.size.height <= start + clip.bounds().size.height {
+            clip.scrollToPoint(NSPoint::new(at.x, start));
+            scroll.reflectScrolledClipView(&clip);
+        }
+    }
+
     /// Puts the cursor at `index` and scrolls its line to the top of the column.
     pub fn move_to_top(&self, index: usize) {
         let index = index.min(self.string().length());

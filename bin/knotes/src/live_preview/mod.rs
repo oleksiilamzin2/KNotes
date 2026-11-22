@@ -84,8 +84,6 @@ const CATCH_UP_MS: u64 = 150;
 const MAX_PIECE_WIDTHS: usize = 20_000;
 
 struct Look {
-    /// How many of a font's own line heights a line takes (the settings' «Текст» tab).
-    line: f64,
     body: Retained<NSFont>,
     bold: Retained<NSFont>,
     italic: Retained<NSFont>,
@@ -136,7 +134,6 @@ impl Look {
     let size = crate::text_look::size(set, crate::text_look::NOTE_SIZE);
     let body = crate::text_look::font(set, size, false);
     Look {
-        line: crate::text_look::line(set),
         bold: crate::text_look::font(set, size, true),
         italic: crate::text_look::italic(&body),
         mono: NSFont::monospacedSystemFontOfSize_weight(size - 1.0, 0.0),
@@ -165,7 +162,7 @@ impl Look {
         card: appearance_color(0x9A7F_D9, 0xB7A3_F5),
         card_deck: appearance_color(0x7A4D_F0, 0xA78B_FF),
         clear: NSColor::clearColor(),
-        paint: PaintCache::new(STYLE_KEY, size * FOOTNOTE_RAISE, crate::text_look::line(set)),
+        paint: PaintCache::new(STYLE_KEY, size * FOOTNOTE_RAISE, crate::text_look::spacing(set, &body)),
         footnote: crate::text_look::font(set, size * FOOTNOTE_SCALE, false),
         number_widths: Cell::new(None),
         body_widths: RefCell::new(std::collections::HashMap::new()),

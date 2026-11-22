@@ -106,13 +106,7 @@ impl LivePreview {
 
     /// Height of a line of body text: what a line of hidden source alone would not get.
     pub(super) fn line_height(&self) -> f64 {
-        self.font_height() * self.look().line
-    }
-
-    /// Height of a line of body text as its font alone makes it (a table's row).
-    pub(super) fn font_height(&self) -> f64 {
-        let body = &self.look().body;
-        body.ascender() - body.descender() + body.leading()
+        crate::text_look::font_height(&self.look().body)
     }
 
     /// Width of a list number (`12. `) in the digits font, without measuring the text.
@@ -239,7 +233,8 @@ impl LivePreview {
         // A card's bar down each of its paragraphs, the blank ones inside braces too.
         let card = styled.cards.partition_point(|c| c.end < from);
         if styled.cards.get(card).is_some_and(|c| c.start < to && (c.end > from || c.end == from && from == to)) {
-            marks.push(Mark::QuoteBar { x: 0.0, card: Some(look.card.clone()) });
+            let top = styled.cards.get(card).is_some_and(|c| from <= c.start);
+            marks.push(Mark::QuoteBar { x: 0.0, top, card: Some(look.card.clone()) });
         }
         let block = styled.code_blocks.partition_point(|c| c.end <= from);
         if let Some(c) = styled.code_blocks.get(block).filter(|c| c.start < to) {
@@ -262,9 +257,8 @@ impl LivePreview {
             }
         }
         let selection = self.ivars().selection.get();
-        // A dot on the middle of small letters; a circle, as tall as capitals, on theirs.
+        // A dot on the middle of small letters; a task's circle is in the middle of its line.
         let centre = self.look().body.xHeight() / 2.0;
-        let task_centre = self.look().body.capHeight() / 2.0;
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
             // A thematic break away from the cursor: a line in the place of its signs.
@@ -277,7 +271,10 @@ impl LivePreview {
             if let Style::QuoteMarker { depth } = run.style {
                 // A callout's lines show its box instead of bars.
                 if !styled.callouts.iter().any(|c| run.range.start >= c.range.start && run.range.start < c.range.end) {
-                    marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT, card: None }));
+                    // The quote's first line: none of a quote in the paragraph before it.
+                    let before = if from == 0 { 0 } else { paragraph(&storage, NSRange::new(from - 1, 0)).0 };
+                    let top = from == 0 || !styled.runs[..first].iter().rev().take_while(|r| r.range.start >= before).any(|r| matches!(r.style, Style::QuoteMarker { .. }));
+                    marks.extend((0..depth).map(|level| Mark::QuoteBar { x: f64::from(level) * QUOTE_INDENT, top, card: None }));
                 }
                 continue;
             }
@@ -288,7 +285,7 @@ impl LivePreview {
             let offset = run.range.start - from;
             match kind {
                 ListKind::Bullet => marks.push(Mark::Bullet { offset, centre }),
-                ListKind::Task { checked } => marks.push(Mark::Task { offset, centre: task_centre, checked }),
+                ListKind::Task { checked } => marks.push(Mark::Task { offset, checked }),
                 ListKind::Ordered => {}
             }
         }

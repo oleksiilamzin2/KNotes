@@ -11,6 +11,8 @@ pub enum PanelMode {
     Links,
     /// The starred folders and files.
     Stars,
+    /// The calendar of daily notes.
+    Calendar,
 }
 
 impl PanelMode {
@@ -20,6 +22,7 @@ impl PanelMode {
             Self::Outline => "outline",
             Self::Links => "links",
             Self::Stars => "stars",
+            Self::Calendar => "calendar",
         }
     }
 
@@ -29,6 +32,7 @@ impl PanelMode {
             "outline" => Some(Self::Outline),
             "links" => Some(Self::Links),
             "stars" => Some(Self::Stars),
+            "calendar" => Some(Self::Calendar),
             _ => None,
         }
     }

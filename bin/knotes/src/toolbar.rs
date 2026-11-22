@@ -180,9 +180,10 @@ define_class!(
         #[unsafe(method(panelMode:))]
         fn panel_mode_chosen(&self, sender: &NSButton) {
             let mode = match sender.tag() {
+                0 => PanelMode::Stars,
                 1 => PanelMode::Outline,
                 2 => PanelMode::Links,
-                3 => PanelMode::Stars,
+                3 => PanelMode::Calendar,
                 _ => PanelMode::Ai,
             };
             self.set_panel_mode(mode);
@@ -626,12 +627,14 @@ impl ToolbarDelegate {
             }
         };
         let (over_sidebar, over_panel) = (side(), side());
-        // Over the panel, what it shows: the AI, the outline or the links.
+        // Over the panel, what it shows: the stars first and the AI last (the owner's order),
+        // the outline, the links and the calendar between them.
         let panels = [
-            button(PANEL_MODE_IDS[0], "brain", strings::AI, sel!(panelMode:)),
+            button(PANEL_MODE_IDS[0], "star", strings::STARS, sel!(panelMode:)),
             button(PANEL_MODE_IDS[1], "list.bullet.indent", strings::OUTLINE, sel!(panelMode:)),
             button(PANEL_MODE_IDS[2], "link", strings::CONNECTIONS, sel!(panelMode:)),
-            button(PANEL_MODE_IDS[3], "star", strings::STARS, sel!(panelMode:)),
+            button(PANEL_MODE_IDS[3], "calendar", strings::CALENDAR, sel!(panelMode:)),
+            button(PANEL_MODE_IDS[4], "brain", strings::AI, sel!(panelMode:)),
         ];
         switch(&over_panel, &panels);
         choose(&panels, panel_index(self.ivars().panel_mode_state.get()));
@@ -914,7 +917,7 @@ struct Row {
     modes: [Retained<NSButton>; 3],
     over_panel: Retained<NSView>,
     /// The AI, the outline, the links.
-    panels: [Retained<NSButton>; 4],
+    panels: [Retained<NSButton>; 5],
     over_list: Retained<NSView>,
     over_note: Retained<NSView>,
     list_title: Retained<NSTextField>,
@@ -942,7 +945,7 @@ fn choose(buttons: &[Retained<NSButton>], index: isize) {
 pub const SIDEBAR_MODE_IDS: [&str; 3] = ["knotes.sidebar-folders", "knotes.sidebar-tags", "knotes.sidebar-cards"];
 
 /// The row's buttons for what the panel shows: the AI, the outline, the links.
-pub const PANEL_MODE_IDS: [&str; 4] = ["knotes.panel-ai", "knotes.panel-outline", "knotes.panel-links", "knotes.panel-stars"];
+pub const PANEL_MODE_IDS: [&str; 5] = ["knotes.panel-stars", "knotes.panel-outline", "knotes.panel-links", "knotes.panel-calendar", "knotes.panel-ai"];
 
 /// The row's height.
 const ROW_HEIGHT: f64 = 28.0;
@@ -969,10 +972,11 @@ fn mode_index(mode: SidebarMode) -> isize {
 
 fn panel_index(mode: PanelMode) -> isize {
     match mode {
-        PanelMode::Ai => 0,
+        PanelMode::Stars => 0,
         PanelMode::Outline => 1,
         PanelMode::Links => 2,
-        PanelMode::Stars => 3,
+        PanelMode::Calendar => 3,
+        PanelMode::Ai => 4,
     }
 }
 

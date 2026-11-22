@@ -282,7 +282,7 @@ pub fn text_look_changed() {
     });
     for panel in panels {
         panel.composer.setFont(Some(&body_font()));
-        panel.composer.setDefaultParagraphStyle(Some(&paragraph_style()));
+        panel.composer.setDefaultParagraphStyle(Some(&paragraph_style(0.0)));
         panel.render();
     }
 }
@@ -393,7 +393,7 @@ impl ChatPanel {
         composer.setRichText(false);
         composer.setDrawsBackground(false);
         composer.setFont(Some(&body_font()));
-        composer.setDefaultParagraphStyle(Some(&paragraph_style()));
+        composer.setDefaultParagraphStyle(Some(&paragraph_style(0.0)));
         composer.setTextContainerInset(NSSize::new(4.0, 6.0));
         // As tall as its scroll view even while empty: a click under the first line is a click
         // in the text, not in the empty clip view below it.
@@ -1263,13 +1263,14 @@ fn body_font() -> Retained<NSFont> {
     crate::text_look::font(&crate::text_look::chat(), body_size(), false)
 }
 
-/// A paragraph's style with the line height the settings' «Текст» tab sets (code keeps its own).
-fn paragraph_style() -> Retained<NSMutableParagraphStyle> {
+/// The room between the lines of the conversation's paragraphs, in points.
+const LINE_SPACING: f64 = 1.5;
+
+/// A paragraph's style, `own` points between its lines and what the settings' «Текст» tab adds
+/// (code keeps its own).
+fn paragraph_style(own: f64) -> Retained<NSMutableParagraphStyle> {
     let paragraph = NSMutableParagraphStyle::new();
-    let line = crate::text_look::line(&crate::text_look::chat());
-    if line != 1.0 {
-        paragraph.setLineHeightMultiple(line);
-    }
+    paragraph.setLineSpacing(own + crate::text_look::spacing(&crate::text_look::chat(), &body_font()));
     paragraph
 }
 
@@ -1279,9 +1280,8 @@ fn any<T: ClassType<Super = NSObject> + 'static>(object: &T) -> Retained<AnyObje
 
 /// `text` in `font` and `colour`, a link to `link` when given.
 fn piece(text: &str, font: &NSFont, colour: &NSColor, link: Option<&str>) -> Retained<NSAttributedString> {
-    let paragraph = paragraph_style();
+    let paragraph = paragraph_style(LINE_SPACING);
     paragraph.setParagraphSpacing(2.0);
-    paragraph.setLineSpacing(1.5);
     let paragraph: Retained<AnyObject> = Retained::into_super(Retained::into_super(Retained::into_super(paragraph)));
     // SAFETY: AppKit's attribute names, each with a value of its kind.
     unsafe {
@@ -1309,11 +1309,10 @@ enum Block {
 /// The user's question as one paragraph (its line breaks kept as line separators) marked for
 /// its card, inset from the card's sides, its own paragraph's end included.
 fn question_text(question: &str) -> Retained<NSAttributedString> {
-    let paragraph = paragraph_style();
+    let paragraph = paragraph_style(LINE_SPACING);
     paragraph.setFirstLineHeadIndent(CARD_INDENT);
     paragraph.setHeadIndent(CARD_INDENT);
     paragraph.setTailIndent(-CARD_INDENT);
-    paragraph.setLineSpacing(1.5);
     let paragraph: Retained<AnyObject> = Retained::into_super(Retained::into_super(Retained::into_super(paragraph)));
     let text = format!("{}\n", question.trim().replace("\r\n", "\n").replace('\n', "\u{2028}"));
     // SAFETY: AppKit's attribute names with values of their kinds, and the card's own marker.

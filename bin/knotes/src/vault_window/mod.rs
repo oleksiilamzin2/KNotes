@@ -17,6 +17,7 @@ mod probe_actions;
 mod ai;
 mod cards;
 mod stars;
+mod calendar;
 
 use self::{completion::*, editing::*, find::*};
 
@@ -55,6 +56,7 @@ use crate::collapse_observer::CollapseObserver;
 use crate::connections_panel::{Connections, ConnectionsPanel};
 use crate::outline_panel::OutlinePanel;
 use crate::stars_panel::StarsPanel;
+use crate::calendar_panel::CalendarPanel;
 use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
@@ -135,6 +137,8 @@ pub struct VaultWindow {
     pub outline_panel: OutlinePanel,
     /// The starred folders and files, in the right panel beside them.
     pub stars_panel: StarsPanel,
+    /// The calendar of daily notes, in the right panel beside them.
+    pub calendar_panel: CalendarPanel,
     /// The vault's stars, as its root's rules file lists them.
     stars: RefCell<Arc<Vec<String>>>,
     /// The connections of the document open, in the right panel (ADR 0026), the document they
@@ -330,8 +334,9 @@ impl VaultWindow {
         let outline_panel = OutlinePanel::new(mtm);
         let connections_panel = ConnectionsPanel::new(mtm);
         let stars_panel = StarsPanel::new(mtm);
+        let calendar_panel = CalendarPanel::new(mtm);
         let panel = NSView::new(mtm);
-        for view in [&chat.view, &outline_panel.view, &connections_panel.view, &stars_panel.view] {
+        for view in [&chat.view, &outline_panel.view, &connections_panel.view, &stars_panel.view, &calendar_panel.view] {
             view.setTranslatesAutoresizingMaskIntoConstraints(false);
             panel.addSubview(view);
             for c in [
@@ -346,6 +351,7 @@ impl VaultWindow {
         outline_panel.view.setHidden(true);
         connections_panel.view.setHidden(true);
         stars_panel.view.setHidden(true);
+        calendar_panel.view.setHidden(true);
         let chat_vc = NSViewController::new(mtm);
         chat_vc.setView(&panel);
         let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc, &chat_vc);
@@ -385,6 +391,7 @@ impl VaultWindow {
             chat,
             outline_panel,
             stars_panel,
+            calendar_panel,
             stars: RefCell::new(Arc::default()),
             connections_panel,
             connections_of: RefCell::new(None),
@@ -494,6 +501,12 @@ impl VaultWindow {
         this.connections_panel.on_make_link(move |source, range| {
             if let Some(window) = weak_make.upgrade() {
                 window.make_connection_link(&source, range);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.calendar_panel.on_day(move |day| {
+            if let Some(window) = weak.upgrade() {
+                window.open_day(day);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -1043,6 +1056,7 @@ impl VaultWindow {
         self.list.set_ai(Arc::clone(&snapshot.ai));
         self.sidebar.set_ai(Arc::clone(&snapshot.ai));
         self.set_stars(snapshot.rules.get("").map(FolderRules::stars).unwrap_or_default());
+        self.refresh_calendar();
         if !self.space_restored.replace(true) {
             self.state.borrow_mut().space = self.saved_space();
         }

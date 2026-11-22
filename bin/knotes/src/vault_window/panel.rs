@@ -16,6 +16,8 @@ impl VaultWindow {
         self.connections_panel.view.setHidden(mode != PanelMode::Links);
         self.stars_panel.view.setHidden(mode != PanelMode::Stars);
         self.refresh_stars();
+        self.calendar_panel.view.setHidden(mode != PanelMode::Calendar);
+        self.refresh_calendar();
         self.refresh_panel();
     }
 
@@ -247,6 +249,8 @@ impl VaultWindow {
             "links"
         } else if !self.stars_panel.view.isHidden() {
             "stars"
+        } else if !self.calendar_panel.view.isHidden() {
+            "calendar"
         } else {
             "nothing"
         };

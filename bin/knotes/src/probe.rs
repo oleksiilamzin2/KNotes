@@ -1407,6 +1407,7 @@ fn report_panel(window: &VaultWindow) {
     let (rows, empty) = window.stars_panel.describe();
     println!("stars: {rows}");
     println!("star-marks: list {} | sidebar {}", window.list.probe_stars(), window.sidebar.probe_stars());
+    println!("calendar: {}", window.calendar_panel.describe());
     if !empty.is_empty() {
         println!("stars-empty: {empty}");
     }
@@ -1431,10 +1432,11 @@ pub fn panel_requested(window: &NSWindow) {
         return;
     }
     let index = match action.as_deref() {
-        Ok("panel=ai") => 0,
+        Ok("panel=stars") => 0,
         Ok("panel=outline") => 1,
         Ok("panel=links") => 2,
-        Ok("panel=stars") => 3,
+        Ok("panel=calendar") => 3,
+        Ok("panel=ai") => 4,
         _ => return,
     };
     let Some(button) = panel_switch(window).into_iter().nth(index as usize) else { return };
@@ -1573,6 +1575,10 @@ fn report_note(window: &VaultWindow) {
     if let Some(top) = window.note_top() {
         println!("note-top: {}", first_line_at(&window.note_text.string().to_string(), top));
     }
+    // After the note's top is read: asking where the caret is lays text out, and may move it.
+    // SAFETY: the selection lies inside the text; a null actual range is allowed.
+    let caret = unsafe { objc2_app_kit::NSTextInputClient::firstRectForCharacterRange_actualRange(&**window.note_text, objc2_foundation::NSRange::new(window.note_text.selectedRange().location, 0), std::ptr::null_mut()) };
+    println!("note-caret: {:.1}", caret.size.height);
     let view = &window.note_text;
     let container = unsafe { view.textContainer() }.map_or(0.0, |c| c.size().width);
     println!("text-layout: column={:.1} width={:.1} left={:.1}", view.frame().size.width, container, view.textContainerInset().width);

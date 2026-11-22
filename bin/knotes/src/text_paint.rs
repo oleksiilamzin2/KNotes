@@ -45,13 +45,15 @@ pub struct Para {
     pub centred: bool,
     /// The line runs on past the column instead of wrapping (a table row).
     pub unwrapped: bool,
+    /// No room between its lines beyond their own heights (code).
+    pub tight: bool,
     pub min_line: f64,
     pub max_line: f64,
     pub spacing_before: f64,
     pub spacing_after: f64,
 }
 
-type ParaKey = [u64; 9];
+type ParaKey = [u64; 10];
 
 impl Para {
     fn key(&self) -> ParaKey {
@@ -61,6 +63,7 @@ impl Para {
             u64::from(self.hidden_tabs),
             u64::from(self.centred),
             u64::from(self.unwrapped),
+            u64::from(self.tight),
             self.min_line.to_bits(),
             self.max_line.to_bits(),
             self.spacing_before.to_bits(),
@@ -68,12 +71,15 @@ impl Para {
         ]
     }
 
-    /// The style; its lines `line` of their fonts' own heights, within the heights set.
-    fn style(&self, line: f64) -> Retained<NSParagraphStyle> {
+    /// The style, `spacing` points between its lines. (A line made taller instead would have
+    /// the room over its text, and a caret as tall as the line.)
+    fn style(&self, spacing: f64) -> Retained<NSParagraphStyle> {
         let style = NSMutableParagraphStyle::new();
-        // A table's row keeps its own height: the room added would sit over its cells' text.
-        if line != 1.0 && !self.unwrapped {
-            style.setLineHeightMultiple(line);
+        // The room goes over a line (TextKit 2 puts it there). Not over a line of a height of
+        // its own (a hidden one, the room kept for a picture), a table's row, which its cells
+        // are drawn around, or code.
+        if !self.unwrapped && !self.tight && self.max_line == 0.0 {
+            style.setLineSpacing(spacing);
         }
         style.setFirstLineHeadIndent(self.first_indent);
         style.setHeadIndent(self.head_indent);
@@ -186,8 +192,8 @@ pub struct PaintCache {
     mark: Retained<NSColor>,
     /// How far raised text sits above the line's baseline, in points.
     raise: f64,
-    /// How many of a font's own line heights a line takes.
-    line: f64,
+    /// The room between lines, in points, over what their fonts leave.
+    spacing: f64,
     styles: RefCell<HashMap<ParaKey, Retained<NSParagraphStyle>>>,
     attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
 }
@@ -198,14 +204,14 @@ type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const N
 
 impl PaintCache {
     /// `style_key` names the attribute carrying each range's test name; raised text sits
-    /// `raise` points above the baseline; a line takes `line` of its font's own heights.
-    pub fn new(style_key: &str, raise: f64, line: f64) -> Self {
+    /// `raise` points above the baseline; `spacing` points more between lines.
+    pub fn new(style_key: &str, raise: f64, spacing: f64) -> Self {
         Self {
             style_key: NSString::from_str(style_key),
             shade: NSColor::quaternarySystemFillColor(),
             mark: NSColor::systemYellowColor().colorWithAlphaComponent(0.4),
             raise,
-            line,
+            spacing,
             styles: RefCell::new(HashMap::new()),
             attributes: RefCell::new(HashMap::new()),
         }
@@ -223,10 +229,10 @@ impl PaintCache {
         // A highlight over code keeps the highlight's yellow.
         let background = if paint.look & MARKED != 0 { 2 } else { u8::from(paint.look & SHADED != 0) };
         let raised = paint.look & RAISED != 0;
-        // A paragraph with no style of its own still takes the line height set.
-        let para = (paint.para != 0 || self.line != 1.0).then(|| {
+        // A paragraph with no style of its own still takes the room set between lines.
+        let para = (paint.para != 0 || self.spacing != 0.0).then(|| {
             let para = palette.para_of(paint.para);
-            self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style(self.line)).clone()
+            self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style(self.spacing)).clone()
         });
         let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, background, raised);
         self.attributes
