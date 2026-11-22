@@ -14,6 +14,8 @@ impl VaultWindow {
         self.chat.view.setHidden(mode != PanelMode::Ai);
         self.outline_panel.view.setHidden(mode != PanelMode::Outline);
         self.connections_panel.view.setHidden(mode != PanelMode::Links);
+        self.stars_panel.view.setHidden(mode != PanelMode::Stars);
+        self.refresh_stars();
         self.refresh_panel();
     }
 
@@ -243,6 +245,8 @@ impl VaultWindow {
             "outline"
         } else if !self.connections_panel.view.isHidden() {
             "links"
+        } else if !self.stars_panel.view.isHidden() {
+            "stars"
         } else {
             "nothing"
         };

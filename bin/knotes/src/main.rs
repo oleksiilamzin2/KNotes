@@ -32,6 +32,7 @@ mod search_bar;
 mod search_window;
 mod search_worker;
 mod settings_spaces;
+mod stars_panel;
 mod settings_text;
 mod settings_trash;
 mod settings_window;

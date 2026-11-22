@@ -296,6 +296,15 @@ impl VaultWindow {
         // After the click: it may open a PDF to rename.
         probe::toolbar_rename_requested(&self.window);
         probe::title_clicks_requested(&self.window);
+        // `KNOTES_PROBE_STAR_CLICK=name`: a click on that star in the panel;
+        // `KNOTES_PROBE_STAR_UNSTAR=name`: its row's menu, its items printed.
+        if let Ok(name) = std::env::var("KNOTES_PROBE_STAR_CLICK") {
+            self.window.displayIfNeeded();
+            self.stars_panel.click(&name);
+        }
+        if let Ok(name) = std::env::var("KNOTES_PROBE_STAR_UNSTAR") {
+            println!("star-menu-items: {}", self.stars_panel.unstar(&name));
+        }
         if let Ok(title) = std::env::var("KNOTES_PROBE_OUTLINE_CLICK") {
             self.window.displayIfNeeded();
             self.outline_panel.click(&title);

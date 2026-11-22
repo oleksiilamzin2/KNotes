@@ -3484,7 +3484,7 @@ fn an_empty_folder_shows_in_the_sidebar() {
 fn a_new_folder_is_made_from_a_folder_s_menu_or_the_sidebar_s_and_named_in_place() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "new-folder=Work"), ("KNOTES_PROBE_FOLDER_NAME", "Звіти")]);
-    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Сховати від ШІ | Видалити | Простір"), "{out}");
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Додати зірочку | Сховати від ШІ | Видалити | Простір"), "{out}");
     assert!(vault.path().join("Work/Звіти").is_dir() && !vault.path().join("Work/Нова тека").exists(), "made and renamed: {out}");
     // At the top of a space: the new folder joins it.
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SPACE", "work"), ("KNOTES_PROBE_ACTION", "new-folder=")]);
@@ -3570,7 +3570,7 @@ fn a_new_note_with_a_first_line_typed_is_deleted_under_the_name_it_takes() {
 fn a_note_deleted_from_its_menu_goes_to_recently_deleted_and_comes_back_from_there() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Work/a.md"), ("KNOTES_PROBE_ACTION", "list-delete")]);
-    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | Сховати від ШІ | — | Видалити"), "{out}");
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | Додати зірочку | Сховати від ШІ | — | Видалити"), "{out}");
     assert!(!vault.path().join("Work/a.md").exists() && deleted_entries(vault.path()) == 1, "{out}");
     assert!(out.contains("Нещодавно видалені (1)"), "a row for them: {out}");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted"), ("KNOTES_PROBE_ACTION", "list-restore")]);
@@ -3584,7 +3584,7 @@ fn a_note_deleted_from_its_menu_goes_to_recently_deleted_and_comes_back_from_the
 fn a_folder_deleted_from_its_menu_goes_whole_and_the_deleted_are_listed_and_emptied() {
     let vault = spaced_vault();
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-delete=Home")]);
-    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Сховати від ШІ | Видалити | Простір"), "{out}");
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Додати зірочку | Сховати від ШІ | Видалити | Простір"), "{out}");
     assert!(!vault.path().join("Home").exists() && deleted_entries(vault.path()) == 1, "{out}");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_SELECT", "deleted")]);
     let list = out.lines().find_map(|l| l.strip_prefix("list: ")).unwrap_or_else(|| panic!("{out}"));
@@ -3670,6 +3670,46 @@ fn a_deleted_note_pdf_or_folder_chosen_in_recently_deleted_shows_as_it_was_and_i
     probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-delete=Home")]);
     let out = show();
     assert_eq!(line(&out, "note-column: "), "empty: Тека «Home» · 1 нотатка. Відновіть її, щоб відкрити.", "{out}");
+}
+
+#[test]
+fn a_folder_and_a_note_are_starred_from_their_menus_and_listed_in_the_right_panel() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault.path().join("Projects")).unwrap();
+    std::fs::write(vault.path().join("Projects/Plan.md"), "# Plan").unwrap();
+    std::fs::write(vault.path().join("a.md"), "note a").unwrap();
+    // A HOME whose settings show the stars in the right panel.
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"panel": "stars"}"#).unwrap();
+    let probe = |env: &[(&str, &str)]| probe_env(&[vault.path()], Some(home.path()), env);
+    let out = probe(&[]);
+    assert!(out.contains("panel: stars, shows stars\n") && out.contains("stars: \n") && out.contains("stars-empty: Тут з'являться теки й файли із зірочкою."), "{out}");
+    let out = probe(&[("KNOTES_PROBE_ACTION", "folder-star=Projects")]);
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Додати зірочку |") && out.contains("stars: Projects/\n") && !out.contains("stars-empty"), "{out}");
+    let out = probe(&[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_ACTION", "list-star")]);
+    assert!(out.contains("| Перемістити в… | Додати зірочку | Сховати від ШІ |") && out.contains("stars: Projects/ | a\n"), "in the order starred: {out}");
+    assert!(out.contains("star-marks: list a | sidebar Projects\n"), "a star after the note's title in the list and after the folder's name: {out}");
+    let rules: serde_json::Value = serde_json::from_str(&read(vault.path(), ".knotes.json")).unwrap();
+    assert_eq!(rules["stars"], serde_json::json!(["Projects/", "a.md"]), "kept with the vault");
+    // A click shows the folder, or opens the file.
+    let out = probe(&[("KNOTES_PROBE_STAR_CLICK", "Projects")]);
+    assert!(out.contains("title: Projects\n"), "{out}");
+    std::fs::write(data.join("settings-v2.json"), r#"{"panel": "stars"}"#).unwrap();
+    let out = probe(&[("KNOTES_PROBE_STAR_CLICK", "a")]);
+    assert!(out.contains("path-bar: 📕 › a\n"), "{out}");
+    // A star follows its note and its folder under their new names.
+    let out = probe(&[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_ACTION", "rename=New")]);
+    assert!(out.contains("stars: Projects/ | New\n"), "{out}");
+    let out = probe(&[("KNOTES_PROBE_ACTION", "folder-rename=Projects=Work")]);
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Прибрати зірочку |") && out.contains("stars: Work/ | New\n"), "{out}");
+    // What is deleted is listed no more; a star's own menu takes it off.
+    std::fs::remove_file(vault.path().join("New.md")).unwrap();
+    let out = probe(&[("KNOTES_PROBE_STAR_UNSTAR", "Work")]);
+    assert!(out.contains("star-menu-items: Прибрати зірочку\n") && out.contains("stars: \n"), "{out}");
+    let rules: serde_json::Value = serde_json::from_str(&read(vault.path(), ".knotes.json")).unwrap();
+    assert_eq!(rules["stars"], serde_json::json!(["New.md"]), "a deleted note's star waits for it");
 }
 
 #[test]
@@ -4076,7 +4116,7 @@ fn a_note_kept_from_the_ai_from_its_menu_is_tagged_marked_and_shown_again() {
     let vault = ai_vault();
     let day = vault.path().join("Щоденник/день.md");
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_OPEN", "Щоденник/день.md"), ("KNOTES_PROBE_ACTION", "list-ai")]);
-    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | Сховати від ШІ | — | Видалити"), "{out}");
+    assert!(out.contains("list-menu-items: Відкрити в новій вкладці | Перейменувати | Перемістити в… | Додати зірочку | Сховати від ШІ | — | Видалити"), "{out}");
     assert_eq!(std::fs::read_to_string(&day).unwrap(), "---\ntags: [no-ai]\n---\nМій день.", "the open note tagged in the editor, and saved");
     let out = probe_with(&[vault.path()], None);
     assert_eq!(listed(&out, "list-ai-marks: "), ["день", "нотатка"], "a tag in the text counts too");
@@ -4100,7 +4140,7 @@ fn a_folder_kept_from_the_ai_from_its_menu_marks_itself_and_the_notes_in_it_subf
     let vault = ai_vault();
     let rules = |folder: &str| std::fs::read_to_string(vault.path().join(folder).join(".knotes.json")).ok().map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap());
     let out = probe_env(&[vault.path()], None, &[("KNOTES_PROBE_ACTION", "folder-ai=Щоденник")]);
-    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Сховати від ШІ | Видалити | Простір"), "{out}");
+    assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Додати зірочку | Сховати від ШІ | Видалити | Простір"), "{out}");
     assert_eq!(rules("Щоденник"), Some(serde_json::json!({"ai": false})));
     let out = probe_with(&[vault.path()], None);
     assert_eq!(listed(&out, "sidebar-ai-marks: "), ["Щоденник"], "{out}");

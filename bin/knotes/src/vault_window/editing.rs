@@ -508,6 +508,7 @@ impl VaultWindow {
         if moved.is_empty() && folder.is_none() {
             return false;
         }
+        self.carry_stars(&moved, folder);
         // A folder's rules go with it; a file's own setting is in its folder's (ADR 0036).
         if folder.is_none() {
             self.carry_ai(moved.iter().map(|(from, to)| (from.as_str(), to.as_str())), false);

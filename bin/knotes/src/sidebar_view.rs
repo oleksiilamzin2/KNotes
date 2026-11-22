@@ -63,6 +63,9 @@ pub struct Ivars {
     /// folder from it or show it (ADR 0036).
     ai: RefCell<Arc<KeptFromAi>>,
     on_folder_ai: RefCell<Option<OnDeleteFolder>>,
+    /// The vault's stars: a starred folder's menu takes its star off.
+    stars: RefCell<Arc<Vec<String>>>,
+    on_folder_star: RefCell<Option<OnDeleteFolder>>,
     /// What a deck's menu calls for its settings.
     on_deck_settings: RefCell<Option<OnDeleteFolder>>,
     on_deck_table: RefCell<Option<OnDeleteFolder>>,
@@ -203,6 +206,15 @@ define_class!(
             }
         }
 
+        /// A folder's menu: starred, or its star taken off.
+        #[unsafe(method(toggleFolderStar:))]
+        fn toggle_folder_star(&self, item: &NSMenuItem) {
+            let folder = item.representedObject().and_then(|o| o.downcast::<NSString>().ok()).and_then(|k| SidebarItem::from_key(&k.to_string())).and_then(|i| drop_folder(&i).map(str::to_owned));
+            if let (Some(folder), Some(callback)) = (folder, self.ivars().on_folder_star.borrow().as_ref()) {
+                callback(folder);
+            }
+        }
+
         /// A deck's menu: its cards as a table (ADR 0037).
         #[unsafe(method(deckTable:))]
         fn deck_table(&self, item: &NSMenuItem) {
@@ -271,6 +283,8 @@ impl SidebarSource {
             on_delete_folder: RefCell::new(None),
             ai: RefCell::new(Arc::default()),
             on_folder_ai: RefCell::new(None),
+            stars: RefCell::new(Arc::default()),
+            on_folder_star: RefCell::new(None),
             on_deck_settings: RefCell::new(None),
             on_deck_table: RefCell::new(None),
             outline: RefCell::new(Weak::default()),
@@ -315,6 +329,7 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
         }
         // The AI's mark: a folder it never looks into, a tab's document it never sees (ADR 0036).
         crate::ai_mark::show(&cell, self.kept_from_ai(&item));
+        crate::ai_mark::show_star(&cell, self.starred(&item));
         if let Some(count) = count_field(&cell) {
             let text = model.count(&item).map(|n| n.to_string()).unwrap_or_default();
             count.setStringValue(&NSString::from_str(&text));
@@ -335,8 +350,10 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     pub fn fill_menu(&self, menu: &NSMenu, item: Option<&SidebarItem>) {
         menu.removeAllItems();
         let ai = if item.is_some_and(|i| self.kept_from_ai(i)) { strings::SHOW_TO_AI } else { strings::KEEP_FROM_AI };
+        let starred = item.is_some_and(|i| self.starred(i));
+        let star = if starred { strings::UNSTAR } else { strings::STAR };
         let entries: &[(&str, Sel)] = match item {
-            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (ai, sel!(toggleFolderAi:)), (strings::DELETE, sel!(deleteFolder:))],
+            Some(SidebarItem::Folder(_)) => &[(strings::RENAME_NOTE, sel!(renameFolder:)), (strings::NEW_SUBFOLDER, sel!(newFolder:)), (star, sel!(toggleFolderStar:)), (ai, sel!(toggleFolderAi:)), (strings::DELETE, sel!(deleteFolder:))],
             // All the decks together have no settings of their own: each deck's are its own.
             Some(SidebarItem::Deck(deck)) if deck.is_empty() => &[(strings::DECK_TABLE, sel!(deckTable:))],
             Some(SidebarItem::Deck(_)) => &[(strings::DECK_TABLE, sel!(deckTable:)), (strings::DECK_SETTINGS, sel!(deckSettings:))],
@@ -399,6 +416,39 @@ fn cell_for(&self, outline: &NSOutlineView, item: &AnyObject) -> Option<Retained
     /// What is kept from the AI, whose folders and tabs the rows mark (ADR 0036).
     pub fn set_ai(&self, ai: Arc<KeptFromAi>) {
         *self.ivars().ai.borrow_mut() = ai;
+    }
+
+    /// The vault's stars: the folders in view show theirs at once.
+    pub fn set_stars(&self, stars: Arc<Vec<String>>) {
+        *self.ivars().stars.borrow_mut() = stars;
+        let Some(outline) = self.ivars().outline.borrow().load() else { return };
+        for row in 0..outline.numberOfRows() {
+            if let (Some(cell), Some(item)) = (outline.viewAtColumn_row_makeIfNecessary(0, row, false), outline.itemAtRow(row).and_then(|o| item_of(&o))) {
+                crate::ai_mark::show_star(&cell, self.starred(&item));
+            }
+        }
+    }
+
+    /// Whether `item` is a starred folder.
+    fn starred(&self, item: &SidebarItem) -> bool {
+        matches!(item, SidebarItem::Folder(folder) if self.ivars().stars.borrow().contains(&knotes_app::folder_star(folder)))
+    }
+
+    /// The rows drawn with a star, for the probe: "Projects | b" (their names).
+    pub fn probe_stars(&self) -> String {
+        let Some(outline) = self.ivars().outline.borrow().load() else { return String::new() };
+        let marked: Vec<String> = (0..outline.numberOfRows())
+            .filter_map(|row| outline.viewAtColumn_row_makeIfNecessary(0, row, true))
+            .filter(|cell| crate::ai_mark::star_shown(cell))
+            // SAFETY: the cells are built by `cell` with their text field set.
+            .filter_map(|cell| cell.downcast::<NSTableCellView>().ok().and_then(|cell| unsafe { cell.textField() }).map(|f| f.stringValue().to_string()))
+            .collect();
+        marked.join(" | ")
+    }
+
+    /// Called with a folder its menu stars or takes the star off.
+    pub fn on_folder_star(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_folder_star.borrow_mut() = Some(Box::new(callback));
     }
 
     /// Called with a deck whose menu asks its settings.

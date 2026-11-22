@@ -9,6 +9,8 @@ pub enum PanelMode {
     Outline,
     /// The connections of the document open (ADR 0026).
     Links,
+    /// The starred folders and files.
+    Stars,
 }
 
 impl PanelMode {
@@ -17,6 +19,7 @@ impl PanelMode {
             Self::Ai => "ai",
             Self::Outline => "outline",
             Self::Links => "links",
+            Self::Stars => "stars",
         }
     }
 
@@ -25,6 +28,7 @@ impl PanelMode {
             "ai" => Some(Self::Ai),
             "outline" => Some(Self::Outline),
             "links" => Some(Self::Links),
+            "stars" => Some(Self::Stars),
             _ => None,
         }
     }

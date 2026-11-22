@@ -80,6 +80,9 @@ pub struct Ivars {
     /// document from it or show it (ADR 0036).
     ai: RefCell<Arc<KeptFromAi>>,
     on_ai: RefCell<Option<OnSelect>>,
+    /// The vault's stars: a starred document's menu takes its star off.
+    stars: RefCell<Arc<Vec<String>>>,
+    on_star: RefCell<Option<OnSelect>>,
     /// The recently deleted the list shows (ADR 0032), and what their rows' menu calls: a note
     /// deleted (its path), an entry restored or deleted for good (its id), all emptied.
     deleted: RefCell<Arc<Vec<TrashEntry>>>,
@@ -163,6 +166,15 @@ define_class!(
         fn move_note(&self, _sender: Option<&AnyObject>) {
             let path = self.menu_row().and_then(|row| self.path_at(row));
             if let (Some(path), Some(callback)) = (path, self.ivars().on_move.borrow().as_ref()) {
+                callback(path);
+            }
+        }
+
+        /// A note's menu: starred, or its star taken off.
+        #[unsafe(method(toggleStar:))]
+        fn toggle_star(&self, _sender: Option<&AnyObject>) {
+            let path = self.menu_row().and_then(|row| self.path_at(row));
+            if let (Some(path), Some(callback)) = (path, self.ivars().on_star.borrow().as_ref()) {
                 callback(path);
             }
         }
@@ -260,6 +272,8 @@ impl NoteListSource {
             spaces: RefCell::new((Arc::new(Spaces::default()), None)),
             ai: RefCell::new(Arc::default()),
             on_ai: RefCell::new(None),
+            stars: RefCell::new(Arc::default()),
+            on_star: RefCell::new(None),
             deleted: RefCell::new(Arc::new(Vec::new())),
             on_delete: RefCell::new(None),
             on_restore: RefCell::new(None),
@@ -328,6 +342,8 @@ impl NoteListSource {
         let deleted = row.is_some_and(|row| self.deleted_at(row).is_some());
         let kept = row.and_then(|row| self.path_at(row)).is_some_and(|path| self.ivars().ai.borrow().holds(&path));
         let ai = if kept { strings::SHOW_TO_AI } else { strings::KEEP_FROM_AI };
+        let starred = row.and_then(|row| self.path_at(row)).is_some_and(|path| self.ivars().stars.borrow().contains(&path));
+        let star = if starred { strings::UNSTAR } else { strings::STAR };
         let entries: &[Option<(&str, Sel)>] = if deleted {
             &[Some((strings::RESTORE, sel!(restoreDeleted:))), Some((strings::DELETE_FOREVER, sel!(purgeDeleted:))), None, Some((strings::EMPTY_DELETED, sel!(emptyDeleted:)))]
         } else {
@@ -335,6 +351,7 @@ impl NoteListSource {
                 Some((strings::OPEN_IN_NEW_TAB, sel!(openInNewTab:))),
                 Some((strings::RENAME_NOTE, sel!(renameNote:))),
                 Some((strings::MOVE_NOTE, sel!(moveNote:))),
+                Some((star, sel!(toggleStar:))),
                 Some((ai, sel!(toggleAi:))),
                 None,
                 Some((strings::DELETE, sel!(deleteNote:))),
@@ -361,6 +378,33 @@ impl NoteListSource {
     /// What is kept from the AI, whose rows the list marks (ADR 0036).
     pub fn set_ai(&self, ai: Arc<KeptFromAi>) {
         *self.ivars().ai.borrow_mut() = ai;
+    }
+
+    /// The vault's stars: the rows in view show theirs at once.
+    pub fn set_stars(&self, stars: Arc<Vec<String>>) {
+        *self.ivars().stars.borrow_mut() = stars;
+        let Some(table) = self.ivars().table.borrow().load() else { return };
+        for row in 0..table.numberOfRows() {
+            if let (Some(cell), Some(path)) = (table.viewAtColumn_row_makeIfNecessary(0, row, false), self.path_at(row as usize)) {
+                crate::ai_mark::show_star(&cell, self.ivars().stars.borrow().contains(&path));
+            }
+        }
+    }
+
+    /// The rows drawn with a star, for the probe: "a | b" (their titles).
+    pub fn probe_stars(&self) -> String {
+        let Some(table) = self.ivars().table.borrow().load() else { return String::new() };
+        let marked: Vec<String> = (0..table.numberOfRows())
+            .filter_map(|row| table.viewAtColumn_row_makeIfNecessary(0, row, true))
+            .filter(|cell| crate::ai_mark::star_shown(cell))
+            .filter_map(|cell| cell.downcast::<NSTableCellView>().ok().and_then(|cell| field(&cell, TITLE_ID)).map(|f| f.stringValue().to_string()))
+            .collect();
+        marked.join(" | ")
+    }
+
+    /// Called with the path of a document its row's menu stars or takes the star off.
+    pub fn on_star(&self, callback: impl Fn(String) + 'static) {
+        *self.ivars().on_star.borrow_mut() = Some(Box::new(callback));
     }
 
     /// Called with the path of a document its row's menu keeps from the AI or shows it.
@@ -520,6 +564,7 @@ impl NoteListSource {
                     dot.setHidden(true);
                 }
                 crate::ai_mark::show(&cell, false);
+                crate::ai_mark::show_star(&cell, false);
                 Some(Retained::into_super(cell))
             }
             ListItem::Note(i) | ListItem::Found(i, _) => {
@@ -545,6 +590,7 @@ impl NoteListSource {
                 }
                 // The AI's mark, when it never sees the note (ADR 0036).
                 crate::ai_mark::show(&cell, self.ivars().ai.borrow().holds(&row.path));
+                crate::ai_mark::show_star(&cell, self.ivars().stars.borrow().contains(&row.path));
                 Some(Retained::into_super(cell))
             }
         }

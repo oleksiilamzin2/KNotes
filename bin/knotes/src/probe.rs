@@ -579,6 +579,7 @@ pub fn list_menu_requested(list: &crate::note_list_view::NoteListSource, table: 
         (None, a) if a.starts_with("list-move=") => (objc2::sel!(moveNote:), None),
         (None, "list-delete") => (objc2::sel!(deleteNote:), None),
         (None, "list-ai") => (objc2::sel!(toggleAi:), None),
+        (None, "list-star") => (objc2::sel!(toggleStar:), None),
         (None, "list-restore") => (objc2::sel!(restoreDeleted:), None),
         (None, "list-purge") => (objc2::sel!(purgeDeleted:), None),
         (None, "list-empty") => (objc2::sel!(emptyDeleted:), None),
@@ -678,11 +679,13 @@ pub fn new_folder_requested(sidebar: &crate::sidebar_view::SidebarSource, outlin
 /// `KNOTES_PROBE_ACTION=folder-delete=Folder`: Delete from the folder's menu in the sidebar (ADR
 /// 0032), its items printed first.
 pub fn folder_delete_requested(sidebar: &crate::sidebar_view::SidebarSource, outline: &objc2_app_kit::NSOutlineView) {
-    // `folder-ai=Folder`: its «Сховати від ШІ» (or «Показати ШІ»), ADR 0036.
+    // `folder-ai=Folder`: its «Сховати від ШІ» (or «Показати ШІ»), ADR 0036; `folder-star=Folder`:
+    // its «Додати зірочку» (or «Прибрати зірочку»).
     let action = std::env::var("KNOTES_PROBE_ACTION").unwrap_or_default();
-    let (folder, chosen) = match (action.strip_prefix("folder-delete="), action.strip_prefix("folder-ai=")) {
-        (Some(folder), _) => (folder.to_owned(), objc2::sel!(deleteFolder:)),
-        (_, Some(folder)) => (folder.to_owned(), objc2::sel!(toggleFolderAi:)),
+    let (folder, chosen) = match (action.strip_prefix("folder-delete="), action.strip_prefix("folder-ai="), action.strip_prefix("folder-star=")) {
+        (Some(folder), _, _) => (folder.to_owned(), objc2::sel!(deleteFolder:)),
+        (_, Some(folder), _) => (folder.to_owned(), objc2::sel!(toggleFolderAi:)),
+        (_, _, Some(folder)) => (folder.to_owned(), objc2::sel!(toggleFolderStar:)),
         _ => return,
     };
     let Some(menu) = outline.menu() else { return };
@@ -1401,6 +1404,12 @@ fn report_panel(window: &VaultWindow) {
     if !empty.is_empty() {
         println!("outline-empty: {empty}");
     }
+    let (rows, empty) = window.stars_panel.describe();
+    println!("stars: {rows}");
+    println!("star-marks: list {} | sidebar {}", window.list.probe_stars(), window.sidebar.probe_stars());
+    if !empty.is_empty() {
+        println!("stars-empty: {empty}");
+    }
 }
 
 /// The row's buttons for what the panel shows (the AI, the outline, the links).
@@ -1425,6 +1434,7 @@ pub fn panel_requested(window: &NSWindow) {
         Ok("panel=ai") => 0,
         Ok("panel=outline") => 1,
         Ok("panel=links") => 2,
+        Ok("panel=stars") => 3,
         _ => return,
     };
     let Some(button) = panel_switch(window).into_iter().nth(index as usize) else { return };

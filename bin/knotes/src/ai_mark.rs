@@ -16,10 +16,12 @@ use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
 
 use crate::strings;
 
-/// The marks after a row's name, side by side: the AI's, then a space's dot.
+/// The marks after a row's name, side by side: a star, the AI's, then a space's dot.
 const MARKS_ID: &str = "marks";
 /// The AI's mark among them.
 const AI_ID: &str = "ai-mark";
+/// The star of a starred folder or document among them.
+const STAR_ID: &str = "star-mark";
 /// The mark's size, in points: the brain's own proportions, about as tall as a title's capitals.
 const WIDTH: f64 = 15.0;
 const HEIGHT: f64 = 13.0;
@@ -65,7 +67,7 @@ fn draw() -> Option<Retained<NSImage>> {
     Some(image)
 }
 
-/// A row's marks after its name: the AI's and `dot`, a hidden one taking no room.
+/// A row's marks after its name: a star, the AI's and `dot`, a hidden one taking no room.
 pub fn marks(mtm: MainThreadMarker, dot: &NSImageView) -> Retained<NSStackView> {
     let mark = NSImageView::new(mtm);
     mark.setIdentifier(Some(&NSString::from_str(AI_ID)));
@@ -73,7 +75,14 @@ pub fn marks(mtm: MainThreadMarker, dot: &NSImageView) -> Retained<NSStackView> 
     mark.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
     mark.setToolTip(Some(&NSString::from_str(strings::KEPT_FROM_AI)));
     mark.setHidden(true);
-    let views: [&NSView; 2] = [&mark, dot];
+    let star = NSImageView::new(mtm);
+    star.setIdentifier(Some(&NSString::from_str(STAR_ID)));
+    let filled = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("star.fill"), Some(&NSString::from_str(strings::STARRED)));
+    star.setImage(filled.and_then(|image| image.imageWithSymbolConfiguration(&NSImageSymbolConfiguration::configurationWithPointSize_weight(9.0, 0.0))).as_deref());
+    star.setContentTintColor(Some(&NSColor::systemYellowColor()));
+    star.setToolTip(Some(&NSString::from_str(strings::STARRED)));
+    star.setHidden(true);
+    let views: [&NSView; 3] = [&star, &mark, dot];
     let stack = NSStackView::stackViewWithViews(&NSArray::from_slice(&views), mtm);
     stack.setIdentifier(Some(&NSString::from_str(MARKS_ID)));
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
@@ -81,7 +90,7 @@ pub fn marks(mtm: MainThreadMarker, dot: &NSImageView) -> Retained<NSStackView> 
     stack.setDetachesHiddenViews(true);
     stack.setTranslatesAutoresizingMaskIntoConstraints(false);
     stack.setContentCompressionResistancePriority_forOrientation(900.0, NSLayoutConstraintOrientation::Horizontal);
-    for (view, width, height) in [(&*mark, WIDTH, HEIGHT), (dot, 9.0, 9.0)] {
+    for (view, width, height) in [(&*star, 12.0, 12.0), (&*mark, WIDTH, HEIGHT), (dot, 9.0, 9.0)] {
         view.widthAnchor().constraintEqualToConstant(width).setActive(true);
         view.heightAnchor().constraintEqualToConstant(height).setActive(true);
     }
@@ -109,6 +118,18 @@ pub fn show(cell: &NSView, kept: bool) {
     if let Some(mark) = mark(cell, AI_ID) {
         mark.setHidden(!kept);
     }
+}
+
+/// Shows `cell`'s star or hides it.
+pub fn show_star(cell: &NSView, starred: bool) {
+    if let Some(mark) = mark(cell, STAR_ID) {
+        mark.setHidden(!starred);
+    }
+}
+
+/// Whether `cell` shows its star (probe mode).
+pub fn star_shown(cell: &NSView) -> bool {
+    mark(cell, STAR_ID).is_some_and(|m| !m.isHidden())
 }
 
 /// Whether `cell` shows its AI mark (probe mode).

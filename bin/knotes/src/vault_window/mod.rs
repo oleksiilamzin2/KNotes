@@ -16,6 +16,7 @@ mod spaces;
 mod probe_actions;
 mod ai;
 mod cards;
+mod stars;
 
 use self::{completion::*, editing::*, find::*};
 
@@ -53,6 +54,7 @@ use crate::chat_panel::ChatPanel;
 use crate::collapse_observer::CollapseObserver;
 use crate::connections_panel::{Connections, ConnectionsPanel};
 use crate::outline_panel::OutlinePanel;
+use crate::stars_panel::StarsPanel;
 use crate::completion_panel::{CompletionItem, CompletionPanel, MAX_ROWS};
 use crate::list_menu::ListMenu;
 use crate::live_preview::LivePreview;
@@ -131,6 +133,10 @@ pub struct VaultWindow {
     pub chat: Rc<ChatPanel>,
     /// The outline of the document open, in the right panel beside the chat.
     pub outline_panel: OutlinePanel,
+    /// The starred folders and files, in the right panel beside them.
+    pub stars_panel: StarsPanel,
+    /// The vault's stars, as its root's rules file lists them.
+    stars: RefCell<Arc<Vec<String>>>,
     /// The connections of the document open, in the right panel (ADR 0026), the document they
     /// are of, and the gathering under way (set to call it off).
     pub connections_panel: ConnectionsPanel,
@@ -323,8 +329,9 @@ impl VaultWindow {
         let chat = ChatPanel::new(mtm, knotes_session::app_data_dir());
         let outline_panel = OutlinePanel::new(mtm);
         let connections_panel = ConnectionsPanel::new(mtm);
+        let stars_panel = StarsPanel::new(mtm);
         let panel = NSView::new(mtm);
-        for view in [&chat.view, &outline_panel.view, &connections_panel.view] {
+        for view in [&chat.view, &outline_panel.view, &connections_panel.view, &stars_panel.view] {
             view.setTranslatesAutoresizingMaskIntoConstraints(false);
             panel.addSubview(view);
             for c in [
@@ -338,6 +345,7 @@ impl VaultWindow {
         }
         outline_panel.view.setHidden(true);
         connections_panel.view.setHidden(true);
+        stars_panel.view.setHidden(true);
         let chat_vc = NSViewController::new(mtm);
         chat_vc.setView(&panel);
         let (window, split) = window::build(mtm, &sidebar_vc, &list_vc, &note_vc, &chat_vc);
@@ -376,6 +384,8 @@ impl VaultWindow {
             embeds: NoteEmbeds::default(),
             chat,
             outline_panel,
+            stars_panel,
+            stars: RefCell::new(Arc::default()),
             connections_panel,
             connections_of: RefCell::new(None),
             connections_job: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
@@ -484,6 +494,31 @@ impl VaultWindow {
         this.connections_panel.on_make_link(move |source, range| {
             if let Some(window) = weak_make.upgrade() {
                 window.make_connection_link(&source, range);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.stars_panel.on_open(move |star| {
+            if let Some(window) = weak.upgrade() {
+                window.open_star(&star);
+            }
+        });
+        // A star put on or taken off: by its row in the panel, a folder's menu, a document's.
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.stars_panel.on_unstar(move |star| {
+            if let Some(window) = weak.upgrade() {
+                window.toggle_star(&star);
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.sidebar.on_folder_star(move |folder| {
+            if let Some(window) = weak.upgrade() {
+                window.toggle_star(&knotes_app::folder_star(&folder));
+            }
+        });
+        let weak: Weak<Self> = Rc::downgrade(&this);
+        this.list.on_star(move |path| {
+            if let Some(window) = weak.upgrade() {
+                window.toggle_star(&path);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);
@@ -1007,6 +1042,7 @@ impl VaultWindow {
         }
         self.list.set_ai(Arc::clone(&snapshot.ai));
         self.sidebar.set_ai(Arc::clone(&snapshot.ai));
+        self.set_stars(snapshot.rules.get("").map(FolderRules::stars).unwrap_or_default());
         if !self.space_restored.replace(true) {
             self.state.borrow_mut().space = self.saved_space();
         }
