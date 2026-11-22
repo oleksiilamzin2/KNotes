@@ -10,6 +10,39 @@ use serde_json::{Value, json};
 
 pub const SETTINGS_FILE: &str = "settings-v2.json";
 
+/// How a text is set (the settings' «Текст» tab); a part not chosen is the app's own.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+pub struct TextLook {
+    /// The font's family; none, the system's font.
+    pub font: Option<String>,
+    /// The size, in points.
+    pub size: Option<u32>,
+    /// A line's height, in percent of the font's own.
+    pub line: Option<u32>,
+}
+
+impl TextLook {
+    /// The sizes and line heights a text may be set in.
+    pub const SIZES: std::ops::RangeInclusive<u32> = 9..=36;
+    pub const LINES: std::ops::RangeInclusive<u32> = 100..=200;
+
+    fn load(value: Option<&Value>) -> Self {
+        let number = |key: &str, within: std::ops::RangeInclusive<u32>| {
+            let n = value?.get(key)?.as_u64()?;
+            Some((n.min(u64::from(u32::MAX)) as u32).clamp(*within.start(), *within.end()))
+        };
+        Self {
+            font: value.and_then(|v| v.get("font")).and_then(Value::as_str).filter(|f| !f.is_empty()).map(str::to_string),
+            size: number("size", Self::SIZES),
+            line: number("line", Self::LINES),
+        }
+    }
+
+    fn json(&self) -> Value {
+        json!({"font": self.font, "size": self.size, "line": self.line})
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AppSettings {
     /// Vault reopened when the app starts without one.
@@ -30,6 +63,9 @@ pub struct AppSettings {
     pub meaning_model: Option<String>,
     /// This Mac's name for its review log in a vault (ADR 0037): letters and digits, made once.
     pub device: Option<String>,
+    /// How a note's text is set, and the chat's.
+    pub note_text: TextLook,
+    pub chat_text: TextLook,
 }
 
 impl AppSettings {
@@ -54,6 +90,8 @@ impl AppSettings {
             chat_effort: value.get("chatEffort").and_then(Value::as_str).map(str::to_string),
             meaning_model: value.get("meaningModel").and_then(Value::as_str).map(str::to_string),
             device: value.get("device").and_then(Value::as_str).filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).map(str::to_string),
+            note_text: TextLook::load(value.get("noteText")),
+            chat_text: TextLook::load(value.get("chatText")),
         }
     }
 
@@ -101,6 +139,8 @@ impl AppSettings {
             "chatEffort": self.chat_effort,
             "meaningModel": self.meaning_model,
             "device": self.device,
+            "noteText": self.note_text.json(),
+            "chatText": self.chat_text.json(),
         });
         let tmp = app_data.join(format!("{SETTINGS_FILE}.tmp"));
         fs::write(&tmp, serde_json::to_string_pretty(&value).map_err(io::Error::other)? + "\n")?;

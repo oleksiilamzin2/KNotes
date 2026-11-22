@@ -28,6 +28,7 @@ use std::sync::Arc;
 use dispatch2::DispatchQueue;
 
 use knotes_core::{Link, LinkKind, LinkResolver};
+use knotes_session::TextLook;
 use knotes_editor::{TableTyping, cell_at, nearest_cell_edge, CalloutRun, Canvas, Edit, FormulaCache, FormulaImage, FormulaRun, FormulaStyle, Highlight, ImageRun, LinkRun, ListKind, Run, Style, TableRun, TableText, Align, changed_region, highlight, set_image_width, CodeHighlighter, CodeRun, CodeToken, utf16_offsets};
 
 use crate::image_loader::{self, DeferredImage};
@@ -38,7 +39,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSFont, NSFontAttributeName, NSFontManager, NSFontTraitMask,
+    NSColor, NSFont, NSFontAttributeName,
     NSAttributedStringNSStringDrawing, NSTextContentStorage, NSTextDelegate, NSTextElement,
     NSTextElementProvider, NSTextLayoutFragment, NSTextLayoutManager, NSTextLayoutManagerDelegate, NSTextLocation, NSTextRange, NSTextStorage, NSTextStorageObserving,
     NSBackgroundColorAttributeName, NSStrikethroughStyleAttributeName, NSTextView, NSTextViewDelegate, NSViewFrameDidChangeNotification,
@@ -54,11 +55,11 @@ pub const READABLE_WIDTH: f64 = 700.0;
 /// Side margin when the column is narrower than the readable width.
 const MIN_MARGIN: f64 = 32.0;
 const TOP_MARGIN: f64 = 24.0;
-const BODY_SIZE: f64 = 15.0;
 /// A footnote reference's label: its size and how far above the baseline, of the body's.
 const FOOTNOTE_SCALE: f64 = 0.7;
 const FOOTNOTE_RAISE: f64 = 0.4;
-const HEADING_SIZES: [f64; 6] = [23.0, 20.0, 18.0, 16.0, 15.0, 15.0];
+/// How many points over the body's size each level of heading is.
+const HEADING_OVER: [f64; 6] = [8.0, 5.0, 3.0, 1.0, 0.0, 0.0];
 const HEADING_NAMES: [&str; 6] = ["heading1", "heading2", "heading3", "heading4", "heading5", "heading6"];
 /// Indentation of each list level (the source's own indentation is hidden).
 const LIST_INDENT: f64 = 20.0;
@@ -83,6 +84,8 @@ const CATCH_UP_MS: u64 = 150;
 const MAX_PIECE_WIDTHS: usize = 20_000;
 
 struct Look {
+    /// How many of a font's own line heights a line takes (the settings' «Текст» tab).
+    line: f64,
     body: Retained<NSFont>,
     bold: Retained<NSFont>,
     italic: Retained<NSFont>,
@@ -126,6 +129,85 @@ struct Look {
     /// Where the characters of pieces of table cells start, by text and font, once measured.
     char_starts: RefCell<std::collections::HashMap<(String, usize), CharStarts>>,
 }
+
+impl Look {
+    /// The fonts and colours of a note set as `set` says.
+    fn new(set: &TextLook) -> Self {
+    let size = crate::text_look::size(set, crate::text_look::NOTE_SIZE);
+    let body = crate::text_look::font(set, size, false);
+    Look {
+        line: crate::text_look::line(set),
+        bold: crate::text_look::font(set, size, true),
+        italic: crate::text_look::italic(&body),
+        mono: NSFont::monospacedSystemFontOfSize_weight(size - 1.0, 0.0),
+        mono_bold: NSFont::monospacedSystemFontOfSize_weight(size - 1.0, 0.4),
+        mono_digit: Cell::new(None),
+        code_colors: CODE_COLORS.iter().map(|&(light, dark)| appearance_color(light, dark)).collect(),
+        // shortcut: a family's own digits may differ in width, numbered items' text then not
+        // lining up to the point; ask the family for its tabular figures if it shows.
+        digits: if set.font.is_some() { body.clone() } else { NSFont::monospacedDigitSystemFontOfSize_weight(size, 0.0) },
+        headings: HEADING_OVER.iter().map(|&over| crate::text_look::font(set, size + over, true)).collect(),
+        hidden: NSFont::systemFontOfSize(0.01),
+        text: NSColor::labelColor(),
+        muted: NSColor::tertiaryLabelColor(),
+        accent: NSColor::linkColor(),
+        missing: NSColor::linkColor().colorWithAlphaComponent(0.7),
+        error: NSColor::systemRedColor(),
+        callouts: vec![
+            NSColor::systemBlueColor(),
+            NSColor::systemTealColor(),
+            NSColor::systemGreenColor(),
+            NSColor::systemOrangeColor(),
+            NSColor::systemRedColor(),
+            NSColor::systemPurpleColor(),
+            NSColor::systemGrayColor(),
+        ],
+        card: appearance_color(0x9A7F_D9, 0xB7A3_F5),
+        card_deck: appearance_color(0x7A4D_F0, 0xA78B_FF),
+        clear: NSColor::clearColor(),
+        paint: PaintCache::new(STYLE_KEY, size * FOOTNOTE_RAISE, crate::text_look::line(set)),
+        footnote: crate::text_look::font(set, size * FOOTNOTE_SCALE, false),
+        number_widths: Cell::new(None),
+        body_widths: RefCell::new(std::collections::HashMap::new()),
+        piece_widths: RefCell::new(std::collections::HashMap::new()),
+        char_starts: RefCell::new(std::collections::HashMap::new()),
+        body,
+    }
+    }
+
+    /// The look of a note set as `set` says, made once and shared by every note so set. It is
+    /// never dropped: text in view holds on to its fonts and styles, and the user tries few.
+    fn of(set: &TextLook) -> &'static Self {
+        thread_local! {
+            static MADE: RefCell<std::collections::HashMap<TextLook, &'static Look>> = RefCell::new(std::collections::HashMap::new());
+        }
+        MADE.with(|made| *made.borrow_mut().entry(set.clone()).or_insert_with(|| Box::leak(Box::new(Self::new(set)))))
+    }
+}
+
+thread_local! {
+    /// Every live preview there is, to set again when the settings' «Текст» tab changes.
+    static PREVIEWS: RefCell<Vec<objc2::rc::Weak<LivePreview>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The note's font, size or line height was set anew: every note shown takes it.
+pub fn text_look_changed() {
+    let previews: Vec<Retained<LivePreview>> = PREVIEWS.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|preview| preview.load().is_some());
+        all.iter().filter_map(objc2::rc::Weak::load).collect()
+    });
+    let look = Look::of(&crate::text_look::note());
+    for preview in previews {
+        preview.ivars().look.set(look);
+        if let Some(view) = preview.ivars().view.borrow().load() {
+            // What is typed into an empty note, and its caret's height.
+            view.setFont(Some(&look.body));
+            preview.restyle_all(&view, &view.string().to_string());
+        }
+    }
+}
+
 
 
 type OnChange = Box<dyn Fn()>;
@@ -274,7 +356,7 @@ pub struct Ivars {
     selection: Cell<(usize, usize)>,
     /// How many words the search the note was opened from found in it (highlighted).
     found: Cell<usize>,
-    look: Look,
+    look: Cell<&'static Look>,
 }
 
 define_class!(
@@ -422,43 +504,6 @@ define_class!(
 
 impl LivePreview {
     pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let fonts = NSFontManager::sharedFontManager(mtm);
-        let body = NSFont::systemFontOfSize(BODY_SIZE);
-        let look = Look {
-            bold: NSFont::boldSystemFontOfSize(BODY_SIZE),
-            italic: fonts.convertFont_toHaveTrait(&body, NSFontTraitMask::ItalicFontMask),
-            mono: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.0),
-            mono_bold: NSFont::monospacedSystemFontOfSize_weight(BODY_SIZE - 1.0, 0.4),
-            mono_digit: Cell::new(None),
-            code_colors: CODE_COLORS.iter().map(|&(light, dark)| appearance_color(light, dark)).collect(),
-            digits: NSFont::monospacedDigitSystemFontOfSize_weight(BODY_SIZE, 0.0),
-            headings: HEADING_SIZES.iter().map(|&s| NSFont::boldSystemFontOfSize(s)).collect(),
-            hidden: NSFont::systemFontOfSize(0.01),
-            text: NSColor::labelColor(),
-            muted: NSColor::tertiaryLabelColor(),
-            accent: NSColor::linkColor(),
-            missing: NSColor::linkColor().colorWithAlphaComponent(0.7),
-            error: NSColor::systemRedColor(),
-            callouts: vec![
-                NSColor::systemBlueColor(),
-                NSColor::systemTealColor(),
-                NSColor::systemGreenColor(),
-                NSColor::systemOrangeColor(),
-                NSColor::systemRedColor(),
-                NSColor::systemPurpleColor(),
-                NSColor::systemGrayColor(),
-            ],
-            card: appearance_color(0x9A7F_D9, 0xB7A3_F5),
-            card_deck: appearance_color(0x7A4D_F0, 0xA78B_FF),
-            clear: NSColor::clearColor(),
-            paint: PaintCache::new(STYLE_KEY, BODY_SIZE * FOOTNOTE_RAISE),
-            footnote: NSFont::systemFontOfSize(BODY_SIZE * FOOTNOTE_SCALE),
-            number_widths: Cell::new(None),
-            body_widths: RefCell::new(std::collections::HashMap::new()),
-            piece_widths: RefCell::new(std::collections::HashMap::new()),
-            char_starts: RefCell::new(std::collections::HashMap::new()),
-            body,
-        };
         let ivars = Ivars {
             on_change: RefCell::new(None),
             on_link: RefCell::new(None),
@@ -511,10 +556,17 @@ impl LivePreview {
             revealed: Cell::new((0, 0)),
             selection: Cell::new((0, 0)),
             found: Cell::new(0),
-            look,
+            look: Cell::new(Look::of(&crate::text_look::note())),
         };
         let this = Self::alloc(mtm).set_ivars(ivars);
-        unsafe { msg_send![super(this), init] }
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        PREVIEWS.with(|all| all.borrow_mut().push(objc2::rc::Weak::new(&*this)));
+        this
+    }
+
+    /// The fonts, colours and styles the note is set in.
+    fn look(&self) -> &'static Look {
+        self.ivars().look.get()
     }
 
     pub fn on_change(&self, callback: impl Fn() + 'static) {
@@ -609,7 +661,7 @@ impl LivePreview {
         view.setSelectedRange(NSRange::new(0, 0));
         view.scrollRangeToVisible(NSRange::new(0, 0));
         let styled = highlight(source).to_utf16(source);
-        let fonts = markup_fonts(&styled, &self.ivars().look);
+        let fonts = markup_fonts(&styled, self.look());
         *self.ivars().markup_fonts.borrow_mut() = fonts;
         *self.ivars().styled.borrow_mut() = styled;
         let Some(storage) = (unsafe { view.textStorage() }) else { return };

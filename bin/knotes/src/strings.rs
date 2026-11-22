@@ -215,6 +215,15 @@ pub const DELETE_FOREVER: &str = "Видалити назавжди";
 pub const EMPTY_DELETED: &str = "Очистити нещодавно видалені…";
 
 /// The settings' «Видалені» tab.
+pub const SETTINGS_TEXT: &str = "Текст";
+pub const TEXT_NOTE: &str = "Нотатка";
+pub const TEXT_CHAT: &str = "Чат";
+pub const TEXT_FONT: &str = "Шрифт";
+pub const TEXT_SIZE: &str = "Розмір";
+pub const TEXT_LINE: &str = "Міжрядковий інтервал";
+pub const TEXT_SYSTEM_FONT: &str = "Системний";
+pub const TEXT_POINTS: &str = "пт";
+pub const TEXT_NOTE_BELOW: &str = "Зміни видно одразу. Код лишається моноширинним шрифтом.";
 pub const SETTINGS_TRASH: &str = "Видалені";
 pub const TRASH_KEEP: &str = "Зберігати видалене";
 pub const TRASH_DAYS: &str = "днів";

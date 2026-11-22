@@ -268,6 +268,25 @@ impl ChatTarget {
     }
 }
 
+thread_local! {
+    /// Every chat panel there is, to set again when the settings' «Текст» tab changes.
+    static PANELS: RefCell<Vec<Weak<ChatPanel>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The chat's font, size or line height was set anew: every chat shown takes it.
+pub fn text_look_changed() {
+    let panels: Vec<Rc<ChatPanel>> = PANELS.with(|all| {
+        let mut all = all.borrow_mut();
+        all.retain(|panel| panel.strong_count() > 0);
+        all.iter().filter_map(Weak::upgrade).collect()
+    });
+    for panel in panels {
+        panel.composer.setFont(Some(&body_font()));
+        panel.composer.setDefaultParagraphStyle(Some(&paragraph_style()));
+        panel.render();
+    }
+}
+
 /// What the panel shows and asks (knotes-assistant's `ChatState`).
 type State = knotes_assistant::chat_state::ChatState;
 
@@ -374,6 +393,7 @@ impl ChatPanel {
         composer.setRichText(false);
         composer.setDrawsBackground(false);
         composer.setFont(Some(&body_font()));
+        composer.setDefaultParagraphStyle(Some(&paragraph_style()));
         composer.setTextContainerInset(NSSize::new(4.0, 6.0));
         // As tall as its scroll view even while empty: a click under the first line is a click
         // in the text, not in the empty clip view below it.
@@ -510,6 +530,7 @@ impl ChatPanel {
             on_open_link: RefCell::new(None),
         });
         *panel.this.borrow_mut() = Rc::downgrade(&panel);
+        PANELS.with(|all| all.borrow_mut().push(Rc::downgrade(&panel)));
         *panel.target.ivars().panel.borrow_mut() = Rc::downgrade(&panel);
         panel.show_account();
         panel
@@ -1166,6 +1187,12 @@ impl ChatPanel {
     }
 
     /// Probe: the list's `index`th conversation chosen.
+    /// Probe: the font, size and line height of the conversation (of the field, with nothing said).
+    pub fn probe_font(&self) -> String {
+        let said = self.transcript.string().length() > 0;
+        crate::text_look::describe(if said { &self.transcript } else { &self.composer })
+    }
+
     pub fn probe_choose_conversation(&self, index: isize) {
         self.conversations_popup.selectItemAtIndex(index);
         self.choose_conversation(index);
@@ -1227,13 +1254,23 @@ fn open_url(url: &str) {
     }
 }
 
-/// The size of the conversation's text and of the field's: a point over the system's.
+/// The size of the conversation's text and of the field's, as the settings' «Текст» tab sets it.
 fn body_size() -> f64 {
-    NSFont::systemFontSize() + 1.0
+    crate::text_look::size(&crate::text_look::chat(), crate::text_look::chat_size())
 }
 
 fn body_font() -> Retained<NSFont> {
-    NSFont::systemFontOfSize(body_size())
+    crate::text_look::font(&crate::text_look::chat(), body_size(), false)
+}
+
+/// A paragraph's style with the line height the settings' «Текст» tab sets (code keeps its own).
+fn paragraph_style() -> Retained<NSMutableParagraphStyle> {
+    let paragraph = NSMutableParagraphStyle::new();
+    let line = crate::text_look::line(&crate::text_look::chat());
+    if line != 1.0 {
+        paragraph.setLineHeightMultiple(line);
+    }
+    paragraph
 }
 
 fn any<T: ClassType<Super = NSObject> + 'static>(object: &T) -> Retained<AnyObject> {
@@ -1242,7 +1279,7 @@ fn any<T: ClassType<Super = NSObject> + 'static>(object: &T) -> Retained<AnyObje
 
 /// `text` in `font` and `colour`, a link to `link` when given.
 fn piece(text: &str, font: &NSFont, colour: &NSColor, link: Option<&str>) -> Retained<NSAttributedString> {
-    let paragraph = NSMutableParagraphStyle::new();
+    let paragraph = paragraph_style();
     paragraph.setParagraphSpacing(2.0);
     paragraph.setLineSpacing(1.5);
     let paragraph: Retained<AnyObject> = Retained::into_super(Retained::into_super(Retained::into_super(paragraph)));
@@ -1272,7 +1309,7 @@ enum Block {
 /// The user's question as one paragraph (its line breaks kept as line separators) marked for
 /// its card, inset from the card's sides, its own paragraph's end included.
 fn question_text(question: &str) -> Retained<NSAttributedString> {
-    let paragraph = NSMutableParagraphStyle::new();
+    let paragraph = paragraph_style();
     paragraph.setFirstLineHeadIndent(CARD_INDENT);
     paragraph.setHeadIndent(CARD_INDENT);
     paragraph.setTailIndent(-CARD_INDENT);
@@ -1290,7 +1327,7 @@ fn question_text(question: &str) -> Retained<NSAttributedString> {
 }
 
 fn tool_text(words: &str) -> Retained<NSAttributedString> {
-    piece(words, &NSFont::systemFontOfSize(NSFont::smallSystemFontSize() + 1.0), &NSColor::tertiaryLabelColor(), None)
+    piece(words, &crate::text_look::font(&crate::text_look::chat(), body_size() - 2.0, false), &NSColor::tertiaryLabelColor(), None)
 }
 
 fn answer_text(markdown: &str, dark: bool) -> Retained<NSAttributedString> {
@@ -1343,9 +1380,9 @@ fn run_text(run: &Run, dark: bool) -> Retained<NSAttributedString> {
         NSFont::monospacedSystemFontOfSize_weight(size - 1.0, unsafe { NSFontWeightRegular })
     } else if style.heading > 0 || style.bold {
         let grown = if style.heading > 0 { size + (4.0 - f64::from(style.heading.min(3))) } else { size };
-        NSFont::boldSystemFontOfSize(grown)
+        crate::text_look::font(&crate::text_look::chat(), grown, true)
     } else if style.italic {
-        objc2_app_kit::NSFontManager::sharedFontManager(MainThreadMarker::new().expect("the chat is drawn on the main thread")).convertFont_toHaveTrait(&body_font(), objc2_app_kit::NSFontTraitMask::ItalicFontMask)
+        crate::text_look::italic(&body_font())
     } else {
         body_font()
     };

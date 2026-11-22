@@ -11,7 +11,7 @@ impl LivePreview {
     /// Text colour for typeset formulas, and the typeset image of `f` (cached).
     pub(super) fn formula_image(&self, f: &FormulaRun) -> Result<Arc<FormulaImage>, String> {
         let rgb = if self.ivars().dark.get() { [235, 235, 235] } else { [29, 29, 31] };
-        let style = FormulaStyle { display: f.display, size_pt: BODY_SIZE + 1.0, rgb, scale: 2.0 };
+        let style = FormulaStyle { display: f.display, size_pt: self.look().body.pointSize() + 1.0, rgb, scale: 2.0 };
         self.ivars().formula_cache.borrow_mut().get(&f.tex, &style)
     }
 
@@ -20,7 +20,7 @@ impl LivePreview {
     /// in it: its source, and room below for a display formula's preview. A formula that
     /// does not typeset shows its source marked as an error.
     pub(super) fn paint_formula<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, f: &FormulaRun, revealed: bool) {
-        let look = &self.ivars().look;
+        let look = self.look();
         let paragraphs = paragraph(storage, ns(&f.range));
         let block = f.display && is_block(storage, f);
         if block {
@@ -68,7 +68,7 @@ impl LivePreview {
     /// Width of `range` of `text` as `canvas` will show it: each run in its font (measured once
     /// for its text), with its kerning.
     pub(super) fn shown_width(&self, canvas: &Canvas<Paint>, palette: &Palette, text: &NSString, range: &Range<usize>) -> f64 {
-        let mut cache = self.ivars().look.piece_widths.borrow_mut();
+        let mut cache = self.look().piece_widths.borrow_mut();
         if cache.len() > MAX_PIECE_WIDTHS {
             cache.clear();
         }
@@ -95,7 +95,7 @@ impl LivePreview {
         styled: &Highlight,
         region: (usize, usize),
     ) {
-        let font = &self.ivars().look.body;
+        let font = &self.look().body;
         let (ascent, descent) = (font.ascender(), -font.descender());
         let mut paragraphs: Vec<(usize, usize)> =
             styled.formulas.iter().filter(|f| f.range.start < region.1 && f.range.end > region.0).map(|f| paragraph(storage, ns(&f.range))).collect();

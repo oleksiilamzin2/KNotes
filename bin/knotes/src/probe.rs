@@ -847,6 +847,10 @@ pub fn schedule(with_sidebar: bool) {
                 for line in crate::settings_window::probe_lines() {
                     println!("{line}");
                 }
+                if std::env::var("KNOTES_PROBE_SETTINGS").as_deref() == Ok("text") {
+                    println!("note-font: {}", crate::text_look::describe(&window.note_text));
+                    println!("chat-font: {}", window.chat.probe_font());
+                }
                 println!("search-meaning-segment: {}", if window.search_bar.meaning_on() { "on" } else { "off" });
                 if std::env::var_os("KNOTES_PROBE_CHAT_FIELD_CLICKS").is_some() {
                     window.window.displayIfNeeded();
@@ -1088,8 +1092,16 @@ fn tabs_requested(window: &VaultWindow) {
     match std::env::var("KNOTES_PROBE_SETTINGS").as_deref() {
         Ok("spaces") => crate::settings_window::show_spaces(window.window.mtm(), window.vault()),
         Ok("trash") => crate::settings_window::show_trash(window.window.mtm(), window.vault()),
+        Ok("text") => crate::settings_window::show_text(window.window.mtm(), window.vault()),
         Ok(_) => crate::settings_window::show(window.window.mtm(), window.vault()),
         Err(_) => {}
+    }
+    // `KNOTES_PROBE_SETTINGS_TEXT="note size 18; chat font Georgia; note line 150"`: each set
+    // through the «Текст» tab's controls.
+    if let Ok(specs) = std::env::var("KNOTES_PROBE_SETTINGS_TEXT") {
+        for spec in specs.split(';') {
+            crate::settings_window::probe_text(spec.trim());
+        }
     }
     if let Ok(days) = std::env::var("KNOTES_PROBE_SETTINGS_TRASH_DAYS") {
         crate::settings_window::probe_trash_days(&days);

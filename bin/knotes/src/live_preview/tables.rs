@@ -38,7 +38,7 @@ impl LivePreview {
         edges.push(x);
         self.ivars().table_widths.borrow_mut().insert(t, padded);
         self.ivars().table_columns.borrow_mut().insert(table.range.start, Rc::new(edges.clone()));
-        let hidden = palette.look(&self.ivars().look.hidden, &self.ivars().look.clear, "table");
+        let hidden = palette.look(&self.look().hidden, &self.look().clear, "table");
         for (row, widths) in table.rows.iter().zip(&widths) {
             // `from` starts the hidden source still to place before the next text shown, `at`
             // is where the text shown so far ends.
@@ -81,7 +81,7 @@ impl LivePreview {
             }
             // Padding above as a taller line (spacing before the document's first paragraph is
             // dropped), below as spacing.
-            let para = palette.para(Para { first_indent, unwrapped: true, min_line: self.line_height() + TABLE_VPAD, spacing_after: TABLE_VPAD, ..Para::default() });
+            let para = palette.para(Para { first_indent, unwrapped: true, min_line: self.font_height() + TABLE_VPAD, spacing_after: TABLE_VPAD, ..Para::default() });
             canvas.paint(row.range.start..row.range.end + 1, |p| p.para = para);
         }
         canvas.paint(table.delimiter.clone(), |p| {
@@ -116,7 +116,7 @@ impl LivePreview {
     /// units in, points in), measured once per text and font.
     pub(super) fn char_starts(&self, piece: &str, font: &NSFont) -> CharStarts {
         let key = (piece.to_owned(), font as *const NSFont as usize);
-        let mut cache = self.ivars().look.char_starts.borrow_mut();
+        let mut cache = self.look().char_starts.borrow_mut();
         if cache.len() > MAX_PIECE_WIDTHS {
             cache.clear();
         }

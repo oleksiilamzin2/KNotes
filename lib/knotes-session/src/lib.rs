@@ -8,7 +8,7 @@ mod paths;
 mod session;
 mod snapshot;
 
-pub use app_settings::{AppSettings, SETTINGS_FILE};
+pub use app_settings::{AppSettings, SETTINGS_FILE, TextLook};
 pub use clock::now;
 pub use lock::VaultLock;
 pub use paths::{app_data_dir, embedder_files, index_dir};

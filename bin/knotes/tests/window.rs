@@ -3673,6 +3673,28 @@ fn a_deleted_note_pdf_or_folder_chosen_in_recently_deleted_shows_as_it_was_and_i
 }
 
 #[test]
+fn the_settings_text_tab_sets_the_font_the_size_and_the_line_height_of_a_note_and_of_the_chat() {
+    let home = tempfile::tempdir().unwrap();
+    let script_dir = tempfile::tempdir().unwrap();
+    let script = chat_script(script_dir.path(), &[chat_reply(&[chat_message("In May.")])]);
+    let notes = [("a.md", "plain text")];
+    let shown = [("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_SETTINGS", "text"), ("KNOTES_PROBE_CHAT", script.as_str()), ("KNOTES_PROBE_CHAT_SEND", "When?"), ("KNOTES_PROBE_DELAY_MS", "2000")];
+    let (_vault, out) = probe_notes_at_home(&notes, &shown, home.path());
+    assert!(out.contains("settings: Текст |") && out.contains("settings-text: Системний 15 1,0 | Системний 14 1,0\n"), "the app's own: {out}");
+    assert!(out.contains("note-font: .AppleSystemUIFont 15 ×1\n") && out.contains("chat-font: .AppleSystemUIFont 14 ×1\n"), "{out}");
+    // Set while the note and the conversation are shown: both take it at once.
+    let set = [shown.as_slice(), &[("KNOTES_PROBE_SETTINGS_TEXT", "note font Georgia; note size 18; note line 150; chat font Menlo; chat size 12; chat line 130")]].concat();
+    let (_vault, out) = probe_notes_at_home(&notes, &set, home.path());
+    assert!(out.contains("settings-text: Georgia 18 1,5 | Menlo 12 1,3\n"), "{out}");
+    assert!(out.contains("note-font: Georgia 18 ×1.5\n") && out.contains("chat-font: Menlo 12 ×1.3\n"), "{out}");
+    let (_vault, out) = probe_notes_at_home(&notes, &shown, home.path());
+    assert!(out.contains("settings-text: Georgia 18 1,5 | Menlo 12 1,3\n") && out.contains("note-font: Georgia 18 ×1.5\n") && out.contains("chat-font: Menlo 12 ×1.3\n"), "kept: {out}");
+    // A size out of range is brought into it; words are no size.
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_SETTINGS", "text"), ("KNOTES_PROBE_SETTINGS_TEXT", "note size 400; chat size big; note font Системний")], home.path());
+    assert!(out.contains("settings-text: Системний 36 1,5 | Menlo 12 1,3\n"), "{out}");
+}
+
+#[test]
 fn the_settings_deleted_tab_sets_the_days_the_vault_keeps_them() {
     let vault = spaced_vault();
     let name = vault.path().file_name().unwrap().to_string_lossy().to_string();

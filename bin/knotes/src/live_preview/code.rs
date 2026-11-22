@@ -14,7 +14,7 @@ impl LivePreview {
         block: &Range<usize>,
         revealed: bool,
     ) {
-        let look = &self.ivars().look;
+        let look = self.look();
         let paragraphs = paragraph(storage, ns(block));
         let base = palette.para_of(canvas.get(paragraphs.0).map_or(0, |p| p.para));
         // Room for the line numbers left of the code (ADR 0025).
@@ -87,7 +87,7 @@ impl LivePreview {
 
     /// A digit's width in the code font, once measured.
     pub(super) fn mono_digit_width(&self) -> f64 {
-        let look = &self.ivars().look;
+        let look = self.look();
         if let Some(width) = look.mono_digit.get() {
             return width;
         }

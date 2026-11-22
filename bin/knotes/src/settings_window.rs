@@ -18,6 +18,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
 use crate::settings_spaces::SpacesTab;
+use crate::settings_text::TextTab;
 use crate::settings_trash::TrashTab;
 use crate::strings;
 
@@ -45,6 +46,7 @@ struct Settings {
     progress: Retained<NSProgressIndicator>,
     spaces: Retained<SpacesTab>,
     trash: Retained<TrashTab>,
+    text: Retained<TextTab>,
     tabs: Retained<NSTabViewController>,
     _target: Retained<SettingsTarget>,
 }
@@ -106,6 +108,7 @@ pub fn show(mtm: MainThreadMarker, vault: Option<PathBuf>) {
         let settings = shown.get_or_insert_with(|| make(mtm));
         settings.spaces.set_vault(vault.clone());
         settings.trash.set_vault(vault);
+        settings.text.refresh();
         let tag = knotes_assistant::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
         settings.popup.selectItemWithTag(tag);
         refresh(settings);
@@ -134,6 +137,27 @@ pub fn show_trash(mtm: MainThreadMarker, vault: Option<PathBuf>) {
             settings.window.setTitle(&NSString::from_str(strings::SETTINGS_TRASH));
         }
     });
+}
+
+/// Shows the window on its «Текст» tab.
+pub fn show_text(mtm: MainThreadMarker, vault: Option<PathBuf>) {
+    show(mtm, vault);
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            settings.tabs.setSelectedTabViewItemIndex(3);
+            settings.window.setTitle(&NSString::from_str(strings::SETTINGS_TEXT));
+        }
+    });
+}
+
+/// Probe: a text's font, size or line height set through the «Текст» tab's controls (see
+/// `TextTab::probe_set`).
+pub fn probe_text(spec: &str) {
+    // Not borrowed while it is set: the notes and the chats take it meanwhile.
+    let text = SHOWN.with(|shown| shown.borrow().as_ref().map(|s| s.text.clone()));
+    if let Some(text) = text {
+        text.probe_set(spec);
+    }
 }
 
 /// Probe: days typed into the «Видалені» tab's field.
@@ -379,6 +403,13 @@ fn make(mtm: MainThreadMarker) -> Settings {
     trash_item.setLabel(&NSString::from_str(strings::SETTINGS_TRASH));
     trash_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("trash"), None).as_deref());
     tabs.addTabViewItem(&trash_item);
+    let (text, text_view) = TextTab::make(mtm);
+    let text_vc = NSViewController::new(mtm);
+    text_vc.setView(&text_view);
+    let text_item = NSTabViewItem::tabViewItemWithViewController(&text_vc);
+    text_item.setLabel(&NSString::from_str(strings::SETTINGS_TEXT));
+    text_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("textformat.size"), None).as_deref());
+    tabs.addTabViewItem(&text_item);
     let window = NSWindow::windowWithContentViewController(&tabs);
     window.setStyleMask(NSWindowStyleMask::Titled | NSWindowStyleMask::Closable);
     window.setTitle(&NSString::from_str(strings::SETTINGS_SEARCH));
@@ -386,7 +417,7 @@ fn make(mtm: MainThreadMarker) -> Settings {
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
     crate::probe::conceal(&window);
-    Settings { window, popup, caches, status, progress, spaces, trash, tabs, _target: target }
+    Settings { window, popup, caches, status, progress, spaces, trash, text, tabs, _target: target }
 }
 
 /// Probe: an edit made through the «Простори» tab's controls (see `SpacesTab::probe_edit`).
@@ -453,6 +484,7 @@ pub fn probe_lines() -> Vec<String> {
             format!("settings-spaces: {spaces}"),
             format!("settings-space-colors: {}", shown.borrow().as_ref().map(|s| s.spaces.probe_colors()).unwrap_or_default()),
             format!("settings-trash: {}", shown.borrow().as_ref().map(|s| s.trash.probe_line()).unwrap_or_default()),
+            format!("settings-text: {}", shown.borrow().as_ref().map(|s| s.text.probe_line()).unwrap_or_default()),
         ]
     })
 }

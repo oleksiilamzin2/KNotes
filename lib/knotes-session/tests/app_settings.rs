@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use knotes_app::PanelMode;
-use knotes_session::AppSettings;
+use knotes_session::{AppSettings, TextLook};
 
 #[test]
 fn settings_round_trip_through_the_app_data_folder() {
@@ -17,6 +17,8 @@ fn settings_round_trip_through_the_app_data_folder() {
         chat_effort: Some("low".into()),
         meaning_model: Some("off".into()),
         device: Some("mac-a1b2c3".into()),
+        note_text: TextLook { font: Some("Georgia".into()), size: Some(17), line: Some(140) },
+        chat_text: TextLook { font: None, size: Some(12), line: None },
     };
     settings.save(data.path()).unwrap();
     assert_eq!(AppSettings::load(data.path()), settings);
@@ -56,4 +58,11 @@ fn the_vaults_opened_are_kept_the_last_first_until_one_is_forgotten() {
     // Settings written before the list was kept: the last vault is the one known.
     std::fs::write(dir.path().join(knotes_session::SETTINGS_FILE), r#"{"lastVault": "/v/old"}"#).unwrap();
     assert_eq!(AppSettings::load(dir.path()).vaults, [std::path::PathBuf::from("/v/old")]);
+}
+
+#[test]
+fn a_text_s_size_and_line_height_out_of_range_are_brought_into_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(knotes_session::SETTINGS_FILE), r#"{"noteText": {"font": "", "size": 400, "line": 5}}"#).unwrap();
+    assert_eq!(AppSettings::load(dir.path()).note_text, TextLook { font: None, size: Some(36), line: Some(100) });
 }

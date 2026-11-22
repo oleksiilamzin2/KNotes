@@ -9,7 +9,7 @@ impl LivePreview {
     /// and wrapped lines line up with the item's text.
     pub(super) fn paint_list_marker<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, run: &Run) {
         let Style::ListMarker { kind, depth } = run.style else { return };
-        let look = &self.ivars().look;
+        let look = self.look();
         let text = storage.string();
         let mut line_start = run.range.start;
         while line_start > 0 && matches!(text.characterAtIndex(line_start - 1), 0x20 | 0x09) {
@@ -50,7 +50,7 @@ impl LivePreview {
     /// A callout's `[!kind]`, hidden (its room kept for the icon, and the kind's name when no
     /// title is written) unless the cursor is on its line; its title bold in its colour.
     pub(super) fn paint_callout<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, callout: &CalloutRun, revealed: bool) {
-        let look = &self.ivars().look;
+        let look = self.look();
         let (colour, _) = callout_look(&callout.kind);
         let colour = &look.callouts[colour];
         if revealed {
@@ -71,7 +71,7 @@ impl LivePreview {
     /// or on itself when there is no room to keep.
     pub(super) fn paint_hidden<'a>(&'a self, canvas: &mut Canvas<Paint>, palette: &mut Palette<'a>, storage: &NSTextStorage, range: &Range<usize>, name: &'static str, room: f64) {
         let Some(last) = range.end.checked_sub(1).filter(|&l| l >= range.start) else { return };
-        let look = &self.ivars().look;
+        let look = self.look();
         let width = self.body_width(storage.string().characterAtIndex(last));
         let kern = palette.kern(room - width);
         let hidden = palette.look(&look.hidden, &look.clear, name);
@@ -96,7 +96,7 @@ impl LivePreview {
         if unit == 0x09 {
             return 0.0;
         }
-        let look = &self.ivars().look;
+        let look = self.look();
         // Between two letters: a lone space measures as nothing (trailing white space).
         *look.body_widths.borrow_mut().entry(unit).or_insert_with(|| {
             let between = format!("x{}x", String::from_utf16_lossy(&[unit]));
@@ -106,13 +106,18 @@ impl LivePreview {
 
     /// Height of a line of body text: what a line of hidden source alone would not get.
     pub(super) fn line_height(&self) -> f64 {
-        let body = &self.ivars().look.body;
+        self.font_height() * self.look().line
+    }
+
+    /// Height of a line of body text as its font alone makes it (a table's row).
+    pub(super) fn font_height(&self) -> f64 {
+        let body = &self.look().body;
         body.ascender() - body.descender() + body.leading()
     }
 
     /// Width of a list number (`12. `) in the digits font, without measuring the text.
     pub(super) fn number_width(&self, text: &NSString, range: &Range<usize>) -> f64 {
-        let look = &self.ivars().look;
+        let look = self.look();
         let widths = look.number_widths.get().unwrap_or_else(|| {
             let width = |s: &str| text_width(&NSString::from_str(s), &look.digits);
             let w = [width("0"), width("."), width(")"), width(" ")];
@@ -186,7 +191,7 @@ impl LivePreview {
                 }
             }
         }
-        let centre_x = self.ivars().look.body.xHeight() / 2.0;
+        let centre_x = self.look().body.xHeight() / 2.0;
         let text = storage.string();
         for end in external_link_ends(&styled, (from, to), self.ivars().revealed.get(), self.ivars().selection.get()) {
             // At the hidden `]`, whose own room follows it; or where a bare address ends, whose
@@ -203,7 +208,7 @@ impl LivePreview {
             }
         }
         let revealed = self.ivars().revealed.get();
-        let look = &self.ivars().look;
+        let look = self.look();
         for callout in styled.callouts.iter().filter(|c| c.range.start < to && c.range.end > from) {
             let (colour, symbol) = callout_look(&callout.kind);
             let colour = look.callouts[colour].clone();
@@ -242,7 +247,7 @@ impl LivePreview {
             // A code line's number (ADR 0025); the fences have none.
             let lines = self.code_lines(&storage, &styled, c);
             if let Ok(n) = lines.binary_search(&from) {
-                marks.push(Mark::CodeNumber { number: (n + 1).to_string(), font: self.ivars().look.mono.clone() });
+                marks.push(Mark::CodeNumber { number: (n + 1).to_string(), font: self.look().mono.clone() });
             }
             // The first code line: the language (its fence hidden) and, with the pointer over
             // the block, the copy button.
@@ -258,8 +263,8 @@ impl LivePreview {
         }
         let selection = self.ivars().selection.get();
         // A dot on the middle of small letters; a circle, as tall as capitals, on theirs.
-        let centre = self.ivars().look.body.xHeight() / 2.0;
-        let task_centre = self.ivars().look.body.capHeight() / 2.0;
+        let centre = self.look().body.xHeight() / 2.0;
+        let task_centre = self.look().body.capHeight() / 2.0;
         let first = styled.runs.partition_point(|r| r.range.start < from);
         for run in styled.runs[first..].iter().take_while(|r| r.range.start < to) {
             // A thematic break away from the cursor: a line in the place of its signs.

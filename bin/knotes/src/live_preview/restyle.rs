@@ -34,7 +34,7 @@ impl LivePreview {
             let end = end.max(old.end).max(revealed.1).min(total);
             paragraph(&storage, NSRange::new(start, end - start))
         });
-        *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&new, &self.ivars().look);
+        *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&new, self.look());
         *self.ivars().styled.borrow_mut() = new;
         self.ivars().revealed.set(revealed);
         // An edit not announced through shouldChangeText restyles everything.
@@ -69,7 +69,7 @@ impl LivePreview {
             return;
         }
         self.ivars().tables_changed.set(false);
-        let look = &self.ivars().look;
+        let look = self.look();
         let styled = self.ivars().styled.borrow();
         let fonts = self.ivars().markup_fonts.borrow();
         let revealed = self.ivars().revealed.get();
@@ -306,7 +306,7 @@ impl LivePreview {
 
     /// Font, colour and test name of a run; links to missing notes are dimmed.
     pub(super) fn run_look<'a>(&'a self, run: &Run, styled: &Highlight) -> (&'a NSFont, &'a NSColor, &'static str) {
-        let look = &self.ivars().look;
+        let look = self.look();
         if matches!(run.style, Style::Link | Style::WikiLink)
             && let Some(links) = self.ivars().links.borrow().as_ref()
             && let Some(link) = link_at(styled, run.range.start)
@@ -320,7 +320,7 @@ impl LivePreview {
 
     pub fn restyle_all(&self, view: &NSTextView, source: &str) {
         let styled = highlight(source).to_utf16(source);
-        *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&styled, &self.ivars().look);
+        *self.ivars().markup_fonts.borrow_mut() = markup_fonts(&styled, self.look());
         *self.ivars().styled.borrow_mut() = styled;
         if let Some(storage) = unsafe { view.textStorage() } {
             self.restyle(&storage, (0, storage.length()));

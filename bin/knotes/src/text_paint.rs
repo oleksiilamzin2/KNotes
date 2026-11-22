@@ -68,8 +68,13 @@ impl Para {
         ]
     }
 
-    fn style(&self) -> Retained<NSParagraphStyle> {
+    /// The style; its lines `line` of their fonts' own heights, within the heights set.
+    fn style(&self, line: f64) -> Retained<NSParagraphStyle> {
         let style = NSMutableParagraphStyle::new();
+        // A table's row keeps its own height: the room added would sit over its cells' text.
+        if line != 1.0 && !self.unwrapped {
+            style.setLineHeightMultiple(line);
+        }
         style.setFirstLineHeadIndent(self.first_indent);
         style.setHeadIndent(self.head_indent);
         if self.hidden_tabs {
@@ -181,6 +186,8 @@ pub struct PaintCache {
     mark: Retained<NSColor>,
     /// How far raised text sits above the line's baseline, in points.
     raise: f64,
+    /// How many of a font's own line heights a line takes.
+    line: f64,
     styles: RefCell<HashMap<ParaKey, Retained<NSParagraphStyle>>>,
     attributes: RefCell<HashMap<AttributesKey, Retained<NSDictionary<NSString, AnyObject>>>>,
 }
@@ -191,13 +198,14 @@ type AttributesKey = (*const NSFont, *const NSColor, &'static str, u64, *const N
 
 impl PaintCache {
     /// `style_key` names the attribute carrying each range's test name; raised text sits
-    /// `raise` points above the baseline.
-    pub fn new(style_key: &str, raise: f64) -> Self {
+    /// `raise` points above the baseline; a line takes `line` of its font's own heights.
+    pub fn new(style_key: &str, raise: f64, line: f64) -> Self {
         Self {
             style_key: NSString::from_str(style_key),
             shade: NSColor::quaternarySystemFillColor(),
             mark: NSColor::systemYellowColor().colorWithAlphaComponent(0.4),
             raise,
+            line,
             styles: RefCell::new(HashMap::new()),
             attributes: RefCell::new(HashMap::new()),
         }
@@ -215,9 +223,10 @@ impl PaintCache {
         // A highlight over code keeps the highlight's yellow.
         let background = if paint.look & MARKED != 0 { 2 } else { u8::from(paint.look & SHADED != 0) };
         let raised = paint.look & RAISED != 0;
-        let para = (paint.para != 0).then(|| {
+        // A paragraph with no style of its own still takes the line height set.
+        let para = (paint.para != 0 || self.line != 1.0).then(|| {
             let para = palette.para_of(paint.para);
-            self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style()).clone()
+            self.styles.borrow_mut().entry(para.key()).or_insert_with(|| para.style(self.line)).clone()
         });
         let key: AttributesKey = (font, color, name, kern.to_bits(), para.as_deref().map_or(std::ptr::null(), |p| p as *const _), struck, background, raised);
         self.attributes

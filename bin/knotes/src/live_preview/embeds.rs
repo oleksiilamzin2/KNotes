@@ -101,7 +101,7 @@ impl LivePreview {
             canvas.paint(line.0..line.1, |p| p.para = para);
             return;
         }
-        let look = &self.ivars().look;
+        let look = self.look();
         let text = storage.string();
         let end = if line.1 > line.0 && matches!(text.characterAtIndex(line.1 - 1), 0x0a | 0x0d) { line.1 - 1 } else { line.1 };
         let hidden = palette.look(&look.hidden, &look.clear, "embed");

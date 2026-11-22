@@ -594,7 +594,7 @@ pub fn note_view(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<Not
     text.setAutomaticDashSubstitutionEnabled(false);
     text.setAutomaticTextReplacementEnabled(false);
     text.setContinuousSpellCheckingEnabled(true);
-    text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
+    text.setFont(Some(&note_font()));
     scroll.setDocumentView(Some(&text));
     (scroll, text)
 }
@@ -624,7 +624,7 @@ pub fn embed_view(mtm: MainThreadMarker) -> Retained<NoteTextView> {
     text.setAutomaticDashSubstitutionEnabled(false);
     text.setAutomaticTextReplacementEnabled(false);
     text.setContinuousSpellCheckingEnabled(true);
-    text.setFont(Some(&NSFont::systemFontOfSize(15.0)));
+    text.setFont(Some(&note_font()));
     text
 }
 
@@ -633,4 +633,10 @@ fn holds_image(pasteboard: &NSPasteboard) -> bool {
     // SAFETY: AppKit's pasteboard type constants live for the whole process.
     let types = unsafe { [objc2_app_kit::NSPasteboardTypePNG, objc2_app_kit::NSPasteboardTypeTIFF, objc2_app_kit::NSPasteboardTypeFileURL] };
     pasteboard.availableTypeFromArray(&objc2_foundation::NSArray::from_slice(&types)).is_some()
+}
+
+/// The font a note is typed in, as the settings' «Текст» tab sets it.
+fn note_font() -> Retained<NSFont> {
+    let look = crate::text_look::note();
+    crate::text_look::font(&look, crate::text_look::size(&look, crate::text_look::NOTE_SIZE), false)
 }
