@@ -302,6 +302,11 @@ impl VaultWindow {
             self.window.displayIfNeeded();
             self.stars_panel.click(&name);
         }
+        // `KNOTES_PROBE_STAR_BUTTON=name`: a click on the star at that row's end.
+        if let Ok(name) = std::env::var("KNOTES_PROBE_STAR_BUTTON") {
+            self.window.displayIfNeeded();
+            self.stars_panel.click_star(&name);
+        }
         if let Ok(name) = std::env::var("KNOTES_PROBE_STAR_UNSTAR") {
             println!("star-menu-items: {}", self.stars_panel.unstar(&name));
         }

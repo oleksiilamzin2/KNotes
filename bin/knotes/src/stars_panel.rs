@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextAlignment,
+    NSButton, NSColor, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSScrollView, NSTableCellView, NSTableColumn, NSTableViewStyle, NSTextAlignment,
     NSTextField, NSUserInterfaceItemIdentification, NSView,
 };
 use objc2_foundation::{NSInteger, NSNumber, NSObject, NSObjectProtocol, NSString, ns_string};
@@ -68,7 +68,7 @@ define_class!(
         fn view_for_item(&self, outline: &NSOutlineView, _column: Option<&NSTableColumn>, item: &AnyObject) -> Option<Retained<NSView>> {
             let row = index_of(item).and_then(|i| self.ivars().rows.borrow().get(i).cloned());
             row.map(|row| {
-                let cell = cell(outline, self.mtm());
+                let cell = cell(outline, self.mtm(), self);
                 // SAFETY: the cells are built by `cell` with their text field and image view set.
                 unsafe {
                     if let Some(field) = cell.textField() {
@@ -92,6 +92,15 @@ define_class!(
             // The row clicked; the one selected when the action comes from the keyboard or a probe.
             let row = if sender.clickedRow() >= 0 { sender.clickedRow() } else { sender.selectedRow() };
             if let (Some(star), Some(callback)) = (self.star_at(sender, row), self.ivars().on_open.borrow().as_ref()) {
+                callback(star);
+            }
+        }
+
+        /// The star at a row's end: a click takes it off.
+        #[unsafe(method(unstarRow:))]
+        fn unstar_row(&self, sender: &NSView) {
+            let Some(outline) = self.ivars().outline.borrow().as_ref().and_then(objc2::rc::Weak::load) else { return };
+            if let (Some(star), Some(callback)) = (self.star_at(&outline, outline.rowForView(sender)), self.ivars().on_unstar.borrow().as_ref()) {
                 callback(star);
             }
         }
@@ -210,6 +219,8 @@ impl StarsPanel {
     pub fn show(&self, rows: Vec<StarRow>) {
         let ivars = self.source.ivars();
         self.empty.setStringValue(&NSString::from_str(if rows.is_empty() { strings::STARS_EMPTY } else { "" }));
+        // Out of the way of the rows: over them, it would take their clicks.
+        self.empty.setHidden(!rows.is_empty());
         if *ivars.rows.borrow() == rows {
             return;
         }
@@ -232,10 +243,30 @@ impl StarsPanel {
         self.source.ivars().rows.borrow().iter().position(|r| r.name == name).map(|i| i as NSInteger)
     }
 
-    /// A click on the row named `name` (probe mode): the row selected and the outline view's
+    /// A click on the star at the end of the row named `name` (probe mode).
+    pub fn click_star(&self, name: &str) {
+        let Some(cell) = self.row_named(name).and_then(|row| self.outline.viewAtColumn_row_makeIfNecessary(0, row, true)) else { return };
+        let star = cell.subviews().iter().find(|v| v.identifier().is_some_and(|i| i.to_string() == STAR_ID)).and_then(|v| v.downcast::<NSButton>().ok());
+        if let Some(star) = star {
+            // SAFETY: a click on the row's own button.
+            unsafe { star.performClick(None) };
+        }
+    }
+
+    /// A click on the row named `name` (probe mode): where the pointer would press it, when
+    /// that is the list (not something lying over it), the row selected and the outline view's
     /// action sent to its target, as AppKit does after a click.
     pub fn click(&self, name: &str) {
         let (Some(row), Some(action)) = (self.row_named(name), self.outline.action()) else { return };
+        let rect = self.outline.rectOfRow(row);
+        let middle = objc2_foundation::NSPoint::new(rect.origin.x + rect.size.width / 2.0, rect.origin.y + rect.size.height / 2.0);
+        // SAFETY: the panel's view, in the window.
+        let above = unsafe { self.view.superview() };
+        let pressed = self.view.hitTest(self.outline.convertPoint_toView(middle, above.as_deref()));
+        if !pressed.is_some_and(|v| v.isDescendantOf(&self.outline)) {
+            println!("star-click: not on the list");
+            return;
+        }
         self.outline.selectRowIndexes_byExtendingSelection(&objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize), false);
         let target = self.outline.target();
         // SAFETY: the outline view's own action and target, with it as the sender.
@@ -273,8 +304,11 @@ impl StarsPanel {
 
 const CELL_ID: &str = "StarCell";
 
-/// A reused cell: a folder's or a file's picture and its name on one line.
-fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
+const STAR_ID: &str = "StarButton";
+
+/// A reused cell: a folder's or a file's picture and its name on one line, and at its end the
+/// star, which a click takes off (`source` takes the click).
+fn cell(outline: &NSOutlineView, mtm: MainThreadMarker, source: &StarsSource) -> Retained<NSTableCellView> {
     let id = NSString::from_str(CELL_ID);
     // SAFETY: reused views with this identifier are always cells made below.
     let reused = unsafe { outline.makeViewWithIdentifier_owner(&id, None) };
@@ -287,7 +321,14 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
     let title = NSTextField::labelWithString(ns_string!(""), mtm);
     title.setFont(Some(&NSFont::systemFontOfSize(NSFont::systemFontSize())));
     title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    for v in [&*image as &NSView, &title] {
+    let filled = NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("star.fill"), Some(&NSString::from_str(strings::UNSTAR)));
+    // SAFETY: the source outlives the list's cells (the panel keeps both) and takes the action.
+    let star = unsafe { NSButton::buttonWithImage_target_action(&filled.unwrap_or_else(NSImage::new), Some(source), Some(sel!(unstarRow:)), mtm) };
+    star.setIdentifier(Some(&NSString::from_str(STAR_ID)));
+    star.setBordered(false);
+    star.setContentTintColor(Some(&NSColor::systemYellowColor()));
+    star.setToolTip(Some(&NSString::from_str(strings::UNSTAR)));
+    for v in [&*image as &NSView, &title, &star] {
         v.setTranslatesAutoresizingMaskIntoConstraints(false);
         cell.addSubview(v);
     }
@@ -296,8 +337,11 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker) -> Retained<NSTableCellV
         image.widthAnchor().constraintEqualToConstant(18.0),
         image.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
         title.leadingAnchor().constraintEqualToAnchor_constant(&image.trailingAnchor(), 6.0),
-        title.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
+        title.trailingAnchor().constraintLessThanOrEqualToAnchor_constant(&star.leadingAnchor(), -4.0),
         title.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
+        star.trailingAnchor().constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
+        star.widthAnchor().constraintEqualToConstant(18.0),
+        star.centerYAnchor().constraintEqualToAnchor(&cell.centerYAnchor()),
     ] {
         c.setActive(true);
     }

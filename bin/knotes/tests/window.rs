@@ -3704,6 +3704,14 @@ fn a_folder_and_a_note_are_starred_from_their_menus_and_listed_in_the_right_pane
     assert!(out.contains("stars: Projects/ | New\n"), "{out}");
     let out = probe(&[("KNOTES_PROBE_ACTION", "folder-rename=Projects=Work")]);
     assert!(out.contains("sidebar-menu-items: Перейменувати | Нова підтека | Прибрати зірочку |") && out.contains("stars: Work/ | New\n"), "{out}");
+    // The star at a row's end takes it off; put back by the folder's menu.
+    let out = probe(&[("KNOTES_PROBE_STAR_BUTTON", "Work")]);
+    assert!(out.contains("stars: New\n") && out.contains("star-marks: list New | sidebar \n"), "{out}");
+    let out = probe(&[("KNOTES_PROBE_ACTION", "folder-star=Work")]);
+    assert!(out.contains("stars: New | Work/\n"), "{out}");
+    // The first row is pressed where the words said with no stars were: they are out of its way.
+    let out = probe(&[("KNOTES_PROBE_STAR_CLICK", "New")]);
+    assert!(!out.contains("star-click: not on the list") && out.contains("path-bar: 📕 › New\n"), "{out}");
     // What is deleted is listed no more; a star's own menu takes it off.
     std::fs::remove_file(vault.path().join("New.md")).unwrap();
     let out = probe(&[("KNOTES_PROBE_STAR_UNSTAR", "Work")]);
