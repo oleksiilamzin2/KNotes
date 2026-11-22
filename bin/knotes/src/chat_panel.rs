@@ -373,7 +373,7 @@ impl ChatPanel {
         let composer = composer_scroll.documentView().and_then(|v| v.downcast::<NSTextView>().ok()).expect("a scrollable text view holds a text view");
         composer.setRichText(false);
         composer.setDrawsBackground(false);
-        composer.setFont(Some(&NSFont::systemFontOfSize(NSFont::systemFontSize())));
+        composer.setFont(Some(&body_font()));
         composer.setTextContainerInset(NSSize::new(4.0, 6.0));
         // As tall as its scroll view even while empty: a click under the first line is a click
         // in the text, not in the empty clip view below it.
@@ -1227,8 +1227,13 @@ fn open_url(url: &str) {
     }
 }
 
+/// The size of the conversation's text and of the field's: a point over the system's.
+fn body_size() -> f64 {
+    NSFont::systemFontSize() + 1.0
+}
+
 fn body_font() -> Retained<NSFont> {
-    NSFont::systemFontOfSize(NSFont::systemFontSize())
+    NSFont::systemFontOfSize(body_size())
 }
 
 fn any<T: ClassType<Super = NSObject> + 'static>(object: &T) -> Retained<AnyObject> {
@@ -1285,7 +1290,7 @@ fn question_text(question: &str) -> Retained<NSAttributedString> {
 }
 
 fn tool_text(words: &str) -> Retained<NSAttributedString> {
-    piece(words, &NSFont::systemFontOfSize(NSFont::smallSystemFontSize()), &NSColor::tertiaryLabelColor(), None)
+    piece(words, &NSFont::systemFontOfSize(NSFont::smallSystemFontSize() + 1.0), &NSColor::tertiaryLabelColor(), None)
 }
 
 fn answer_text(markdown: &str, dark: bool) -> Retained<NSAttributedString> {
@@ -1305,7 +1310,7 @@ thread_local! {
 /// does not typeset is `None`.
 fn formula_text(tex: &str, display: bool, dark: bool) -> Option<Retained<NSAttributedString>> {
     let rgb = if dark { [235, 235, 235] } else { [29, 29, 31] };
-    let style = knotes_editor::FormulaStyle { display, size_pt: NSFont::systemFontSize() + 1.0, rgb, scale: 2.0 };
+    let style = knotes_editor::FormulaStyle { display, size_pt: body_size() + 1.0, rgb, scale: 2.0 };
     let formula = FORMULAS.with_borrow_mut(|cache| cache.get(tex, &style)).ok()?;
     let image = NSImage::initWithData(NSImage::alloc(), &objc2_foundation::NSData::with_bytes(&formula.png))?;
     image.setSize(NSSize::new(formula.width_pt, formula.height_pt));
@@ -1324,7 +1329,7 @@ fn formula_text(tex: &str, display: bool, dark: bool) -> Option<Retained<NSAttri
 }
 
 fn run_text(run: &Run, dark: bool) -> Retained<NSAttributedString> {
-    let size = NSFont::systemFontSize();
+    let size = body_size();
     let mut style = run.style;
     if style.math {
         if let Some(formula) = formula_text(&run.text, style.display, dark) {
