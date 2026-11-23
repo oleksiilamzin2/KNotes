@@ -1096,6 +1096,7 @@ fn tabs_requested(window: &VaultWindow) {
         Ok("spaces") => crate::settings_window::show_spaces(window.window.mtm(), window.vault()),
         Ok("trash") => crate::settings_window::show_trash(window.window.mtm(), window.vault()),
         Ok("text") => crate::settings_window::show_text(window.window.mtm(), window.vault()),
+        Ok("daily") => crate::settings_window::show_daily(window.window.mtm(), window.vault()),
         Ok(_) => crate::settings_window::show(window.window.mtm(), window.vault()),
         Err(_) => {}
     }
@@ -1104,6 +1105,13 @@ fn tabs_requested(window: &VaultWindow) {
     if let Ok(specs) = std::env::var("KNOTES_PROBE_SETTINGS_TEXT") {
         for spec in specs.split(';') {
             crate::settings_window::probe_text(spec.trim());
+        }
+    }
+    // `KNOTES_PROBE_SETTINGS_DAILY="folder=Journal; layout=week"`: each set through the
+    // «Щоденник» tab's controls.
+    if let Ok(specs) = std::env::var("KNOTES_PROBE_SETTINGS_DAILY") {
+        for spec in specs.split(';') {
+            crate::settings_window::probe_daily(spec.trim());
         }
     }
     if let Ok(days) = std::env::var("KNOTES_PROBE_SETTINGS_TRASH_DAYS") {

@@ -51,6 +51,14 @@ define_class!(
             // Another model for search by meaning: every window's chat and search take it.
             let this = objc2::Message::retain(self);
             crate::settings_window::on_meaning_change(move || this.meaning_changed());
+            // The settings' «Перекласти наявні нотатки…»: the vault's own window moves them.
+            let this = objc2::Message::retain(self);
+            crate::settings_daily::on_relayout(move |vault| {
+                let window = this.ivars().vaults.borrow().iter().find(|open| open.path == vault).map(|open| Rc::clone(&open.window));
+                if let Some(window) = window {
+                    window.relayout_daily_notes();
+                }
+            });
             let start = std::env::args_os()
                 .nth(1)
                 .or_else(|| std::env::var_os("KNOTES_VAULT"))

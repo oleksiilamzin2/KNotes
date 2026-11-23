@@ -61,7 +61,7 @@ pub use space_list::SpaceList;
 pub use space_marks::{folder_space_mark, space_mark};
 pub use space_tags::SpaceTags;
 pub use completion_list::{Offered, offer_blocks, offer_headings, offer_notes, offer_tags, recent_notes, step_found};
-pub use calendar::{Day, daily_day, daily_name, daily_note_path, day_at, days_in_month, month_after, month_cells};
+pub use calendar::{DailyLayout, Day, daily_day, daily_moves, daily_name, daily_note_path, day_at, days_in_month, iso_week, month_after, month_cells, with_daily};
 pub use card_table::{CardColumn, CardSearch, CardTable, MarkedRows, Standing, block_to_delete, card_of, in_deck, replace_block, standing};
 pub use chart_scale::{bar_length, bar_under, scale_top, share};
 pub use follow_link::{Followed, follow_link, linked_note_path, named_link, normalize_path};

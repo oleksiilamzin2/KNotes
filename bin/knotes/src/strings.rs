@@ -392,6 +392,40 @@ pub const CONNECTIONS: &str = "Зв'язки";
 pub const CALENDAR: &str = "Календар";
 /// The folder a day's note is made in when the vault names none.
 pub const DAILY_FOLDER: &str = "Щоденник";
+pub const SETTINGS_DAILY: &str = "Щоденник";
+pub const DAILY_FOLDER_LABEL: &str = "Тека";
+pub const DAILY_LAYOUT_LABEL: &str = "Розкладати";
+/// The layouts, in `DailyLayout::ALL`'s order.
+pub const DAILY_LAYOUTS: [&str; 4] = ["Усі в одній теці", "За роками", "За роками й місяцями", "За роками, місяцями й тижнями"];
+pub const DAILY_NOTE: &str = "Тут календар створює нотатку дня. Роки, місяці й тижні — теки з числами: 2026, 11, 48 (тиждень року). Наявні нотатки лишаються на місці, доки ви їх не перекладете: нотатку дня календар знаходить за назвою, де б вона не лежала.";
+pub const DAILY_FAILED: &str = "Не вдалося зберегти налаштування щоденника";
+pub const DAILY_RELAYOUT: &str = "Перекласти наявні нотатки…";
+pub const DAILY_RELAYOUT_DO: &str = "Перекласти";
+pub const DAILY_RELAYOUT_NONE: &str = "Усі щоденні нотатки вже лежать за цією структурою";
+pub const DAILY_RELAYOUT_EXPLAINED: &str = "Перекладаються всі нотатки бази з назвою-датою (2026-11-22), де б вони не лежали. Теки, що спорожніють, лишаються.";
+
+/// Before the daily notes are moved: how many, and where one of them goes.
+pub fn daily_relayout_question(notes: usize, example: &str) -> String {
+    format!("Перекласти {notes} {} за новою структурою? Наприклад: {example}", knotes_app::plural_uk(notes as u64, "щоденну нотатку", "щоденні нотатки", "щоденних нотаток"))
+}
+
+/// The daily notes that stayed: their day's place is taken.
+pub fn daily_relayout_staying(notes: usize) -> String {
+    format!("{notes} {} на місці", knotes_app::plural_uk(notes as u64, "нотатка лишилася", "нотатки лишилися", "нотаток лишилося"))
+}
+
+pub const DAILY_RELAYOUT_TAKEN: &str = "Там, куди вона мала б переїхати, вже лежить інша нотатка того самого дня.";
+
+/// The «Щоденник» tab's title: whose daily notes it sets.
+pub fn daily_of(vault: &str) -> String {
+    format!("Щоденні нотатки бази «{vault}»")
+}
+
+/// Where today's note would be made.
+pub fn daily_example(path: &str) -> String {
+    format!("Сьогоднішня: {path}")
+}
+
 pub const CALENDAR_BEFORE: &str = "Попередній місяць";
 pub const CALENDAR_AFTER: &str = "Наступний місяць";
 pub const CALENDAR_HAS_NOTE: &str = "Є нотатка цього дня";

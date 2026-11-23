@@ -1,6 +1,6 @@
 //! The calendar of daily notes, in the right panel: a month in weeks from Monday, today filled
 //! in the accent colour and the days that have a note written in it. A click on a day asks for
-//! its note; the arrows step by a month, «Сьогодні» comes back to this one.
+//! its note; the arrows step by a month, «Сьогодні» comes back to this one and to today's note.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -55,12 +55,15 @@ define_class!(
             self.fill();
         }
 
-        /// «Сьогодні»: this month again.
+        /// «Сьогодні»: this month again, and today's note, as a click on the day asks for it.
         #[unsafe(method(showToday:))]
         fn show_today(&self, _sender: Option<&AnyObject>) {
-            let (year, month, _) = self.ivars().today.get();
-            self.ivars().month.set((year, month));
+            let today = self.ivars().today.get();
+            self.ivars().month.set((today.0, today.1));
             self.fill();
+            if let Some(callback) = self.ivars().on_day.borrow().as_ref() {
+                callback(today);
+            }
         }
 
         /// A click on a day.
@@ -243,7 +246,8 @@ impl CalendarPanel {
                 let by = match what {
                     "before" => -1,
                     "after" => 1,
-                    _ => 0,
+                    "today" => 0,
+                    _ => return,
                 };
                 // The head's buttons, by what they do.
                 let head = self.view.subviews().firstObject().and_then(|month| month.subviews().firstObject());

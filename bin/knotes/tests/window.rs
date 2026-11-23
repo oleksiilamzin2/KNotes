@@ -3737,12 +3737,75 @@ fn the_calendar_marks_the_days_with_a_note_and_a_click_on_a_day_opens_its_note_o
     assert_eq!(read(vault.path(), "Щоденник/2026-11-22.md"), "");
     let out = probe("before");
     assert!(out.contains("calendar: Жовтень 2026 | today — | notes 31\n"), "{out}");
-    let out = probe("before; before; today");
-    assert!(out.contains("calendar: Листопад 2026 | today 22 | notes 3 21 22\n"), "back to this month, the new note in it: {out}");
+    // «Сьогодні» from another month and another note: this month and today's note again.
+    let out = probe("day=3; before; before; today");
+    assert!(out.contains("calendar: Листопад 2026 | today 22 | notes 3 21 22\n") && out.contains("path-bar: 📕 › Щоденник › 2026-11-22\n"), "{out}");
     // The folder the vault's root names instead.
     std::fs::write(vault.path().join(".knotes.json"), r#"{"daily": {"folder": "Journal"}}"#).unwrap();
     let out = probe("after; after; day=1");
     assert!(out.contains("calendar: Січень 2027 |") && out.contains("path-bar: 📕 › Journal › 2027-01-01\n"), "{out}");
+}
+
+#[test]
+fn the_settings_daily_tab_sets_the_folder_of_daily_notes_and_how_they_are_laid_out() {
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::write(vault.path().join("a.md"), "a").unwrap();
+    let name = vault.path().file_name().unwrap().to_string_lossy().into_owned();
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("Library/Application Support/Knotes");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("settings-v2.json"), r#"{"panel": "calendar"}"#).unwrap();
+    // Noon of 22 November 2026 in Greenwich, a Sunday of the year's week 47.
+    let probe = |env: &[(&str, &str)]| probe_env(&[vault.path()], Some(home.path()), &[&[("KNOTES_PROBE_NOW", "1795348800")], env].concat());
+    let out = probe(&[("KNOTES_PROBE_SETTINGS", "daily")]);
+    assert!(out.contains("settings: Щоденник |") && out.contains(&format!("settings-daily: {name} | Щоденник | Усі в одній теці | Сьогоднішня: Щоденник/2026-11-22.md\n")), "{out}");
+    let out = probe(&[("KNOTES_PROBE_SETTINGS", "daily"), ("KNOTES_PROBE_SETTINGS_DAILY", "layout=year")]);
+    assert!(out.contains("| Щоденник | За роками | Сьогоднішня: Щоденник/2026/2026-11-22.md\n"), "{out}");
+    let rules: serde_json::Value = serde_json::from_str(&read(vault.path(), ".knotes.json")).unwrap();
+    assert_eq!(rules["daily"], serde_json::json!({"folder": "Щоденник", "layout": "year"}), "kept with the vault");
+    let out = probe(&[("KNOTES_PROBE_CALENDAR", "day=22")]);
+    assert!(out.contains("path-bar: 📕 › Щоденник › 2026 › 2026-11-22\n"), "the calendar makes a day's note there: {out}");
+    let out = probe(&[("KNOTES_PROBE_SETTINGS", "daily"), ("KNOTES_PROBE_SETTINGS_DAILY", "folder=Journal; layout=week")]);
+    assert!(out.contains("| Journal | За роками, місяцями й тижнями | Сьогоднішня: Journal/2026/11/47/2026-11-22.md\n"), "{out}");
+    let out = probe(&[("KNOTES_PROBE_CALENDAR", "day=23")]);
+    assert!(out.contains("path-bar: 📕 › Journal › 2026 › 11 › 48 › 2026-11-23\n"), "Monday starts week 48: {out}");
+    let out = probe(&[("KNOTES_PROBE_CALENDAR", "day=22")]);
+    assert!(out.contains("path-bar: 📕 › Щоденник › 2026 › 2026-11-22\n"), "a note already made stays where it is, and is its day's: {out}");
+    let out = probe(&[("KNOTES_PROBE_SETTINGS", "daily"), ("KNOTES_PROBE_SETTINGS_DAILY", "layout=month")]);
+    assert!(out.contains("| Journal | За роками й місяцями | Сьогоднішня: Journal/2026/11/2026-11-22.md\n"), "{out}");
+}
+
+#[test]
+fn the_settings_daily_tab_moves_the_daily_notes_there_are_into_the_layout_set() {
+    let vault = tempfile::tempdir().unwrap();
+    for folder in ["Old", "Щоденник"] {
+        std::fs::create_dir_all(vault.path().join(folder)).unwrap();
+    }
+    let notes = [
+        ("Old/2026-11-03.md", "third"),
+        ("Щоденник/2026-11-21.md", "x"),
+        ("2026-11-21.md", "the same day's, elsewhere"),
+        ("Щоденник/2026-10-31.md", "oct"),
+        ("a.md", "see [[2026-11-03]] and [x](Old/2026-11-03.md) and [[Щоденник/2026-10-31]]"),
+    ];
+    for (path, text) in notes {
+        std::fs::write(vault.path().join(path), text).unwrap();
+    }
+    let home = tempfile::tempdir().unwrap();
+    let probe = |specs: &str, answer: &str| probe_env(&[vault.path()], Some(home.path()), &[("KNOTES_PROBE_SETTINGS", "daily"), ("KNOTES_PROBE_SETTINGS_DAILY", specs), ("KNOTES_PROBE_ANSWER", answer)]);
+    // Asked first, with how many and where one goes: nothing moves on «Скасувати».
+    let out = probe("layout=month; relayout", "cancel");
+    assert!(out.contains("daily-relayout-question: Перекласти 3 щоденні нотатки за новою структурою? Наприклад: Щоденник/2026/10/2026-10-31.md\n"), "{out}");
+    assert!(vault.path().join("Old/2026-11-03.md").exists() && !vault.path().join("Щоденник/2026").exists(), "{out}");
+    let out = probe("relayout", "update");
+    assert!(out.contains("rename-question: 2 1"), "the links by path are asked about as for any move: {out}");
+    assert!(out.contains("failed: 1 нотатка лишилася на місці: "), "one of two notes of a day stays: {out}");
+    assert_eq!(read(vault.path(), "Щоденник/2026/11/2026-11-03.md"), "third");
+    assert_eq!(read(vault.path(), "Щоденник/2026/10/2026-10-31.md"), "oct");
+    assert_eq!(read(vault.path(), "Щоденник/2026/11/2026-11-21.md"), "the same day's, elsewhere", "the first by path went");
+    assert_eq!(read(vault.path(), "Щоденник/2026-11-21.md"), "x", "the other stayed where it was");
+    assert!(!vault.path().join("Old/2026-11-03.md").exists() && !vault.path().join("2026-11-21.md").exists(), "{out}");
+    assert_eq!(read(vault.path(), "a.md"), "see [[2026-11-03]] and [x](Щоденник/2026/11/2026-11-03.md) and [[Щоденник/2026/10/2026-10-31]]");
 }
 
 #[test]

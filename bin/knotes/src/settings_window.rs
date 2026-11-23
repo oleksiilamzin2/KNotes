@@ -17,6 +17,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
+use crate::settings_daily::DailyTab;
 use crate::settings_spaces::SpacesTab;
 use crate::settings_text::TextTab;
 use crate::settings_trash::TrashTab;
@@ -47,6 +48,7 @@ struct Settings {
     spaces: Retained<SpacesTab>,
     trash: Retained<TrashTab>,
     text: Retained<TextTab>,
+    daily: Retained<DailyTab>,
     tabs: Retained<NSTabViewController>,
     _target: Retained<SettingsTarget>,
 }
@@ -107,6 +109,7 @@ pub fn show(mtm: MainThreadMarker, vault: Option<PathBuf>) {
         let mut shown = shown.borrow_mut();
         let settings = shown.get_or_insert_with(|| make(mtm));
         settings.spaces.set_vault(vault.clone());
+        settings.daily.set_vault(vault.clone());
         settings.trash.set_vault(vault);
         settings.text.refresh();
         let tag = knotes_assistant::meaning::model().and_then(|m| MeaningModel::ALL.iter().position(|a| *a == m)).map_or(OFF_TAG, |i| i as isize);
@@ -148,6 +151,27 @@ pub fn show_text(mtm: MainThreadMarker, vault: Option<PathBuf>) {
             settings.window.setTitle(&NSString::from_str(strings::SETTINGS_TEXT));
         }
     });
+}
+
+/// Shows the window on its «Щоденник» tab.
+pub fn show_daily(mtm: MainThreadMarker, vault: Option<PathBuf>) {
+    show(mtm, vault);
+    SHOWN.with(|shown| {
+        if let Some(settings) = shown.borrow().as_ref() {
+            settings.tabs.setSelectedTabViewItemIndex(4);
+            settings.window.setTitle(&NSString::from_str(strings::SETTINGS_DAILY));
+        }
+    });
+}
+
+/// Probe: the daily notes' folder or layout set through the «Щоденник» tab's controls (see
+/// `DailyTab::probe_set`).
+pub fn probe_daily(spec: &str) {
+    // Not borrowed while it is set: the vault's window moves notes meanwhile.
+    let daily = SHOWN.with(|shown| shown.borrow().as_ref().map(|s| s.daily.clone()));
+    if let Some(daily) = daily {
+        daily.probe_set(spec);
+    }
 }
 
 /// Probe: a text's font, size or line height set through the «Текст» tab's controls (see
@@ -410,6 +434,13 @@ fn make(mtm: MainThreadMarker) -> Settings {
     text_item.setLabel(&NSString::from_str(strings::SETTINGS_TEXT));
     text_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("textformat.size"), None).as_deref());
     tabs.addTabViewItem(&text_item);
+    let (daily, daily_view) = DailyTab::make(mtm);
+    let daily_vc = NSViewController::new(mtm);
+    daily_vc.setView(&daily_view);
+    let daily_item = NSTabViewItem::tabViewItemWithViewController(&daily_vc);
+    daily_item.setLabel(&NSString::from_str(strings::SETTINGS_DAILY));
+    daily_item.setImage(NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("calendar"), None).as_deref());
+    tabs.addTabViewItem(&daily_item);
     let window = NSWindow::windowWithContentViewController(&tabs);
     window.setStyleMask(NSWindowStyleMask::Titled | NSWindowStyleMask::Closable);
     window.setTitle(&NSString::from_str(strings::SETTINGS_SEARCH));
@@ -417,7 +448,7 @@ fn make(mtm: MainThreadMarker) -> Settings {
     unsafe { window.setReleasedWhenClosed(false) };
     window.center();
     crate::probe::conceal(&window);
-    Settings { window, popup, caches, status, progress, spaces, trash, text, tabs, _target: target }
+    Settings { window, popup, caches, status, progress, spaces, trash, text, daily, tabs, _target: target }
 }
 
 /// Probe: an edit made through the «Простори» tab's controls (see `SpacesTab::probe_edit`).
@@ -485,6 +516,7 @@ pub fn probe_lines() -> Vec<String> {
             format!("settings-space-colors: {}", shown.borrow().as_ref().map(|s| s.spaces.probe_colors()).unwrap_or_default()),
             format!("settings-trash: {}", shown.borrow().as_ref().map(|s| s.trash.probe_line()).unwrap_or_default()),
             format!("settings-text: {}", shown.borrow().as_ref().map(|s| s.text.probe_line()).unwrap_or_default()),
+            format!("settings-daily: {}", shown.borrow().as_ref().map(|s| s.daily.probe_line()).unwrap_or_default()),
         ]
     })
 }

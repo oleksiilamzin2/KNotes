@@ -32,6 +32,7 @@ mod review_view;
 mod search_bar;
 mod search_window;
 mod search_worker;
+mod settings_daily;
 mod settings_spaces;
 mod stars_panel;
 mod settings_text;

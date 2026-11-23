@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use knotes_app::{FolderRules, daily_day, daily_name, daily_note_path, day_at, days_in_month, month_after, month_cells};
+use knotes_app::{DailyLayout, FolderRules, Moves, daily_day, daily_moves, daily_name, daily_note_path, day_at, days_in_month, iso_week, month_after, month_cells, with_daily};
 
 #[test]
 fn a_note_named_by_its_day_is_that_day_s_wherever_it_lies() {
@@ -38,4 +38,43 @@ fn the_day_it_is_follows_the_time_zone() {
     assert_eq!(day_at(seconds, 0), (2026, 11, 22));
     assert_eq!(day_at(seconds, 2 * 3600), (2026, 11, 23), "past midnight in Kyiv");
     assert_eq!(day_at(0, -3600), (1969, 12, 31));
+}
+
+#[test]
+fn the_daily_notes_are_laid_out_by_the_year_the_month_and_the_week() {
+    let rules = |layout: DailyLayout| HashMap::from([(String::new(), FolderRules::parse(&with_daily(r#"{"trash": {"days": 14}}"#, "/Journal/", layout).unwrap()).unwrap())]);
+    let path = |layout: DailyLayout| daily_note_path(&rules(layout), "Щоденник", (2026, 3, 5));
+    assert_eq!(path(DailyLayout::Flat), "Journal/2026-03-05.md");
+    assert_eq!(path(DailyLayout::Year), "Journal/2026/2026-03-05.md");
+    assert_eq!(path(DailyLayout::Month), "Journal/2026/03/2026-03-05.md");
+    assert_eq!(path(DailyLayout::Week), "Journal/2026/03/10/2026-03-05.md");
+    let written = rules(DailyLayout::Week);
+    assert_eq!((written[""].daily_folder(), written[""].daily_layout(), written[""].trash_days()), (Some("Journal"), DailyLayout::Week, 14), "the other keys stay");
+    // In the vault's root, laid out all the same; a layout not known is the flat one.
+    let root = HashMap::from([(String::new(), FolderRules::parse(&with_daily("", "", DailyLayout::Year).unwrap()).unwrap())]);
+    assert_eq!(daily_note_path(&root, "Щоденник", (2026, 3, 5)), "2026/2026-03-05.md");
+    assert_eq!(FolderRules::parse(r#"{"daily": {"layout": "decade"}}"#).unwrap().daily_layout(), DailyLayout::Flat);
+    assert!(with_daily("{broken", "Journal", DailyLayout::Year).is_err(), "a file that does not parse is left");
+}
+
+#[test]
+fn weeks_are_counted_as_iso_8601_counts_them() {
+    // 2026 starts on a Thursday: its first day is in week 1, and it has 53 weeks.
+    assert_eq!((iso_week((2026, 1, 1)), iso_week((2026, 1, 4)), iso_week((2026, 1, 5))), (1, 1, 2));
+    assert_eq!((iso_week((2026, 11, 22)), iso_week((2026, 11, 23)), iso_week((2026, 12, 31))), (47, 48, 53));
+    // The first days of 2027 are still in 2026's last week; the last of 2024 in 2025's first.
+    assert_eq!((iso_week((2027, 1, 3)), iso_week((2027, 1, 4)), iso_week((2024, 12, 30)), iso_week((2025, 12, 28))), (53, 1, 1, 52));
+}
+
+#[test]
+fn the_daily_notes_not_where_the_layout_puts_them_are_moved_there() {
+    let rules = HashMap::from([(String::new(), FolderRules::parse(&with_daily("", "Journal", DailyLayout::Month).unwrap()).unwrap())]);
+    let paths = ["Old/2026-11-03.md", "2026-11-03.md", "Journal/2026/11/2026-11-21.md", "Journal/2026-10-31.md", "Journal/2026/10/2026-10-30.md", "Projects/Plan.md", "Old/2026-10-30.md"];
+    let (moves, staying) = daily_moves(paths, &rules, "Щоденник");
+    let expected = Moves::from([
+        // Two notes of one day: the first by path goes, the other stays.
+        ("2026-11-03.md".to_string(), "Journal/2026/11/2026-11-03.md".to_string()),
+        ("Journal/2026-10-31.md".to_string(), "Journal/2026/10/2026-10-31.md".to_string()),
+    ]);
+    assert_eq!((moves, staying), (expected, 2), "one in its place stays, one whose place is taken too; other notes are not daily ones");
 }

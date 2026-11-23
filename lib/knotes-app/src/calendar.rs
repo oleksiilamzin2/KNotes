@@ -3,9 +3,9 @@
 
 use std::collections::HashMap;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::{FolderRules, days_from_civil};
+use crate::{FolderRules, Moves, days_from_civil};
 
 /// A day: its year, month (1–12) and day of the month.
 pub type Day = (i32, u8, u8);
@@ -26,12 +26,125 @@ pub fn daily_name((year, month, day): Day) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// How the daily notes are laid out in their folder: all in it, or in folders by the year, by
+/// the year and the month, or by the year, the month and the week (each a number).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum DailyLayout {
+    #[default]
+    Flat,
+    Year,
+    Month,
+    Week,
+}
+
+impl DailyLayout {
+    pub const ALL: [Self; 4] = [Self::Flat, Self::Year, Self::Month, Self::Week];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Year => "year",
+            Self::Month => "month",
+            Self::Week => "week",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|layout| layout.key() == key)
+    }
+
+    /// The folders `day`'s note lies in, under the folder of daily notes: `2026/11/48`.
+    fn folders(self, (year, month, day): Day) -> String {
+        match self {
+            Self::Flat => String::new(),
+            Self::Year => format!("{year:04}"),
+            Self::Month => format!("{year:04}/{month:02}"),
+            Self::Week => format!("{year:04}/{month:02}/{:02}", iso_week((year, month, day))),
+        }
+    }
+}
+
+impl FolderRules {
+    /// The folder of daily notes this (root) file names (`"daily": {"folder"}`); `""` is the
+    /// vault's root.
+    pub fn daily_folder(&self) -> Option<&str> {
+        self.object().get("daily").and_then(|d| d.get("folder")).and_then(Value::as_str).map(|folder| folder.trim_matches('/'))
+    }
+
+    /// How this (root) file lays the daily notes out (`"daily": {"layout"}`).
+    pub fn daily_layout(&self) -> DailyLayout {
+        self.object().get("daily").and_then(|d| d.get("layout")).and_then(Value::as_str).and_then(DailyLayout::from_key).unwrap_or_default()
+    }
+}
+
+/// The root rules file's `text` with the daily notes' `folder` and `layout` in it, its other
+/// keys kept. An empty text is a file not there yet.
+pub fn with_daily(text: &str, folder: &str, layout: DailyLayout) -> Result<String, String> {
+    let mut root = FolderRules::parse(if text.trim().is_empty() { "{}" } else { text })?.object().clone();
+    let daily = root.entry("daily").or_insert_with(|| json!({}));
+    if !daily.is_object() {
+        *daily = json!({});
+    }
+    if let Some(daily) = daily.as_object_mut() {
+        daily.insert("folder".into(), json!(folder.trim_matches('/')));
+        daily.insert("layout".into(), json!(layout.key()));
+    }
+    let mut text = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    text.push('\n');
+    Ok(text)
+}
+
 /// Where `day`'s note is made: in the folder the root's rules name (`"daily": {"folder"}`),
-/// else `default`; `""` is the vault's root.
+/// else `default` (`""` is the vault's root), in the folders its layout asks for.
 pub fn daily_note_path(rules: &HashMap<String, FolderRules>, default: &str, day: Day) -> String {
-    let set = rules.get("").and_then(|r| r.object().get("daily")).and_then(|d| d.get("folder")).and_then(Value::as_str);
-    let folder = set.unwrap_or(default).trim_matches('/');
-    if folder.is_empty() { format!("{}.md", daily_name(day)) } else { format!("{folder}/{}.md", daily_name(day)) }
+    let root = rules.get("");
+    let folder = root.and_then(FolderRules::daily_folder).unwrap_or(default.trim_matches('/'));
+    let folders = root.map(FolderRules::daily_layout).unwrap_or_default().folders(day);
+    let parts: Vec<&str> = [folder, folders.as_str()].into_iter().filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() { format!("{}.md", daily_name(day)) } else { format!("{}/{}.md", parts.join("/"), daily_name(day)) }
+}
+
+/// The daily notes among `paths` (every note of the vault) that do not lie where the rules lay
+/// them out, each with where it goes, and how many stay because their place is taken: by a note
+/// there already, or by another of the same day, of which the first by path goes.
+pub fn daily_moves<'a>(paths: impl IntoIterator<Item = &'a str>, rules: &HashMap<String, FolderRules>, default: &str) -> (Moves, usize) {
+    let mut paths: Vec<&str> = paths.into_iter().collect();
+    paths.sort_unstable();
+    let mut taken: std::collections::HashSet<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+    let (mut moves, mut staying) = (Moves::new(), 0);
+    for path in paths {
+        let Some(day) = daily_day(path) else { continue };
+        let to = daily_note_path(rules, default, day);
+        if to == path {
+            continue;
+        }
+        if taken.insert(to.clone()) {
+            moves.insert(path.to_owned(), to);
+        } else {
+            staying += 1;
+        }
+    }
+    (moves, staying)
+}
+
+/// The week of the year `day` is in, as ISO 8601 counts them: weeks start on Monday, and the
+/// first is the one with the year's first Thursday (so a year's first days may be in week 52
+/// or 53, and its last in week 1).
+pub fn iso_week((year, month, day): Day) -> u8 {
+    let days = days_from_civil(year, month, day);
+    let weekday = (days + 3).rem_euclid(7);
+    let ordinal = days - days_from_civil(year, 1, 1) + 1;
+    let week = (ordinal - weekday + 9) / 7;
+    // A year has 53 weeks when it starts on a Thursday, or on a Wednesday and is a leap year.
+    let weeks_in = |year: i32| {
+        let first = (days_from_civil(year, 1, 1) + 3).rem_euclid(7);
+        if first == 3 || (first == 2 && days_in_month(year, 2) == 29) { 53 } else { 52 }
+    };
+    match week {
+        0 => weeks_in(year - 1),
+        53 if weeks_in(year) == 52 => 1,
+        week => week as u8,
+    }
 }
 
 pub fn days_in_month(year: i32, month: u8) -> u8 {
