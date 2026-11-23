@@ -3809,6 +3809,21 @@ fn the_settings_daily_tab_moves_the_daily_notes_there_are_into_the_layout_set() 
 }
 
 #[test]
+fn the_first_zen_mode_says_how_to_leave_it_and_no_other_does() {
+    let home = tempfile::tempdir().unwrap();
+    let notes = [("a.md", "a")];
+    let zen = |action: &str| probe_notes_at_home(&notes, &[("KNOTES_PROBE_ACTION", action), ("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_DELAY_MS", "1500")], home.path()).1;
+    assert!(zen("none").contains("zen-hint: hidden\n"), "not before zen mode");
+    let out = zen("zen");
+    assert!(out.contains("folded: folded folded shown folded, no toolbar") && out.contains("zen-hint: shown\n"), "its button went with the toolbar: {out}");
+    assert!(zen("zen").contains("zen-hint: hidden\n"), "said once");
+    // Left at once, the words go with it.
+    let other = tempfile::tempdir().unwrap();
+    let (_vault, out) = probe_notes_at_home(&notes, &[("KNOTES_PROBE_ACTION", "zen-twice"), ("KNOTES_PROBE_DELAY_MS", "2500")], other.path());
+    assert!(out.contains("zen-hint: hidden\n"), "{out}");
+}
+
+#[test]
 fn a_folder_and_a_note_are_starred_from_their_menus_and_listed_in_the_right_panel() {
     let vault = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(vault.path().join("Projects")).unwrap();

@@ -66,6 +66,8 @@ pub struct AppSettings {
     /// How a note's text is set, and the chat's.
     pub note_text: TextLook,
     pub chat_text: TextLook,
+    /// Zen mode was entered once, and how to leave it said: not said again.
+    pub zen_hinted: bool,
 }
 
 impl AppSettings {
@@ -92,6 +94,7 @@ impl AppSettings {
             device: value.get("device").and_then(Value::as_str).filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).map(str::to_string),
             note_text: TextLook::load(value.get("noteText")),
             chat_text: TextLook::load(value.get("chatText")),
+            zen_hinted: value.get("zenHinted").and_then(Value::as_bool).unwrap_or(false),
         }
     }
 
@@ -141,6 +144,7 @@ impl AppSettings {
             "device": self.device,
             "noteText": self.note_text.json(),
             "chatText": self.chat_text.json(),
+            "zenHinted": self.zen_hinted,
         });
         let tmp = app_data.join(format!("{SETTINGS_FILE}.tmp"));
         fs::write(&tmp, serde_json::to_string_pretty(&value).map_err(io::Error::other)? + "\n")?;

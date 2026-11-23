@@ -19,6 +19,7 @@ fn settings_round_trip_through_the_app_data_folder() {
         device: Some("mac-a1b2c3".into()),
         note_text: TextLook { font: Some("Georgia".into()), size: Some(17), line: Some(140) },
         chat_text: TextLook { font: None, size: Some(12), line: None },
+        zen_hinted: true,
     };
     settings.save(data.path()).unwrap();
     assert_eq!(AppSettings::load(data.path()), settings);

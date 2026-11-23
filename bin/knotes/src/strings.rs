@@ -589,6 +589,8 @@ pub const TOGGLE_SIDEBAR: &str = "Показати або сховати біч�
 pub const TOGGLE_PANEL: &str = "Показати або сховати панель";
 pub const FULL_SCREEN: &str = "Повноекранний режим";
 pub const ZEN: &str = "Дзен-режим";
+/// Said the first time zen mode is entered: its button is hidden with the toolbar.
+pub const ZEN_HINT: &str = "Щоб вийти з дзен-режиму, натисніть ⌃⌥Z";
 pub const ZOOM_IN: &str = "Збільшити";
 pub const ZOOM_OUT: &str = "Зменшити";
 pub const ZOOM_ACTUAL: &str = "Справжній розмір";

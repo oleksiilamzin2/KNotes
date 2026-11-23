@@ -148,6 +148,8 @@ pub struct VaultWindow {
     connections_job: RefCell<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Said in the note column while no document is open.
     no_document: Retained<NSTextField>,
+    /// How to leave zen mode, said over the note the first time it is entered.
+    zen_hint: Retained<NSTextField>,
     /// The documents open as tabs (ADR 0024), and whether the last launch's came back.
     tabs: RefCell<Tabs>,
     tabs_restored: Cell<bool>,
@@ -328,6 +330,20 @@ impl VaultWindow {
         ] {
             c.setActive(true);
         }
+        let zen_hint = NSTextField::labelWithString(&NSString::from_str(&format!("  {}  ", strings::ZEN_HINT)), mtm);
+        zen_hint.setTextColor(Some(&objc2_app_kit::NSColor::secondaryLabelColor()));
+        zen_hint.setDrawsBackground(true);
+        zen_hint.setBackgroundColor(Some(&objc2_app_kit::NSColor::quaternarySystemFillColor()));
+        zen_hint.setWantsLayer(true);
+        if let Some(layer) = zen_hint.layer() {
+            layer.setCornerRadius(6.0);
+            layer.setMasksToBounds(true);
+        }
+        zen_hint.setHidden(true);
+        zen_hint.setTranslatesAutoresizingMaskIntoConstraints(false);
+        find_bar.column.addSubview(&zen_hint);
+        zen_hint.centerXAnchor().constraintEqualToAnchor(&find_bar.column.centerXAnchor()).setActive(true);
+        zen_hint.bottomAnchor().constraintEqualToAnchor_constant(&find_bar.column.bottomAnchor(), -24.0).setActive(true);
         no_document.centerXAnchor().constraintEqualToAnchor(&find_bar.column.centerXAnchor()).setActive(true);
         no_document.centerYAnchor().constraintEqualToAnchor(&find_bar.column.centerYAnchor()).setActive(true);
         let chat = ChatPanel::new(mtm, knotes_session::app_data_dir());
@@ -397,6 +413,7 @@ impl VaultWindow {
             connections_of: RefCell::new(None),
             connections_job: RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
             no_document,
+            zen_hint,
             tabs: RefCell::new(Tabs::default()),
             tabs_restored: Cell::new(false),
             space_restored: Cell::new(false),

@@ -1416,6 +1416,7 @@ fn report_panel(window: &VaultWindow) {
     println!("stars: {rows}");
     println!("star-marks: list {} | sidebar {}", window.list.probe_stars(), window.sidebar.probe_stars());
     println!("calendar: {}", window.calendar_panel.describe());
+    println!("zen-hint: {}", if window.zen_hint_shown() { "shown" } else { "hidden" });
     if !empty.is_empty() {
         println!("stars-empty: {empty}");
     }

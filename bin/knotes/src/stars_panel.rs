@@ -326,7 +326,7 @@ fn cell(outline: &NSOutlineView, mtm: MainThreadMarker, source: &StarsSource) ->
     let star = unsafe { NSButton::buttonWithImage_target_action(&filled.unwrap_or_else(NSImage::new), Some(source), Some(sel!(unstarRow:)), mtm) };
     star.setIdentifier(Some(&NSString::from_str(STAR_ID)));
     star.setBordered(false);
-    star.setContentTintColor(Some(&NSColor::systemYellowColor()));
+    star.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
     star.setToolTip(Some(&NSString::from_str(strings::UNSTAR)));
     for v in [&*image as &NSView, &title, &star] {
         v.setTranslatesAutoresizingMaskIntoConstraints(false);

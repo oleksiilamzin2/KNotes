@@ -79,7 +79,7 @@ pub fn marks(mtm: MainThreadMarker, dot: &NSImageView) -> Retained<NSStackView> 
     star.setIdentifier(Some(&NSString::from_str(STAR_ID)));
     let filled = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("star.fill"), Some(&NSString::from_str(strings::STARRED)));
     star.setImage(filled.and_then(|image| image.imageWithSymbolConfiguration(&NSImageSymbolConfiguration::configurationWithPointSize_weight(9.0, 0.0))).as_deref());
-    star.setContentTintColor(Some(&NSColor::systemYellowColor()));
+    star.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
     star.setToolTip(Some(&NSString::from_str(strings::STARRED)));
     star.setHidden(true);
     let views: [&NSView; 3] = [&star, &mark, dot];

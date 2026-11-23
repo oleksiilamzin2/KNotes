@@ -257,6 +257,35 @@ impl VaultWindow {
         format!("{}, shows {shows}", self.panel_mode.get().key())
     }
 
+    /// The first time zen mode is entered (ever, on this Mac), how to leave it is said under the
+    /// note for some seconds: its button went with the toolbar. Leaving takes the words away.
+    fn hint_zen(&self, on: bool) {
+        if !on {
+            return self.zen_hint.setHidden(true);
+        }
+        let app_data = knotes_session::app_data_dir();
+        let mut settings = knotes_session::AppSettings::load(&app_data);
+        if settings.zen_hinted {
+            return;
+        }
+        settings.zen_hinted = true;
+        if let Err(e) = settings.save(&app_data) {
+            eprintln!("knotes: cannot save settings: {e}");
+        }
+        self.zen_hint.setHidden(false);
+        let hint = MainThreadBound::new(self.zen_hint.clone(), MainThreadMarker::from(&*self.window));
+        let when = dispatch2::DispatchTime::try_from(std::time::Duration::from_secs(8)).expect("short delay");
+        let _ = DispatchQueue::main().after(when, move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            hint.get(mtm).setHidden(true);
+        });
+    }
+
+    /// Whether the words on leaving zen mode show (probe mode).
+    pub fn zen_hint_shown(&self) -> bool {
+        !self.zen_hint.isHidden()
+    }
+
     /// Zen mode (View → Zen Mode, the toolbar's button): the note alone, the sidebar, the list
     /// and the panel folded away; again, and each is as it was before.
     pub fn toggle_zen(&self) {
@@ -289,6 +318,7 @@ impl VaultWindow {
             }
         }
         let on = self.zen.get().is_some();
+        self.hint_zen(on);
         // The toolbar's buttons go too (⌃⌥Z brings them back): the note's name alone on top.
         if let Some(toolbar) = self.window.toolbar() {
             toolbar.setVisible(!on);
