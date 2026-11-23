@@ -49,8 +49,10 @@ fn a_heading_a_block_or_a_tag_typed_is_offered_those_holding_it() {
     assert!(offer_blocks(text, parsed.anchors, "zz", 10).is_empty());
     // A tag with its notes: `#` shown in the text, none in the frontmatter; the same goes in.
     let tags = tag_tree(&[("work".into(), 5), ("work/radar".into(), 2), ("home".into(), 1)]);
-    assert_eq!(offer_tags("wo", false, &[], &tags, 10)[0], offered("#work", "5", "work"));
-    assert_eq!(offer_tags("wo", true, &[], &tags, 10)[0], offered("work", "5", "work"));
+    assert_eq!(offer_tags("wo", false, &[], &tags, 10)[0], offered("#work", "5 ›", "work"), "tags are nested under it: a step in");
+    assert_eq!(offer_tags("wo", true, &[], &tags, 10)[0], offered("work", "5 ›", "work"));
+    assert_eq!(offer_tags("work/", false, &[], &tags, 10), [offered("#work/radar", "2", "work/radar")]);
+    assert_eq!(offer_tags("ho", false, &[], &tags, 10), [offered("#home", "1", "home")]);
     assert!(offer_tags("zz", false, &[], &tags, 10).is_empty());
 }
 

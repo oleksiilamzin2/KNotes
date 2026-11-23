@@ -49,3 +49,21 @@ fn tags_are_offered_the_space_s_first_then_by_how_they_match_then_the_most_used(
     assert_eq!(suggest_tags("", &space, &all, 3), [("radar", 3), ("area", 1), ("area/job", 1)], "nothing typed: the most used, at most the limit");
     assert_eq!(suggest_tags("adi", &[], &all, 10), [("radio", 1)], "held inside");
 }
+
+#[test]
+fn a_level_typed_out_offers_the_tags_right_under_it_a_step_at_a_time() {
+    use knotes_app::{has_nested_tags, suggest_tags};
+    let counts = |pairs: &[(&str, usize)]| tag_tree(&pairs.iter().map(|(t, n)| (t.to_string(), *n)).collect::<Vec<_>>());
+    let all = counts(&[("project", 6), ("project/radar", 3), ("project/radar/fmcw", 2), ("project/radar/pulse", 1), ("project/ui", 4), ("project/quarry", 1), ("radar", 5)]);
+    assert_eq!(suggest_tags("project/", &[], &all, 10), [("project/ui", 4), ("project/radar", 3), ("project/quarry", 1)], "its own level alone, the most used first");
+    assert_eq!(suggest_tags("project/ra", &[], &all, 10), [("project/radar", 3)], "not the tags under the one named");
+    assert_eq!(suggest_tags("project/r", &[], &all, 10), [("project/radar", 3), ("project/quarry", 1)], "a name's start first, then held inside");
+    assert_eq!(suggest_tags("Project/Radar/", &[], &all, 10), [("project/radar/fmcw", 2), ("project/radar/pulse", 1)], "a step further; case ignored");
+    // A level with nothing such under it: matched whole, as a tag without levels is.
+    assert_eq!(suggest_tags("radar/", &[], &all, 10), [("project/radar/fmcw", 2), ("project/radar/pulse", 1)], "held inside");
+    assert!(suggest_tags("project/zz", &[], &all, 10).is_empty());
+    // In a space its own tags of the level first.
+    let space = counts(&[("project", 1), ("project/quarry", 1)]);
+    assert_eq!(suggest_tags("project/", &space, &all, 10), [("project/quarry", 1), ("project/ui", 4), ("project/radar", 3)]);
+    assert!(has_nested_tags(&all, "project") && has_nested_tags(&all, "project/radar") && !has_nested_tags(&all, "project/ui") && !has_nested_tags(&all, "none"));
+}

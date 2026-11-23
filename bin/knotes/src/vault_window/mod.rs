@@ -642,7 +642,7 @@ impl VaultWindow {
         this.completion.on_click(move |row| {
             if let Some(window) = weak.upgrade() {
                 window.completion.select(row);
-                window.accept_completion();
+                window.accept_completion(false);
             }
         });
         let weak: Weak<Self> = Rc::downgrade(&this);

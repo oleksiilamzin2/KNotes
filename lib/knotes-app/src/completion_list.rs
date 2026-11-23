@@ -3,7 +3,7 @@
 
 use knotes_core::{BlockAnchor, Heading, LinkResolver, NoteRow};
 
-use crate::{TagNode, suggest_tags};
+use crate::{TagNode, has_nested_tags, suggest_tags};
 
 /// A row of the completion's list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,10 +68,17 @@ pub fn offer_blocks(text: &str, anchors: Vec<BlockAnchor>, query: &str, most: us
         .collect()
 }
 
-/// The tags offered for the one typed (`suggest_tags`), each with its notes: shown with `#`
-/// in a note's text, bare in its frontmatter.
+/// The tags offered for the one typed (`suggest_tags`), each with its notes, and `›` after
+/// them for one with tags nested under it (Tab steps into it): shown with `#` in a note's
+/// text, bare in its frontmatter.
 pub fn offer_tags(query: &str, frontmatter: bool, space: &[TagNode], all: &[TagNode], most: usize) -> Vec<Offered> {
-    suggest_tags(query, space, all, most).into_iter().map(|(name, notes)| Offered { title: if frontmatter { name.to_owned() } else { format!("#{name}") }, detail: notes.to_string(), insert: name.to_owned() }).collect()
+    suggest_tags(query, space, all, most)
+        .into_iter()
+        .map(|(name, notes)| {
+            let nested = has_nested_tags(all, name) || has_nested_tags(space, name);
+            Offered { title: if frontmatter { name.to_owned() } else { format!("#{name}") }, detail: format!("{notes}{}", if nested { " ›" } else { "" }), insert: name.to_owned() }
+        })
+        .collect()
 }
 
 /// The find after (`forward`) or before the one shown, of `count`, round their ends; the first

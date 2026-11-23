@@ -1376,6 +1376,27 @@ fn typing_a_tag_offers_the_vault_s_tags_and_return_inserts_one_with_a_space_afte
 }
 
 #[test]
+fn a_tag_s_levels_are_completed_a_step_at_a_time_and_tab_steps_into_one() {
+    let notes = [("b.md", "#project/radar/fmcw #project/ui"), ("c.md", "#project/ui #project/radar/pulse #radar"), ("a.md", "")];
+    let typed = |text: &str, keys: &str| probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", text), ("KNOTES_PROBE_KEYS", keys)]).1;
+    // After the level's `/`: the tags right under it alone, with `›` for one that goes on.
+    let out = typed("#project/", "left,right");
+    assert_eq!(completion(&out), "▸#project/radar — 2 › | #project/ui — 2", "{out}");
+    // Tab on a tag with tags under it steps in: `/` after it, and that level's tags.
+    let out = typed("#pro", "tab");
+    assert!(out.contains("note: a.md | #project/"), "{out}");
+    assert_eq!(completion(&out), "▸#project/radar — 2 › | #project/ui — 2", "{out}");
+    let out = typed("#pro", "tab,tab");
+    assert!(out.contains("note: a.md | #project/radar/"), "{out}");
+    assert_eq!(completion(&out), "▸#project/radar/fmcw — 1 | #project/radar/pulse — 1", "{out}");
+    // On a tag with none under it Tab inserts it, as Return does; Return takes a level as it is.
+    let out = typed("#pro", "tab,tab,tab");
+    assert!(out.contains("note: a.md | #project/radar/fmcw ") && completion(&out) == "none", "{out}");
+    let out = typed("#pro", "tab,return");
+    assert!(out.contains("note: a.md | #project/radar ") && completion(&out) == "none", "{out}");
+}
+
+#[test]
 fn in_the_frontmatter_the_tags_list_offers_tags_without_a_hash() {
     let notes = [("b.md", "#radar"), ("a.md", "")];
     let (_vault, out) = probe_notes(&notes, &[("KNOTES_PROBE_OPEN", "a.md"), ("KNOTES_PROBE_TYPE", "---\ntags: [ra"), ("KNOTES_PROBE_KEYS", "return")]);

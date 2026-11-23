@@ -151,9 +151,24 @@ pub fn space_tag_trees(inside: &[(String, usize)], all: &[(String, usize)]) -> (
 /// (`all`); in each, those starting with it, then those with a part (after `/`) starting with
 /// it, then those holding it; the most used first. Case is ignored (the index keeps tags
 /// lowercased).
+///
+/// A level typed out (`project/`, `project/ra`) is a step into it: the tags right under it
+/// alone, those whose own name starts with what follows first, then those holding it. Where it
+/// has none such (a level that is not there, a new tag), the tags are matched whole as above.
 pub fn suggest_tags<'a>(query: &str, space: &'a [TagNode], all: &'a [TagNode], limit: usize) -> Vec<(&'a str, usize)> {
     let query = query.to_lowercase();
-    let how = |tag: &str| {
+    if let Some((under, name)) = query.rsplit_once('/') {
+        let stepped = matching_tags(space, all, limit, |node| {
+            let inside = node.tag.rsplit_once('/').is_some_and(|(parent, _)| parent == under);
+            let class = if node.name.starts_with(name) { Some(0) } else { node.name.contains(name).then_some(1) };
+            class.filter(|_| inside)
+        });
+        if !stepped.is_empty() {
+            return stepped;
+        }
+    }
+    matching_tags(space, all, limit, |node| {
+        let tag = node.tag.as_str();
         if tag.starts_with(&query) {
             Some(0)
         } else if tag.split('/').skip(1).any(|part| part.starts_with(&query)) {
@@ -161,7 +176,19 @@ pub fn suggest_tags<'a>(query: &str, space: &'a [TagNode], all: &'a [TagNode], l
         } else {
             tag.contains(&query).then_some(2)
         }
-    };
+    })
+}
+
+/// Whether tags are nested under `tag` in `nodes`: a step into it has something to offer.
+pub fn has_nested_tags(nodes: &[TagNode], tag: &str) -> bool {
+    let mut nested = false;
+    walk(nodes, &mut |node| nested |= node.tag == tag && !node.children.is_empty());
+    nested
+}
+
+/// The tags `how` gives a class to (the lower the better), at most `limit`, with their notes:
+/// the space's first, then the rest of the vault's; in each by class, then the most used.
+fn matching_tags<'a>(space: &'a [TagNode], all: &'a [TagNode], limit: usize, how: impl Fn(&TagNode) -> Option<u8>) -> Vec<(&'a str, usize)> {
     let mut own: HashSet<&str> = HashSet::new();
     let mut found: Vec<(u8, u8, &TagNode)> = Vec::new();
     for (group, nodes) in [(0, space), (1, all)] {
@@ -171,7 +198,7 @@ pub fn suggest_tags<'a>(query: &str, space: &'a [TagNode], all: &'a [TagNode], l
             } else if own.contains(node.tag.as_str()) {
                 return;
             }
-            if let Some(class) = how(&node.tag) {
+            if let Some(class) = how(node) {
                 found.push((group, class, node));
             }
         });

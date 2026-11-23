@@ -72,4 +72,4 @@ pub use vault_search::{SearchRequest, SearchResponse, found_documents, marked_wo
 pub use vault_state::{Listed, VaultState, deck_exists, find_folder_node, folder_exists, session_settings_key, tag_exists, tag_names};
 pub use tab_layout::{Slot, TAB_GAP, TAB_MIN, cross_of, cross_size, drag_tab, slots_dragged, tab_at, tab_scroll, tab_slots, tabs_out_of_sight};
 pub use tabs::{AfterClose, TabPlace, Tabs};
-pub use tag_tree::{TagNode, count_tags, deck_tree, space_tag_trees, split_tags, suggest_tags, tag_tree};
+pub use tag_tree::{TagNode, count_tags, deck_tree, has_nested_tags, space_tag_trees, split_tags, suggest_tags, tag_tree};

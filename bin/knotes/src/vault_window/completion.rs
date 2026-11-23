@@ -123,7 +123,8 @@ impl VaultWindow {
         }
     }
 
-    /// Keys while the list is open: Up/Down choose, Return/Tab insert, Esc closes.
+    /// Keys while the list is open: Up/Down choose, Return/Tab insert, Esc closes. Tab on a tag
+    /// with tags nested under it steps into it instead: `tag/` and the tags of that level.
     pub(super) fn completion_command(&self, command: Sel) -> bool {
         if !self.completion.is_visible() {
             return false;
@@ -132,8 +133,10 @@ impl VaultWindow {
             self.completion.move_selection(1);
         } else if command == sel!(moveUp:) {
             self.completion.move_selection(-1);
-        } else if command == sel!(insertNewline:) || command == sel!(insertTab:) {
-            self.accept_completion();
+        } else if command == sel!(insertNewline:) {
+            self.accept_completion(false);
+        } else if command == sel!(insertTab:) {
+            self.accept_completion(true);
         } else if command == sel!(cancelOperation:) {
             self.completion.hide();
             self.completion_dismissed.set(Some(self.completion_anchor.get()));
@@ -145,9 +148,15 @@ impl VaultWindow {
 
     /// Replaces the typed part with the chosen link (or heading), closing it with `]]` unless
     /// the brackets already follow, and puts the cursor after them; or with the chosen tag, a
-    /// space after it in the text unless one follows (none in the frontmatter's list).
-    pub(super) fn accept_completion(&self) {
+    /// space after it in the text unless one follows (none in the frontmatter's list). With
+    /// `step`, a tag that has tags nested under it goes in with `/` after it, and the list
+    /// shows those.
+    pub(super) fn accept_completion(&self, step: bool) {
         let Some(item) = self.completion.chosen() else { return };
+        let step = step && matches!(self.completing.get(), Completing::Tag { .. }) && {
+            let state = self.state.borrow();
+            knotes_app::has_nested_tags(&state.tags, &item.insert) || state.space_tags.iter().any(|counted| knotes_app::has_nested_tags(&counted.tags, &item.insert))
+        };
         self.completion.hide();
         let view = self.completion_view.borrow().clone().unwrap_or_else(|| Retained::into_super(self.note_text.clone()));
         let cursor = view.selectedRange().location;
@@ -156,6 +165,7 @@ impl VaultWindow {
         let closed = cursor + 2 <= ns.length() && ns.substringWithRange(NSRange::new(cursor, 2)).to_string() == "]]";
         let spaced = cursor < ns.length() && matches!(ns.characterAtIndex(cursor), 0x20 | 0x09 | 0x0A | 0x0D);
         let (text, closed) = match self.completing.get() {
+            Completing::Tag { .. } if step => (format!("{}/", item.insert), false),
             Completing::Link if closed => (item.insert, true),
             Completing::Link => (format!("{}]]", item.insert), false),
             Completing::Tag { frontmatter: false } if !spaced => (format!("{} ", item.insert), false),
@@ -169,6 +179,9 @@ impl VaultWindow {
         let after = from + text.encode_utf16().count() + if closed { 2 } else { 0 };
         view.setSelectedRange(NSRange::new(after, 0));
         self.accepting.set(false);
+        if step {
+            self.complete_in(&view, self.open_path());
+        }
     }
 
     pub fn describe_completion(&self) -> String {
